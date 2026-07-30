@@ -55,16 +55,62 @@ def event_store():
     store.close()
 
 
+class _AvailableStore:
+    def status(self):
+        from disco.tools.projects import StorageStatus
+
+        return StorageStatus.OK
+
+
+class _AvailableProjects:
+    def current_project_store(self):
+        return _AvailableStore()
+
+
+class _Notifier:
+    async def emit(self, *_args, **_kwargs):
+        return None
+
+
+def _resources():
+    from disco.agent_server.run_registry import RunResourceRegistry
+
+    return RunResourceRegistry()
+
+
+def _persistence(resources):
+    from disco.agent_server.workspace_persistence import WorkspacePersistence
+
+    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
+    persistence._projects = _AvailableProjects()
+    persistence._run_resources = resources
+    persistence._persistence_notifier = _Notifier()
+    return persistence
+
+
+def _set_executor(rt, cid, workspace, **attrs):  # noqa: ANN001, ANN201
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=workspace, **attrs))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_deploy_lock_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "deploy-locks"))
+
+
 def _runtime(
     event_store: SqliteEventStore, tmp_path: Path
 ) -> tuple[ConversationRuntime, ProjectStore]:
     rt = ConversationRuntime(
-        event_store,
-        router=MagicMock(),
-        sandbox_service=ProcessSandboxService(),
+        event_store, router=MagicMock(), sandbox_service=ProcessSandboxService()
     )
     projects = ProjectStore(str(tmp_path / "projects"))
-    rt._project_store_now = MagicMock(return_value=projects)
+    # The lifecycle/persistence owners resolve the project store through
+    # ``ProjectRuntimeService.current_project_store()`` (no longer through a
+    # runtime-level ``_project_store_now``).  Override the owner so every
+    # collaborator that asks for the current store receives the test's
+    # temporary ``ProjectStore``.
+    rt._projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     return rt, projects
 
 
@@ -79,6 +125,10 @@ async def _seed_running(store: SqliteEventStore, cid: str) -> None:
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
 
+async def _make_loop() -> MagicMock:
+    return MagicMock()
+
+
 async def test_finished_commit_seals_fresh_immutable_bytes(
     event_store: SqliteEventStore,
     tmp_path: Path,
@@ -86,7 +136,7 @@ async def test_finished_commit_seals_fresh_immutable_bytes(
     cid = "conv-final-seal"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"<h1>sealed</h1>"}))
+    _set_executor(rt, cid, _Workspace({"index.html": b"<h1>sealed</h1>"}))
 
     terminal = await rt._lifecycle.commit_finished_workspace(
         cid,
@@ -124,7 +174,7 @@ async def test_incomplete_capture_leaves_finished_honestly_unsealed(
     cid = "conv-incomplete-seal"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"lost.txt": b"bytes"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"lost.txt": b"bytes"})))
 
     async def incomplete_snapshot(session, dest):  # noqa: ANN001
         dest.mkdir(parents=True)
@@ -163,9 +213,7 @@ async def test_content_refused_seal_discloses_typed_evidence(
     cid = "conv-content-refused-seal"
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(
-        _sandbox=_Workspace({"steer-dashboard/index.html": b"<h1>built</h1>"})
-    )
+    _set_executor(rt, cid, _Workspace({"steer-dashboard/index.html": b"<h1>built</h1>"}))
     live_skips = [
         "dist: symlink excluded",
         "index.html: symlink excluded",
@@ -216,7 +264,7 @@ async def test_transient_refused_seal_never_claims_content(
     cid = "conv-transient-refused-seal"
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"lost.txt": b"bytes"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"lost.txt": b"bytes"})))
 
     async def transient_snapshot(session, dest):  # noqa: ANN001
         del session
@@ -259,7 +307,7 @@ async def test_finish_sealability_probe_judges_content_only(
     cid = "conv-seal-probe"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"ok"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"ok"})))
     seen_dests: list[Path] = []
 
     async def scripted_snapshot(session, dest):  # noqa: ANN001
@@ -303,7 +351,7 @@ async def test_finish_sealability_probe_judges_content_only(
     assert result.blocking == ()
 
     # No live sandbox ⇒ sealable, "nothing to judge" (commit-time authority).
-    del rt._executors[cid]
+    rt._run_resources.pop_executor(cid)
     result = await rt._lifecycle.probe_finish_sealability(cid)
     assert result.sealable is True
     assert "no live workspace" in result.detail
@@ -317,7 +365,7 @@ async def test_finalizer_and_host_mutation_share_one_barrier(
     cid = "conv-final-barrier"
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"v1"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"v1"})))
     capture_entered = asyncio.Event()
     release_capture = asyncio.Event()
     real_snapshot = __import__(
@@ -370,7 +418,7 @@ async def test_snapshot_journal_without_sqlite_checkpoint_remains_unsealed(
     cid = "conv-snapshot-recovery"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"recover me"}))
+    _set_executor(rt, cid, _Workspace({"index.html": b"recover me"}))
     real_cut = projects.cut_verified_version
 
     def interrupt_before_version(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
@@ -404,7 +452,7 @@ async def test_snapshot_journal_refuses_changed_mirror_bytes(
     cid = "conv-snapshot-tamper"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"before"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"before"})))
     real_cut = projects.cut_verified_version
 
     def interrupt_before_version(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
@@ -437,7 +485,7 @@ async def test_version_journal_recovers_after_event_append_interruption(
     cid = "conv-version-recovery"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"versioned"}))
+    _set_executor(rt, cid, _Workspace({"index.html": b"versioned"}))
     real_append = event_store.append
 
     async def interrupt_seal_append(conversation_id, event):  # noqa: ANN001, ANN202
@@ -479,7 +527,7 @@ async def test_version_journal_refuses_live_workspace_drift_after_checkpoint(
     cid = "conv-version-recovery-drift"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"versioned"}))
+    _set_executor(rt, cid, _Workspace({"index.html": b"versioned"}))
     real_append = event_store.append
 
     async def interrupt_seal_append(conversation_id, event):  # noqa: ANN001, ANN202
@@ -514,7 +562,7 @@ async def test_recovery_refuses_older_version_without_matching_sqlite_checkpoint
     cid = "conv-older-journal-version"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"first"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"first"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -570,7 +618,7 @@ async def test_cancelled_finish_drains_failed_capture_then_reraises_cancellation
     cid = "conv-cancelled-failed-capture"
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"bytes"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"bytes"})))
     capture_entered = asyncio.Event()
     release_failure = asyncio.Event()
 
@@ -612,7 +660,7 @@ async def test_repeated_cancellation_cannot_cancel_successful_finish_seal(
     cid = "conv-double-cancelled-seal"
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"complete"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"complete"})))
     capture_entered = asyncio.Event()
     release_capture = asyncio.Event()
     capture_cancelled = asyncio.Event()
@@ -687,7 +735,7 @@ async def test_shadow_fold_bytes_are_captured_before_the_final_seal(
         ],
     )
     sandbox = _Workspace({"index.html": b"app"})
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
     order: list[str] = []
     fold_count = 0
 
@@ -712,7 +760,7 @@ async def test_shadow_fold_bytes_are_captured_before_the_final_seal(
         order.append("capture")
         return await snapshot_workspace(session, dest)
 
-    monkeypatch.setattr(rt, "_shadow_fold_manifest", fold)
+    monkeypatch.setattr(rt._artifact_manifest_shadow, "fold", fold)
     monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", capture)
     await rt._lifecycle.commit_finished_workspace(
         cid,
@@ -721,7 +769,7 @@ async def test_shadow_fold_bytes_are_captured_before_the_final_seal(
             agent_view_id="aview-shadow",
         ),
     )
-    await rt._finalize_clean_return(cid)
+    await rt._run_finalizer.finalize_clean(cid)
 
     assert order == ["fold", "capture"]
     assert fold_count == 1
@@ -818,7 +866,7 @@ async def test_shadow_fold_seals_winning_artifact_without_losing_view_output(
             "stale.txt": b"stale",
         }
     )
-    rt._executors[cid] = MagicMock(_sandbox=workspace, sandbox=workspace)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=workspace, sandbox=workspace))
 
     await rt._lifecycle.commit_finished_workspace(
         cid,
@@ -849,9 +897,9 @@ async def test_shadow_fold_flag_off_records_no_effect(
     monkeypatch.delenv("PMX_ARTIFACT_MANIFEST_SHADOW", raising=False)
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"app"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"app"})))
     fold = AsyncMock()
-    monkeypatch.setattr(rt, "_shadow_fold_manifest", fold)
+    monkeypatch.setattr(rt._artifact_manifest_shadow, "fold", fold)
 
     await rt._lifecycle.commit_finished_workspace(
         cid,
@@ -875,7 +923,7 @@ async def test_host_mirror_finalizer_never_folds_sandbox_manifest(
     monkeypatch.delenv("DISCO_ARTIFACT_MANIFEST_SHADOW", raising=False)
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"initial"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -883,7 +931,7 @@ async def test_host_mirror_finalizer_never_folds_sandbox_manifest(
 
     monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
     fold = AsyncMock()
-    monkeypatch.setattr(rt, "_shadow_fold_manifest", fold)
+    monkeypatch.setattr(rt._artifact_manifest_shadow, "fold", fold)
     async with rt._workspace.lock(cid):
         async with rt._workspace.interprocess_mutation_fence(cid):
             await rt.record_workspace_mutation_locked(
@@ -911,10 +959,7 @@ async def test_nonfinished_suspend_snapshot_serializes_with_host_mutation(
     rt, _projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
     await event_store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
-    rt._executors[cid] = MagicMock(
-        _sandbox=_Workspace({"index.html": b"paused"}),
-        kill=AsyncMock(),
-    )
+    _set_executor(rt, cid, _Workspace({"index.html": b"paused"}), kill=AsyncMock())
     capture_entered = asyncio.Event()
     release_capture = asyncio.Event()
     mutation_attempting = asyncio.Event()
@@ -964,7 +1009,7 @@ async def test_inactive_finished_host_edit_gets_a_fresh_committed_revision(
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
     sandbox = _Workspace({"index.html": b"before"})
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -998,7 +1043,7 @@ async def test_locked_host_mirror_finalizer_seals_mirror_not_stale_sandbox(
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
     sandbox = _Workspace({"index.html": b"sandbox-before"})
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1053,7 +1098,7 @@ async def test_committed_host_mirror_guard_rejects_unsealed_drift(
     cid = "conv-host-mirror-guard"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1083,14 +1128,18 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
     rt.kick = MagicMock()
     async with rt._workspace.lock(cid):
         await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
+        # record_workspace_mutation_locked on a RUNNING head publishes a run
+        # claim; clear it so the finalizer's inactive-FINISHED-head guard is the
+        # one that fires (not the run-claim guard).
+        rt._workspace.clear_run_claim(cid)
         with pytest.raises(RuntimeError, match="inactive FINISHED head"):
             await rt.finalize_host_mirror_change_locked(cid, "host-write")
 
     await event_store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
     release_active = asyncio.Event()
     active = asyncio.create_task(release_active.wait())
-    rt._tasks[cid] = active
-    rt._workspace._admitted_runs.add(cid)
+    rt._run_registry._tasks[cid] = active
+    rt._workspace._fences._admitted_runs.add(cid)
     try:
         async with rt._workspace.lock(cid):
             await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
@@ -1098,10 +1147,10 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
             with pytest.raises(RuntimeError, match="agent run is active"):
                 await rt.finalize_host_mirror_change_locked(cid, "host-write")
     finally:
-        rt._workspace._admitted_runs.discard(cid)
+        rt._workspace._fences._admitted_runs.discard(cid)
         release_active.set()
         await active
-        rt._tasks.pop(cid, None)
+        rt._run_registry._tasks.pop(cid, None)
 
     events = await event_store.get_events(cid)
     assert not any(
@@ -1154,7 +1203,7 @@ async def test_retrying_exact_finished_event_never_writes_after_terminal(
         ],
     )
     workspace = _Workspace({"index.html": b"complete"})
-    rt._executors[cid] = MagicMock(_sandbox=workspace, sandbox=workspace)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=workspace, sandbox=workspace))
     terminal = StatusEvent(
         status=ConversationStatus.FINISHED,
         agent_view_id="view-idempotent",
@@ -1225,7 +1274,7 @@ async def test_host_mirror_finalizer_rejects_wrong_authority_before_append(
             ),
         ],
     )
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"initial"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(
@@ -1280,7 +1329,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     rt, projects = _runtime(event_store, tmp_path)
     rt.set_surface(cid, "build")
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"initial"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1293,12 +1342,12 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
         await release_run.wait()
         return "done"
 
-    monkeypatch.setattr(rt, "_run_with_persistence", fake_run)
+    monkeypatch.setattr(rt._run_execution, "run", fake_run)
     lock = rt._workspace.lock(cid)
     async with lock:
-        task, _generation = rt._create_run_task(cid, MagicMock())
+        task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
         await asyncio.sleep(0)
-        assert rt._tasks[cid] is task
+        assert rt._run_registry._tasks[cid] is task
         assert not rt._workspace.has_admitted_run(cid)
         assert not run_started.is_set()
 
@@ -1324,7 +1373,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     release_run.set()
     assert await task == "done"
     assert not rt._workspace.has_admitted_run(cid)
-    rt._tasks.pop(cid, None)
+    rt._run_registry._tasks.pop(cid, None)
 
 
 async def test_ingress_first_pending_run_blocks_already_queued_deploy(
@@ -1338,7 +1387,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
     rt, _projects = _runtime(event_store, tmp_path)
     rt.set_surface(cid, "build")
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1351,7 +1400,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
         await release_run.wait()
         return "done"
 
-    monkeypatch.setattr(rt, "_run_with_persistence", fake_run)
+    monkeypatch.setattr(rt._run_execution, "run", fake_run)
     lock = rt._workspace.lock(cid)
     await lock.acquire()
 
@@ -1361,7 +1410,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
 
     deploy = asyncio.create_task(queued_deploy_preflight())
     await asyncio.sleep(0)  # place deploy first in the lock's waiter queue
-    run, _generation = rt._create_run_task(cid, MagicMock())
+    run, _generation = rt._run_supervisor.create_task(cid, _make_loop())
     rt._workspace.claim_registered_run_locked(cid)
     assert rt._workspace.has_run_claim(cid)
     lock.release()
@@ -1371,7 +1420,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
     await asyncio.wait_for(run_started.wait(), timeout=1)
     release_run.set()
     assert await run == "done"
-    rt._tasks.pop(cid, None)
+    rt._run_registry._tasks.pop(cid, None)
 
 
 async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
@@ -1384,7 +1433,7 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     lock = rt._workspace.lock(cid)
     await lock.acquire()
     same_lock = rt._workspace.lock(cid)
-    task, _generation = rt._create_run_task(cid, MagicMock())
+    task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
     rt._workspace.claim_registered_run_locked(cid)
     assert rt._workspace.has_run_claim(cid)
 
@@ -1408,9 +1457,10 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
     rt_b, _unused = _runtime(event_store, tmp_path / "other-runtime")
     rt_a.set_surface(cid, "build")
     rt_b.set_surface(cid, "build")
-    rt_b._project_store_now = MagicMock(return_value=projects)
+    rt_b._projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt_b._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     await _seed_running(event_store, cid)
-    rt_a._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt_a._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt_a._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1434,6 +1484,11 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
         await rt_b.record_workspace_mutation_locked(
             cid, "stale-host-finalizer", paths=("index.html",)
         )
+        # The run-intent event reopens the workspace to RUNNING, so
+        # record_workspace_mutation_locked publishes a run claim.  Clear it
+        # so the inactive-FINISHED-head guard is the one that fires (not the
+        # run-claim guard).
+        rt_b._workspace.clear_run_claim(cid)
         with pytest.raises(RuntimeError, match="inactive FINISHED head"):
             await rt_b.finalize_host_mirror_change_locked(cid, "stale-host-finalizer")
 
@@ -1495,10 +1550,10 @@ async def test_locked_restore_helper_rejects_missing_local_or_process_fence(
     rt, _projects = _runtime(event_store, tmp_path)
 
     with pytest.raises(RuntimeError, match="conversation lock"):
-        await rt._restore_workspace_version_locked(cid, 1)
+        await rt._workspace.restore_version_locked(cid, 1)
     async with rt._workspace.lock(cid):
         with pytest.raises(RuntimeError, match="process fence"):
-            await rt._restore_workspace_version_locked(cid, 1)
+            await rt._workspace.restore_version_locked(cid, 1)
 
 
 async def test_resolver_rejects_structurally_valid_seal_that_launders_run_intent(
@@ -1508,7 +1563,7 @@ async def test_resolver_rejects_structurally_valid_seal_that_launders_run_intent
     cid = "conv-manual-run-intent-launder"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1625,7 +1680,7 @@ async def test_admitted_run_with_real_progress_can_publish_final_workspace(
             StatusEvent(status=ConversationStatus.RUNNING),
         ],
     )
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"complete"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"complete"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED, agent_view_id="aview_s"),
@@ -1643,7 +1698,7 @@ async def test_host_mirror_finalizer_fails_closed_if_mirror_changes_during_cut(
     cid = "conv-host-mirror-race"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"initial"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1677,7 +1732,7 @@ async def test_host_mirror_finalizer_rejects_drift_after_version_cut_returns(
     cid = "conv-host-mirror-post-cut-race"
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_running(event_store, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"initial"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1734,7 +1789,7 @@ async def test_dry_deploy_plan_revalidates_durable_head_after_synchronous_planni
     primary.create_conversation(cid, owner_id="local")
     rt, projects = _runtime(primary, tmp_path)
     await _seed_running(primary, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1805,7 +1860,7 @@ async def test_dry_plan_lone_user_changes_event_head_seq(
     primary.create_conversation(cid, owner_id="local")
     rt, projects = _runtime(primary, tmp_path)
     await _seed_running(primary, cid)
-    rt._executors[cid] = MagicMock(_sandbox=_Workspace({"index.html": b"sealed"}))
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await rt._lifecycle.commit_finished_workspace(
         cid,
         StatusEvent(status=ConversationStatus.FINISHED),
@@ -1871,26 +1926,7 @@ async def test_seal_uses_the_sandbox_pinned_at_the_terminal_not_a_later_lookup()
     p4_ff_import_rollback). The reference is now pinned while the producing run is
     still live.
     """
-    from disco.agent_server.workspace_persistence import WorkspacePersistence
-
-    class _Store:
-        def status(self):
-            from disco.tools.projects import StorageStatus
-
-            return StorageStatus.OK
-
-    class _Runtime:
-        def __init__(self):
-            self._executors = {}  # the executor is ALREADY gone at seal time
-
-        def _project_store_now(self):
-            return _Store()
-
-        async def _emit_persistence_reminder(self, *a, **k):
-            return None
-
-    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
-    persistence._rt = _Runtime()
+    persistence = _persistence(_resources())  # no executor → pinned path
     pinned = object()
 
     resolved = await persistence._resolve_capture_session(
@@ -1906,26 +1942,7 @@ async def test_seal_uses_the_sandbox_pinned_at_the_terminal_not_a_later_lookup()
 async def test_seal_still_fails_closed_when_nothing_was_pinned_and_nothing_is_live():
     """Regression guard: the pin is a window fix, not a way to seal without a
     sandbox. With no pin and no live executor the strict path still raises."""
-    from disco.agent_server.workspace_persistence import WorkspacePersistence
-
-    class _Store:
-        def status(self):
-            from disco.tools.projects import StorageStatus
-
-            return StorageStatus.OK
-
-    class _Runtime:
-        def __init__(self):
-            self._executors = {}
-
-        def _project_store_now(self):
-            return _Store()
-
-        async def _emit_persistence_reminder(self, *a, **k):
-            return None
-
-    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
-    persistence._rt = _Runtime()
+    persistence = _persistence(_resources())  # no executor, no pin
 
     with pytest.raises(RuntimeError, match="no live sandbox"):
         await persistence._resolve_capture_session("conv_pin", seal_fence=(7, None))
@@ -1940,31 +1957,14 @@ async def test_pinned_sandbox_yields_to_a_rotated_live_one():
     against it fails on paths that no longer exist. The pin closes the
     dropped-executor window; it does not bind the seal to a corpse.
     """
-    from disco.agent_server.workspace_persistence import WorkspacePersistence
-
-    class _Store:
-        def status(self):
-            from disco.tools.projects import StorageStatus
-
-            return StorageStatus.OK
-
     live = object()
 
     class _Executor:
         _sandbox = live
 
-    class _Runtime:
-        def __init__(self):
-            self._executors = {"conv_rot": _Executor()}
-
-        def _project_store_now(self):
-            return _Store()
-
-        async def _emit_persistence_reminder(self, *a, **k):
-            return None
-
-    persistence = WorkspacePersistence.__new__(WorkspacePersistence)
-    persistence._rt = _Runtime()
+    run_resources = _resources()
+    run_resources.set_executor("conv_rot", _Executor())  # type: ignore[arg-type]
+    persistence = _persistence(run_resources)
     stale = object()
 
     resolved = await persistence._resolve_capture_session(

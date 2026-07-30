@@ -19,6 +19,7 @@ import pytest
 from disco.agent_server import create_app
 from disco.core import ConversationStatus, ObservationEvent, SqliteEventStore, StatusEvent
 from disco.core.events import ToolResult
+from disco.core.llm import ConfigStore, SecretStore
 from disco.tools.builtin._deck_schema import AuthoredDeck
 from fastapi.testclient import TestClient
 
@@ -123,6 +124,29 @@ class _FakeSandboxService:
         return self._instance
 
 
+class _LiveSessions:
+    """Minimal stand-in for the LiveSessionDirectory named owner."""
+
+    def live_session(self, cid: str) -> _Session | None:
+        return None
+
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        return None
+
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return None
+
+
+class _Sandbox:
+    """Minimal stand-in for the SandboxRuntimeService named owner."""
+
+    def __init__(self, spec: object) -> None:
+        self._spec = spec
+
+    def base_spec(self) -> object:
+        return self._spec
+
+
 class _LiveRuntime:
     def __init__(
         self,
@@ -137,7 +161,11 @@ class _LiveRuntime:
         self._backend = backend
         self._svc = sandbox_service
         self._sandbox_spec = object()
+        self._sandbox = _Sandbox(self._sandbox_spec)
         self.finalized_host_changes: list[tuple[str, str]] = []
+        self._live_sessions = _LiveSessions()
+        self._config_store = ConfigStore()
+        self._secret_store = SecretStore()
 
     def set_surface(self, cid: str, surface: object) -> None: ...
     def set_model_override(self, cid: str, model: object) -> None: ...

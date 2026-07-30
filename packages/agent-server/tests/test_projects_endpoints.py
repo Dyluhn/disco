@@ -603,18 +603,18 @@ def test_surface_recovery_treats_project_with_manifest_as_build(store, tmp_path)
         total_bytes=1,
     )
     # set_surface was NEVER called on this runtime — exactly the post-restart shape.
-    assert cid not in runtime._surface
+    assert cid not in runtime._settings._surface_settings._surfaces
     # the recovery method should return "build" because a manifest exists
     assert runtime._surface_of(cid) == "build"
     # and the lookup caches the recovery so subsequent calls don't restat
-    assert runtime._surface[cid] == "build"
+    assert runtime._settings._surface_settings._surfaces[cid] == "build"
 
 
 def test_surface_recovery_defaults_to_research_when_no_manifest(store, tmp_path):
     runtime = _runtime(store, root=str(tmp_path))
     # no project on disk → defaults to research, doesn't pollute _surface
     assert runtime._surface_of("conv_unknown") == "research"
-    assert "conv_unknown" not in runtime._surface
+    assert "conv_unknown" not in runtime._settings._surface_settings._surfaces
 
 
 def test_surface_persists_across_restart_without_project_manifest(store, tmp_path, monkeypatch):

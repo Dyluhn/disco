@@ -11,7 +11,7 @@ test-record/bp-15/integration-workspace-route.log.
 from __future__ import annotations
 
 import pytest
-from disco.agent_server import create_app
+from disco.agent_server.routes.conversations import make_conversations_router
 from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
 
@@ -51,14 +51,35 @@ class _StubRuntime:
 @pytest.fixture
 def client() -> TestClient:
     store = SqliteEventStore(":memory:")
-    return TestClient(create_app(store, runtime=_StubRuntime()))  # type: ignore[arg-type]
+    return _route_client(store, _StubRuntime())
 
 
 @pytest.fixture
 def bare_client() -> TestClient:
     """No runtime at all — the 'agent-server without a sandbox' shape."""
     store = SqliteEventStore(":memory:")
-    return TestClient(create_app(store))
+    return _route_client(store, None)
+
+
+def _route_client(store: SqliteEventStore, runtime: object | None) -> TestClient:
+    from disco.agent_server.auth import AgentAuthMiddleware
+    from fastapi import FastAPI
+
+    if runtime is not None:
+        runtime.project_store = _project_store  # type: ignore[attr-defined]
+    app = FastAPI()
+    app.add_middleware(AgentAuthMiddleware, store=store)
+    app.include_router(make_conversations_router(store, runtime))  # type: ignore[arg-type]
+    return TestClient(app)
+
+
+class _NoProjectStore:
+    def path_for(self, _conversation_id: str) -> None:
+        return None
+
+
+def _project_store() -> _NoProjectStore:
+    return _NoProjectStore()
 
 
 def _create(client: TestClient) -> str:

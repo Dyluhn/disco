@@ -27,7 +27,7 @@ def _loop_for(rt: ConversationRuntime, cid: str):
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._compose_build_loop(cid, router, agent)
-    rt._loops[cid] = loop
+    rt._loop_registry.bind(cid, loop)
     return loop
 
 
@@ -36,10 +36,10 @@ def test_effective_appkit_mode_gated_by_flag(monkeypatch: pytest.MonkeyPatch) ->
     rt.set_appkit_mode("c1", True)
     monkeypatch.setenv(APPKIT_ENABLED_ENV, "0")
     with pytest.raises(RuntimeError, match="was not opened as Freeform"):
-        rt._effective_appkit_mode("c1")
+        rt._settings._effective_appkit_mode("c1")
     # Re-enable: the stored per-conversation flag was never touched.
     monkeypatch.delenv(APPKIT_ENABLED_ENV, raising=False)
-    assert rt._effective_appkit_mode("c1") is True
+    assert rt._settings._effective_appkit_mode("c1") is True
 
 
 def test_effective_appkit_mode_recovers_from_store_not_runtime_cache(
@@ -49,8 +49,8 @@ def test_effective_appkit_mode_recovers_from_store_not_runtime_cache(
     store = SqliteEventStore(":memory:")
     store.create_conversation("persisted", appkit_mode=True)
     rt = ConversationRuntime(store)
-    rt._appkit_mode.clear()
-    assert rt._effective_appkit_mode("persisted") is True
+    rt._settings._mode_settings._appkit_mode.clear()
+    assert rt._settings._effective_appkit_mode("persisted") is True
     with pytest.raises(ValueError, match="immutable"):
         rt.set_appkit_mode("persisted", False)
 
@@ -73,7 +73,7 @@ def test_disabled_flag_blocks_existing_appkit_without_freeform_fallback(
     rt = _rt()
     with pytest.raises(RuntimeError, match="AppKit is unavailable"):
         _loop_for(rt, "kd1")
-    assert rt._executors == {}
+    assert rt._run_resources.conversation_ids(executors_only=True) == ()
 
 
 def test_enabled_flag_keeps_strict_executor(monkeypatch: pytest.MonkeyPatch) -> None:

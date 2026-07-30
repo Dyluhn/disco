@@ -13,7 +13,7 @@ drift row, and the DTO's `new_description_hash` is `None`.
 These tests drive the real end-to-end path:
   pool.approval_pending()  →  mcp_approval_pending table  →  ConfigState.mcp_connections()
 
-through the real `ConversationRuntime._start_mcp_pool` (the production
+through the real `McpManager._start_mcp_pool` (the production
 write path) and the real `ConfigState.mcp_connections` (the production
 read path). No mocks.
 """
@@ -80,7 +80,7 @@ def _fake_stdio_command() -> list[str]:
 def _router_config_with_fake_srv(server_name: str = "fake_e6_srv") -> RouterConfig:
     """Build a RouterConfig with one enabled stdio MCP server (the fake one).
 
-    Mirrors the production config shape that the runtime's `_start_mcp_pool`
+    Mirrors the production config shape that the manager's `_start_mcp_pool`
     reads — `cfg.mcp.enabled + cfg.mcp.servers[name] = {transport, command, ...}`.
     """
     return RouterConfig.model_validate(
@@ -198,7 +198,7 @@ async def test_e6_real_new_hash_threads_through_pool_db_and_dto(tmp_path):
     # shared table. After start, BOTH the runtime's in-memory
     # `_mcp_approval_pending` AND the persisted row carry the new_hash.
     rt = _runtime_with_mcp(store, server_name, tmp_path)
-    await rt._start_mcp_pool()
+    await rt._mcp._start_mcp_pool()
     try:
         # 1) Pool source of truth: the runtime's `mcp_approval_state()` has
         #    the AUTHORITATIVE new_hash.
@@ -224,7 +224,7 @@ async def test_e6_real_new_hash_threads_through_pool_db_and_dto(tmp_path):
         assert drift_rows[0]["old_hash"] == stale_hash
         assert drift_rows[0]["new_hash"] == _FAKE_SERVER_EXPECTED_HASH
     finally:
-        await rt._close_mcp_pool()
+        await rt._mcp._close_mcp_pool()
 
     # 3) UI contract: the app-server's mcp_connections() projects the
     #    AUTHORITATIVE new_hash onto McpConnectionDTO.new_description_hash.
@@ -273,18 +273,18 @@ async def test_e6_unchanged_server_writes_no_drift_row(tmp_path):
     _approve_server_config(store, server_name)
 
     rt = _runtime_with_mcp(store, server_name, tmp_path)
-    await rt._start_mcp_pool()
+    await rt._mcp._start_mcp_pool()
     try:
         # 1) Pool: no drift. The pool must be connected (not
         #    `approval_required`) and `approval_pending()` is empty.
-        assert rt._mcp_pool is not None
-        status = rt._mcp_pool.server_status()
+        assert rt._mcp._pool is not None
+        status = rt._mcp._pool.server_status()
         assert status[server_name] == "connected", (
             f"expected connected (hashes match); got {status!r}"
         )
-        assert rt._mcp_pool.approval_pending() == {}, (
+        assert rt._mcp._pool.approval_pending() == {}, (
             f"approval_pending() must be empty when hashes match; "
-            f"got {rt._mcp_pool.approval_pending()!r}"
+            f"got {rt._mcp._pool.approval_pending()!r}"
         )
 
         # 2) Runtime: `_mcp_approval_pending` is the empty bridge.
@@ -299,7 +299,7 @@ async def test_e6_unchanged_server_writes_no_drift_row(tmp_path):
         rows = list_mcp_approval_pending(store._conn)
         assert rows == [], f"mcp_approval_pending must be empty when hashes match; got {rows!r}"
     finally:
-        await rt._close_mcp_pool()
+        await rt._mcp._close_mcp_pool()
 
     # 4) UI contract: the DTO has `new_description_hash = None` so the
     #    frontend does NOT show an ApprovalDiff banner (the
@@ -326,11 +326,11 @@ async def test_e6_first_time_server_requires_config_approval(tmp_path):
     # No create_mcp_approval — first-time setup.
 
     rt = _runtime_with_mcp(store, server_name, tmp_path)
-    await rt._start_mcp_pool()
+    await rt._mcp._start_mcp_pool()
     try:
-        assert rt._mcp_pool is not None
-        assert rt._mcp_pool.server_status()[server_name] == "approval_required"
-        pending = rt._mcp_pool.approval_pending()[server_name]
+        assert rt._mcp._pool is not None
+        assert rt._mcp._pool.server_status()[server_name] == "approval_required"
+        pending = rt._mcp._pool.approval_pending()[server_name]
         assert pending["kind"] == "config"
         assert pending["old_hash"] == ""
         assert pending["new_hash"] == _server_config_hash(server_name)
@@ -339,7 +339,7 @@ async def test_e6_first_time_server_requires_config_approval(tmp_path):
         # separate approval ledger; it must not pollute the tool-schema table.
         assert list_mcp_approval_pending(store._conn) == []
     finally:
-        await rt._close_mcp_pool()
+        await rt._mcp._close_mcp_pool()
 
     cfg_state = _config_state(store, tmp_path, server_name, "stdio://fake")
     conns = cfg_state.mcp_connections()
@@ -425,7 +425,7 @@ async def test_e6_stale_drift_row_replaced_with_fresh_authoritative_value(
     # (= _FAKE_SERVER_EXPECTED_HASH) and the runtime overwrites the stale
     # drift row with the fresh value.
     rt = _runtime_with_mcp(store, server_name, tmp_path)
-    await rt._start_mcp_pool()
+    await rt._mcp._start_mcp_pool()
     try:
         # The pool detected drift (stored "f"*64 != real new_hash).
         approval_state = rt.mcp_approval_state()
@@ -440,4 +440,4 @@ async def test_e6_stale_drift_row_replaced_with_fresh_authoritative_value(
             f"expected {_FAKE_SERVER_EXPECTED_HASH!r})"
         )
     finally:
-        await rt._close_mcp_pool()
+        await rt._mcp._close_mcp_pool()

@@ -144,7 +144,7 @@ async def run_scripted(
 
     # Kick the loop; wait for it to reach a terminal status.
     runtime.kick(cid)
-    task = runtime._tasks.get(cid)
+    task = runtime._run_registry.task(cid)
     if task is None:
         raise RuntimeError("runtime.kick() did not schedule a task — check surface wiring")
 
@@ -160,7 +160,7 @@ async def run_scripted(
 
     # Workspace path: executor holds the sandbox session; the session exposes
     # the host-side workspace root once at least one sandbox tool has run.
-    executor = runtime._executors.get(cid)
+    executor = runtime._run_resources.executor(cid)
     sandbox = getattr(executor, "sandbox", None) if executor is not None else None
     workspace_path: str | None = getattr(sandbox, "workspace_path", None)
 

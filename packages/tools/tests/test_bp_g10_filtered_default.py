@@ -16,7 +16,7 @@ Acceptance:
 References:
   - packages/agent-server/src/disco/agent_server/runtime.py
     `_build_sandbox_spec` (BP-G10 default flip)
-  - packages/agent-server/src/disco/agent_server/runtime.py
+  - packages/agent-server/src/disco/agent_server/mcp_manager.py
     `_mcp_proxy_env` (matching default flip)
   - packages/tools/src/disco/tools/sandbox/base.py:79  REGISTRY_EGRESS_ALLOW
   - packages/tools/src/disco/tools/sandbox/gvisor.py   `_setup_filtered_egress` (UNCHANGED)
@@ -135,7 +135,7 @@ def test_default_mcp_proxy_env_is_not_none():
     rt = _runtime()
     env = {k: v for k, v in os.environ.items() if k != "PMX_BUILD_EGRESS"}
     with mock.patch.dict(os.environ, env, clear=True):
-        proxy = rt._mcp_proxy_env()
+        proxy = rt._mcp._mcp_proxy_env()
     assert proxy is not None, (
         "default posture is now filtered → _mcp_proxy_env must return a proxy env"
     )
@@ -150,7 +150,7 @@ def test_explicit_open_mcp_proxy_env_is_none():
     route through)."""
     rt = _runtime()
     with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "open"}):
-        assert rt._mcp_proxy_env() is None
+        assert rt._mcp._mcp_proxy_env() is None
 
 
 # ---------------------------------------------------------------------------

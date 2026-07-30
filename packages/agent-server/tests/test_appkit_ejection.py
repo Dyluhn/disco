@@ -83,12 +83,11 @@ class _PreviewRuntime:
 
 
 def _runtime(store: SqliteEventStore, root: Path) -> ConversationRuntime:
-    runtime = ConversationRuntime(store, router=MagicMock())
     config = MagicMock()
     config.projects.projects_root = str(root)
-    runtime._config_store = MagicMock()
-    runtime._config_store.load.return_value = config
-    return runtime
+    config_store = MagicMock()
+    config_store.load.return_value = config
+    return ConversationRuntime(store, router=MagicMock(), config_store=config_store)
 
 
 async def _seed_appkit_attempt(
@@ -155,8 +154,8 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     router = MagicMock(spec=DefaultLLMRouter)
     agent = MagicMock(spec=RouterAgent)
     with (
-        mock.patch.object(runtime, "_sandbox_service_now"),
-        mock.patch.object(runtime, "_effective_driver_endpoint", return_value=None),
+        mock.patch.object(runtime._sandbox, "_sandbox_service_now"),
+        mock.patch.object(runtime._settings, "_effective_driver_endpoint", return_value=None),
     ):
         loop = runtime._compose_build_loop(
             conversation_id,
@@ -165,11 +164,11 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
             driver_context_window=8192,
         )
     assert isinstance(loop.executor, AppKitToolExecutor)
-    runtime._loops[conversation_id] = loop
+    runtime._loop_registry.bind(conversation_id, loop)
     loop.mode = OperatingMode.LONG_HORIZON
     loop.executor.appkit_phase.phase = AppKitPhase.BUILD
     loop.executor._sandbox = session
-    runtime._executors[conversation_id] = loop.executor
+    runtime._run_resources.set_executor(conversation_id, loop.executor)
     call, action, initial_admission = await _seed_appkit_attempt(runtime, conversation_id)
     assert initial_admission.route == "platform"
     assert initial_admission.composition_digest is not None
@@ -254,7 +253,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert admission.supersedes_admission_id == initial_admission.id
     assert admission.composition_digest != initial_admission.composition_digest
     assert admission.run_identity != initial_admission.run_identity
-    assert runtime._effective_appkit_mode(conversation_id) is False
+    assert runtime._settings._effective_appkit_mode(conversation_id) is False
 
     app = FastAPI()
     app.include_router(make_preview_router(store, cast(Any, _PreviewRuntime(projects))))
@@ -273,5 +272,5 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
 
     restarted = _runtime(store, tmp_path)
     await restarted._build_platform.prepare_route_pin(conversation_id)
-    assert restarted._effective_appkit_mode(conversation_id) is False
+    assert restarted._settings._effective_appkit_mode(conversation_id) is False
     assert restarted._build_platform.route_pins[conversation_id] == "platform"

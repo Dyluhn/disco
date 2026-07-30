@@ -60,7 +60,7 @@ def _loop_for(rt: ConversationRuntime, cid: str, *, appkit_mode: bool = False):
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._compose_build_loop(cid, router, agent)
-    rt._loops[cid] = loop
+    rt._loop_registry.bind(cid, loop)
     return loop
 
 
@@ -145,11 +145,13 @@ def test_loop_for_selects_strict_appkit_prompt_profile() -> None:
     cid = "ak-prompt"
     rt.set_surface(cid, "agent")
     rt.set_appkit_mode(cid, True)
-    with mock.patch.object(rt, "_router_now", wraps=rt._router_now) as router_now:
+    with mock.patch.object(rt._drivers, "router", wraps=rt._drivers.router) as router_now:
         with mock.patch.object(rt, "_sandbox_service_now"):
             rt._loop_for(cid)
     assert any(call.kwargs.get("appkit_mode") is True for call in router_now.call_args_list)
-    prompt = rt._loops[cid]._router._prompts.system_prompt(
+    loop = rt._loop_registry.loop(cid)
+    assert loop is not None
+    prompt = loop._router._prompts.system_prompt(
         model_family="deepseek",
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
@@ -378,7 +380,7 @@ def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
         runs_in="in_process",
         behavior=OPAQUE_MCP_BEHAVIOR,
     )
-    rt._mcp_http_tools = {"mcp_remote_search": mcp_def}
+    rt._mcp._http_tools = {"mcp_remote_search": mcp_def}
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._compose_build_loop("ak5", router, agent)
 
@@ -389,11 +391,11 @@ def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
 
 def test_set_appkit_mode_and_effective() -> None:
     rt = _rt()
-    assert rt._effective_appkit_mode("c_new") is False
+    assert rt._settings._effective_appkit_mode("c_new") is False
     rt.set_appkit_mode("c_on", True)
-    assert rt._effective_appkit_mode("c_on") is True
+    assert rt._settings._effective_appkit_mode("c_on") is True
     rt.set_appkit_mode("c_off", False)
-    assert rt._effective_appkit_mode("c_off") is False
+    assert rt._settings._effective_appkit_mode("c_off") is False
 
 
 def test_effective_appkit_mode_reads_live_ejection_state() -> None:
@@ -401,7 +403,7 @@ def test_effective_appkit_mode_reads_live_ejection_state() -> None:
     rt.set_appkit_mode("c_ejected", True)
 
     with mock.patch.object(rt._appkit_ejections, "is_appkit_ejected", return_value=True):
-        assert rt._effective_appkit_mode("c_ejected") is False
+        assert rt._settings._effective_appkit_mode("c_ejected") is False
 
 
 def test_appkit_mode_flag_round_trips_from_body() -> None:
@@ -417,8 +419,8 @@ def test_appkit_mode_flag_round_trips_from_body() -> None:
 
     resp = asyncio.run(route.endpoint(CreateConversationBody(surface="agent", appkit_mode=True)))
     cid = resp["conversation_id"]
-    assert rt._effective_appkit_mode(cid) is True
+    assert rt._settings._effective_appkit_mode(cid) is True
 
     resp2 = asyncio.run(route.endpoint(CreateConversationBody(surface="agent")))
     cid2 = resp2["conversation_id"]
-    assert rt._effective_appkit_mode(cid2) is False
+    assert rt._settings._effective_appkit_mode(cid2) is False

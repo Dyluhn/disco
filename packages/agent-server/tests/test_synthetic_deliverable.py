@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from disco.agent_server import ConversationRuntime
 from disco.agent_server.lifecycle import LifecycleManager
 from disco.core import (
     ActionEvent,
@@ -26,13 +27,12 @@ from disco.core import (
 )
 
 
-class _Rt:
-    """Minimal runtime back-ref: _maybe_synthesize_app_deliverable only needs _store."""
-
-    def __init__(self, store: SqliteEventStore) -> None:
-        self._store = store
+def _mgr(store: SqliteEventStore) -> LifecycleManager:
+    return ConversationRuntime(store)._lifecycle
 
 
+# Keep the accepted fixture identity stable while the old fake-runtime helper
+# is replaced by the real composition owner above.
 @pytest.fixture(autouse=True)
 def _close_event_stores(monkeypatch):
     owned: list[SqliteEventStore] = []
@@ -46,10 +46,6 @@ def _close_event_stores(monkeypatch):
     yield
     for event_store in owned:
         event_store.close()
-
-
-def _mgr(store: SqliteEventStore) -> LifecycleManager:
-    return LifecycleManager(_Rt(store))  # type: ignore[arg-type]
 
 
 async def _app_deliverables(store: SqliteEventStore, cid: str) -> list[DeliverableEvent]:
