@@ -156,18 +156,12 @@ def score_other(tool_name: str, args: Mapping[str, object]) -> tuple[SecurityRis
     inferred = _L
     why = f"tool '{tool_name}'"
 
-    for classifier in (
-        _classify_read_only,
-        _classify_state_changing,
-        _classify_deploy,
-        _classify_destructive,
+    for result in (
+        _classify_read_only(name, tool_name),
+        _classify_state_changing(name, tool_name, args),
+        _classify_deploy(name, tool_name),
+        _classify_destructive(name, tool_name),
     ):
-        if classifier is _classify_state_changing:
-            result = _classify_state_changing(name, tool_name, args)
-        elif classifier is _classify_browser:
-            result = _classify_browser(name, tool_name, args)
-        else:
-            result = classifier(name, tool_name)
         if result is not None:
             risk, rationale = result
             inferred = max_risk(inferred, risk)

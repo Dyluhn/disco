@@ -78,8 +78,6 @@ class TransitionCoordinator:
         # conversation" (the model already saw it), while HS-03 is
         # "fire once per resume" (a pause may have lost context, so
         # a resume is exactly when the recap matters).
-        self._loop._hs03_reground_post_resume_emitted = False
-        self._loop._hs03_reground_last_action_count = -1
         # C18 — NOTE: `_plan_step_predicates` is intentionally NOT reset
         # here. The map is per-(plan_revision, step_index) and is
         # populated by `_plan_from_args` at submit_plan / re-plan time;

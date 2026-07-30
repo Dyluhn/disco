@@ -13,6 +13,8 @@ closed.
 from __future__ import annotations
 
 import re
+from enum import Enum, auto
+from typing import Final, Literal
 
 _SUBSTITUTION_MAX_DEPTH = 8
 _SUBSTITUTION_MAX_COUNT = 32
@@ -244,8 +246,17 @@ def parameter_expansion_end(
     return None
 
 
-_HEREDOC_SENTINEL = object()
-_ERROR_SENTINEL = object()
+class _SubstitutionSentinel(Enum):
+    HEREDOC = auto()
+    ERROR = auto()
+
+
+type _HeredocSentinel = Literal[_SubstitutionSentinel.HEREDOC]
+type _ErrorSentinel = Literal[_SubstitutionSentinel.ERROR]
+type _SubstitutionStep = int | _HeredocSentinel | _ErrorSentinel
+
+_HEREDOC_SENTINEL: Final[_HeredocSentinel] = _SubstitutionSentinel.HEREDOC
+_ERROR_SENTINEL: Final[_ErrorSentinel] = _SubstitutionSentinel.ERROR
 
 
 def _param_nested_step(
@@ -292,7 +303,7 @@ def _dq_substitution_step(
     max_chars: int,
     syntax_depth: int,
     tracker: _CaseWordTracker,
-) -> int | _HEREDOC_SENTINEL | _ERROR_SENTINEL:
+) -> _SubstitutionStep:
     """Handle one character inside a double quote in ``$(...)``.
 
     Returns the new index, or a sentinel on error/heredoc.
@@ -339,7 +350,7 @@ def _unquoted_substitution_step(
     max_chars: int,
     syntax_depth: int,
     tracker: _CaseWordTracker,
-) -> int | _HEREDOC_SENTINEL | _ERROR_SENTINEL:
+) -> _SubstitutionStep:
     """Handle one unquoted character in ``$(...)`` (not whitespace/operator/paren).
 
     Returns the new index, or a sentinel on error/heredoc.
@@ -372,7 +383,7 @@ def _unquoted_substitution_step(
 
 def _skip_comment_line(
     command: str, index: int, body_start: int, max_chars: int, tracker: _CaseWordTracker
-) -> int | _ERROR_SENTINEL:
+) -> int | _ErrorSentinel:
     """Skip a ``#`` comment through newline; return the new index or error sentinel."""
     while index < len(command) and command[index] != "\n":
         if index - body_start > max_chars:
@@ -389,7 +400,7 @@ def _unquoted_nested_step(
     max_chars: int,
     syntax_depth: int,
     tracker: _CaseWordTracker,
-) -> int | _HEREDOC_SENTINEL | _ERROR_SENTINEL | None:
+) -> _SubstitutionStep | None:
     """Handle nested substitution/backtick in unquoted context; return None if not one."""
     character = command[index]
     if character == "`":

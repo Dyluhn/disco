@@ -424,6 +424,8 @@ class AgentLoop:
         return await self._planning_gates._gate_risk_confirm(action)
 
     async def run(self) -> ConversationState:
+        self._hs03_reground_post_resume_emitted = False
+        self._hs03_reground_last_action_count = -1
         return await self._transition.run()
 
     async def _run_drive(self) -> ConversationState:

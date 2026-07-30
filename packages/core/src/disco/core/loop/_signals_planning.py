@@ -374,7 +374,9 @@ def superseded_plan_owned_failure(events: list[Event]) -> frozenset[str]:
     retired: set[str] = set()
     failure_messages = {"plan_verifier_failed", "plan_verifier_replan_required"}
     for message_index, message in enumerate(events):
-        if not _is_failure_message(message, failure_messages):
+        if not isinstance(message, MessageEvent) or not _is_failure_message(
+            message, failure_messages
+        ):
             continue
         _process_failure_message(events, message_index, message, retired)
     return frozenset(retired)
@@ -462,9 +464,11 @@ def _check_approval_replacement(
 ) -> None:
     """Check whether a later approval replaces the failed plan's directives."""
     for approval in events[message_index + 1 :]:
-        if not _is_approval_with_transition(approval):
+        if not isinstance(approval, StatusEvent) or not _is_approval_with_transition(approval):
             continue
         transition = approval.plan_verification_transition
+        if transition is None:
+            continue
         if not _transition_matches_failure(transition, failure, failure_fingerprints):
             continue
         replacement = _find_replacement_plan(events, transition, approval)
