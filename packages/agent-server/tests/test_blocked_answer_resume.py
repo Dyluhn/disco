@@ -9,12 +9,12 @@ gate instead of letting the approved execution segment continue.
 from __future__ import annotations
 
 import asyncio
-import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock
 
 from disco.agent_server.build_kernel.disco_kernel import DiscoKernel
+from disco.agent_server.run_registry import KernelPinStore, RunRegistry
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -211,12 +211,7 @@ async def _answer_with_kernel(
     store: SqliteEventStore, cid: str, text: str, *, steer: bool = True
 ) -> None:
     lock = asyncio.Lock()
-    runtime = types.SimpleNamespace(
-        _store=store,
-        kick=MagicMock(),
-        workspace_lock=lambda _conversation_id: lock,
-        _workspace=MagicMock(),
-    )
+    workspace = MagicMock()
 
     @asynccontextmanager
     async def process_fence(_conversation_id: str) -> AsyncIterator[None]:
@@ -239,11 +234,24 @@ async def _answer_with_kernel(
     ) -> list[Event]:
         return await store.append_many(conversation_id, events)
 
-    runtime._workspace.interprocess_mutation_fence = process_fence
-    runtime._workspace.append_run_ingress_locked = append_run_ingress
-    runtime._lifecycle_commands = MagicMock()
-    runtime._lifecycle_commands.append_transition_batch_locked = append_transition_batch_locked
-    await DiscoKernel(runtime).send_user_turn(cid, text, steer=steer)
+    workspace.lock = lambda _conversation_id: lock
+    workspace.interprocess_mutation_fence = process_fence
+    workspace.append_run_ingress_locked = append_run_ingress
+    workspace.claim_registered_run_locked = MagicMock()
+    lifecycle = MagicMock()
+    lifecycle.append_transition_batch_locked = append_transition_batch_locked
+    controller = MagicMock()
+    kernel = DiscoKernel._from_owners(
+        store,
+        workspace,
+        lifecycle,
+        controller,
+        MagicMock(),
+        MagicMock(),
+        RunRegistry(),
+        KernelPinStore(),
+    )
+    await kernel.send_user_turn(cid, text, steer=steer)
 
 
 def _statuses(events, *, detail: str | None = None, status: ConversationStatus | None = None):

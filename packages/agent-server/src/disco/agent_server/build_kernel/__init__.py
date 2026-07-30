@@ -6,6 +6,8 @@ selector that keeps legacy persisted choices resolving to Disco.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .base import (
     BuildKernel,
     BuildKernelKind,
@@ -32,11 +34,11 @@ def resolve_kernel_kind(selected: str | None) -> BuildKernelKind:
     return "disco"
 
 
-def select_kernel(*, disco: DiscoKernel, selected: str | None) -> BuildKernel:
+def select_kernel(runtime: Any, *, disco: DiscoKernel, selected: str | None) -> BuildKernel:
     """Pick the active kernel instance.
 
     Kept as the small selection seam so runtime pinning and tests keep exercising
     the `BuildKernel` protocol; legacy/unknown settings all resolve to Disco.
     """
-    _ = selected
+    _ = runtime, selected
     return disco

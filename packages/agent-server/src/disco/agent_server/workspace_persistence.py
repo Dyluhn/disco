@@ -12,10 +12,8 @@ Receives its actual collaborators directly, without a runtime handle.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import logging
-import os
 import shutil
 import tempfile
 import time
@@ -30,9 +28,7 @@ from disco.core import (
     ConversationStatus,
     DeliverableEvent,
     EventSource,
-    FinalWorkspaceSeal,
     ObservationEvent,
-    ResourceKey,
     StatusEvent,
     WorkspaceMutationEvent,
     WorkspaceVersionEvent,
@@ -54,12 +50,23 @@ from disco.tools.projects import (
 )
 
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
-from .workspace_persistence_dependencies import WorkspacePersistenceDependencies
+from .workspace_finalization import (
+    FINALIZATION_JOURNAL,
+    checkpoint_event,
+    clear_finalization_journal,
+    journal_facts,
+    seal_event,
+    write_finalization_journal,
+)
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
 
-    from .run_registry import RunResourceRegistry
+    from .artifact_manifest_shadow import ArtifactManifestShadow
+    from .persistence_notifier import PersistenceNotifier
+    from .project_runtime_service import ProjectRuntimeService
+    from .run_registry import RunRegistry, RunResourceRegistry
+    from .workspace_fence import WorkspaceFenceService
 
 _LOG = logging.getLogger(__name__)
 
@@ -79,37 +86,6 @@ def _cut_recovery_version(
         return version
     versions = store.list_versions(conversation_id)
     return versions[0] if versions else None
-
-
-_FINALIZATION_JOURNAL = "finalization-v1.json"
-
-
-def _write_json_durable(path: Path, payload: dict[str, Any]) -> None:
-    """Atomically replace a small recovery journal and fsync its directory."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink() or not path.parent.is_dir():
-        raise RuntimeError("finalization journal parent is missing or symlinked")
-    fd, raw_tmp = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    tmp = Path(raw_tmp)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp, path)
-        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
 
 
 # The two deliberate non-deliverable exclusions the strict seal accepts.
@@ -288,103 +264,26 @@ def _skipped_capture(conversation_id: str, trigger: str) -> None:
     return None
 
 
-class WorkspacePersistence(WorkspacePersistenceDependencies):
+class WorkspacePersistence:
     """Own workspace durability while callers supply the snapshot operation."""
 
-    # -- journal helper methods ------------------------------------------------
-
-    @staticmethod
-    def _finalization_journal_path(store: ProjectStore, conversation_id: str) -> Path:
-        return store.manifest_for(conversation_id).parent / _FINALIZATION_JOURNAL
-
-    def _write_finalization_journal(
+    def __init__(
         self,
-        store: ProjectStore,
-        conversation_id: str,
-        payload: dict[str, Any],
+        store: SqliteEventStore,
+        run_resources: RunResourceRegistry,
+        workspace: WorkspaceFenceService,
+        projects: ProjectRuntimeService,
+        artifact_manifest_shadow: ArtifactManifestShadow,
+        persistence_notifier: PersistenceNotifier,
+        run_registry: RunRegistry,
     ) -> None:
-        _write_json_durable(
-            self._finalization_journal_path(store, conversation_id),
-            payload,
-        )
-
-    def _clear_finalization_journal(
-        self,
-        store: ProjectStore,
-        conversation_id: str,
-    ) -> None:
-        path = self._finalization_journal_path(store, conversation_id)
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
-            directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-
-    # -- event constructors ----------------------------------------------------
-
-    @staticmethod
-    def _seal_event(
-        conversation_id: str,
-        fence: tuple[int, int | None],
-        version: VersionRecord,
-    ) -> WorkspaceVersionEvent:
-        terminal_seq, latest_effect_seq = fence
-        return WorkspaceVersionEvent(
-            version_seq=version.seq,
-            tree_digest=version.tree_digest,
-            trigger="finish",
-            final_seal=FinalWorkspaceSeal(
-                scope=ResourceKey(
-                    namespace="workspace.tree",
-                    identifier=conversation_id,
-                ),
-                terminal_seq=terminal_seq,
-                latest_effect_seq=latest_effect_seq,
-                version_seq=version.seq,
-                tree_digest=version.tree_digest,
-                file_count=version.file_count,
-                total_bytes=version.total_bytes,
-            ),
-        )
-
-    @staticmethod
-    def _checkpoint_event(
-        fence: tuple[int, int | None],
-        version: VersionRecord,
-    ) -> WorkspaceVersionEvent:
-        """SQLite-side provenance for crash recovery of one filesystem version."""
-
-        terminal_seq, _latest_effect_seq = fence
-        return WorkspaceVersionEvent(
-            version_seq=version.seq,
-            tree_digest=version.tree_digest,
-            trigger=f"finalizing:{terminal_seq}",
-        )
-
-    # -- journal facts ---------------------------------------------------------
-
-    @staticmethod
-    def _journal_facts(journal: dict[str, Any]) -> WorkspaceTreeFacts:
-        file_count = journal.get("file_count")
-        total_bytes = journal.get("total_bytes")
-        tree_digest = journal.get("tree_digest")
-        if (
-            type(file_count) is not int
-            or file_count < 0
-            or type(total_bytes) is not int
-            or total_bytes < 0
-            or not isinstance(tree_digest, str)
-            or len(tree_digest) != 64
-            or any(char not in "0123456789abcdef" for char in tree_digest)
-        ):
-            raise ValueError("finalization journal carries invalid workspace facts")
-        return WorkspaceTreeFacts(
-            file_count=file_count,
-            total_bytes=total_bytes,
-            tree_digest=tree_digest,
-        )
+        self._store = store
+        self._run_resources = run_resources
+        self._workspace = workspace
+        self._projects = projects
+        self._artifact_manifest_shadow = artifact_manifest_shadow
+        self._persistence_notifier = persistence_notifier
+        self._run_registry = run_registry
 
     async def _publish_strict_version(
         self,
@@ -421,10 +320,10 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                     "tree_digest": version.tree_digest,
                 }
             )
-            self._write_finalization_journal(store, conversation_id, journal)
+            write_finalization_journal(store, conversation_id, journal)
         checkpoint = await self._store.append(
             conversation_id,
-            self._checkpoint_event(seal_fence, version),
+            checkpoint_event(seal_fence, version),
         )
         if not isinstance(checkpoint, WorkspaceVersionEvent):
             raise RuntimeError("event store returned wrong finalization checkpoint type")
@@ -438,10 +337,10 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
         )
         if journal is not None:
             journal.update({"phase": "checkpoint", "checkpoint_event_id": checkpoint.id})
-            self._write_finalization_journal(store, conversation_id, journal)
+            write_finalization_journal(store, conversation_id, journal)
         stored = await self._store.append(
             conversation_id,
-            self._seal_event(conversation_id, seal_fence, version),
+            seal_event(conversation_id, seal_fence, version),
         )
         if not isinstance(stored, WorkspaceVersionEvent):
             raise RuntimeError("event store returned wrong final seal event type")
@@ -462,7 +361,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
             raise
         if journal is not None:
             journal.update({"phase": "sealed", "seal_event_id": stored.id})
-            self._write_finalization_journal(store, conversation_id, journal)
+            write_finalization_journal(store, conversation_id, journal)
         return stored
 
     # -- commit_finished_workspace (bulk) ----------------------------------------
@@ -595,7 +494,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
             "phase": "prepared",
         }
         try:
-            self._write_finalization_journal(store, conversation_id, journal)
+            write_finalization_journal(store, conversation_id, journal)
         except Exception as exc:
             _LOG.error(
                 "could not prepare finalization journal for %s; FINISHED will be unsealed",
@@ -659,9 +558,9 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                         "latest_effect_seq": fence[1],
                     }
                 )
-                self._write_finalization_journal(store, conversation_id, journal)
+                write_finalization_journal(store, conversation_id, journal)
                 journal["phase"] = "capturing"
-                self._write_finalization_journal(store, conversation_id, journal)
+                write_finalization_journal(store, conversation_id, journal)
                 sealed = await self._do_capture_workspace(
                     conversation_id,
                     trigger="finish",
@@ -705,7 +604,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                 raise cancellation from None
             raise
         if sealed is not None:
-            self._clear_finalization_journal(store, conversation_id)
+            clear_finalization_journal(store, conversation_id)
         if cancellation is not None:
             raise cancellation
         return stored
@@ -745,7 +644,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
             _LOG.warning("finalization journal scan failed", exc_info=True)
             return 0
         for project_dir in projects:
-            path = project_dir / _FINALIZATION_JOURNAL
+            path = project_dir / FINALIZATION_JOURNAL
             if path.is_symlink() or not path.is_file():
                 continue
             conversation_id = project_dir.name
@@ -777,7 +676,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                     )
                     if terminal is None:
                         if journal.get("phase") == "prepared":
-                            self._clear_finalization_journal(store, conversation_id)
+                            clear_finalization_journal(store, conversation_id)
                         continue
                     fence = derive_final_workspace_fence(events)
                     if terminal.seq != fence[0]:
@@ -803,7 +702,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                             or seal.tree_digest != record.tree_digest
                         ):
                             raise ValueError("persisted seal disagrees with immutable version")
-                        self._clear_finalization_journal(store, conversation_id)
+                        clear_finalization_journal(store, conversation_id)
                         recovered += 1
                         continue
 
@@ -818,7 +717,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                         or journal.get("latest_effect_seq") != fence[1]
                     ):
                         raise ValueError("finalization journal fence is invalid")
-                    facts = self._journal_facts(journal)
+                    facts = journal_facts(journal)
                     if phase in {"checkpoint", "sealed"}:
                         version_seq = journal.get("version_seq")
                         if type(version_seq) is not int or version_seq < 1:
@@ -852,11 +751,11 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
 
                     stored = await self._store.append(
                         conversation_id,
-                        self._seal_event(conversation_id, fence, version),
+                        seal_event(conversation_id, fence, version),
                     )
                     if not isinstance(stored, WorkspaceVersionEvent):
                         raise RuntimeError("event store returned wrong recovered seal type")
-                    self._clear_finalization_journal(store, conversation_id)
+                    clear_finalization_journal(store, conversation_id)
                     recovered += 1
                 except Exception:
                     _LOG.error(
@@ -988,7 +887,7 @@ class WorkspacePersistence(WorkspacePersistenceDependencies):
                 conversation_id, store.path_for(conversation_id)
             )
             if journal is not None:
-                self._write_finalization_journal(store, conversation_id, journal)
+                write_finalization_journal(store, conversation_id, journal)
             try:
                 if seal_fence is not None:
                     return await self._publish_strict_version(

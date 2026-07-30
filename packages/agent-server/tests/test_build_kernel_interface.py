@@ -111,7 +111,7 @@ def _kernel_harness(store: SqliteEventStore) -> types.SimpleNamespace:
     controller.kick = MagicMock()
     runs = RunRegistry()
     pin_store = KernelPinStore()
-    kernel = DiscoKernel(
+    kernel = DiscoKernel._from_owners(
         store,
         workspace,
         lifecycle,
@@ -120,6 +120,7 @@ def _kernel_harness(store: SqliteEventStore) -> types.SimpleNamespace:
         loops,
         runs,
         pin_store,
+        resume,
     )
     pins = KernelPinRegistry(DiscoKernelSelector(kernel), store=pin_store)
     contract = MagicMock()
@@ -169,10 +170,10 @@ def test_resolve_kernel_kind(selected: str | None, expected: BuildKernelKind) ->
 
 def test_select_kernel_picks_disco_for_every_value(store: SqliteEventStore) -> None:
     disco = _kernel_harness(store).kernel
-    assert select_kernel(disco=disco, selected="disco") is disco
-    assert select_kernel(disco=disco, selected="pi_experimental") is disco
-    assert select_kernel(disco=disco, selected="pi") is disco
-    assert select_kernel(disco=disco, selected="garbage") is disco
+    assert select_kernel(None, disco=disco, selected="disco") is disco
+    assert select_kernel(None, disco=disco, selected="pi_experimental") is disco
+    assert select_kernel(None, disco=disco, selected="pi") is disco
+    assert select_kernel(None, disco=disco, selected="garbage") is disco
 
 
 # ---- protocol conformance ----------------------------------------------------
@@ -324,9 +325,7 @@ async def test_verification_requirement_replacement_is_causal_and_atomic(
 async def test_disco_kernel_turn_waits_for_host_workspace_fence(store: SqliteEventStore) -> None:
     rt = _kernel_harness(store)
     await rt.workspace_lock.acquire()
-    sending = asyncio.create_task(
-        rt.kernel.send_user_turn(CID, "change the header", steer=True)
-    )
+    sending = asyncio.create_task(rt.kernel.send_user_turn(CID, "change the header", steer=True))
     await asyncio.sleep(0)
 
     assert await store.get_events(CID) == []
@@ -351,11 +350,9 @@ def test_kernel_pin_registry_resolves_disco(store: SqliteEventStore) -> None:
 
 
 @pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
-def test_legacy_selection_values_pin_disco(
-    legacy: str, store: SqliteEventStore
-) -> None:
+def test_legacy_selection_values_pin_disco(legacy: str, store: SqliteEventStore) -> None:
     rt = _kernel_harness(store)
-    selected = select_kernel(disco=rt.kernel, selected=legacy)
+    selected = select_kernel(None, disco=rt.kernel, selected=legacy)
     assert selected is rt.kernel
 
 

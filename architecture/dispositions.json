@@ -104,7 +104,7 @@
     "state": "active",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:234-253 + harness/build_soak/adapters/_client_collection.py:_CollectionMixin.collect_browser_evidence:409-491",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:194-213 + harness/build_soak/adapters/_client_collection.py:_CollectionMixin.collect_browser_evidence:409-491",
     "role_category": "product preview evidence binds FINISHED while harness PAUSED freeze uses a WorkspaceVersionEvent horizon"
   },
   {
@@ -2192,7 +2192,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
-    "location": "packages/agent-server/src/disco/agent_server/mcp_manager.py:McpManager:143-773",
+    "location": "packages/agent-server/src/disco/agent_server/mcp_manager.py:McpManager:143-779",
     "role_category": "python class logical gt 350"
   },
   {
@@ -2291,7 +2291,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:PreviewService:48-816",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:PreviewService:64-753",
     "role_category": "python class logical gt 350"
   },
   {
@@ -2300,7 +2300,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_prepare_sealed_node_dependencies:313-380",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_prepare_sealed_node_dependencies:262-329",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -2309,7 +2309,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_replace_with_sealed_workspace:383-483",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_replace_with_sealed_workspace:332-432",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -2318,7 +2318,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:preview:556-661",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:preview:504-603",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -2327,7 +2327,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:ensure_preview:663-816",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:ensure_preview:605-753",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -2336,13 +2336,13 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:ensure_preview:663-816",
+    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:ensure_preview:605-753",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
     "id": "PY-0239",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-PREVIEW",
     "location": "packages/agent-server/src/disco/agent_server/preview_service.py:<module>:1-820",
@@ -2462,7 +2462,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:_register_upload_routes:89-220",
+    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:_register_upload_routes:88-219",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -2471,7 +2471,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:95-220",
+    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -2480,7 +2480,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:95-220",
+    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -2489,7 +2489,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:95-220",
+    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
     "role_category": "http ws route handler logical gt 80"
   },
   {
@@ -2498,7 +2498,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:artifact_file:229-308",
+    "location": "packages/agent-server/src/disco/agent_server/routes/files.py:artifact_file:228-307",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -2822,7 +2822,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-WORKFLOWS",
-    "location": "packages/agent-server/src/disco/agent_server/routes/share.py:make_share_router:15-156",
+    "location": "packages/agent-server/src/disco/agent_server/routes/share.py:make_share_router:15-154",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -3317,7 +3317,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:WorkspacePersistence:291-1256",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:WorkspacePersistence:267-1155",
     "role_category": "python class logical gt 350"
   },
   {
@@ -3326,7 +3326,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:521-711",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:420-610",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -3335,7 +3335,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:521-711",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:420-610",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -3344,7 +3344,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:724-867",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:623-766",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -3353,7 +3353,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:724-867",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:623-766",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -3362,7 +3362,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:888-1045",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:787-944",
     "role_category": "python callable logical gt 100"
   },
   {
@@ -3371,7 +3371,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:888-1045",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:787-944",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -3380,7 +3380,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_maybe_synthesize_app_deliverable:1114-1179",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_maybe_synthesize_app_deliverable:1013-1078",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -3389,7 +3389,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_trusted_verified_app_entry:1182-1237",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_trusted_verified_app_entry:1081-1136",
     "role_category": "python callable ast mccabe gt 15"
   },
   {
@@ -3398,7 +3398,7 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:<module>:1-1256",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:<module>:1-1155",
     "role_category": "python or harness module logical gt 700"
   },
   {

@@ -689,6 +689,12 @@ class McpManager:
             self._mcp_egress_hosts(),
         )
 
+    def workflow_tool_definitions(self) -> tuple[ToolDef, ...]:
+        """Read-only workflow-authoring projection of currently connected tools."""
+
+        pooled = self._pool.snapshot() if self._pool is not None else ()
+        return (*pooled, *self._http_tools.values())
+
     async def _build_mcp_retrieval_providers(self) -> None:
         """Build retrieval-tier MCP providers from registered MCP tools.
 

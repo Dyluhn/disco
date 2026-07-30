@@ -28,7 +28,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
-        result = await runtime._share.create_share_link_async(
+        result = await runtime.create_share_link_async(
             conversation_id,
             owner_id=owner_id,
         )
@@ -50,9 +50,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         """List active, owner-scoped share links."""
         if runtime is None:
             return {"links": []}
-        return {
-            "links": runtime._share.list_share_links(owner_id=current_owner_id(request))
-        }
+        return {"links": runtime.list_share_links(owner_id=current_owner_id(request))}
 
     @router.delete("/api/share/{token}")
     async def revoke_share(token: str, request: Request) -> dict:
@@ -62,7 +60,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         token it issued (the WHERE clause filters by owner_id)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
-        ok = runtime._share.revoke_share_link(
+        ok = runtime.revoke_share_link(
             token,
             owner_id=current_owner_id(request),
         )
@@ -78,7 +76,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
-        result = await runtime._share.share_export(conversation_id, owner_id=owner_id)
+        result = await runtime.share_export(conversation_id, owner_id=owner_id)
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,
@@ -94,7 +92,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         reason) on any validation failure — never a partial import."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
-        result = await runtime._share.share_import(
+        result = await runtime.share_import(
             bundle,
             owner_id=current_owner_id(request),
         )
@@ -121,13 +119,13 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         missing or revoked tokens."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
-        row = runtime._share.lookup_share_link(token)
+        row = runtime.lookup_share_link(token)
         if row is None:
             # 404 with NO distinguishing detail — revoked and never-issued
             # tokens are intentionally conflated. A probe that varies the
             # token string sees 404 every time.
             raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found"})
-        result = await runtime._share.share_export(
+        result = await runtime.share_export(
             row["conversation_id"],
             owner_id=row["owner_id"],
             before_seq=row["bundle_seq"],

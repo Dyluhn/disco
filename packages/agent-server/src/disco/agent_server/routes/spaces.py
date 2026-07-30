@@ -144,7 +144,7 @@ def make_spaces_router(store: SqliteEventStore, runtime: ConversationRuntime | N
 def _space_store(runtime: ConversationRuntime | None) -> JsonSpaceStore:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime._projects.current_project_store()
+    project_store = runtime.project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
@@ -165,7 +165,7 @@ def _space_store(runtime: ConversationRuntime | None) -> JsonSpaceStore:
 def _space_vector_store(runtime: ConversationRuntime | None) -> DiskVectorStore:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    return runtime._spaces.space_vector_store()
+    return runtime.space_vector_store()
 
 
 def _get_space_or_404(

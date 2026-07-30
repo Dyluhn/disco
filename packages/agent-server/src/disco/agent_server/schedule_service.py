@@ -6,7 +6,7 @@ import asyncio
 import contextvars
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from disco.core import MessageEvent
+from disco.core import DEFAULT_OWNER_ID, MessageEvent
 from disco.core.llm import DefaultLLMRouter
 from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
@@ -173,6 +173,7 @@ class _ScheduleRuntimeAdapter:
             coalesced=coalesced,
         )
 
+
 class ScheduleService:
     def __init__(
         self,
@@ -201,6 +202,23 @@ class ScheduleService:
                 cast("ScheduleRuntime", self._runtime_port),
             )
         return self._sched_manager
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        owner_id: str = DEFAULT_OWNER_ID,
+        coalesced: bool = False,
+    ) -> WorkflowScheduleRunRecord:
+        """Compatibility entrypoint retained until PKG-13 facade deletion."""
+
+        return await self._workflow_runs.run(
+            schedule_id=schedule_id,
+            spec=spec,
+            owner_id=owner_id,
+            coalesced=coalesced,
+        )
 
     async def _schedule_manager_loop(self) -> None:
         """Thin trampoline: lifespan task → ScheduleManager.run().  Mirrors the

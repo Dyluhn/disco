@@ -117,7 +117,7 @@ def _deck_pdf_capable(runtime: ConversationRuntime) -> bool:
     actually installed in the deployed image (a stale image predating the
     libreoffice-impress layer passes this but cannot convert). The real availability
     check is `_deck_pdf_available`, which probes ``command -v soffice`` in the box."""
-    name = runtime._sandbox.backend_name()
+    name = runtime.sandbox_backend_name()
     return name in _PDF_CAPABLE_BACKENDS
 
 
@@ -404,7 +404,7 @@ async def _export_deck_with_template_response(
                     "Deck PDF export needs a container sandbox backend "
                     "(gVisor / local / podman) — LibreOffice ships in the sandbox "
                     "image, not on the host. The active backend is "
-                    f"{live_runtime._sandbox.backend_name() or 'none'}."
+                    f"{live_runtime.sandbox_backend_name() or 'none'}."
                 ),
             },
         )
@@ -517,7 +517,7 @@ async def _patch_deck_response(
             status_code=422, detail={"reason": "render_failed", "message": str(exc)}
         ) from exc
 
-    session = live_runtime._preview.live_session(conversation_id)
+    session = live_runtime.live_session(conversation_id)
     if session is None:
         raise HTTPException(status_code=409, detail={"reason": "no_live_sandbox"})
 
@@ -526,7 +526,7 @@ async def _patch_deck_response(
         (html_rel, html_str.encode()),
         (pptx_rel, pptx_bytes),
     ]
-    async with live_runtime._workspace.mutation(
+    async with live_runtime.workspace_mutation(
         conversation_id,
         "deck.patch",
         paths=tuple(sorted(rel for rel, _ in targets)),
@@ -553,7 +553,7 @@ async def _patch_deck_response(
 
     if was_finished:
         try:
-            await live_runtime._workspace.finalize_sandbox_change(
+            await live_runtime.finalize_host_workspace_change(
                 conversation_id,
                 "deck.patch",
             )

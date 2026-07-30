@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 def space_store_for_runtime(runtime: ConversationRuntime | None) -> JsonSpaceStore:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime._projects.current_project_store()
+    project_store = runtime.project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,

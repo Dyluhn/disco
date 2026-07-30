@@ -11,7 +11,7 @@ import ctypes
 import ctypes.util
 import gc
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from disco.core import (
     ConversationStatus,
@@ -66,6 +66,7 @@ from .build_loop_components import (
     workflow_router_enabled as workflow_router_enabled,
 )
 from .driver_context import ResolvedDriverContext
+from .runtime_compatibility import install_runtime_compatibility
 from .runtime_composition import wire_runtime
 from .runtime_model_probe import (
     _LIVE_MODEL_PROBE_CACHE as _LIVE_MODEL_PROBE_CACHE,
@@ -82,6 +83,7 @@ from .runtime_model_probe import (
 from .runtime_model_probe import _do_live_model_probe
 from .runtime_model_probe import _model_label as _model_label
 from .runtime_model_probe import _probe_live_model as _owned_probe_live_model
+from .runtime_wiring_schema import _RuntimeWiringSchema
 from .sandbox_runtime_service import (
     build_sandbox_service as build_sandbox_service,
 )
@@ -99,61 +101,43 @@ from .workspace_service import (
 )
 
 if TYPE_CHECKING:
-    from .appkit_ejection import AppKitEjectionService
-    from .artifact_manifest_shadow import ArtifactManifestShadow
+    import asyncio
+    import contextlib
+    from collections.abc import AsyncIterator
+
+    from disco.core import DEFAULT_OWNER_ID, ToolCall, ToolResult, WorkspaceMutationEvent
+    from disco.core.llm import SandboxSettings
+    from disco.core.workflow import ScheduleSpec
+    from disco.retrieval import DefaultCorpusService, DiskVectorStore
+    from disco.tools import SandboxSession
+    from disco.tools.projects import VersionRecord
+    from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
+
     from .build_contract_service import BuildContractService
-    from .build_kernel import DiscoKernel
-    from .build_loop_assembler import BuildShadowLedger
     from .build_loop_factory import BuildLoopFactory
-    from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
-    from .build_retrieval import BuildRetrievalCapabilities
-    from .connection_tracker import ConnectionState, ConnectionTracker
-    from .control_ops import ControlOps
     from .conversation_control_service import ConversationControlService
     from .deep_research_service import DeepResearchService
-    from .deep_research_state import DeepResearchLiveState, DeepResearchState
-    from .driver_context_state import DriverContextState
     from .driver_runtime import DriverPreflight, DriverRuntime
     from .lifecycle import LifecycleManager
-    from .lifecycle_command_service import LifecycleCommandService
     from .lifecycle_idle_sweep import LifecycleIdleSweeper
-    from .lifecycle_ports import LifecycleIdleSweepDeps
+    from .live_session_directory import LiveSessionDirectory
     from .mcp_manager import McpManager
-    from .persistence_notifier import PersistenceNotifier
-    from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
     from .resume_service import ResumeService
-    from .run_controller import RunController
-    from .run_kill_service import RunKillService
-    from .run_registry import (
-        CancellationRegistry,
-        KernelPinRegistry,
-        KernelPinStore,
-        LoopRegistry,
-        RunAuthorityLedger,
-        RunIngressLedger,
-        RunRecoveryLedger,
-        RunRegistry,
-        RunResourceRegistry,
-    )
-    from .run_stranded_sweep import RunStrandedSweep
+    from .run_registry import RunRegistry
     from .run_supervisor import (
-        RunFinalizer,
         RunPersistenceSupervisor,
         RunSupervisor,
     )
     from .runtime_settings import RuntimeSettings
-    from .sandbox_resource_reconciler import SandboxResourceReconciler
     from .sandbox_runtime_service import SandboxRuntimeService
     from .schedule_service import ScheduleService
-    from .sessions_service import SessionsService
-    from .share_service import ShareService
-    from .space_service import SpaceService
+    from .space_store import JsonSpaceStore
     from .suggestion_service import SuggestionService
     from .title_service import TitleService
     from .upload_store import UploadStore
-    from .workspace_fence import WorkspaceFenceService
-    from .workspace_ownership import WorkspaceOwnership
+    from .workflow_schedule import WorkflowScheduleRunRecord
+    from .workspace_commit import CommittedWorkspaceView
     from .workspace_service import WorkspaceCoordinator
 
 
@@ -211,73 +195,141 @@ def _default_in_catalog(
     return default if any(model["id"] == default for model in models) else None
 
 
-class _RuntimeWiringSchema:
-    """Static owner inventory for the composition root; stores no values."""
-
-    _store: SqliteEventStore
-    _skill_store: SkillStore
-    _uploads: UploadStore
-    _secret_store: SecretStore
-    _config_store: ConfigStore
-    _sandbox: SandboxRuntimeService
-    _projects: ProjectRuntimeService
-    _loop_registry: LoopRegistry
-    _run_registry: RunRegistry
-    _run_authorities: RunAuthorityLedger
-    _run_ingress: RunIngressLedger
-    _run_resources: RunResourceRegistry
-    _run_recovery: RunRecoveryLedger
-    _driver_contexts: DriverContextState
-    _appkit_ejections: AppKitEjectionLedger
-    _settings: RuntimeSettings
-    _drivers: DriverRuntime
-    _driver_preflight: DriverPreflight
-    _cancellations: CancellationRegistry
-    _mcp: McpManager
-    _kernel_pin_store: KernelPinStore
-    _connection_state: ConnectionState
-    _lifecycle_idle: LifecycleIdleSweepDeps
-    _idle_sweeper: LifecycleIdleSweeper
-    _workspace_fence: WorkspaceFenceService
-    _title_service: TitleService
-    _suggestion_service: SuggestionService
-    _share: ShareService
-    _resume: ResumeService
-    _workspace: WorkspaceCoordinator
-    _workspace_ownership: WorkspaceOwnership
-    _persistence_notifier: PersistenceNotifier
-    _contract: BuildContractService
-    _build_platform: BuildPlatformRuntime
-    _lifecycle: LifecycleManager
-    _lifecycle_commands: LifecycleCommandService
-    _connections: ConnectionTracker
-    _appkit_ejection: AppKitEjectionService
-    _research_state: DeepResearchState
-    _research_live_state: DeepResearchLiveState
-    _dr: DeepResearchService
-    _spaces: SpaceService
-    _build_retrieval: BuildRetrievalCapabilities
-    _build_shadows: BuildShadowLedger
-    _artifact_manifest_shadow: ArtifactManifestShadow
-    _loop_factory: BuildLoopFactory
-    _schedule: ScheduleService
-    _sessions: SessionsService
-    _preview: PreviewService
-    _sandbox_resources: SandboxResourceReconciler
-    _run_supervisor: RunSupervisor
-    _run_controller: RunController
-    _run_kills: RunKillService
-    _control: ControlOps
-    _disco_kernel: DiscoKernel
-    _kernel_pins: KernelPinRegistry
-    _conversation_control: ConversationControlService
-    _run_finalizer: RunFinalizer
-    _run_sweep: RunStrandedSweep
-    _run_execution: RunPersistenceSupervisor
-
-
-class ConversationRuntime(_RuntimeWiringSchema):
+class ConversationRuntime:
     """Wiring-only root plus the transport-stable conversation ingress facade."""
+
+    if TYPE_CHECKING:
+        # fmt: off
+        _config_store: ConfigStore
+        _contract: BuildContractService
+        _conversation_control: ConversationControlService
+        _dr: DeepResearchService
+        _driver_preflight: DriverPreflight
+        _drivers: DriverRuntime
+        _idle_sweeper: LifecycleIdleSweeper
+        _lifecycle: LifecycleManager
+        _live_sessions: LiveSessionDirectory
+        _loop_factory: BuildLoopFactory
+        _mcp: McpManager
+        _projects: ProjectRuntimeService
+        _resume: ResumeService
+        _run_registry: RunRegistry
+        _run_execution: RunPersistenceSupervisor
+        _run_supervisor: RunSupervisor
+        _sandbox: SandboxRuntimeService
+        _schedule: ScheduleService
+        _secret_store: SecretStore
+        _settings: RuntimeSettings
+        _skill_store: SkillStore
+        _title_service: TitleService
+        _uploads: UploadStore
+        _workspace: WorkspaceCoordinator
+
+        def set_surface(self, conversation_id: str, surface: str) -> None: ...
+        async def probe_active_sandbox(self) -> tuple[bool, str, str]: ...
+        async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]: ...  # noqa: E501
+        async def prewarm_model_probe(self) -> None: ...
+        async def prewarm_vision_probe(self) -> None: ...
+        def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
+        def set_autonomous(self, conversation_id: str, value: bool=True) -> None: ...
+        def is_autonomous(self, conversation_id: str) -> bool: ...
+        def set_quiet(self, conversation_id: str, value: bool=True) -> None: ...
+        def is_quiet(self, conversation_id: str) -> bool: ...
+        def set_assist(self, conversation_id: str, value: bool=True) -> None: ...
+        def is_assist(self, conversation_id: str) -> bool: ...
+        async def apply_settings_change(self, conversation_id: str, *, model_override: str | None=None, assist: bool | None=None, model_provided: bool | None=None) -> bool: ...  # noqa: E501
+        def set_artifact_mode(self, conversation_id: str, on: bool) -> None: ...
+        def set_appkit_mode(self, conversation_id: str, on: bool) -> None: ...
+        def set_research_sources(self, conversation_id: str, sources: list[str]) -> None: ...
+        def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]: ...
+        def activate_contract_for_brief(self, conversation_id: str, build_brief: BuildBrief | None) -> None: ...  # noqa: E501
+        def set_build_kind(self, conversation_id: str, kind: str | None) -> None: ...
+        def expected_delivery_mode(self, conversation_id: str) -> str | None: ...
+        def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None: ...
+        def get_last_selected_model(self) -> str | None: ...
+        def set_last_selected_model(self, model_id: str | None) -> None: ...
+        def driver_models(self) -> dict[str, Any]: ...
+        async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
+        def upload_session(self, conversation_id: str) -> SandboxSession: ...
+        def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
+        def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]: ...  # noqa: E501
+        @contextlib.asynccontextmanager
+        async def workspace_mutation(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> AsyncIterator[None]:  # noqa: E501
+            if False:
+                yield
+        async def record_workspace_mutation_locked(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> WorkspaceMutationEvent: ...  # noqa: E501
+        async def finalize_host_workspace_change(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
+        async def finalize_host_mirror_change_locked(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
+        async def require_committed_host_mirror_locked(self, conversation_id: str) -> CommittedWorkspaceView: ...  # noqa: E501
+        def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None: ...
+        def get_upload_names(self, conversation_id: str) -> set[str]: ...
+        def get_upload_size(self, conversation_id: str) -> int: ...
+        def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None: ...
+        def get_upload_passages(self, conversation_id: str) -> list[Any]: ...
+        def set_depth(self, conversation_id: str, tier: str | None) -> None: ...
+        def set_iterative(self, conversation_id: str, enabled: bool) -> None: ...
+        def set_recency(self, conversation_id: str, window: str | None) -> None: ...
+        def research_stream(self, query: str, *, model_override: str | None=None, drop_weak: bool=False, domains_deny: frozenset[str]=frozenset(), think: bool=False, conversation_id: str | None=None, space_ids: frozenset[str]=frozenset(), owner_id: str | None=None, include_unclaimed_legacy: bool=False, sources: list[str] | tuple[str, ...] | None=None) -> AsyncIterator[dict[str, Any]]: ...  # noqa: E501
+        def kick(self, conversation_id: str, *, claimed_user_seq: int | None=None) -> None: ...
+        async def sweep_stranded_runs_once(self) -> int: ...
+        async def reconcile_sandbox_backend(self) -> int: ...
+        async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
+        async def reload_mcp_pool(self) -> dict[str, Any]: ...
+        def mcp_approval_state(self) -> dict[str, dict]: ...
+        def on_connect(self, conversation_id: str) -> None: ...
+        def on_disconnect(self, conversation_id: str, *, grace_s: float=60.0) -> None: ...
+        def sandbox_state(self, conversation_id: str) -> str | None: ...
+        def sandbox_instance_ids(self, conversation_id: str) -> list[str]: ...
+        async def sweep_idle_once(self) -> int: ...
+        async def sweep_abandoned_gates_once(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
+        def title_service(self) -> TitleService: ...
+        def suggestion_service(self) -> SuggestionService: ...
+        def project_store(self) -> ProjectStore: ...
+        def space_store(self) -> JsonSpaceStore: ...
+        def space_vector_store(self) -> DiskVectorStore: ...
+        def space_corpus_service(self) -> DefaultCorpusService: ...
+        def set_space_ids(self, conversation_id: str, space_ids: list[str] | frozenset[str]) -> None: ...  # noqa: E501
+        def get_space_ids(self, conversation_id: str | None) -> frozenset[str]: ...
+        async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict: ...
+        async def share_export(self, conversation_id: str, *, owner_id: str=DEFAULT_OWNER_ID, before_seq: int | None=None) -> dict[str, Any]: ...  # noqa: E501
+        async def share_import(self, bundle: Any, *, owner_id: str=DEFAULT_OWNER_ID) -> dict[str, Any]: ...  # noqa: E501
+        async def export_report(self, conversation_id: str, fmt: str, *, owner_id: str=DEFAULT_OWNER_ID) -> tuple[bytes, str, str] | None: ...  # noqa: E501
+        def create_share_link(self, conversation_id: str, *, owner_id: str=DEFAULT_OWNER_ID) -> dict[str, Any]: ...  # noqa: E501
+        async def create_share_link_async(self, conversation_id: str, *, owner_id: str=DEFAULT_OWNER_ID) -> dict[str, Any]: ...  # noqa: E501
+        def lookup_share_link(self, token: str) -> dict | None: ...
+        def list_share_links(self, *, owner_id: str) -> list[dict]: ...
+        def revoke_share_link(self, token: str, *, owner_id: str) -> bool: ...
+        def resolve_cid_prefix(self, cid8: str) -> str | None: ...
+        async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None: ...
+        def preview_upstream(self, conversation_id: str) -> str | None: ...
+        def preview_target_port(self, conversation_id: str) -> int | None: ...
+        async def resolve_active_preview_projection(self, conversation_id: str, projection: Any) -> bool: ...  # noqa: E501
+        async def resolve_finished_preview_runtime(self, conversation_id: str, contract: Any) -> dict[str, Any] | None: ...  # noqa: E501
+        def port_upstream(self, conversation_id: str, port: int) -> str | None: ...
+        async def wake_for_preview(self, cid8: str, port: int, *, owner_id: str=DEFAULT_OWNER_ID) -> str | None: ...  # noqa: E501
+        def live_session(self, conversation_id: str) -> SandboxSession | None: ...
+        def sandbox_backend_name(self) -> str | None: ...
+        async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]: ...  # noqa: E501
+        async def sessions_list(self, conversation_id: str) -> list[SessionInfo]: ...
+        async def session_view(self, conversation_id: str, name: str, tail_chars: int) -> SessionView | None: ...  # noqa: E501
+        async def preview(self, conversation_id: str) -> dict[str, Any]: ...
+        async def ensure_preview(self, conversation_id: str) -> bool: ...
+        async def resume_conversation(self, conversation_id: str) -> dict: ...
+        async def forget_conversation(self, conversation_id: str) -> None: ...
+        async def run_sealed_workflow_schedule(self, *, schedule_id: str, spec: ScheduleSpec, owner_id: str=DEFAULT_OWNER_ID, coalesced: bool=False) -> WorkflowScheduleRunRecord: ...  # noqa: E501
+        def create_schedule(self, *, conversation_id: str, owner_id: str, rrule: str, description: str, timezone: str='UTC', depth: str | None=None, model_override: str | None=None) -> dict: ...  # noqa: E501
+        def list_schedules(self, *, owner_id: str, conversation_id: str | None=None) -> list[dict]: ...  # noqa: E501
+        def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool: ...
+        async def fire_schedule_now(self, schedule_id: str, *, owner_id: str) -> bool: ...
+        def create_workflow_schedule(self, spec: ScheduleSpec, *, owner_id: str) -> dict: ...
+        def list_workflow_schedules(self, *, owner_id: str | None=None, include_unclaimed_legacy: bool=False) -> list[dict]: ...  # noqa: E501
+        def list_workflow_schedule_runs(self, *, schedule_id: str | None=None, owner_id: str | None=None, include_unclaimed_legacy: bool=False, limit: int=100) -> list[dict]: ...  # noqa: E501
+        async def fire_workflow_schedule_now(self, schedule_id: str, *, owner_id: str, include_unclaimed_legacy: bool=False) -> dict | None: ...  # noqa: E501
+        def preview_schedule_runs(self, rrule: str, n: int=3, *, timezone: str='UTC') -> list[str]: ...  # noqa: E501
+        def running_conversation_ids(self) -> set[str]: ...
+        def list_recent_schedule_runs(self, *, owner_id: str, limit: int=50) -> list[dict]: ...
+        # fmt: on
+
 
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
 
@@ -298,7 +350,7 @@ class ConversationRuntime(_RuntimeWiringSchema):
     ) -> None:
         db_path = disco_env("DB", "") or getattr(store, "db_path", "")
         wire_runtime(
-            self,
+            cast(_RuntimeWiringSchema, self),
             store,
             db_path=db_path,
             config=config,
@@ -389,6 +441,16 @@ class ConversationRuntime(_RuntimeWiringSchema):
 
     def _project_store_now(self) -> ProjectStore:
         return self._projects.current_project_store()
+
+    def _workflow_tool_definitions(self) -> tuple[Any, ...]:
+        """State-free compatibility delegate pending PKG-11-WORKFLOWS."""
+
+        return self._mcp.workflow_tool_definitions()
+
+    def _workflow_skills(self) -> list[Any]:
+        """State-free compatibility delegate pending PKG-11-WORKFLOWS."""
+
+        return self._skill_store.list()
 
     def _loop_for(
         self,
@@ -498,3 +560,6 @@ class ConversationRuntime(_RuntimeWiringSchema):
         await self._run_supervisor.cancel_runs()
         await self._driver_preflight.aclose()
         await self._run_supervisor.close_resources()
+
+
+install_runtime_compatibility(ConversationRuntime)

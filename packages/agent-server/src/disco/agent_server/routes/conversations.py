@@ -86,7 +86,7 @@ def _resolve_model(
     why it fell back to the default."""
     if body_model_override:
         return body_model_override, None
-    last = runtime._settings.get_last_selected_model()
+    last = runtime.get_last_selected_model()
     if last:
         cfg = runtime._config_store.load()
         if last in cfg.models:
@@ -96,7 +96,7 @@ def _resolve_model(
             f"using the default '{cfg.default_model}'"
         )
         _LOG.warning(note)
-        runtime._settings.set_last_selected_model(None)
+        runtime.set_last_selected_model(None)
         return None, f"⚠ {note}"
     return None, None
 
@@ -153,8 +153,8 @@ async def _create_conversation_response(
     # Select surface and pin the driver model if the picker chose one.
     if runtime is not None:
         model_override, model_note = _resolve_model(body.model_override, runtime)
-        runtime._settings._set_surface(conversation_id, body.surface)
-        runtime._settings.set_model_override(conversation_id, model_override)
+        runtime.set_surface(conversation_id, body.surface)
+        runtime.set_model_override(conversation_id, model_override)
         if model_note is not None:
             await store.append(
                 conversation_id,
@@ -168,9 +168,7 @@ async def _create_conversation_response(
         "conversation_id": conversation_id,
         "conversation_url": f"/ws/conversations/{conversation_id}",
         "surface": body.surface,
-        "sandbox_backend": (
-            runtime._sandbox.backend_name() if runtime is not None else None
-        ),
+        "sandbox_backend": (runtime.sandbox_backend_name() if runtime is not None else None),
     }
 
 
@@ -204,34 +202,34 @@ def _apply_create_runtime_settings(
 ) -> None:
     """Apply the per-conversation runtime settings from the create body."""
     if body.autonomous:
-        runtime._settings.set_autonomous(conversation_id, True)
+        runtime.set_autonomous(conversation_id, True)
     if body.quiet:
-        runtime._settings.set_quiet(conversation_id, True)
+        runtime.set_quiet(conversation_id, True)
     # Weak-model assist tier: None ⇒ leave the model-derived default;
     # True/False ⇒ explicit per-conversation override.
     if body.assist is not None:
-        runtime._settings.set_assist(conversation_id, body.assist)
+        runtime.set_assist(conversation_id, body.assist)
     # Deep Research depth tier (no-op for other surfaces). Was dropped before —
     # every DR run defaulted to standard_deep regardless of the UI picker.
     if body.depth_tier:
-        runtime._dr.set_depth(conversation_id, body.depth_tier)
+        runtime.set_depth(conversation_id, body.depth_tier)
     # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
     # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
     if body.iterative:
-        runtime._dr.set_iterative(conversation_id, True)
+        runtime.set_iterative(conversation_id, True)
     # DR-3 E2: recency window for time-filtered search + prompt injection.
     if body.recency_window is not None:
-        runtime._dr.set_recency(conversation_id, body.recency_window)
+        runtime.set_recency(conversation_id, body.recency_window)
     if validated_space_ids:
-        runtime._spaces.set_space_ids(conversation_id, validated_space_ids)
+        runtime.set_space_ids(conversation_id, validated_space_ids)
     if body.sources:
-        runtime._settings.set_research_sources(conversation_id, body.sources)
+        runtime.set_research_sources(conversation_id, body.sources)
     # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
     if body.artifact_mode:
-        runtime._settings.set_artifact_mode(conversation_id, True)
+        runtime.set_artifact_mode(conversation_id, True)
     # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
     if body.appkit_mode:
-        runtime._settings.set_appkit_mode(conversation_id, True)
+        runtime.set_appkit_mode(conversation_id, True)
 
 
 async def _read_workspace_file(
@@ -239,8 +237,7 @@ async def _read_workspace_file(
 ) -> bytes | None:
     """Read an allowlisted workspace image from the live sandbox, falling back to
     the project-store snapshot on disk. Returns None when no source has the file."""
-    executor = runtime._run_resources.executor(conversation_id)
-    session = executor.sandbox if executor is not None else None
+    session = runtime.live_session(conversation_id)
     if session is not None:
         try:
             data = await session.read_file(norm)
@@ -255,7 +252,7 @@ def _read_workspace_snapshot(
     runtime: ConversationRuntime, conversation_id: str, norm: str
 ) -> bytes | None:
     """Read an allowlisted workspace image from the project-store snapshot on disk."""
-    ps = runtime._projects.current_project_store()
+    ps = runtime.project_store()
     store_path = ps.path_for(conversation_id)
     if store_path is None:
         return None
@@ -284,7 +281,7 @@ def _register_workspace_version_routes(
         if runtime is None:
             return {"versions": []}
         try:
-            project_store = runtime._projects.current_project_store()
+            project_store = runtime.project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 return {"versions": []}
             return {
@@ -302,7 +299,7 @@ def _register_workspace_version_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         try:
-            return await runtime._workspace.restore_version(conversation_id, seq)
+            return await runtime.restore_workspace_version(conversation_id, seq)
         except WorkspaceRestoreConflict as exc:
             raise HTTPException(
                 status_code=409,
@@ -334,7 +331,7 @@ async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> 
     deep_field_set = bool(deep_fields & body.model_fields_set)
     if not (model_field_set or body.assist is not None or deep_field_set):
         return
-    ok = await runtime._settings.apply_settings_change(
+    ok = await runtime.apply_settings_change(
         conversation_id,
         model_override=body.model_override,
         assist=body.assist,
@@ -354,17 +351,17 @@ async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> 
 def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
     """Apply the settings that are safe to change at any point in a run."""
     if body.autonomous is not None:
-        runtime._settings.set_autonomous(conversation_id, body.autonomous)
+        runtime.set_autonomous(conversation_id, body.autonomous)
     if body.quiet is not None:
-        runtime._settings.set_quiet(conversation_id, body.quiet)
+        runtime.set_quiet(conversation_id, body.quiet)
     if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
-        runtime._dr.set_depth(conversation_id, body.depth_tier)
+        runtime.set_depth(conversation_id, body.depth_tier)
     if "iterative" in body.model_fields_set and body.iterative is not None:
-        runtime._dr.set_iterative(conversation_id, body.iterative)
+        runtime.set_iterative(conversation_id, body.iterative)
     if "recency_window" in body.model_fields_set:
-        runtime._dr.set_recency(conversation_id, body.recency_window)
+        runtime.set_recency(conversation_id, body.recency_window)
     if "sources" in body.model_fields_set and body.sources is not None:
-        runtime._settings.set_research_sources(conversation_id, body.sources)
+        runtime.set_research_sources(conversation_id, body.sources)
 
 
 async def _handle_post_message(
@@ -431,25 +428,25 @@ async def _handle_get_state(
     # surface (agentLive fallback, polling clients, the live specs) must
     # tell the same suspended/active story as the socket.
     if runtime is not None:
-        sstate = runtime._lifecycle.sandbox_state(conversation_id)
+        sstate = runtime.sandbox_state(conversation_id)
         if sstate is not None:
             state.extras["sandbox"] = sstate
-        sandbox_ids = runtime._lifecycle.sandbox_instance_ids(conversation_id)
+        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
         if sandbox_ids:
             state.extras["sandbox_instance_ids"] = sandbox_ids
         # Surface the autonomous flag so the UI can badge the conversation.
-        if runtime._settings.is_autonomous(conversation_id):
+        if runtime.is_autonomous(conversation_id):
             state.extras["autonomous"] = True
-        if runtime._settings.is_quiet(conversation_id):
+        if runtime.is_quiet(conversation_id):
             state.extras["quiet"] = True
         # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
         # tier. Emitting it only-when-true let a switch to standard leave the
         # frontend's preserved-on-absent value stuck on "Assist".
-        state.extras["assist"] = runtime._settings.is_assist(conversation_id)
+        state.extras["assist"] = runtime.is_assist(conversation_id)
     result = state.model_dump(mode="json")
     # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
     if runtime is not None:
-        sbackend = runtime._sandbox.backend_name()
+        sbackend = runtime.sandbox_backend_name()
         if sbackend is not None:
             result["sandbox_backend"] = sbackend
     # Overlay the stored (auto-titled) conversation title so a resumed surface
@@ -531,11 +528,7 @@ async def _handle_kill(
     """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
     revoke its capabilities."""
     _revoke_host_tokens(host_token_store, conversation_id)
-    sandbox_ids = (
-        runtime._lifecycle.sandbox_instance_ids(conversation_id)
-        if runtime is not None
-        else []
-    )
+    sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
     if runtime is not None:
         await runtime.kill(conversation_id)
     state = await store.get_state(conversation_id)
@@ -585,7 +578,7 @@ async def _handle_delete(
     owner_id = current_owner_id(request)
     _revoke_host_tokens(host_token_store, conversation_id)
     if runtime is not None:
-        await runtime._workspace.forget(conversation_id)
+        await runtime.forget_conversation(conversation_id)
     store.release_local_preview_lease(
         conversation_id=conversation_id,
         owner_id=owner_id,
@@ -781,7 +774,7 @@ def _get_space_or_404(
 ) -> None:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime._projects.current_project_store()
+    project_store = runtime.project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,

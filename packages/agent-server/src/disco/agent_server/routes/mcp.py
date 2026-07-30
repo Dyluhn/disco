@@ -95,7 +95,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
 
         servers: dict[str, dict] = {}
         srv_status = runtime._mcp._pool.server_status() if runtime._mcp._pool else {}
-        approval_pending = runtime._mcp.mcp_approval_state()
+        approval_pending = runtime.mcp_approval_state()
 
         for name, srv_raw in mcp_cfg.servers.items():
             srv, diagnostic = _server_config(name, srv_raw)
@@ -140,7 +140,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
         """Apply the latest persisted MCP config/approvals to the live runtime."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        return await runtime._mcp.reload()
+        return await runtime.reload_mcp_pool()
 
     @router.get("/api/mcp/servers/{name}/status")
     async def get_mcp_server_status(name: str) -> dict:
@@ -164,7 +164,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             if runtime._mcp._pool is not None:
                 status = runtime._mcp._pool.server_status().get(name, "disconnected")
 
-        approval_pending = runtime._mcp.mcp_approval_state()
+        approval_pending = runtime.mcp_approval_state()
         result: dict = {
             "name": name,
             "transport": srv.transport,

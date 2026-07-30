@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from disco.agent_server import runtime_compatibility
 from disco.agent_server.app import _make_runtime_lifespan
 from disco.agent_server.runtime import ConversationRuntime
 from disco.agent_server.runtime_composition import wire_runtime
@@ -67,7 +68,7 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
         if callable(member) and not name.startswith("_")
     }
 
-    assert public == {
+    active_ingress = {
         "aclose",
         "approve_plan",
         "cancel",
@@ -81,6 +82,21 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
         "send_user_turn",
         "start",
     }
+    compatibility = {
+        name
+        for name, member in vars(runtime_compatibility).items()
+        if inspect.isfunction(member)
+        and not name.startswith("_")
+        and name != "install_runtime_compatibility"
+    }
+
+    assert len(active_ingress) == 12
+    assert len(compatibility) == 100
+    assert public == active_ingress | compatibility
+    assert all(
+        getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
+        for name in compatibility
+    )
 
 
 def test_application_owners_do_not_retain_the_runtime() -> None:
@@ -152,9 +168,7 @@ def test_wire_runtime_body_is_wiring_only() -> None:
 async def test_shutdown_order_is_deterministic() -> None:
     runtime = _runtime()
     calls: list[str] = []
-    runtime._run_supervisor.cancel_runs = AsyncMock(
-        side_effect=lambda: calls.append("runs")
-    )
+    runtime._run_supervisor.cancel_runs = AsyncMock(side_effect=lambda: calls.append("runs"))
     runtime._driver_preflight.aclose = AsyncMock(
         side_effect=lambda: calls.append("driver-preflight")
     )

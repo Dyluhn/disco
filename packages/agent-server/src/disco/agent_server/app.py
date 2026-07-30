@@ -75,9 +75,7 @@ __all__ = ["_sanitize_name", "create_app"]
 
 _LOG = logging.getLogger(__name__)
 
-type _AppLifespan = Callable[
-    [FastAPI], contextlib.AbstractAsyncContextManager[None]
-]
+type _AppLifespan = Callable[[FastAPI], contextlib.AbstractAsyncContextManager[None]]
 
 
 async def _resolve_canonical_authority(
@@ -99,14 +97,16 @@ async def _resolve_canonical_authority(
     )
 
 
-def _webhook_approvals(runtime: object | None) -> OriginApprovalStore | None:
-    """Extract real runtime approval wiring without assuming test doubles have it."""
-    config_store = getattr(runtime, "_config_store", None)
-    secret_store = getattr(runtime, "_secret_store", None)
-    approval_store = getattr(config_store, "approval_store", None)
-    if not callable(approval_store) or secret_store is None:
+def _webhook_approvals(
+    runtime: ConversationRuntime | None,
+) -> OriginApprovalStore | None:
+    """Build the approval port at the composition boundary."""
+
+    if runtime is None:
         return None
-    result = approval_store(secret_store=secret_store)
+    result = runtime._config_store.approval_store(
+        secret_store=runtime._secret_store
+    )
     return result if isinstance(result, OriginApprovalStore) else None
 
 
@@ -135,7 +135,7 @@ def _attach_inspect_journal(event_db_path: str) -> None:
 
 def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
     try:
-        project_store = runtime._projects.current_project_store()
+        project_store = runtime.project_store()
         status = project_store.status()
         root = project_store.root
         if status != StorageStatus.OK or root is None:
@@ -202,18 +202,14 @@ def _make_runtime_lifespan(
                 _start_mcp_without_owning_readiness(), name="mcp-startup"
             )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
-                await active_runtime._lifecycle.reconcile_orphaned_runs()
+                await active_runtime.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
-                await active_runtime._drivers.prewarm_model_probe()
+                await active_runtime.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once
-                await active_runtime._drivers.prewarm_vision_probe()
-            idle_sweep_task = asyncio.create_task(
-                active_runtime._idle_sweeper.run()
-            )
+                await active_runtime.prewarm_vision_probe()
+            idle_sweep_task = asyncio.create_task(active_runtime._idle_sweeper.run())
             # RP-08: start the schedule manager loop alongside the idle sweep.
-            schedule_task = asyncio.create_task(
-                active_runtime._schedule._schedule_manager_loop()
-            )
+            schedule_task = asyncio.create_task(active_runtime._schedule._schedule_manager_loop())
         try:
             yield
         finally:
@@ -279,7 +275,7 @@ def _configure_middleware(
         # Fix 2 (codex P1): in-sandbox liveness fallback so the canonical iframe
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(
-            runtime._preview if runtime is not None else None
+            runtime._live_sessions if runtime is not None else None
         ),
         require_capability=True,
         redemption_store=store,

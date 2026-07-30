@@ -31,7 +31,7 @@ def make_health_router(store: SqliteEventStore, runtime: ConversationRuntime | N
             checks["runtime"] = "absent (wire-only mode)"
         else:
             try:
-                models = runtime._drivers.catalog().get("models", [])
+                models = runtime.driver_models().get("models", [])
                 checks["models"] = len(models) if isinstance(models, list) else 0
                 checks["runtime"] = "ok"
             except Exception as e:  # noqa: BLE001

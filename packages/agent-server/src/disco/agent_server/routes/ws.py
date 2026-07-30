@@ -332,23 +332,23 @@ async def _send_conversation_state_frame(
     state = await store.get_state(conversation_id)
     # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
     if runtime is not None:
-        sstate = runtime._lifecycle.sandbox_state(conversation_id)
+        sstate = runtime.sandbox_state(conversation_id)
         if sstate is not None:
             state.extras["sandbox"] = sstate
-        sandbox_ids = runtime._lifecycle.sandbox_instance_ids(conversation_id)
+        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
         if sandbox_ids:
             state.extras["sandbox_instance_ids"] = sandbox_ids
-        if runtime._settings.is_autonomous(conversation_id):
+        if runtime.is_autonomous(conversation_id):
             state.extras["autonomous"] = True
-        if runtime._settings.is_quiet(conversation_id):
+        if runtime.is_quiet(conversation_id):
             state.extras["quiet"] = True
         # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
         # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
-        state.extras["assist"] = runtime._settings.is_assist(conversation_id)
+        state.extras["assist"] = runtime.is_assist(conversation_id)
     # BP-15: mirror the HTTP /state sandbox_backend overlay.
     state_dict = state.model_dump(mode="json")
     if runtime is not None:
-        sbackend = runtime._sandbox.backend_name()
+        sbackend = runtime.sandbox_backend_name()
         if sbackend is not None:
             state_dict["sandbox_backend"] = sbackend
     await _send_json_redacted(websocket, {"type": "state", "state": state_dict})
@@ -428,7 +428,7 @@ async def _run_conversation_ws(
         # Last viewer left → after a grace window, free an idle sandbox
         # (an in-flight RUNNING loop is left alone; see runtime._suspend).
         if runtime is not None:
-            runtime._connections.on_disconnect(conversation_id)
+            runtime.on_disconnect(conversation_id)
 
 
 async def _ws_frame_loop(
@@ -471,7 +471,7 @@ def _parse_research_request(
     # P3: seed from last-selected when no explicit override is given.
     model_override = body.get("model_override") or None
     if not model_override and runtime is not None:
-        model_override = runtime._settings.get_last_selected_model()
+        model_override = runtime.get_last_selected_model()
     drop_weak = bool(body.get("drop_weak"))
     think = bool(body.get("think"))
     domains = body.get("domains_deny") or []
@@ -561,7 +561,7 @@ async def _stream_research_frames(
 ) -> None:
     """Stream research frames to the WebSocket, handling errors and closing."""
     try:
-        async for frame in runtime._dr.research_stream(
+        async for frame in runtime.research_stream(
             query,
             model_override=params["model_override"],
             drop_weak=params["drop_weak"],
@@ -610,7 +610,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             return
         await websocket.accept()
         if runtime is not None:
-            runtime._connections.on_connect(conversation_id)
+            runtime.on_connect(conversation_id)
         await _run_conversation_ws(store, runtime, websocket, conversation_id, last_seq)
 
     @router.websocket("/ws/research")

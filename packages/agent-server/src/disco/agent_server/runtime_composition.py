@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from disco.core import SkillStore
 from disco.core.inspect import inspect_enabled
@@ -70,6 +70,7 @@ from .lifecycle_ports import (
     LifecycleStoreAccess,
     LifecycleUploads,
 )
+from .live_session_directory import LiveSessionDirectory
 from .mcp_manager import McpManager
 from .persistence_notifier import PersistenceNotifier
 from .preview_service import PreviewService
@@ -113,6 +114,7 @@ from .runtime_settings import (
     _RuntimeModelBindings,
     _RuntimeSettingsRouting,
 )
+from .runtime_wiring_schema import _RuntimeWiringSchema
 from .sandbox_resource_reconciler import SandboxResourceReconciler
 from .sandbox_runtime_service import SandboxRuntimeService
 from .schedule_service import ScheduleService
@@ -142,9 +144,6 @@ from .workspace_ownership import (
 from .workspace_persistence import WorkspacePersistence
 from .workspace_service import WorkspaceCoordinator
 
-if TYPE_CHECKING:
-    from .runtime import ConversationRuntime
-
 _LOG = logging.getLogger(__name__)
 
 
@@ -167,7 +166,7 @@ def _config_store(
 
 
 def _wire_foundation(
-    rt: ConversationRuntime,
+    rt: _RuntimeWiringSchema,
     store: SqliteEventStore,
     *,
     db_path: str,
@@ -246,7 +245,7 @@ def _wire_foundation(
     )
 
 
-def _wire_lifecycle(rt: ConversationRuntime) -> None:
+def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
     executors = BuildExecutorAccess(rt._run_resources)
     rt._share = ShareService(
         rt._store,
@@ -327,7 +326,7 @@ def _wire_lifecycle(rt: ConversationRuntime) -> None:
 
 
 def _wire_research(
-    rt: ConversationRuntime,
+    rt: _RuntimeWiringSchema,
     *,
     research_providers: dict[str, Any] | None,
 ) -> None:
@@ -357,7 +356,7 @@ def _wire_research(
     )
 
 
-def _wire_workspace(rt: ConversationRuntime) -> None:
+def _wire_workspace(rt: _RuntimeWiringSchema) -> None:
     executors = BuildExecutorAccess(rt._run_resources)
     rt._workspace_ownership = WorkspaceOwnership(
         RunTaskDisposal(
@@ -407,7 +406,7 @@ def _wire_workspace(rt: ConversationRuntime) -> None:
 
 
 def _wire_domains(
-    rt: ConversationRuntime,
+    rt: _RuntimeWiringSchema,
     *,
     research_providers: dict[str, Any] | None,
 ) -> None:
@@ -416,7 +415,7 @@ def _wire_domains(
     _wire_workspace(rt)
 
 
-def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
+def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
     sessions = BuildSessionFactory(
         rt._settings,
         rt._sandbox,
@@ -461,8 +460,9 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._driver_contexts,
         mode,
     )
+    rt._live_sessions = LiveSessionDirectory(rt._run_resources, rt._store)
     rt._preview = PreviewService(
-        rt._run_resources,
+        rt._live_sessions,
         rt._store,
         rt._config_store,
         rt._settings,
@@ -479,7 +479,7 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._mcp,
         rt._lifecycle,
         rt._connections,
-        rt._preview,
+        rt._live_sessions,
     )
     rt._workspace_ownership.bind_restore_session(
         WorkspaceRestoreSession(
@@ -490,7 +490,7 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
     )
 
 
-def _wire_run_control(rt: ConversationRuntime) -> DeferredRunCompletion:
+def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
     rt._sandbox_resources = SandboxResourceReconciler(
         rt._sandbox,
         rt._run_registry,
@@ -534,7 +534,7 @@ def _wire_run_control(rt: ConversationRuntime) -> DeferredRunCompletion:
         rt._run_controller,
         rt._run_kills,
     )
-    rt._disco_kernel = DiscoKernel(
+    rt._disco_kernel = DiscoKernel._from_owners(
         rt._store,
         rt._workspace,
         rt._lifecycle_commands,
@@ -562,6 +562,7 @@ def _wire_run_control(rt: ConversationRuntime) -> DeferredRunCompletion:
         ResumeEnvironmentProbe(rt._projects, rt._uploads, rt._sessions),
         PinnedRunStart(rt._kernel_pins),
     )
+    rt._disco_kernel._bind_resume(rt._resume)
     rt._conversation_control = ConversationControlService(
         rt._contract,
         rt._kernel_pins,
@@ -575,7 +576,7 @@ def _wire_run_control(rt: ConversationRuntime) -> DeferredRunCompletion:
 
 
 def _wire_run_completion(
-    rt: ConversationRuntime,
+    rt: _RuntimeWiringSchema,
     completion: DeferredRunCompletion,
 ) -> None:
     run_policy = RunSurfaceSettings(rt._settings)
@@ -617,7 +618,7 @@ def _wire_run_completion(
     )
 
 
-def _wire_workflows(rt: ConversationRuntime) -> None:
+def _wire_workflows(rt: _RuntimeWiringSchema) -> None:
     workflow_runs = WorkflowRunService(
         rt._store,
         lifecycle_commands=rt._lifecycle_commands,
@@ -650,14 +651,14 @@ def _wire_workflows(rt: ConversationRuntime) -> None:
     )
 
 
-def _wire_runs(rt: ConversationRuntime) -> None:
+def _wire_runs(rt: _RuntimeWiringSchema) -> None:
     completion = _wire_run_control(rt)
     _wire_run_completion(rt, completion)
     _wire_workflows(rt)
 
 
 def wire_runtime(
-    rt: ConversationRuntime,
+    rt: _RuntimeWiringSchema,
     store: SqliteEventStore,
     *,
     db_path: str,

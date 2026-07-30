@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 
 from disco.core import (
+    ConversationState,
     ConversationStatus,
     MessageEvent,
     active_verification_requirements_event,
@@ -21,7 +23,10 @@ from ..run_controller import RunController
 from ..workspace_service import WorkspaceCoordinator
 
 if TYPE_CHECKING:
+    from ..resume_service import ResumeService
     from ..run_registry import KernelPinStore, RunRegistry
+    from ..runtime import ConversationRuntime
+    from .base import KernelEvent
 
 
 class DiscoKernel:
@@ -29,7 +34,63 @@ class DiscoKernel:
 
     name: ClassVar[str] = "disco"
 
-    def __init__(
+    if TYPE_CHECKING:
+
+        def __init__(self, runtime: ConversationRuntime | Any) -> None: ...
+
+        async def resume(self, conversation_id: str) -> None: ...
+
+        async def subscribe(
+            self, conversation_id: str, *, after_seq: int | None = None
+        ) -> AsyncIterator[KernelEvent]: ...
+
+        async def get_state(self, conversation_id: str) -> ConversationState: ...
+
+    else:
+
+        def __init__(self, runtime: object) -> None:
+            """Legacy constructor: copy named owners without retaining the runtime."""
+
+            self._assign_owners(
+                runtime._store,
+                runtime._workspace,
+                runtime._lifecycle_commands,
+                runtime._run_controller,
+                runtime._control,
+                runtime._loop_factory,
+                runtime._run_registry,
+                runtime._kernel_pin_store,
+                runtime._resume,
+            )
+
+    @classmethod
+    def _from_owners(
+        cls,
+        store: SqliteEventStore,
+        workspace: WorkspaceCoordinator,
+        lifecycle: LifecycleCommandService,
+        controller: RunController,
+        controls: ControlOps,
+        loops: BuildLoopFactory,
+        runs: RunRegistry,
+        pins: KernelPinStore,
+        resume: ResumeService | None = None,
+    ) -> Self:
+        kernel = cls.__new__(cls)
+        kernel._assign_owners(
+            store,
+            workspace,
+            lifecycle,
+            controller,
+            controls,
+            loops,
+            runs,
+            pins,
+            resume,
+        )
+        return kernel
+
+    def _assign_owners(
         self,
         store: SqliteEventStore,
         workspace: WorkspaceCoordinator,
@@ -39,6 +100,7 @@ class DiscoKernel:
         loops: BuildLoopFactory,
         runs: RunRegistry,
         pins: KernelPinStore,
+        resume: ResumeService | None,
     ) -> None:
         self._store = store
         self._workspace = workspace
@@ -48,6 +110,12 @@ class DiscoKernel:
         self._loops = loops
         self._runs = runs
         self._pins = pins
+        self._resume = resume
+
+    def _bind_resume(self, resume: ResumeService) -> None:
+        if self._resume is not None:
+            raise RuntimeError("DiscoKernel resume owner is already bound")
+        self._resume = resume
 
     # -- lifecycle ------------------------------------------------------------
     def start(self, conversation_id: str) -> None:
@@ -173,3 +241,30 @@ class DiscoKernel:
         generation = self._runs.generation(conversation_id)
         self._pins.clear_if_current(conversation_id, generation, self._runs)
         await self._controls.kill(conversation_id, generation)
+
+
+async def _compat_resume(self: DiscoKernel, conversation_id: str) -> None:
+    if self._resume is None:
+        raise RuntimeError("DiscoKernel resume owner is not bound")
+    await self._resume.resume_conversation(conversation_id)
+
+
+async def _compat_subscribe(
+    self: DiscoKernel,
+    conversation_id: str,
+    *,
+    after_seq: int | None = None,
+) -> AsyncIterator[KernelEvent]:
+    return await self._store.subscribe(conversation_id, after_seq=after_seq)
+
+
+async def _compat_get_state(
+    self: DiscoKernel,
+    conversation_id: str,
+) -> ConversationState:
+    return await self._store.get_state(conversation_id)
+
+
+DiscoKernel.resume = _compat_resume
+DiscoKernel.subscribe = _compat_subscribe
+DiscoKernel.get_state = _compat_get_state

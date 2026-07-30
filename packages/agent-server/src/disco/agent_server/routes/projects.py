@@ -390,7 +390,7 @@ async def _handle_list_projects(
 ) -> dict:
     session = current_session(request)
     owner_id = session.owner_id
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None:
         return {"projects": [], "status": StorageStatus.UNSET.value}
     status = ps.status()
@@ -432,7 +432,7 @@ async def _handle_import_project(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
 ) -> dict:
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=503,
@@ -487,7 +487,7 @@ async def _handle_import_project(
         title=title,
         surface="build",
     )
-    runtime._settings._set_surface(conversation_id, "build")
+    runtime.set_surface(conversation_id, "build")
     created_at = await _created_at_for(store, conversation_id, owner_id)
     ps.write_manifest(
         conversation_id,
@@ -549,7 +549,7 @@ async def _handle_download_project(
     runtime: ConversationRuntime | None,
 ) -> Response:
     """Stream a zip of the project's workspace."""
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=404,
@@ -645,7 +645,7 @@ async def _handle_project_manifest(
     runtime: ConversationRuntime | None,
 ) -> dict:
     """Export a JSON manifest of the project: metadata, file tree, and deliverable."""
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
     record = ps.get(conversation_id)
@@ -734,7 +734,7 @@ async def _handle_delete_project(
     runtime: ConversationRuntime | None,
 ) -> dict:
     """Remove a project's manifest + workspace from disk."""
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=404,
@@ -755,7 +755,7 @@ async def _handle_delete_project(
     if runtime is None:
         deleted = ps.delete(conversation_id)
     else:
-        async with runtime._workspace.mutation(
+        async with runtime.workspace_mutation(
             conversation_id,
             "project.delete",
             paths=(".",),
@@ -779,7 +779,7 @@ async def _resolve_project_for_read(
     workspace tree is gone). Returns the store, the record, and the workspace dir
     on success."""
     conversation_id = await require_owned_conversation(request, store, conversation_id)
-    ps = runtime._projects.current_project_store() if runtime is not None else None
+    ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
     record = ps.get(conversation_id)

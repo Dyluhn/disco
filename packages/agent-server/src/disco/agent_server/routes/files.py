@@ -70,13 +70,12 @@ async def _read_artifact_bytes(
     if is_runtime_secret_path(norm):
         return None
     # 1) live sandbox (a running/suspended-but-live conversation)
-    executor = runtime._run_resources.executor(conversation_id)
-    session = executor.sandbox if executor is not None else None
+    session = runtime.live_session(conversation_id)
     if session is not None:
         with contextlib.suppress(Exception):
             return await session.read_file(norm)
     # 2) host ProjectStore snapshot (finished run, sandbox reaped)
-    ps = runtime._projects.current_project_store()
+    ps = runtime.project_store()
     if ps is not None and ps.status() == StorageStatus.OK:
         with contextlib.suppress(Exception):
             workspace = ps.path_for(conversation_id).resolve()
@@ -112,7 +111,7 @@ def _register_upload_routes(
 
         if runtime is None:
             raise HTTPException(status_code=409, detail={"reason": "no_active_sandbox"})
-        session = runtime._sessions.upload_session(conversation_id)
+        session = runtime.upload_session(conversation_id)
 
         saved: list[dict] = []
         rejected: list[dict] = []
@@ -137,7 +136,7 @@ def _register_upload_routes(
             # Quota, collision choice, invalidation, and both writes share the
             # finalization lock. Two simultaneous uploads can never select the
             # same suffix or slip a write between FINISHED and its seal.
-            async with runtime._workspace.fence(conversation_id):
+            async with runtime.workspace_fence(conversation_id):
                 server_names = runtime._uploads.names(conversation_id)
                 try:
                     sandbox_names: set[str] = set(await session.list_dir("uploads"))
@@ -167,7 +166,7 @@ def _register_upload_routes(
                     final_name = f"{stem}-{counter}{suffix}"
                     counter += 1
                 upload_path = f"uploads/{final_name}"
-                await runtime._workspace.record_mutation_locked(
+                await runtime.record_workspace_mutation_locked(
                     conversation_id,
                     "upload.write",
                     paths=(upload_path,),
@@ -182,7 +181,7 @@ def _register_upload_routes(
             # agent to read but are NOT indexed as retrievable passages.
             upload_doc = parse_upload_to_doc(final_name, data, conversation_id)
             if upload_doc is not None and upload_doc.passages:
-                runtime._dr.add_upload_passages(
+                runtime.add_upload_passages(
                     conversation_id,
                     list(upload_doc.passages),
                 )
@@ -268,7 +267,7 @@ def _register_artifact_routes(
             None,
         )
         if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
-            project_store = runtime._projects.current_project_store()
+            project_store = runtime.project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 raise HTTPException(status_code=503, detail={"reason": "workspace_unsealed"})
             try:

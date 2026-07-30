@@ -24,9 +24,10 @@ spine (the store's element type), not a new parallel event type.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
-from disco.core import Event, MessageEvent
+from disco.core import ConversationState, Event, MessageEvent
 from disco.core.appkit import BuildBrief
 from disco.core.verification import VerificationRequirementsDirective
 
@@ -122,6 +123,21 @@ class BuildKernel(Protocol):
         """Cooperative stop — the run winds down to a terminal status."""
         ...
 
+    async def resume(self, conversation_id: str) -> None:
+        """Continue a stopped/incomplete run (mode-agnostic resume)."""
+        ...
+
     async def kill(self, conversation_id: str) -> None:
         """The hard kill switch — halt the run, revoke caps, tear down the box."""
+        ...
+
+    # -- events / state -------------------------------------------------------
+    async def subscribe(
+        self, conversation_id: str, *, after_seq: int | None = None
+    ) -> AsyncIterator[KernelEvent]:
+        """Await the conversation's durable-then-live event stream."""
+        ...
+
+    async def get_state(self, conversation_id: str) -> ConversationState:
+        """Return the reconstructed conversation state."""
         ...

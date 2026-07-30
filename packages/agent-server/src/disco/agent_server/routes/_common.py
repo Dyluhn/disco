@@ -265,7 +265,7 @@ def make_preview_upstream_resolver(runtime: ConversationRuntime | None):
         if runtime is None:
             return None
         if owner_id is None:
-            return await runtime._preview.wake_for_preview(cid8, port)
-        return await runtime._preview.wake_for_preview(cid8, port, owner_id=owner_id)
+            return await runtime.wake_for_preview(cid8, port)
+        return await runtime.wake_for_preview(cid8, port, owner_id=owner_id)
 
     return _preview_upstream_resolver

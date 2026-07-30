@@ -19,7 +19,7 @@ def make_sessions_router(store: SqliteEventStore, runtime: ConversationRuntime |
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"sessions": []}
-        sessions, stale = await runtime._sessions.sessions_snapshot(conversation_id)
+        sessions, stale = await runtime.sessions_snapshot(conversation_id)
         return {
             "sessions": [
                 {
@@ -49,10 +49,10 @@ def make_sessions_router(store: SqliteEventStore, runtime: ConversationRuntime |
             raise HTTPException(status_code=404, detail="session not found")
         if runtime is None:
             raise HTTPException(status_code=404, detail="no runtime")
-        sessions = (await runtime._sessions.sessions_snapshot(conversation_id))[0]
+        sessions = (await runtime.sessions_snapshot(conversation_id))[0]
         if not any(s.name == name for s in sessions):
             raise HTTPException(status_code=404, detail="session not found")
-        view = await runtime._sessions.session_view(conversation_id, name, tail_chars)
+        view = await runtime.session_view(conversation_id, name, tail_chars)
         if view is None:
             raise HTTPException(status_code=404, detail="no sandbox")
         return {"name": name, "busy": view.running, "content": view.output}

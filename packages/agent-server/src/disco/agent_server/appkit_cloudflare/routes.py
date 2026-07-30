@@ -489,7 +489,7 @@ class _CommittedWorkspaceGate:
 
     def resolve_workspace(self, conversation_id: str) -> Path:
         runtime = self.runtime_required()
-        ps = runtime._projects.current_project_store()
+        ps = runtime.project_store()
         if ps is None or ps.status() != StorageStatus.OK:
             raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
         try:
@@ -526,7 +526,7 @@ async def _build_committed_plan(
     runtime = gate.runtime_required()
     workspace = gate.resolve_workspace(conversation_id)
     try:
-        async with runtime._workspace.lock(conversation_id):
+        async with runtime.workspace_lock(conversation_id):
             async with workspace_process_fence(workspace, wait=False):
                 before = await gate.require_locked(conversation_id)
                 try:
@@ -574,20 +574,20 @@ async def _execute_committed_deploy(
     cid = body.conversation_id
     runtime = gate.runtime_required()
     try:
-        async with runtime._workspace.lock(cid):
+        async with runtime.workspace_lock(cid):
             async with workspace_process_fence(workspace, wait=False):
                 await gate.require_locked(cid)
 
                 async def begin_mutation() -> None:
                     await gate.require_locked(cid)
-                    await runtime._workspace.record_mutation_locked(
+                    await runtime.record_workspace_mutation_locked(
                         cid,
                         "cloudflare.deploy-record",
                         paths=(".disco/cloudflare/deployments",),
                     )
 
                 async def finish_mutation() -> None:
-                    await runtime._workspace.finalize_host_mirror_change_locked(
+                    await runtime.finalize_host_mirror_change_locked(
                         cid, "cloudflare.deploy-record"
                     )
 

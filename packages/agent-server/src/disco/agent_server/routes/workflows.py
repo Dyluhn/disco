@@ -346,7 +346,7 @@ def _workflow_store(
     owner_id: str | None = None,
     include_unclaimed_legacy: bool = False,
 ) -> JsonDirWorkflowStore:
-    project_store = runtime._projects.current_project_store()
+    project_store = runtime.project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
@@ -387,15 +387,11 @@ def _surface_environment(runtime: ConversationRuntime) -> _SurfaceEnvironment:
     builtin_names = frozenset(builtin_defs) | WORKFLOW_CONTROL_TOOLS
 
     mcp_defs: dict[str, ToolDef] = {}
-    pool = getattr(runtime, "_mcp_pool", None)
-    if pool is not None:
-        for tool_def in pool.snapshot():
+    for tool_def in runtime._workflow_tool_definitions():
+        if isinstance(tool_def, ToolDef):
             mcp_defs[tool_def.name] = tool_def
-    for name, tool_def in getattr(runtime, "_mcp_http_tools", {}).items():
-        if isinstance(name, str) and isinstance(tool_def, ToolDef):
-            mcp_defs[name] = tool_def
 
-    skills = runtime._skill_store.list()
+    skills = runtime._workflow_skills()
     skill_payloads: dict[str, dict[str, object]] = {}
     for skill in skills:
         payload: dict[str, object] = {
@@ -973,12 +969,12 @@ async def _fire_approved_workflow_once(
         cron=_ONE_SHOT_CRON,
         enabled=False,
     )
-    row = runtime._schedule.create_workflow_schedule(spec, owner_id=owner_id)
+    row = runtime.create_workflow_schedule(spec, owner_id=owner_id)
     schedule_id = str(row.get("schedule_id") or "")
     if not schedule_id:
         raise ValueError("workflow schedule creation did not return a schedule_id")
     try:
-        record = await runtime._schedule.fire_workflow_schedule_now(
+        record = await runtime.fire_workflow_schedule_now(
             schedule_id,
             owner_id=owner_id,
         )
@@ -996,7 +992,7 @@ def _delete_ephemeral_workflow_schedule(
     runtime: ConversationRuntime,
     schedule_id: str,
 ) -> None:
-    project_store = runtime._projects.current_project_store()
+    project_store = runtime.project_store()
     root = project_store.root
     if root is None:
         return
