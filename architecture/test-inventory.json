@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "6521e85faf1e8078cf4e95402f61f5dfd9d6b98b",
+  "source_identity": "e009e223b72dbf880c32d0f86d5ef8b48d4b3723",
   "collected": {
     "counts": {
-      "packages": 9839,
+      "packages": 9842,
       "harness": 1236,
       "integrations": 9,
       "tests": 328
     },
-    "total": 11412,
+    "total": 11415,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9127,6 +9127,7 @@
         "packages/tools/tests/test_safe_write_file.py::test_syntax_introducing_write_rejected_no_change",
         "packages/tools/tests/test_sandbox.py::test_backend_swap_identical_results_process_vs_fake",
         "packages/tools/tests/test_sandbox.py::test_container_backend_kill_path_unchanged",
+        "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
         "packages/tools/tests/test_sandbox.py::test_file_round_trip_and_escape_rejection",
         "packages/tools/tests/test_sandbox.py::test_h342_bounded_shell_argv_pins_non_login_bash",
         "packages/tools/tests/test_sandbox.py::test_h342_process_shell_runs_bash_process_substitution",
@@ -9147,6 +9148,8 @@
         "packages/tools/tests/test_sandbox.py::test_process_shell_resolves_workspace_prefix",
         "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_path_built_from_a_shell_variable_resolves",
         "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_rewrite_rejects_traversal_escape",
+        "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+        "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds",
         "packages/tools/tests/test_sandbox.py::test_session_destroy_shuts_down_cached_kernel",
         "packages/tools/tests/test_sandbox.py::test_session_file_exists_delegates_to_instance",
         "packages/tools/tests/test_sandbox.py::test_session_no_hook_recreate_still_works",
@@ -11433,9 +11436,9 @@
     }
   },
   "mapping_static": {
-    "identity": "6521e85faf1e8078cf4e95402f61f5dfd9d6b98b",
+    "identity": "e009e223b72dbf880c32d0f86d5ef8b48d4b3723",
     "python_test_file_count": 771,
-    "python_static_test_id_count": 9305,
+    "python_static_test_id_count": 9308,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20620,6 +20623,7 @@
       "packages/tools/tests/test_safe_write_file.py::test_syntax_introducing_write_rejected_no_change",
       "packages/tools/tests/test_sandbox.py::test_backend_swap_identical_results_process_vs_fake",
       "packages/tools/tests/test_sandbox.py::test_container_backend_kill_path_unchanged",
+      "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
       "packages/tools/tests/test_sandbox.py::test_file_round_trip_and_escape_rejection",
       "packages/tools/tests/test_sandbox.py::test_h342_bounded_shell_argv_pins_non_login_bash",
       "packages/tools/tests/test_sandbox.py::test_h342_process_shell_runs_bash_process_substitution",
@@ -20640,6 +20644,8 @@
       "packages/tools/tests/test_sandbox.py::test_process_shell_resolves_workspace_prefix",
       "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_path_built_from_a_shell_variable_resolves",
       "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_rewrite_rejects_traversal_escape",
+      "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+      "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds",
       "packages/tools/tests/test_sandbox.py::test_session_destroy_shuts_down_cached_kernel",
       "packages/tools/tests/test_sandbox.py::test_session_file_exists_delegates_to_instance",
       "packages/tools/tests/test_sandbox.py::test_session_no_hook_recreate_still_works",
@@ -24232,24 +24238,10 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/tools/tests/test_sandbox.py",
-        "line": 387,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"all non-reserved user preview ports are already bound on this host\")"
-      },
-      {
-        "framework": "pytest",
         "path": "packages/core/tests/test_export_render.py",
         "line": 412,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"SIGALRM unavailable\")"
-      },
-      {
-        "framework": "pytest",
-        "path": "packages/tools/tests/test_sandbox.py",
-        "line": 418,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"no managed host Preview port is free\")"
       },
       {
         "framework": "pytest",
@@ -24281,6 +24273,13 @@
       },
       {
         "framework": "pytest",
+        "path": "packages/tools/tests/test_sandbox.py",
+        "line": 509,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"all non-reserved user preview ports are already bound on this host\")"
+      },
+      {
+        "framework": "pytest",
         "path": "packages/tools/tests/test_sandbox_integration.py",
         "line": 53,
         "marker": "pytest.mark.skipif",
@@ -24296,7 +24295,14 @@
       {
         "framework": "pytest",
         "path": "packages/tools/tests/test_sandbox.py",
-        "line": 57,
+        "line": 540,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"no managed host Preview port is free\")"
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/tools/tests/test_sandbox.py",
+        "line": 59,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"tmux is required for the real process-backend cleanup boundary\")"
       },
@@ -26841,6 +26847,34 @@
           "packages/core/tests/test_store_schema_contract.py::test_tools_ensure_mcp_approval_tables_functional",
           "packages/core/tests/test_store_schema_contract.py::test_tools_mcp_migrations_imports_core_schema",
           "tests/architecture/test_public_api.py::test_type_checking_class_declarations_preserve_static_surface"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-07-PREVIEW-CORRECTION",
+      "root": "packages",
+      "source_identity_before": "6521e85faf1e8078cf4e95402f61f5dfd9d6b98b",
+      "source_identity_after": "e009e223b72dbf880c32d0f86d5ef8b48d4b3723",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9839,
+          "after_count": 9842,
+          "added_ids": [
+            "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
+            "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+            "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
+          "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+          "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
