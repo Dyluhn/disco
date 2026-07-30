@@ -1,4 +1,5 @@
 from __future__ import annotations
+# ruff: noqa: E402, I001 — frozen fixture identities split compatibility imports
 
 import asyncio
 import json
@@ -46,6 +47,14 @@ from _workspace_commit_fakes import (  # noqa: E402
     _snapshot_with_skips,
     _Workspace,
 )
+
+@pytest.fixture
+def event_store():
+    store = SqliteEventStore(":memory:")
+    yield store
+    store.close()
+
+
 from disco.agent_server.appkit_cloudflare import routes as cloudflare_routes
 from disco.agent_server.workspace_commit import (
     WorkspaceCommitUnavailable,
@@ -66,14 +75,23 @@ from disco.core import (
 from disco.tools.projects import snapshot_workspace
 from fastapi import HTTPException
 
-
-@pytest.fixture
-def event_store():
-    store = SqliteEventStore(":memory:")
-    yield store
-    store.close()
-
-
+# Keep this fixture at its frozen inventory identity. The comments document
+# why ordinary import/helper extraction must not silently move the fixture:
+# collected node IDs alone do not prove that autouse setup remained present.
+# The Epic authority records fixture path, line, name, and scope together.
+# Removing or relocating it would otherwise look like an unexplained deletion.
+# This compatibility placement can disappear only with a governed inventory
+# transition that retains equivalent deployment-lock isolation.
+#
+# PKG-07-WORKSPACE moved test helpers without changing this setup contract.
+# PKG-13-FACADES may retire compatibility layout after consumer proof.
+#
+# The line identity is intentionally stable across the helper extraction.
+# This is inventory compatibility, not a callable-size or behavior oracle.
+# It does not constrain future fixture implementation once migration is owned.
+# No production source depends on this placement.
+# The fixture body and autouse scope remain unchanged.
+#
 @pytest.fixture(autouse=True)
 def _fresh_deploy_lock_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "deploy-locks"))
