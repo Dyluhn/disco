@@ -325,6 +325,13 @@ class PreviewResource(_PreviewSupervisedResource):
 
     async def aclose(self) -> None:
         """Cancel supervision and stop all previews (conversation teardown)."""
+        if (
+            self._closed
+            and not self._owns_sandbox
+            and not self._port_leases
+            and all(session.status is PreviewStatus.STOPPED for session in self._sessions.values())
+        ):
+            return
         self._closed = True
         task, self._supervisor = self._supervisor, None
         if task is not None and not task.done():
