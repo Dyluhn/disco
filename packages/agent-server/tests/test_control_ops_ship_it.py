@@ -1,13 +1,10 @@
 """F-3: post-FINISHED 'ship-it / accept-as-is' intent must NOT force a re-plan.
-
-After a build FINISHES, a user message that clearly means "stop, we're done"
-should echo the user text to the log but leave the conversation FINISHED —
+After a build FINISHES, a user message that clearly means "stop, we're done" should
+echo the user text to the log but leave the conversation FINISHED —
 no RUNNING/planning status, no run-intent, no PlanEvent, no task kick.
-
-Real change/deploy intents must still fall through to the replan path, which
-publishes the planning ingress — the user echo, a RUNNING/planning StatusEvent,
-and the durable ``agent.run-intent.request-plan`` (run_protocol_version=1)
-marker — as ONE atomic transaction through the real WorkspaceCoordinator, then
+Real change/deploy intents must still fall through to the replan path, which publishes
+the planning ingress — the user echo, a RUNNING/planning StatusEvent,
+and its durable run-intent marker as ONE atomic WorkspaceCoordinator transaction, then
 kicks a new turn carrying the new user turn's seq. A peer therefore sees either
 the old execution state or the complete planning ingress, never the new
 instruction under the old tool scope. The guard is a no-op when the conversation
@@ -31,6 +28,7 @@ import pytest
 from disco.agent_server.control_ops import ControlOps, _is_ship_it_intent
 from disco.agent_server.lifecycle_command_service import LifecycleCommandService
 from disco.agent_server.run_registry import CancellationRegistry, LoopRegistry
+from disco.agent_server.workspace_fence import WorkspaceFenceService
 from disco.agent_server.workspace_service import WorkspaceCoordinator
 from disco.core import (
     ConversationStatus,
@@ -74,12 +72,25 @@ class _Runtime:
         self._tasks: dict[str, Any] = {}
         self._settings = MagicMock()
         self._settings._surface_of.return_value = "build"
-        self._workspace = WorkspaceCoordinator(self)
+        projects = MagicMock()
+        projects.current_project_store.return_value = project_store
+        fence = WorkspaceFenceService(store, projects, self._settings)
+        self._workspace = WorkspaceCoordinator(
+            store,
+            self._settings,
+            projects,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            fence,
+        )
         self._lifecycle_commands = LifecycleCommandService(
             store=store,
             fence=self._workspace,
             terminal_effects=MagicMock(),
         )
+        self._workspace._lifecycle_commands = self._lifecycle_commands
         self.kick = MagicMock()
         self._loop_for = MagicMock()
         self._loop_for.return_value.enter_planning = AsyncMock()

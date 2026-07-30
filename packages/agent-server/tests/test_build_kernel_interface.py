@@ -1,14 +1,5 @@
-"""BuildKernel seam.
-
-Proves the seam is a ZERO-behavior-change wrapper:
-
-  * the current Build runs through `DiscoKernel`, which is a thin pass-through to
-    the SAME collaborators the agent-server already drives (the event store +
-    `ControlOps` + `kick` + `ResumeService`), with IDENTICAL events/args;
-  * the kernel selector resolves legacy/unknown persisted values to `DiscoKernel`;
-  * `ConversationControlService` routes plan/action-gate ops through the pinned
-    kernel and, with the current `disco` kernel, lands on `ControlOps` exactly
-    as before.
+"""BuildKernel zero-behavior-change seam.
+The public facade and explicit control owner both route through pinned Disco kernels.
 """
 
 from __future__ import annotations

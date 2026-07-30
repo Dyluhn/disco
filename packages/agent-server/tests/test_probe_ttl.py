@@ -1,6 +1,5 @@
-"""T6/E2: the live-model /props probe cache must have a TTL so a model
-hot-swap re-probes after the TTL elapses, but within the TTL the cached
-result is served without re-probing.
+"""T6/E2: the live-model /props probe cache must have a TTL.
+Hot-swaps re-probe after the TTL; within it, cached results avoid re-probing.
 
 Contract locked here:
   - cache entry WITHIN _PROBE_TTL_S (60s) -> served from cache, the

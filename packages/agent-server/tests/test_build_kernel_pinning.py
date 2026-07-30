@@ -1,4 +1,6 @@
-"""BuildKernel per-run pinning through the explicit control owner."""
+"""BuildKernel per-run pinning.
+The explicit control owner preserves one kernel identity for each run.
+"""
 
 from __future__ import annotations
 
@@ -9,12 +11,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from disco.agent_server import run_supervisor as _run_supervisor
 from disco.agent_server.build_kernel import BuildKernel
 from disco.agent_server.run_registry import KernelPinRegistry
-from disco.agent_server.run_supervisor import (
-    _KERNEL_UNPIN_STATUSES,
-    _MAX_NONTERMINAL_REKICKS,
-)
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     ConversationState,
@@ -264,7 +263,7 @@ async def test_stuck_watchdog_clears_pin(store: SqliteEventStore) -> None:
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
     runtime = _finalizer_runtime(store)
     runtime._kernel_pins.ensure(CID)
-    for _ in range(_MAX_NONTERMINAL_REKICKS):
+    for _ in range(_run_supervisor._MAX_NONTERMINAL_REKICKS):
         runtime._run_recovery.increment_stall(CID)
 
     await runtime._run_finalizer.finalize_clean(CID)
@@ -303,9 +302,15 @@ async def test_finalize_after_new_run_started_does_not_clear_new_pin(
 
 
 def test_unpin_statuses_exclude_paused_and_gates() -> None:
-    assert ConversationStatus.PAUSED not in _KERNEL_UNPIN_STATUSES
-    assert ConversationStatus.AWAITING_PLAN_APPROVAL not in _KERNEL_UNPIN_STATUSES
-    assert ConversationStatus.WAITING_FOR_CONFIRMATION not in _KERNEL_UNPIN_STATUSES
-    assert ConversationStatus.FINISHED in _KERNEL_UNPIN_STATUSES
-    assert ConversationStatus.ERROR in _KERNEL_UNPIN_STATUSES
-    assert ConversationStatus.STUCK in _KERNEL_UNPIN_STATUSES
+    assert ConversationStatus.PAUSED not in _run_supervisor._KERNEL_UNPIN_STATUSES
+    assert (
+        ConversationStatus.AWAITING_PLAN_APPROVAL
+        not in _run_supervisor._KERNEL_UNPIN_STATUSES
+    )
+    assert (
+        ConversationStatus.WAITING_FOR_CONFIRMATION
+        not in _run_supervisor._KERNEL_UNPIN_STATUSES
+    )
+    assert ConversationStatus.FINISHED in _run_supervisor._KERNEL_UNPIN_STATUSES
+    assert ConversationStatus.ERROR in _run_supervisor._KERNEL_UNPIN_STATUSES
+    assert ConversationStatus.STUCK in _run_supervisor._KERNEL_UNPIN_STATUSES
