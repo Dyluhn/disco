@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Literal
 
-from disco.core.quota import QuotaConfig, QuotaConfigurationError, StoredQuotaConfig
+from disco.core.quota import (
+    QuotaConfig,
+    QuotaConfigurationError,
+    QuotaUsage,
+    SqliteQuotaStore,
+    StoredQuotaConfig,
+)
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 
 from ..auth import current_owner_id
@@ -22,6 +31,96 @@ ServiceQuery = Annotated[
     str | None,
     Query(min_length=3, max_length=128, pattern=_SERVICE_PATTERN),
 ]
+
+
+@dataclass(frozen=True)
+class _QuotaStatusDecision:
+    audience: str
+    service: str | None
+    source: Literal["configured", "inherited", "default"]
+    limits: QuotaConfig
+    updated_at: datetime | None
+    usage: QuotaUsage
+
+
+class _QuotaApplicationService:
+    """Narrow quota port; routes never reconstruct policy from mutable state."""
+
+    def __init__(self, store: Callable[[], SqliteQuotaStore]) -> None:
+        self._store = store
+
+    def configure(
+        self,
+        owner_id: str,
+        audience: str,
+        service: str | None,
+        limits: QuotaConfig,
+    ) -> StoredQuotaConfig:
+        return self._store().configure(
+            owner_id=owner_id,
+            audience=audience,
+            service=service,
+            limits=limits,
+        )
+
+    def configured(
+        self,
+        owner_id: str,
+        audience: str,
+        service: str | None,
+    ) -> StoredQuotaConfig | None:
+        return self._store().get_config(owner_id, audience, service=service)
+
+    def delete(
+        self,
+        owner_id: str,
+        audience: str,
+        service: str | None,
+    ) -> bool:
+        return self._store().delete_config(owner_id, audience, service=service)
+
+    def status(
+        self,
+        owner_id: str,
+        audience: str,
+        service: str | None,
+    ) -> _QuotaStatusDecision:
+        store = self._store()
+        exact = store.get_config(owner_id, audience, service=service)
+        aggregate = (
+            store.get_config(owner_id, audience) if service is not None and exact is None else None
+        )
+        usage = store.get_usage(
+            owner_id=owner_id,
+            audience=audience,
+            service=service,
+        )
+        if exact is not None:
+            return _QuotaStatusDecision(
+                audience,
+                service,
+                "configured",
+                exact.limits,
+                exact.updated_at,
+                usage,
+            )
+        if aggregate is not None:
+            return _QuotaStatusDecision(
+                audience,
+                service,
+                "inherited",
+                aggregate.limits,
+                aggregate.updated_at,
+                usage,
+            )
+        return _QuotaStatusDecision(
+            audience,
+            service,
+            "default",
+            store.default_config,
+            None,
+            usage,
+        )
 
 
 def _limits_dto(limits: QuotaConfig) -> QuotaLimitsDTO:
@@ -52,7 +151,10 @@ def _store_unavailable(exc: RuntimeError) -> HTTPException:
     return HTTPException(status_code=503, detail={"reason": "quota_store_unavailable"})
 
 
-def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None:
+def _register_quota_config_routes(
+    router: APIRouter,
+    service_port: _QuotaApplicationService,
+) -> None:
     @router.put("/api/quota/config/{audience}")
     async def configure_quota(
         audience: str,
@@ -61,11 +163,11 @@ def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None
         service: ServiceQuery = None,
     ) -> QuotaConfigStatus:
         try:
-            stored = app_quota_store(state).configure(
-                owner_id=current_owner_id(request),
-                audience=audience,
-                service=service,
-                limits=QuotaConfig(
+            stored = service_port.configure(
+                current_owner_id(request),
+                audience,
+                service,
+                QuotaConfig(
                     window_seconds=body.window_seconds,
                     max_requests=body.max_requests,
                     max_input_tokens=body.max_input_tokens,
@@ -89,9 +191,7 @@ def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None
         service: ServiceQuery = None,
     ) -> QuotaConfigStatus:
         try:
-            stored = app_quota_store(state).get_config(
-                current_owner_id(request), audience, service=service
-            )
+            stored = service_port.configured(current_owner_id(request), audience, service)
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
         except RuntimeError as exc:
@@ -110,9 +210,7 @@ def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None
         service: ServiceQuery = None,
     ) -> Response:
         try:
-            deleted = app_quota_store(state).delete_config(
-                current_owner_id(request), audience, service=service
-            )
+            deleted = service_port.delete(current_owner_id(request), audience, service)
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
         except RuntimeError as exc:
@@ -122,7 +220,10 @@ def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _register_quota_status_route(router: APIRouter, state: ConfigState) -> None:
+def _register_quota_status_route(
+    router: APIRouter,
+    service_port: _QuotaApplicationService,
+) -> None:
     @router.get("/api/quota/status/{audience}")
     async def quota_status(
         audience: str,
@@ -131,52 +232,35 @@ def _register_quota_status_route(router: APIRouter, state: ConfigState) -> None:
     ) -> QuotaStatusDTO:
         owner_id = current_owner_id(request)
         try:
-            store = app_quota_store(state)
-            exact = store.get_config(owner_id, audience, service=service)
-            aggregate = (
-                store.get_config(owner_id, audience)
-                if service is not None and exact is None
-                else None
-            )
-            usage = store.get_usage(owner_id=owner_id, audience=audience, service=service)
-            if exact is not None:
-                config = _config_dto(exact)
-            elif aggregate is not None:
-                config = QuotaConfigStatus(
-                    audience=audience,
-                    service=service,
-                    source="inherited",
-                    limits=_limits_dto(aggregate.limits),
-                    updated_at=aggregate.updated_at,
-                )
-            else:
-                config = QuotaConfigStatus(
-                    audience=audience,
-                    service=service,
-                    source="default",
-                    limits=_limits_dto(store.default_config),
-                )
+            decision = service_port.status(owner_id, audience, service)
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
         except RuntimeError as exc:
             raise _store_unavailable(exc) from exc
         return QuotaStatusDTO(
-            config=config,
+            config=QuotaConfigStatus(
+                audience=decision.audience,
+                service=decision.service,
+                source=decision.source,
+                limits=_limits_dto(decision.limits),
+                updated_at=decision.updated_at,
+            ),
             usage=QuotaUsageDTO(
-                request_count=usage.request_count,
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                total_tokens=usage.total_tokens,
-                window_start=usage.window_start,
-                window_end=usage.window_end,
+                request_count=decision.usage.request_count,
+                input_tokens=decision.usage.input_tokens,
+                output_tokens=decision.usage.output_tokens,
+                total_tokens=decision.usage.total_tokens,
+                window_start=decision.usage.window_start,
+                window_end=decision.usage.window_end,
             ),
         )
 
 
 def make_quota_router(state: ConfigState) -> APIRouter:
     router = APIRouter()
-    _register_quota_config_routes(router, state)
-    _register_quota_status_route(router, state)
+    service_port = _QuotaApplicationService(lambda: app_quota_store(state))
+    _register_quota_config_routes(router, service_port)
+    _register_quota_status_route(router, service_port)
     return router
 
 

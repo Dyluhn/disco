@@ -9,6 +9,11 @@ import secrets
 import time
 from typing import Any
 
+from disco.core._auth_capability_policy import (
+    authenticated_request_refusal,
+    conversation_owner_refusal,
+    pairing_refusal,
+)
 from disco.core.auth import (
     CSRF_HEADER,
     SESSION_COOKIE,
@@ -18,9 +23,7 @@ from disco.core.auth import (
     cookie_header_from_headers,
     generated_preview_request_host,
     local_preview_origin_crosses_host,
-    localhost_auto_pair_allowed,
     origin_allowed,
-    origin_permitted,
     pairing_token,
     request_traversed_proxy,
 )
@@ -31,7 +34,6 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
 _LOG = logging.getLogger(__name__)
-_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
 # The admin pairing token is DERIVED LIVE from the shared session secret (see
 # disco.core.auth.pairing_token) at each use — identical across the app- and
@@ -222,21 +224,20 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_http(path, method):
             return await call_next(request)
         origin = request.headers.get("origin")
-        # allowlist OR same-host (the single-front-door deploy: Origin == Host).
-        if origin and not origin_permitted(origin, request.headers.get("host")):
-            return Response("forbidden origin", status_code=403)
         session = self._authenticate_request(request)
-        if session is None:
-            return Response("auth required", status_code=401)
+        refusal = authenticated_request_refusal(
+            session=session,
+            origin=origin,
+            request_host=request.headers.get("host"),
+            method=method,
+            csrf_token=request.headers.get(CSRF_HEADER),
+            admin_required=_is_admin_path(path),
+            test_client=_is_testclient(request),
+        )
+        if refusal is not None:
+            return Response(refusal.response_text, status_code=refusal.status_code)
+        assert session is not None
         request.state.auth_session = session
-        if _is_admin_path(path) and not session.is_admin:
-            return Response("admin required", status_code=403)
-        if (
-            method in _UNSAFE_METHODS
-            and not _is_testclient(request)
-            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
-        ):
-            return Response("csrf required", status_code=403)
         owner_check = await self._authorize_conversation_path(request, session)
         if owner_check is not None:
             return owner_check
@@ -253,17 +254,14 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
     async def _authorize_conversation_path(
         self, request: Request, session: AuthSession
     ) -> Response | None:
-        if session.session_id == "test-session":
-            return None
         match = _CID_RE.search(request.url.path)
         if match is None:
             return None
         cid = match.group(1)
         owner = await self._store.conversation_owner_id(cid)
-        if owner is None:
-            return Response("conversation not found", status_code=404)
-        if owner != session.owner_id:
-            return Response("conversation forbidden", status_code=403)
+        refusal = conversation_owner_refusal(session, owner)
+        if refusal is not None:
+            return Response(refusal.response_text, status_code=refusal.status_code)
         return None
 
 
@@ -291,26 +289,19 @@ def make_auth_router() -> APIRouter:
         # path; the tokenless auto-pair shortcut keeps the STRICT allowlist so a
         # DNS-rebound page (Origin == rebound Host) can never mint without the token.
         origin = request.headers.get("origin")
-        if not origin_permitted(origin, request.headers.get("host")):
-            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
-        auto_pair = _auto_pair_enabled()
-        token_ok = _pairing_token_ok(body.pairing_token)
-        if not token_ok:
-            if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
-                pass  # host-process dev convenience (unforgeable loopback TCP peer)
-            elif localhost_auto_pair_allowed(
-                origin,
-                request.headers.get("host"),
-                via_proxy=request_traversed_proxy(request.headers),
-            ):
-                # Loopback-BOUND front door (compose default): the ports are
-                # kernel-unreachable from other machines, and the page asserts a
-                # localhost origin == this app's own Host → the operator's own
-                # machine. Zero-friction first run; DISCO_BIND=0.0.0.0 (or a proxy
-                # in front, which adds a forwarding header) disables it.
-                pass
-            else:
-                raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+        refusal = pairing_refusal(
+            token_valid=_pairing_token_ok(body.pairing_token),
+            origin=origin,
+            request_host=request.headers.get("host"),
+            loopback_client=_is_loopback_client(request),
+            auto_pair_enabled=_auto_pair_enabled(),
+            traversed_proxy=request_traversed_proxy(request.headers),
+        )
+        if refusal is not None:
+            raise HTTPException(
+                status_code=refusal.status_code,
+                detail={"reason": refusal.reason},
+            )
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
         set_session_cookie(response, cookie, session)
         return {
