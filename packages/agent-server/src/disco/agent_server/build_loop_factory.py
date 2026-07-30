@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, cast
 
@@ -125,6 +126,31 @@ class BuildSessionFactory:
             sandbox_spec,
             conversation_id=conversation_id,
             on_recreate=lambda: self._rehydration._rehydrate_after_recreate(conversation_id),
+            legacy_auto_preview=False,
+        )
+
+    def create_preview(
+        self,
+        conversation_id: str,
+        snapshot: McpLoopSnapshot,
+    ) -> SandboxSession:
+        """Create an isolated session for immutable Preview replay.
+
+        It intentionally does not enter the executor registry: the canonical
+        Preview resource owns its lifetime, while the conversation session
+        remains the mutable build workspace.
+        """
+
+        surface = self._settings._surface_of(conversation_id)
+        sandbox_spec = self._sandbox._build_sandbox_spec(
+            surface=surface,
+            mcp_egress_hosts=snapshot.egress_hosts,
+        )
+        preview_id = "pv_" + hashlib.sha256(conversation_id.encode()).hexdigest()[:29]
+        return SandboxSession(
+            self._sandbox._sandbox_service_now(),
+            sandbox_spec,
+            conversation_id=preview_id,
             legacy_auto_preview=False,
         )
 
@@ -416,6 +442,14 @@ class BuildLoopComposer:
     def build_broker(self) -> CapabilityBroker:
         return self._brokers.build()
 
+    def create_preview_session(self, conversation_id: str) -> SandboxSession:
+        """Compose the isolated sandbox owned by one sealed Preview resource."""
+
+        return self._sessions.create_preview(
+            conversation_id,
+            self._mcp._loop_snapshot(),
+        )
+
     def compose_build_loop(
         self,
         conversation_id: str,
@@ -493,6 +527,11 @@ class BuildLoopFactory:
 
     def build_broker(self) -> CapabilityBroker:
         return self._composer.build_broker()
+
+    def create_preview_session(self, conversation_id: str) -> SandboxSession:
+        """Return a Preview-owned sandbox without composing an executor."""
+
+        return self._composer.create_preview_session(conversation_id)
 
     def compose_build_loop(
         self,
