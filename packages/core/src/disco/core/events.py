@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import typing as _typing
 import uuid
 from collections.abc import Iterable
 from contextvars import ContextVar
@@ -226,6 +227,14 @@ _workspace_folds.Event = Event
 # event dicts (post-migration) through this; the `kind` field selects the
 # concrete type. (§4 serialization contract.)
 EventAdapter: TypeAdapter[Event] = TypeAdapter(Event)
+_EVENT_TYPES = frozenset(_typing.get_args(_typing.get_args(Event)[0]))
+
+
+def _require_concrete_event(event: object) -> Event:
+    """Reject values outside the exact canonical Event union."""
+    if type(event) not in _EVENT_TYPES:
+        raise TypeError("event store append requires a concrete Event instance")
+    return _typing.cast(Event, event)
 
 
 def event_to_json_dict(event: Event) -> dict[str, Any]:
