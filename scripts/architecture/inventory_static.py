@@ -388,35 +388,17 @@ def _ids_owned_by_paths(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str) and item.partition("::")[0] in paths]
 
 
-def _later_ids(
-    transitions: list[dict[str, Any]],
-    path: tuple[str, ...],
-) -> set[str]:
-    result: set[str] = set()
-    for transition in transitions:
-        if transition.get("package") == _PKG02:
-            continue
-        value: Any = transition
-        for key in path:
-            value = value.get(key) if isinstance(value, dict) else None
-        if isinstance(value, list):
-            result.update(item for item in value if isinstance(item, str))
-    return result
-
-
 def _check_pkg02_exact_additions(
     row: dict[str, Any],
-    transitions: list[dict[str, Any]],
+    claims: dict[str, set[str]],
     baseline: dict[str, Any],
     problems: list[str],
 ) -> None:
-    later_collected = _later_ids(
-        transitions,
-        ("collected_roots", "tests", "added_ids"),
-    )
     collected = row.get("collected_roots")
     tests = collected.get("tests") if isinstance(collected, dict) else {}
     actual_collected = tests.get("added_ids") if isinstance(tests, dict) else None
+    owned_collected = set(actual_collected) if isinstance(actual_collected, list) else set()
+    later_collected = claims.get("collected_roots.tests", set()) - owned_collected
     current_collected = baseline.get("collected", {}).get("roots", {}).get("tests")
     frozen_collected = [
         node_id
@@ -435,10 +417,9 @@ def _check_pkg02_exact_additions(
     current_static = (
         current_mapping.get("python_static_test_ids") if isinstance(current_mapping, dict) else None
     )
-    later_static = _later_ids(
-        transitions,
-        ("mapping_static_additions", "python_static_test_ids"),
-    )
+    actual_static = additions.get("python_static_test_ids")
+    owned_static = set(actual_static) if isinstance(actual_static, list) else set()
+    later_static = claims.get("mapping_static.python_static_test_ids", set()) - owned_static
     frozen_static = [
         node_id for node_id in _ids_owned_by_paths(current_static) if node_id not in later_static
     ]
@@ -449,6 +430,7 @@ def _check_pkg02_exact_additions(
 def _check_pkg02_transition(
     transitions: list[dict[str, Any]],
     baseline: dict[str, Any],
+    claims: dict[str, set[str]],
     problems: list[str],
 ) -> None:
     rows = [row for row in transitions if row.get("package") == _PKG02]
@@ -494,7 +476,7 @@ def _check_pkg02_transition(
     )
     if mapping_facts != (14, 302, [], [], []):
         problems.append("PKG-02-GATE mapping-static addition relation is not exact")
-    _check_pkg02_exact_additions(row, transitions, baseline, problems)
+    _check_pkg02_exact_additions(row, claims, baseline, problems)
 
 
 def _check_identity_chain(
@@ -616,7 +598,7 @@ def check_inventory_metadata(
         )
         if checked is not None:
             valid_rows.append(checked)
-    _check_pkg02_transition(valid_rows, baseline, problems)
+    _check_pkg02_transition(valid_rows, baseline, claims, problems)
     _check_identity_chain(valid_rows, source, problems)
     return problems
 
