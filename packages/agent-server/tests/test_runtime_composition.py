@@ -99,6 +99,21 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     )
 
 
+def test_runtime_compatibility_installers_are_bounded() -> None:
+    tree = ast.parse(Path(runtime_compatibility.__file__).read_text())
+    installers = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and "install" in node.name
+    ]
+
+    assert {node.name for node in installers} == {
+        "_install_schedule_compatibility",
+        "install_runtime_compatibility",
+    }
+    assert all(len(node.body) <= 95 for node in installers)
+
+
 def test_application_owners_do_not_retain_the_runtime() -> None:
     owner_modules = (
         "deep_research_service.py",

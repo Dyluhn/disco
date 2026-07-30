@@ -719,6 +719,21 @@ def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[d
     return self._schedule.list_recent_schedule_runs(owner_id=owner_id, limit=limit)
 
 
+def _install_schedule_compatibility(runtime_cls: type[ConversationRuntime]) -> None:
+    runtime_cls.run_sealed_workflow_schedule = run_sealed_workflow_schedule
+    runtime_cls.create_schedule = create_schedule
+    runtime_cls.list_schedules = list_schedules
+    runtime_cls.delete_schedule = delete_schedule
+    runtime_cls.fire_schedule_now = fire_schedule_now
+    runtime_cls.create_workflow_schedule = create_workflow_schedule
+    runtime_cls.list_workflow_schedules = list_workflow_schedules
+    runtime_cls.list_workflow_schedule_runs = list_workflow_schedule_runs
+    runtime_cls.fire_workflow_schedule_now = fire_workflow_schedule_now
+    runtime_cls.preview_schedule_runs = preview_schedule_runs
+    runtime_cls.running_conversation_ids = running_conversation_ids
+    runtime_cls.list_recent_schedule_runs = list_recent_schedule_runs
+
+
 def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> None:
     """Install explicit delegates without a dynamic attribute/service-locator seam."""
 
@@ -898,26 +913,4 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.forget_conversation = forget_conversation
 
-    runtime_cls.run_sealed_workflow_schedule = run_sealed_workflow_schedule
-
-    runtime_cls.create_schedule = create_schedule
-
-    runtime_cls.list_schedules = list_schedules
-
-    runtime_cls.delete_schedule = delete_schedule
-
-    runtime_cls.fire_schedule_now = fire_schedule_now
-
-    runtime_cls.create_workflow_schedule = create_workflow_schedule
-
-    runtime_cls.list_workflow_schedules = list_workflow_schedules
-
-    runtime_cls.list_workflow_schedule_runs = list_workflow_schedule_runs
-
-    runtime_cls.fire_workflow_schedule_now = fire_workflow_schedule_now
-
-    runtime_cls.preview_schedule_runs = preview_schedule_runs
-
-    runtime_cls.running_conversation_ids = running_conversation_ids
-
-    runtime_cls.list_recent_schedule_runs = list_recent_schedule_runs
+    _install_schedule_compatibility(runtime_cls)
