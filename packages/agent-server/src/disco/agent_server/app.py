@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 from disco.core.auth import allowed_frontend_origins
@@ -73,6 +74,10 @@ from .runtime import ConversationRuntime
 __all__ = ["_sanitize_name", "create_app"]
 
 _LOG = logging.getLogger(__name__)
+
+type _AppLifespan = Callable[
+    [FastAPI], contextlib.AbstractAsyncContextManager[None]
+]
 
 
 async def _resolve_canonical_authority(
@@ -146,41 +151,19 @@ def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
         _LOG.warning("Builtin workflow seed failed", exc_info=True)
 
 
-def create_app(
-    store: SqliteEventStore,
-    *,
-    runtime: ConversationRuntime | None = None,
-    host_token_store: HostTokenStore | None = None,
-    quota_store: SqliteQuotaStore | None = None,
-    stripe_config_store: StripeAppConfigStore | None = None,
-    webhook_config_store: WebhookAppConfigStore | None = None,
-) -> FastAPI:
-    """Build the FastAPI app over a given store. The store is injected so tests
-    drive it headlessly. `runtime` runs the agent loop with real inference (Stage
-    2); pass None in tests that only exercise the wire layer (the loop won't run)."""
-
-    # WO-A2.2: durable operational token store for the host-service bus. Shares
-    # the event-store DB path so tokens survive restarts; falls back to :memory:
-    # for ephemeral wire tests.
-    owns_token_store = host_token_store is None
-    event_db_path = getattr(store, "db_path", None) or ":memory:"
-    token_store = host_token_store or HostTokenStore(event_db_path)
-    owns_quota_store = quota_store is None
-    quotas = quota_store or SqliteQuotaStore(event_db_path)
-    owns_stripe_config_store = stripe_config_store is None
-    stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
-    owns_webhook_config_store = webhook_config_store is None
-    webhook_configs = webhook_config_store or WebhookAppConfigStore(event_db_path)
-
+def _make_runtime_lifespan(
+    event_db_path: str,
+    runtime: ConversationRuntime | None,
+) -> _AppLifespan:
     @contextlib.asynccontextmanager
-    async def _runtime_lifespan(_app: FastAPI):
+    async def runtime_lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # On startup, start the MCP pool (RP-05) and reconcile orphaned RUNNING
         # conversations — loops that died with a previous server process. Without
         # this they show 'RUNNING' forever in History / the Deep Research read-only
         # view (and may have leaked a sandbox).
-        mcp_start_task: asyncio.Task | None = None
-        idle_sweep_task: asyncio.Task | None = None
-        schedule_task: asyncio.Task | None = None
+        mcp_start_task: asyncio.Task[None] | None = None
+        idle_sweep_task: asyncio.Task[None] | None = None
+        schedule_task: asyncio.Task[None] | None = None
         _attach_inspect_journal(event_db_path)
         if runtime is not None:
             # Narrow once outside the nested startup coroutine. Type checkers
@@ -227,10 +210,25 @@ def create_app(
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
 
+    return runtime_lifespan
+
+
+def _make_lifespan(
+    runtime_lifespan: _AppLifespan,
+    token_store: HostTokenStore,
+    quotas: SqliteQuotaStore,
+    stripe_configs: StripeAppConfigStore,
+    webhook_configs: WebhookAppConfigStore,
+    *,
+    owns_token_store: bool,
+    owns_quota_store: bool,
+    owns_stripe_config_store: bool,
+    owns_webhook_config_store: bool,
+) -> _AppLifespan:
     @contextlib.asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
-            async with _runtime_lifespan(_app):
+            async with runtime_lifespan(app):
                 yield
         finally:
             if owns_token_store:
@@ -242,11 +240,14 @@ def create_app(
             if owns_webhook_config_store:
                 webhook_configs.close()
 
-    app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
-    app.state.host_token_store = token_store
-    app.state.quota_store = quotas
-    app.state.stripe_config_store = stripe_configs
-    app.state.webhook_config_store = webhook_configs
+    return lifespan
+
+
+def _configure_middleware(
+    app: FastAPI,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> None:
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
@@ -282,6 +283,16 @@ def create_app(
     # can override the global CORSMiddleware's headers on those paths.
     app.add_middleware(CloudflareDeployCorsMiddleware)
 
+
+def _include_routers(
+    app: FastAPI,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    token_store: HostTokenStore,
+    quotas: SqliteQuotaStore,
+    stripe_configs: StripeAppConfigStore,
+    webhook_configs: WebhookAppConfigStore,
+) -> None:
     # Per-domain routers (routes/<domain>.py). Registration order preserves the
     # original relative order; the `{path:path}` catch-alls (workspace/artifacts/
     # preview-app/port) live inside their domain routers after the literal routes.
@@ -340,4 +351,56 @@ def create_app(
         )
     )
 
+
+def create_app(
+    store: SqliteEventStore,
+    *,
+    runtime: ConversationRuntime | None = None,
+    host_token_store: HostTokenStore | None = None,
+    quota_store: SqliteQuotaStore | None = None,
+    stripe_config_store: StripeAppConfigStore | None = None,
+    webhook_config_store: WebhookAppConfigStore | None = None,
+) -> FastAPI:
+    """Build the FastAPI app over a given store. The store is injected so tests
+    drive it headlessly. `runtime` runs the agent loop with real inference (Stage
+    2); pass None in tests that only exercise the wire layer (the loop won't run)."""
+
+    # WO-A2.2: durable operational token store for the host-service bus. Shares
+    # the event-store DB path so tokens survive restarts; falls back to :memory:
+    # for ephemeral wire tests.
+    owns_token_store = host_token_store is None
+    event_db_path = getattr(store, "db_path", None) or ":memory:"
+    token_store = host_token_store or HostTokenStore(event_db_path)
+    owns_quota_store = quota_store is None
+    quotas = quota_store or SqliteQuotaStore(event_db_path)
+    owns_stripe_config_store = stripe_config_store is None
+    stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
+    owns_webhook_config_store = webhook_config_store is None
+    webhook_configs = webhook_config_store or WebhookAppConfigStore(event_db_path)
+    lifespan = _make_lifespan(
+        _make_runtime_lifespan(event_db_path, runtime),
+        token_store,
+        quotas,
+        stripe_configs,
+        webhook_configs,
+        owns_token_store=owns_token_store,
+        owns_quota_store=owns_quota_store,
+        owns_stripe_config_store=owns_stripe_config_store,
+        owns_webhook_config_store=owns_webhook_config_store,
+    )
+    app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
+    app.state.host_token_store = token_store
+    app.state.quota_store = quotas
+    app.state.stripe_config_store = stripe_configs
+    app.state.webhook_config_store = webhook_configs
+    _configure_middleware(app, store, runtime)
+    _include_routers(
+        app,
+        store,
+        runtime,
+        token_store,
+        quotas,
+        stripe_configs,
+        webhook_configs,
+    )
     return app
