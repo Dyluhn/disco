@@ -112,7 +112,6 @@ from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.verification import VerificationRequirementsDirective
 from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
-from disco.retrieval import DefaultCorpusService, DiskVectorStore
 from disco.retrieval.deep_research import (
     DepthTier,
 )
@@ -173,6 +172,7 @@ from .build_platform_shadow import (
     build_platform_shadow_enabled,
     observe_legacy_build,
 )
+from .connection_tracker import ConnectionTracker, LifecycleSuspender
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
 from .driver_context import (
@@ -222,7 +222,7 @@ from .schedule_service import (
 from .security_live_verifier import make_security_live_verifier
 from .sessions_service import SessionsService
 from .share_service import ShareService
-from .space_store import JsonSpaceStore
+from .space_service import ConfiguredProjectRoot, SpaceService
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.dispatcher import HostVerifierDispatcher
@@ -911,24 +911,6 @@ class ConversationRuntime:
         # raw bytes for persistence (the corpus is re-ingested lazily on demand
         # in a future persistence upgrade).
         self._upload_passages: dict[str, list[Any]] = {}  # list[Passage]
-        # Spaces: persistent named corpora. The registry + disk vector store live
-        # under the configured ProjectStore root and are rebuilt lazily when that
-        # root changes. Per-conversation selections are pinned at create/submit.
-        self._space_ids: dict[str, frozenset[str]] = {}
-        self._space_vector_store_root: str | None = None
-        self._space_vector_store: DiskVectorStore | None = None
-        # Auto-suspend (lifecycle G): a build session is live only while a UI is
-        # watching it. Track open WS connections per conversation; when the last one
-        # closes, free the idle sandbox after a grace period (a quick reconnect — or
-        # the WS-reconnect backoff — cancels it).
-        self._connections: dict[str, int] = {}
-        self._suspend_tasks: dict[str, asyncio.Task] = {}
-        # BP-14: per-(cid, name) coalescing cache for capture-pane calls.
-        self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
-        self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
-        self._wake_locks: dict[str, asyncio.Lock] = {}
-        # DC-04b: last-known session list per cid for stale-on-failure degradation.
-        self._last_sessions: dict[str, list[SessionInfo]] = {}
         # RP-05 rung A: MCP client pool — built once at start from RouterConfig.mcp.
         self._mcp_pool: McpPool | None = None
         # Servers that need re-approval (ApprovalRequired at startup). Emitted to
@@ -967,6 +949,7 @@ class ConversationRuntime:
             ejections=self._appkit_ejections,
         )
         self._lifecycle, self._lifecycle_commands = compose_lifecycle_service(self)
+        self._connections = ConnectionTracker(LifecycleSuspender(self._lifecycle))
         self._appkit_ejection = AppKitEjectionService(
             event_store=self._store,
             workspace=self._workspace,
@@ -980,6 +963,7 @@ class ConversationRuntime:
         # (_cancel_flags is shared with kill/cancel/resume); the service reaches
         # state via a back-ref. See deep_research_service.py.
         self._dr = DeepResearchService(self)
+        self._spaces = SpaceService(ConfiguredProjectRoot(self._config_store), self._dr)
         # ScheduleService owns sealed workflow execution and the temporary typed
         # compatibility port for the legacy ScheduleManager.
         self._schedule = ScheduleService(
@@ -3698,12 +3682,7 @@ class ConversationRuntime:
         start in an EMPTY workspace (silently losing prior work). The view-cache /
         wake-lock / last-session entries are dropped too so a stale handle can't ghost
         the fresh backend's session."""
-        for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
-            del self._session_view_cache[key]
-        for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
-            del self._session_view_locks[key]
-        self._wake_locks.pop(conversation_id, None)
-        self._last_sessions.pop(conversation_id, None)
+        self._connections.clear_conversation(conversation_id)
         rehydrated = getattr(self, "_rehydrated", None)
         if rehydrated is not None:
             rehydrated.discard(conversation_id)
@@ -3962,10 +3941,10 @@ class ConversationRuntime:
         return self._mcp.mcp_approval_state()
 
     def on_connect(self, conversation_id: str) -> None:
-        return self._lifecycle.on_connect(conversation_id)
+        return self._connections.on_connect(conversation_id)
 
     def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
-        return self._lifecycle.on_disconnect(conversation_id, grace_s=grace_s)
+        return self._connections.on_disconnect(conversation_id, grace_s=grace_s)
 
     async def _suspend(self, conversation_id: str) -> None:
         return await self._lifecycle._suspend(conversation_id)
@@ -4015,40 +3994,6 @@ class ConversationRuntime:
         not_writable etc.).  An empty ``projects_root`` resolves to the
         auto-default path rather than returning None."""
         return self._project_store_now()
-
-    def space_store(self) -> JsonSpaceStore:
-        """Public accessor for the Spaces registry under the ProjectStore root."""
-        project_store = self._project_store_now()
-        root = project_store.root
-        if root is None:
-            return JsonSpaceStore("")
-        return JsonSpaceStore(root)
-
-    def space_vector_store(self) -> DiskVectorStore:
-        """Durable vector store for Space corpora, one namespace per space_id."""
-        root = self.space_store().vectors_dir
-        root_str = str(root)
-        if self._space_vector_store is None or self._space_vector_store_root != root_str:
-            self._space_vector_store = DiskVectorStore(root)
-            self._space_vector_store_root = root_str
-        return self._space_vector_store
-
-    def space_corpus_service(self) -> DefaultCorpusService:
-        """Corpus service for ingesting Space documents with the live embedder."""
-        deps = self._research()
-        return DefaultCorpusService(self.space_vector_store(), deps["embedder"])
-
-    def set_space_ids(self, conversation_id: str, space_ids: list[str] | frozenset[str]) -> None:
-        clean = frozenset(str(space_id).strip() for space_id in space_ids if str(space_id).strip())
-        if clean:
-            self._space_ids[conversation_id] = clean
-        else:
-            self._space_ids.pop(conversation_id, None)
-
-    def get_space_ids(self, conversation_id: str | None) -> frozenset[str]:
-        if not conversation_id:
-            return frozenset()
-        return self._space_ids.get(conversation_id, frozenset())
 
     async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict:
         return await self._workspace.restore_version(conversation_id, seq)

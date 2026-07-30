@@ -420,7 +420,7 @@ async def _run_conversation_ws(
         # Last viewer left → after a grace window, free an idle sandbox
         # (an in-flight RUNNING loop is left alone; see runtime._suspend).
         if runtime is not None:
-            runtime.on_disconnect(conversation_id)
+            runtime._connections.on_disconnect(conversation_id)
 
 
 async def _ws_frame_loop(
@@ -595,7 +595,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             return
         await websocket.accept()
         if runtime is not None:
-            runtime.on_connect(conversation_id)
+            runtime._connections.on_connect(conversation_id)
         await _run_conversation_ws(store, runtime, websocket, conversation_id, last_seq)
 
     @router.websocket("/ws/research")

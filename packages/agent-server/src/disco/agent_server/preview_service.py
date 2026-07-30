@@ -539,7 +539,7 @@ class PreviewService:
         except Exception:
             return None
 
-        lock = self._rt._wake_locks.setdefault(cid, asyncio.Lock())
+        lock = self._rt._connections.wake_lock_for(cid)
         async with lock:
             if cid in self._rt._executors:
                 return self._rt.port_upstream(cid, port)

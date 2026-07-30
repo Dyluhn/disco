@@ -123,7 +123,7 @@ class GateReaper:
                 return 0
             if cid in live_run_ids:
                 return 0  # a live in-memory run/task is driving it — not abandoned
-            if self._rt._connections.get(cid, 0) > 0:
+            if self._rt._connections.has_connections(cid):
                 return 0  # UI attached — not abandoned
             # Capture the conversation's run-generation at the sweep-DECISION
             # point (finding #3, SAME stale-terminalizer race as
@@ -528,12 +528,7 @@ class LifecycleManager:
         # BP-14: drop the capture-pane coalescing cache + locks for this conversation —
         # each cache entry pins up to 100KB of captured output and would otherwise
         # accumulate for the life of the server process.
-        for key in [k for k in self._rt._session_view_cache if k[0] == conversation_id]:
-            del self._rt._session_view_cache[key]
-        for key in [k for k in self._rt._session_view_locks if k[0] == conversation_id]:
-            del self._rt._session_view_locks[key]
-        self._rt._wake_locks.pop(conversation_id, None)
-        self._rt._last_sessions.pop(conversation_id, None)  # don't ghost a stale list (DC-04b)
+        self._rt._connections.clear_conversation(conversation_id)
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
@@ -561,35 +556,16 @@ class LifecycleManager:
     def on_connect(self, conversation_id: str) -> None:
         """A UI WebSocket connected — track it and cancel any pending idle-suspend
         (the user is back before the grace elapsed, or the WS reconnected)."""
-        self._rt._connections[conversation_id] = self._rt._connections.get(conversation_id, 0) + 1
-        task = self._rt._suspend_tasks.pop(conversation_id, None)
-        if task is not None:
-            task.cancel()
+        self._rt._connections.on_connect(conversation_id)
 
     def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
         """A UI WebSocket closed. When the LAST connection for a conversation goes,
         schedule an idle-suspend after `grace_s` — long enough that a brief blip (the
         WS-reconnect backoff) reconnects and cancels it before it fires."""
-        n = self._rt._connections.get(conversation_id, 0) - 1
-        if n > 0:
-            self._rt._connections[conversation_id] = n
-            return
-        self._rt._connections.pop(conversation_id, None)
-        old = self._rt._suspend_tasks.pop(conversation_id, None)
-        if old is not None:
-            old.cancel()
-        self._rt._suspend_tasks[conversation_id] = asyncio.create_task(
-            self._suspend_after_grace(conversation_id, grace_s)
-        )
+        self._rt._connections.on_disconnect(conversation_id, grace_s=grace_s)
 
     async def _suspend_after_grace(self, conversation_id: str, grace_s: float) -> None:
-        try:
-            await asyncio.sleep(grace_s)
-        except asyncio.CancelledError:
-            return
-        if self._rt._connections.get(conversation_id, 0) <= 0:
-            await self._rt._suspend(conversation_id)
-        self._rt._suspend_tasks.pop(conversation_id, None)
+        await self._rt._connections._suspend_after_grace(conversation_id, grace_s)
 
     def _has_active_work(self, conversation_id: str) -> bool:
         """LIFE-3 — True when a suspend would KILL in-flight work even though the
@@ -697,7 +673,7 @@ class LifecycleManager:
                 state = await self._rt._store.get_state(cid)
                 if state.execution_status is ConversationStatus.RUNNING:
                     continue
-                if self._rt._connections.get(cid, 0) > 0:
+                if self._rt._connections.has_connections(cid):
                     continue
                 if self._has_active_work(cid):  # LIFE-3: never suspend in-flight work
                     continue

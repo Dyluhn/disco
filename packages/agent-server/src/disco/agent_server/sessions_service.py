@@ -70,7 +70,7 @@ class SessionsService:
             try:
                 all_sessions = await session.sessions.list()
                 filtered = [s for s in all_sessions if not s.name.startswith("__")]
-                self._rt._last_sessions[conversation_id] = filtered
+                self._rt._connections.set_last_sessions(conversation_id, filtered)
                 return (filtered, False)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -80,7 +80,7 @@ class SessionsService:
             self._rt._SESSIONS_LIST_RETRIES + 1,
             last_exc,
         )
-        return (self._rt._last_sessions.get(conversation_id, []), True)
+        return (self._rt._connections.last_sessions_get(conversation_id), True)
 
     async def session_view(
         self, conversation_id: str, name: str, tail_chars: int
@@ -90,19 +90,23 @@ class SessionsService:
         session = self._rt.live_session(conversation_id)
         if session is None:
             return None
-        key = (conversation_id, name)
-        lock = self._rt._session_view_locks.setdefault(key, asyncio.Lock())
+        lock = self._rt._connections.session_view_lock(conversation_id, name)
         async with lock:
             loop = asyncio.get_running_loop()
             now = loop.time()
-            cached = self._rt._session_view_cache.get(key)
+            cached = self._rt._connections.session_view_cache_get(conversation_id, name)
             if cached is not None and (now - cached[0]) < self._rt._SESSION_VIEW_CACHE_TTL:
                 view = cached[1]
             else:
                 view = await session.sessions.view(
                     name, tail_chars=self._rt._SESSION_VIEW_MAX_CHARS
                 )
-                self._rt._session_view_cache[key] = (now, view)
+                self._rt._connections.session_view_cache_set(
+                    conversation_id,
+                    name,
+                    now,
+                    view,
+                )
         if len(view.output) > tail_chars:
             return SessionView(running=view.running, output=view.output[-tail_chars:])
         return view

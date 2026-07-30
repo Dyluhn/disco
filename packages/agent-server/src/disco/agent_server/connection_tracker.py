@@ -34,9 +34,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
+
+if TYPE_CHECKING:
+    from .lifecycle import LifecycleManager
 
 _LOG = logging.getLogger(__name__)
 
@@ -46,6 +49,16 @@ class SuspendCallback(Protocol):
     """Suspend an idle build's sandbox after the grace period elapses."""
 
     async def suspend(self, conversation_id: str) -> None: ...
+
+
+class LifecycleSuspender:
+    """Narrow adapter for the lifecycle owner's suspend operation."""
+
+    def __init__(self, lifecycle: LifecycleManager) -> None:
+        self._lifecycle = lifecycle
+
+    async def suspend(self, conversation_id: str) -> None:
+        await self._lifecycle._suspend(conversation_id)
 
 
 class ConnectionTracker:

@@ -36,7 +36,7 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -73,6 +73,7 @@ from disco.retrieval.deep_research import (
     decompose_query,
 )
 from disco.retrieval.models import Passage
+from disco.retrieval.ranking import Embedder
 from disco.tools.projects import StorageStatus
 
 from .space_store import JsonSpaceStore
@@ -111,6 +112,10 @@ class DeepResearchService:
     def forget(self, conversation_id: str) -> None:
         self._steer_queues.pop(conversation_id, None)
         self._injected_source_queues.pop(conversation_id, None)
+
+    def embedder(self) -> Embedder:
+        """Return the live research embedder for Space corpus ingestion."""
+        return cast(Embedder, self._research()["embedder"])
 
     def _validated_space_ids(
         self,
@@ -505,7 +510,7 @@ class DeepResearchService:
         if driver_reason is not None:
             yield {"type": "error", "message": driver_reason}
             return
-        requested_space_ids = space_ids or self._rt.get_space_ids(conversation_id)
+        requested_space_ids = space_ids or self._rt._spaces.get_space_ids(conversation_id)
         space_owner_id = owner_id
         if space_owner_id is None and conversation_id:
             space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
@@ -558,7 +563,7 @@ class DeepResearchService:
             seed_passages=seed_passages,
             corpus_ids=requested_space_ids,
             embedder=deps.get("embedder"),
-            vector_store=self._rt.space_vector_store(),
+            vector_store=self._rt._spaces.space_vector_store(),
         ):
             yield frame
 
@@ -846,7 +851,7 @@ class DeepResearchService:
         research_sources = self._rt.get_research_sources(conversation_id)
         search_override = self._search_override_for_sources(research_sources)
         deps = self._rt._research(search_override=search_override)
-        space_ids = self._rt.get_space_ids(conversation_id)
+        space_ids = self._rt._spaces.get_space_ids(conversation_id)
         space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
         space_ids, forbidden_space_ids = self._validated_space_ids(
             space_ids,
@@ -891,7 +896,7 @@ class DeepResearchService:
             reranker=deps["reranker"],
             embedder=deps.get("embedder"),
             rewriter=RouterQueryRewriter(router),
-            vector_store=self._rt.space_vector_store(),
+            vector_store=self._rt._spaces.space_vector_store(),
         )
         # RAM-aware peak-memory guard (OOM fix): bound how many gather legs run
         # their fetch/extract/embed/rerank body at once. Applies on EVERY tier —

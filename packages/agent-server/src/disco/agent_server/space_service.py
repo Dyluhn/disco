@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from disco.core.llm import ConfigStore
 from disco.retrieval import DefaultCorpusService, DiskVectorStore
+from disco.tools.projects import ProjectStore
 
 from .space_store import JsonSpaceStore
 
@@ -47,6 +49,16 @@ class EmbedderResolver(Protocol):
     """Resolve the live embedder for Space corpus ingestion."""
 
     def embedder(self) -> Embedder: ...
+
+
+class ConfiguredProjectRoot:
+    """Resolve the current ProjectStore root from persisted configuration."""
+
+    def __init__(self, config_store: ConfigStore) -> None:
+        self._config_store = config_store
+
+    def root(self) -> str | None:
+        return ProjectStore(self._config_store.load().projects.projects_root).root
 
 
 class SpaceService:
@@ -103,3 +115,6 @@ class SpaceService:
         if not conversation_id:
             return frozenset()
         return self._space_ids.get(conversation_id, frozenset())
+
+    def forget(self, conversation_id: str) -> None:
+        self._space_ids.pop(conversation_id, None)

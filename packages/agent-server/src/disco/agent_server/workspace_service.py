@@ -889,6 +889,8 @@ class WorkspaceCoordinator:
             cache.pop(conversation_id, None)
         self._rt._contract.forget(conversation_id)
         self._rt._dr.forget(conversation_id)
+        self._rt._spaces.forget(conversation_id)
+        self._rt._connections.clear_conversation(conversation_id)
         self._rt._driver_proven = {
             proven for proven in self._rt._driver_proven if proven[0] != conversation_id
         }
@@ -912,6 +914,5 @@ class WorkspaceCoordinator:
             self._rt._appkit_mode,
             self._rt._depth,
             self._rt._upload_passages,
-            self._rt._last_sessions,
             self._rt._mcp_approval_pending,
         )
