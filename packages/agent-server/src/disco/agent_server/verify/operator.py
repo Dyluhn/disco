@@ -47,6 +47,7 @@ from typing import Any
 from disco.core.auth import ISOLATED_PATH_PREVIEW_PREFIX
 from websockets.asyncio.client import connect as _ws_connect
 
+from .operator_parts import assemble_gate_context, fold_view_events, scan_gate_events
 from .runner import AbstractVerifyClient, HttpVerifyClient
 
 # A conversation will not advance off these without operator action.
@@ -118,47 +119,8 @@ class OperatorClient:
     def _gate_context(status: str | None, events: list[dict[str, Any]]) -> dict[str, Any]:
         """Pull the operator-relevant context for the pending gate from the event log:
         the proposed plan, the question asked, or the offered alternatives."""
-        ctx: dict[str, Any] = {}
-        plan = None
-        question = None
-        alternatives = None
-        for e in events:
-            k = e.get("kind")
-            # PlanEvent: kind="plan" with summary + steps (the proposal to approve).
-            if k == "plan":
-                plan = {
-                    "summary": e.get("summary"),
-                    "steps": e.get("steps"),
-                    "revision": e.get("revision"),
-                }
-            # The stuck-detector / clarify path emits a dedicated event whose KIND is
-            # "alternatives", carrying summary + options at the top level — NOT a
-            # tool_call. The operator was blind to exactly the gate that needs it most
-            # (F5/F6 from the build stress-test): surface the summary + option ids so
-            # the operator knows what to decide and that the verb is `pick <id>`.
-            if k in ("alternatives", "ask", "clarify"):
-                if e.get("options"):
-                    alternatives = {"summary": e.get("summary"), "options": e.get("options")}
-                if e.get("question") or e.get("summary"):
-                    question = question or e.get("question") or e.get("summary")
-            # ActionEvent: the tool call lives under `tool_call` (name + arguments).
-            tc = e.get("tool_call") or {}
-            name = tc.get("name") or tc.get("tool_name")
-            if name in ("ask_user", "clarify"):
-                question = tc.get("arguments") or tc.get("args") or e.get("thought")
-            if name in ("propose_alternatives", "offer_alternatives") or e.get("alternatives"):
-                alternatives = e.get("alternatives") or tc.get("arguments")
-            if k == "message" and e.get("source") == "agent":
-                msg = e.get("message", {}).get("content")
-                if msg:
-                    ctx["last_agent_message"] = str(msg)[:1500]
-        if status == "AWAITING_PLAN_APPROVAL" and plan:
-            ctx["plan"] = plan
-        if status == "AWAITING_USER_QUESTION" and question:
-            ctx["question"] = question
-        if status == "AWAITING_USER_DECISION" and alternatives:
-            ctx["alternatives"] = alternatives
-        return ctx
+        plan, question, alternatives, ctx = scan_gate_events(events)
+        return assemble_gate_context(status, plan, question, alternatives, ctx)
 
     @staticmethod
     def _derive_view(status: str | None, events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -167,69 +129,7 @@ class OperatorClient:
         the workspace files, terminal/server output, the rendered-page observation, the
         deliverables, the answer/sources, and the pending gate. Tool names live on the
         OBSERVATION (tool_result.tool_name); actions carry only args."""
-        import re as _re
-
-        plan: dict[str, Any] | None = None
-        progress: Any = None
-        activity: list[str] = []
-        files: dict[str, int] = {}
-        terminal: list[str] = []
-        browser: dict[str, Any] | None = None
-        deliverables: list[dict[str, Any]] = []
-        messages: list[str] = []
-        answer: str | None = None
-        sources: list[Any] = []
-        for e in events:
-            k = e.get("kind")
-            if k == "plan":
-                plan = {"summary": e.get("summary"), "steps": e.get("steps")}
-            elif k == "observation":
-                tr = e.get("tool_result") or {}
-                name = tr.get("tool_name")
-                content = str(tr.get("content") or "")
-                st = tr.get("structured") or {}
-                activity.append(f"{name}: {content[:90]}" if content else f"{name}")
-                if name == "file_write":
-                    m = _re.search(r"wrote\s+(\d+)\s+bytes?\s+to\s+(.+)", content)
-                    if m:
-                        files[m.group(2).strip()] = int(m.group(1))
-                elif name == "file_list" and isinstance(st.get("entries"), list):
-                    for p in st["entries"]:
-                        files.setdefault(str(p), 0)
-                elif name in ("run_command", "bash", "exec", "server_status"):
-                    terminal.append(content[:300])
-                elif name == "browser":
-                    browser = {kk: st.get(kk) for kk in ("url", "title", "console", "network")}
-                elif name == "update_plan_progress":
-                    progress = st.get("steps") or content
-                elif name in ("research_answer", "answer"):
-                    answer = content or answer
-                    sources = st.get("sources") or st.get("citations") or sources
-            elif k == "deliverable":
-                deliverables.append(
-                    {
-                        "kind": e.get("artifact_kind"),
-                        "path": e.get("path"),
-                        "url": e.get("deployment_url"),
-                    }
-                )
-            elif k == "message" and e.get("source") == "agent":
-                msg = e.get("message", {}).get("content")
-                if msg:
-                    messages.append(str(msg)[:600])
-        return {
-            "status": status,
-            "plan": plan,
-            "plan_progress": progress,
-            "activity": activity[-25:],
-            "files": files,
-            "terminal": terminal[-8:],
-            "browser": browser,
-            "deliverables": deliverables,
-            "messages": messages[-4:],
-            "answer": answer,
-            "sources": sources[:8] if sources else [],
-        }
+        return fold_view_events(status, events)
 
     async def _has_live_preview_port(self, cid: str) -> bool:
         """Fix 2 (B-H.2): True iff the backend reports a live preview port for this

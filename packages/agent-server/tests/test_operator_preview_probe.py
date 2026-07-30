@@ -24,6 +24,21 @@ from disco.agent_server.verify.operator import OperatorClient
 from disco.agent_server.verify.runner import AbstractVerifyClient, HttpVerifyClient
 
 
+def test_gate_context_preserves_latest_tool_question_semantics() -> None:
+    events = [
+        {
+            "kind": "action",
+            "tool_call": {"name": "ask_user", "arguments": "first question"},
+        },
+        {
+            "kind": "action",
+            "tool_call": {"name": "ask_user", "arguments": "latest question"},
+        },
+    ]
+    context = OperatorClient._gate_context("AWAITING_USER_QUESTION", events)
+    assert context["question"] == "latest question"
+
+
 class _CapabilityPreviewClient(AbstractVerifyClient):
     def __init__(self, response: tuple[int, bytes] | None) -> None:
         self.response = response
