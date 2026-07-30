@@ -8,6 +8,12 @@ unchanged.
 
 from __future__ import annotations
 
-from .partial_stream import extract_partial_string_field
-
-__all__ = ["extract_partial_string_field"]
+from .partial_stream import (
+    _ESCAPES as _ESCAPES,
+)
+from .partial_stream import (
+    _WS as _WS,
+)
+from .partial_stream import (
+    extract_partial_string_field as extract_partial_string_field,
+)
