@@ -128,7 +128,7 @@ def test_build_egress_union_deduplicates():
 
 
 def test_runtime_mcp_egress_hosts_method():
-    """The ConversationRuntime._mcp_egress_hosts() method computes the correct
+    """The McpManager._mcp_egress_hosts() method computes the correct
     union from active HTTP clients."""
     from disco.agent_server.runtime import ConversationRuntime
     from disco.core import SecurityRisk, SqliteEventStore
@@ -148,9 +148,9 @@ def test_runtime_mcp_egress_hosts_method():
         enabled=True,
     )
     client = McpHttpClient(server=config, call_timeout_s=5.0)
-    runtime._mcp_http_clients["test_srv"] = client
+    runtime._mcp._http_clients["test_srv"] = client
 
-    hosts = runtime._mcp_egress_hosts()
+    hosts = runtime._mcp._mcp_egress_hosts()
 
     assert "test-mcp.example.com:8443" in hosts
     assert "cdn.test.example.com" in hosts
@@ -180,10 +180,10 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
         risk_tier=SecurityRisk.MEDIUM,
         enabled=True,
     )
-    runtime._mcp_http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
+    runtime._mcp._http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._build_sandbox_spec(mcp_egress_hosts=runtime._mcp_egress_hosts())
+    spec = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=runtime._mcp._mcp_egress_hosts())
 
     allow = set(spec.egress_allow)
     # Registry hosts survive (a REPLACEMENT would have dropped these).
@@ -196,6 +196,6 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
 
     # CONTROL: with no MCP hosts, the spec is exactly the registry base — proves
     # the additions above came from the MCP union, not from the spec by default.
-    spec_bare = runtime._build_sandbox_spec(mcp_egress_hosts=frozenset())
+    spec_bare = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=frozenset())
     assert set(spec_bare.egress_allow) == set(REGISTRY_EGRESS_ALLOW)
     store.close()

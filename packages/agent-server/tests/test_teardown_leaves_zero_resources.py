@@ -12,9 +12,22 @@ every structure it owns for that conversation.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
+from disco.agent_server.connection_tracker import ConnectionState
 from disco.agent_server.lifecycle import LifecycleManager
+from disco.agent_server.lifecycle_ports import (
+    LifecycleConnections,
+    LifecycleRunState,
+    LifecycleStoreAccess,
+)
+from disco.agent_server.lifecycle_rehydration import Rehydration
+from disco.agent_server.run_registry import (
+    LoopRegistry,
+    RunRegistry,
+    RunResourceRegistry,
+)
 
 CID = "conv_621005"
 
@@ -27,61 +40,69 @@ class _Executor:
     def __init__(self) -> None:
         self._sandbox = _Sandbox()
 
+    async def kill(self) -> None:
+        pass
 
-class _Rt:
-    """Only the per-conversation state `_teardown_sandbox` is responsible for."""
 
-    def __init__(self) -> None:
-        self._executors = {CID: _Executor()}
-        self._pending_sessions = {CID: object()}
-        self._loops = {CID: object()}
-        self._session_view_cache = {(CID, "a"): b"x" * 1024}
-        self._session_view_locks = {(CID, "a"): asyncio.Lock()}
-        self._wake_locks = {CID: asyncio.Lock()}
-        self._last_sessions = {CID: ["s1"]}
-        self._rehydrated = {CID}
+class _Store:
+    async def get_events(self, _cid: str) -> list[object]:
+        return []
 
-    def _sandbox_service_now(self):
+
+class _SandboxAccess:
+    """Lifecycle sandbox-access stand-in with no durable project store."""
+
+    def sandbox_service_now(self):
         return None
 
-    # `_maybe_snapshot` declines when the terminal is already sealed (F-25). An
-    # empty event log has no canonical head, so `resolve_committed_workspace`
-    # raises and this fixture exercises the UNSEALED path — the one where the
-    # F-21 pin is taken, which is what this test is about.
-    def _project_store_now(self):
+    def current_project_store(self):
         return None
 
-    class _Store:
-        async def get_events(self, _cid: str) -> list[object]:
-            return []
 
-    _store = _Store()
+def _build_run_state(executor: Any) -> LifecycleRunState:
+    resources = RunResourceRegistry()
+    resources.set_executor(CID, executor)
+    resources.set_pending_session(CID, _Sandbox())  # type: ignore[arg-type]
+    return LifecycleRunState(RunRegistry(), resources, LoopRegistry())
 
 
-def _manager(rt: _Rt) -> LifecycleManager:
+def _build_manager(
+    *,
+    run_state: LifecycleRunState,
+    connections: LifecycleConnections,
+    rehydration: Rehydration,
+    persistence: Any | None = None,
+) -> LifecycleManager:
     manager = LifecycleManager.__new__(LifecycleManager)
-    manager._rt = rt  # type: ignore[attr-defined]
+    manager._run_state = run_state  # type: ignore[attr-defined]
+    manager._connections = connections  # type: ignore[attr-defined]
+    manager._rehydration = rehydration  # type: ignore[attr-defined]
+    manager._store = LifecycleStoreAccess(_Store())  # type: ignore[arg-type, attr-defined]
+    manager._sandbox = _SandboxAccess()  # type: ignore[attr-defined]
+    manager._persistence = persistence  # type: ignore[attr-defined]
     return manager
 
 
-def _residue(rt: _Rt) -> dict[str, object]:
+def _residue(
+    run_state: LifecycleRunState,
+    connections: LifecycleConnections,
+    rehydration: Rehydration,
+) -> dict[str, object]:
+    state = connections._connections
     return {
-        "executors": CID in rt._executors,
-        "pending_sessions": CID in rt._pending_sessions,
-        "loops": CID in rt._loops,
-        "session_view_cache": [k for k in rt._session_view_cache if k[0] == CID],
-        "session_view_locks": [k for k in rt._session_view_locks if k[0] == CID],
-        "wake_locks": CID in rt._wake_locks,
-        "last_sessions": CID in rt._last_sessions,
-        "rehydrated": CID in rt._rehydrated,
+        "executors": run_state.executor(CID) is not None,
+        "pending_sessions": run_state.pending_session(CID) is not None,
+        "loops": run_state._loops.loop(CID) is not None,
+        "session_view_cache": [k for k in state._session_view_cache if k[0] == CID],
+        "session_view_locks": [k for k in state._session_view_locks if k[0] == CID],
+        "wake_locks": CID in state._wake_locks,
+        "last_sessions": CID in state._last_sessions,
+        "rehydrated": CID in rehydration._rehydrated,
     }
 
 
-@pytest.mark.asyncio
-async def test_teardown_leaves_zero_relevant_resources():
-    rt = _Rt()
-    await _manager(rt)._teardown_sandbox(CID)
-    assert _residue(rt) == {
+def _empty_residue() -> dict[str, object]:
+    return {
         "executors": False,
         "pending_sessions": False,
         "loops": False,
@@ -93,35 +114,60 @@ async def test_teardown_leaves_zero_relevant_resources():
     }
 
 
+def _fresh_state() -> tuple[LifecycleRunState, LifecycleConnections, Rehydration]:
+    run_state = _build_run_state(_Executor())
+    connection_state = ConnectionState()
+    connection_state._session_view_cache[(CID, "a")] = (0.0, None)  # type: ignore[arg-type]
+    connection_state._session_view_locks[(CID, "a")] = asyncio.Lock()
+    connection_state._wake_locks[CID] = asyncio.Lock()
+    connection_state._last_sessions[CID] = []  # type: ignore[assignment]
+    connections = LifecycleConnections(connection_state)
+    rehydration = Rehydration.__new__(Rehydration)
+    rehydration._rehydrated = {CID}  # type: ignore[attr-defined]
+    return run_state, connections, rehydration
+
+
+@pytest.mark.asyncio
+async def test_teardown_leaves_zero_relevant_resources():
+    run_state, connections, rehydration = _fresh_state()
+    manager = _build_manager(run_state=run_state, connections=connections, rehydration=rehydration)
+    await manager._teardown_sandbox(CID)
+    assert _residue(run_state, connections, rehydration) == _empty_residue()
+
+
 @pytest.mark.asyncio
 async def test_a_pinned_snapshot_does_not_keep_anything_alive():
     """The pin is a local of `_maybe_snapshot`; it must not survive the call."""
-    rt = _Rt()
-    manager = _manager(rt)
+    run_state, connections, rehydration = _fresh_state()
 
     captured: dict[str, object] = {}
 
     class _Persistence:
-        async def _do_capture_workspace(self, conversation_id: str, **kwargs: object):
+        async def capture_workspace(self, conversation_id: str, **kwargs: object):
             captured.update(kwargs)
             return None
 
-    manager._persistence = _Persistence()  # type: ignore[attr-defined]
+    manager = _build_manager(
+        run_state=run_state,
+        connections=connections,
+        rehydration=rehydration,
+        persistence=_Persistence(),
+    )
     await manager._maybe_snapshot(CID, trigger="suspend")
     assert captured["pinned_session"] is not None, "the pin was taken"
 
     await manager._teardown_sandbox(CID)
-    assert all(
-        v in (False, []) for v in _residue(rt).values()
-    ), "teardown after a pinned snapshot must still free everything"
+    assert all(v in (False, []) for v in _residue(run_state, connections, rehydration).values()), (
+        "teardown after a pinned snapshot must still free everything"
+    )
 
 
 @pytest.mark.asyncio
 async def test_teardown_is_idempotent_on_an_already_clean_conversation():
     # Teardown runs on paths where the executor may already be gone; it must not
     # raise or resurrect keys.
-    rt = _Rt()
-    manager = _manager(rt)
+    run_state, connections, rehydration = _fresh_state()
+    manager = _build_manager(run_state=run_state, connections=connections, rehydration=rehydration)
     await manager._teardown_sandbox(CID)
     await manager._teardown_sandbox(CID)
-    assert all(v in (False, []) for v in _residue(rt).values())
+    assert all(v in (False, []) for v in _residue(run_state, connections, rehydration).values())

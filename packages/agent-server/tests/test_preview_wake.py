@@ -55,6 +55,9 @@ class FakeRuntime:
         self.wake_calls.append((cid8, port))
         return self._wake_result
 
+    def preview_target_port(self, conversation_id: str) -> int:
+        return 8000
+
     async def preview(self, conversation_id: str) -> dict:
         return {"available": False, "reason": "stub"}
 

@@ -76,7 +76,7 @@ def test_freeform_opt_in_selects_platform_with_exact_legacy_execution_bridge(mon
 
 def test_cutover_is_pinned_to_the_existing_loop_and_switch_is_new_run_only(monkeypatch) -> None:
     runtime, loop = _compose(monkeypatch, "pinned", platform=True)
-    runtime._loops["pinned"] = loop
+    runtime._loop_registry.bind("pinned", loop)
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     assert runtime._loop_for("pinned") is loop
     assert runtime._build_platform.route_records["pinned"].active_route == "platform"
@@ -111,8 +111,8 @@ def test_platform_resolution_failure_blocks_without_legacy_fallback(monkeypatch)
             mock.MagicMock(spec=DefaultLLMRouter),
             mock.MagicMock(spec=RouterAgent),
         )
-    assert "blocked" not in runtime._executors
-    assert "blocked" not in runtime._loops
+    assert not runtime._run_resources.has_executor("blocked")
+    assert runtime._loop_registry.loop("blocked") is None
     assert runtime._build_platform.route_records == {}
 
 

@@ -18,6 +18,7 @@ import pytest
 from disco.agent_server.mcp_manager import McpManager
 from disco.agent_server.runtime import _mcp_base_risk_by_tool
 from disco.core import ActionEvent, SecurityRisk, SqliteEventStore, ToolCall
+from disco.core.llm import SecretBox, SecretStore
 from disco.core.loop import BlastRadiusConfirm
 from disco.core.security import RuleBasedAnalyzer
 from disco.tools.mcp.approval import compute_config_hash, compute_description_hash
@@ -130,6 +131,7 @@ async def test_changed_stdio_config_invalidates_approval_before_spawn(
 @pytest.mark.asyncio
 async def test_unapproved_http_config_never_reaches_connect(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     attempted = False
     raw = {
@@ -138,24 +140,21 @@ async def test_unapproved_http_config_never_reaches_connect(
         "risk_tier": SecurityRisk.MEDIUM.value,
         "enabled": True,
     }
-    rt = SimpleNamespace(
-        _config_store=SimpleNamespace(
-            load=lambda: SimpleNamespace(
-                mcp=SimpleNamespace(
-                    enabled=True,
-                    servers={"new_http": raw},
-                    max_active_schemas=20,
-                )
+    config_store = SimpleNamespace(
+        load=lambda: SimpleNamespace(
+            mcp=SimpleNamespace(
+                enabled=True,
+                servers={"new_http": raw},
+                max_active_schemas=20,
             )
-        ),
-        _store=SqliteEventStore(":memory:"),
-        _secret_store=None,
-        _mcp_pool=None,
-        _mcp_http_clients={},
-        _mcp_http_tools={},
-        _mcp_approval_pending={},
+        )
     )
-    manager = McpManager(rt)
+    store = SqliteEventStore(":memory:")
+    manager = McpManager(
+        config_store,  # type: ignore[arg-type]
+        SecretStore(tmp_path / "secrets.json", box=SecretBox(None)),
+        store,
+    )
 
     async def _forbidden_connect(*_: Any, **__: Any) -> None:
         nonlocal attempted
@@ -165,11 +164,11 @@ async def test_unapproved_http_config_never_reaches_connect(
     await manager._start_mcp_pool()
 
     assert attempted is False
-    pending = rt._mcp_approval_pending["new_http"]
+    pending = manager._approval_pending["new_http"]
     assert pending["kind"] == "config"
     assert pending["old_hash"] == ""
     assert pending["new_hash"] == compute_config_hash({"name": "new_http", **raw})
-    rt._store.close()
+    store.close()
 
 
 class _FakeStdioClient:

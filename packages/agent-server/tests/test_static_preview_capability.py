@@ -1,4 +1,4 @@
-"""H079/H110: finished previews use body-only, isolated one-use capabilities."""
+# H079/H110: finished previews use body-only, isolated one-use capabilities.
 
 from __future__ import annotations
 
@@ -107,6 +107,9 @@ class _StaticRuntime:
     ) -> None:
         del owner_id
         return None
+
+    async def ensure_preview(self, _conversation_id: str) -> bool:
+        return False
 
 
 class _SealedProjectionRuntime(_StaticRuntime):
@@ -716,13 +719,13 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
             router=_runtime_router(),
             sandbox_service=ProcessSandboxService(str(tmp_path / "sandbox-restarted")),
         )
-        restarted._project_store_now = MagicMock(return_value=projects)
+        restarted._projects.current_project_store = MagicMock(return_value=projects)
         restarted.set_surface(cid, "build")
         # Reuse a live sandbox carrying a foreign top-level file. Sealed restart
         # must clear the workspace before restoring the verified version, not
         # merely overlay immutable files onto whatever happens to be present.
         restarted._loop_for(cid)
-        reused_session = restarted._executors[cid]._sandbox
+        reused_session = cast(Any, restarted._run_resources.executor(cid)).sandbox
         await reused_session.write_file("foreign-runtime.txt", b"must be removed")
         assert await reused_session.file_exists("foreign-runtime.txt")
         capability_app = _app(store, cast(Any, restarted), live_upstream=None)
@@ -737,8 +740,7 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
         new_mint = new_mint_response.json()
         assert new_mint["preview_authority"] != old_mint["preview_authority"]
 
-        restored_executor = restarted._executors[cid]
-        restored_sandbox = restored_executor._sandbox
+        restored_sandbox = cast(Any, restarted._run_resources.executor(cid)).sandbox
         assert not await restored_sandbox.file_exists("foreign-runtime.txt")
         restored_manager = restored_sandbox._preview_manager
         restored_session = restored_manager.canonical_lifecycle_session()

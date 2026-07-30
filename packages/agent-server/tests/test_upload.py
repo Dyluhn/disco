@@ -6,9 +6,9 @@ Covers:
   • Event text format (thousands separator, multi-file)
   • State legality (ERROR blocks upload, FINISHED allows it)
 
-The endpoint accesses the sandbox via runtime._executors[cid]._sandbox, so
-tests inject a _FakeRuntime / _FakeExecutor / _FakeSession triple — no real
-process or container required.
+The endpoint accesses the sandbox through the runtime's session owner, so tests
+inject a _FakeRuntime / _FakeExecutor / _FakeSession triple — no real process or
+container required.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ import pytest
 from disco.agent_server import create_app
 from disco.agent_server.app import _sanitize_name
 from disco.core import EventSource, MessageEvent, SqliteEventStore
+from disco.core.llm import ConfigStore, SecretStore
 from fastapi.testclient import TestClient
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -54,6 +55,25 @@ class _FakeExecutor:
     def __init__(self, session: _FakeSession) -> None:
         self._sandbox = session
 
+    @property
+    def sandbox(self) -> _FakeSession:
+        return self._sandbox
+
+
+class _LiveSessions:
+    def __init__(self, executors: dict[str, _FakeExecutor]) -> None:
+        self._executors = executors
+
+    def live_session(self, cid: str) -> _FakeSession | None:
+        executor = self._executors.get(cid)
+        return executor.sandbox if executor is not None else None
+
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        return None
+
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return None
+
 
 class _FakeRuntime:
     def __init__(self) -> None:
@@ -72,6 +92,9 @@ class _FakeRuntime:
             size=self.get_upload_size,
         )
         self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
+        self._live_sessions = _LiveSessions(self._executors)
+        self._config_store = ConfigStore()
+        self._secret_store = SecretStore()
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
@@ -596,7 +619,9 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
     agent = mock.MagicMock(spec=RouterAgent)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        rt._uploads = UploadStore(tmpdir)
+        upload_store = UploadStore(tmpdir)
+        rt._uploads = upload_store
+        rt._lifecycle._rehydration._uploads._uploads = upload_store
         data = b"post-restart data"
         rt._uploads.store(cid, "data.csv", data)
         assert rt._uploads.names(cid) == {"data.csv"}

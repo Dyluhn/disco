@@ -46,14 +46,20 @@ def _set_backend(rt: ConversationRuntime, backend: str) -> None:
     rt._sandbox.effective_backend_name = lambda: backend  # type: ignore[method-assign]
 
 
+def _fake_executor(session: _FakeSession) -> types.SimpleNamespace:
+    """A stand-in executor exposing both ``_sandbox`` and ``sandbox`` (the
+    reconciler reads ``executor.sandbox``; lifecycle reads ``_sandbox``)."""
+    return types.SimpleNamespace(_sandbox=session, sandbox=session)
+
+
 # ---- (a) first-use preflight ------------------------------------------------
 
 
 async def test_preflight_sandbox_passes_when_reachable():
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)  # no injected sandbox → preflight active
-    rt._sandbox_service_now = lambda: _FakeService()  # type: ignore[assignment]
-    assert await rt._preflight_sandbox("c1") is None
+    rt._sandbox._sandbox_service_now = lambda: _FakeService()  # type: ignore[method-assign]
+    assert await rt._sandbox.preflight_failure() is None
 
 
 async def test_preflight_sandbox_typed_named_reason_when_unreachable():
@@ -66,10 +72,18 @@ async def test_preflight_sandbox_typed_named_reason_when_unreachable():
         )
 
     cfg = SandboxConfig(backend="gvisor", docker_socket="ssh://sandbox@100.81.82.115")
-    rt._sandbox_service_now = lambda: _FakeService(  # type: ignore[assignment]
+    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+        load=lambda: types.SimpleNamespace(
+            sandbox=SandboxSettings(
+                backend="gvisor",
+                docker_socket="ssh://sandbox@100.81.82.115",
+            )
+        )
+    )
+    rt._sandbox._sandbox_service_now = lambda: _FakeService(  # type: ignore[method-assign]
         name="gvisor", cfg=cfg, on_health=_dead
     )
-    reason = await rt._preflight_sandbox("c1")
+    reason = await rt._sandbox.preflight_failure()
     assert reason is not None
     assert "gvisor sandbox host ssh://sandbox@100.81.82.115" in reason  # endpoint NAMED
     assert "unreachable" in reason
@@ -84,11 +98,18 @@ async def test_preflight_sandbox_is_wall_bounded_on_black_hole():
     async def _hang():
         await asyncio.sleep(60)
 
-    rt._sandbox_service_now = lambda: _FakeService(on_health=_hang)  # type: ignore[assignment]
-    rt._SANDBOX_PREFLIGHT_TIMEOUT_S = 0.1  # tiny bound for the test
+    rt._sandbox._sandbox_service_now = lambda: _FakeService(on_health=_hang)  # type: ignore[method-assign]
+    import disco.agent_server.sandbox_runtime_service as srs_mod
+
+    monkeypatch_timeout = 0.1
+    original_timeout = srs_mod._RUN_PREFLIGHT_TIMEOUT_S
+    srs_mod._RUN_PREFLIGHT_TIMEOUT_S = monkeypatch_timeout  # tiny bound for the test
 
     t0 = time.monotonic()
-    reason = await rt._preflight_sandbox("c1")
+    try:
+        reason = await rt._sandbox.preflight_failure()
+    finally:
+        srs_mod._RUN_PREFLIGHT_TIMEOUT_S = original_timeout
     elapsed = time.monotonic() - t0
 
     assert reason is not None and "timed out" in reason and "unreachable" in reason
@@ -99,7 +120,7 @@ async def test_preflight_sandbox_skipped_when_backend_injected():
     store = SqliteEventStore(":memory:")
     # An injected sandbox is authoritative — no endpoint to probe.
     rt = ConversationRuntime(store, sandbox_service=_FakeService(name="process"))
-    assert await rt._preflight_sandbox("c1") is None
+    assert await rt._sandbox.preflight_failure() is None
 
 
 async def test_run_with_persistence_emits_typed_error_and_skips_loop():
@@ -112,11 +133,11 @@ async def test_run_with_persistence_emits_typed_error_and_skips_loop():
     async def _ok_driver(cid, **kw):
         return None
 
-    async def _fail_sandbox(cid):
+    async def _fail_sandbox():
         return "gvisor sandbox host ssh://sandbox@host unreachable: connection refused"
 
-    rt._preflight_driver = _ok_driver  # type: ignore[assignment]
-    rt._preflight_sandbox = _fail_sandbox  # type: ignore[assignment]
+    rt._driver_preflight.check = _ok_driver  # type: ignore[method-assign]
+    rt._sandbox.preflight_failure = _fail_sandbox  # type: ignore[method-assign]
 
     class _Loop:
         def __init__(self):
@@ -126,7 +147,7 @@ async def test_run_with_persistence_emits_typed_error_and_skips_loop():
             self.ran = True
 
     loop = _Loop()
-    await rt._run_with_persistence("c1", loop)
+    await rt._run_execution.run("c1", loop)
     assert loop.ran is False  # the doomed loop never started
 
     events = await store.get_events("c1")
@@ -147,21 +168,25 @@ async def test_reconcile_destroys_stale_backend_sessions_only():
 
     # c1: a pending session on the OLD gvisor backend → must be destroyed + dropped.
     stale_pending = _FakeSession("gvisor")
-    rt._pending_sessions["c1"] = stale_pending
+    rt._run_resources.set_pending_session("c1", stale_pending)
     # c2: a live executor session on the OLD gvisor backend → destroyed; loop evicted.
     stale_exec = _FakeSession("gvisor")
-    rt._executors["c2"] = types.SimpleNamespace(_sandbox=stale_exec)
-    rt._loops["c2"] = object()
+    rt._run_resources.set_executor("c2", _fake_executor(stale_exec))
+    rt._loop_registry.bind("c2", object())  # type: ignore[arg-type]
     # c3: already on the NEW backend → untouched.
     fresh_pending = _FakeSession("local")
-    rt._pending_sessions["c3"] = fresh_pending
+    rt._run_resources.set_pending_session("c3", fresh_pending)
 
     n = await rt.reconcile_sandbox_backend()
 
     assert n == 2
-    assert stale_pending.destroyed and "c1" not in rt._pending_sessions
-    assert stale_exec.destroyed and "c2" not in rt._executors and "c2" not in rt._loops
-    assert not fresh_pending.destroyed and "c3" in rt._pending_sessions
+    assert stale_pending.destroyed and not rt._run_resources.has_pending_session("c1")
+    assert (
+        stale_exec.destroyed
+        and not rt._run_resources.has_executor("c2")
+        and rt._loop_registry.loop("c2") is None
+    )
+    assert not fresh_pending.destroyed and rt._run_resources.has_pending_session("c3")
 
 
 async def test_reconcile_skips_live_running_conversation():
@@ -171,17 +196,17 @@ async def test_reconcile_skips_live_running_conversation():
     _set_backend(rt, "local")
 
     busy = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=busy)
+    rt._run_resources.set_executor("c1", _fake_executor(busy))
 
     async def _running():
         await asyncio.sleep(5)
 
     task = asyncio.create_task(_running())
-    rt._tasks["c1"] = task
+    rt._run_registry.register_task("c1", task)  # type: ignore[arg-type]
     try:
         n = await rt.reconcile_sandbox_backend()
         assert n == 0
-        assert not busy.destroyed and "c1" in rt._executors  # mid-turn → untouched
+        assert not busy.destroyed and rt._run_resources.has_executor("c1")  # mid-turn → untouched
     finally:
         task.cancel()
 
@@ -194,15 +219,15 @@ async def test_evict_stale_backend_lazy_path_drops_cached_loop():
     _set_backend(rt, "local")
 
     stale = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
-    rt._loops["c1"] = object()
+    rt._run_resources.set_executor("c1", _fake_executor(stale))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
     pending = _FakeSession("gvisor")
-    rt._pending_sessions["c1"] = pending
+    rt._run_resources.set_pending_session("c1", pending)
 
-    rt._evict_stale_backend("c1")  # synchronous eviction + scheduled async destroy
+    rt._sandbox_resources.evict_stale("c1")  # synchronous eviction + scheduled async destroy
 
-    assert "c1" not in rt._executors and "c1" not in rt._loops
-    assert "c1" not in rt._pending_sessions
+    assert not rt._run_resources.has_executor("c1") and rt._loop_registry.loop("c1") is None
+    assert not rt._run_resources.has_pending_session("c1")
     # the async best-effort destroy was scheduled — let it run.
     await asyncio.sleep(0)
     await asyncio.sleep(0)
@@ -215,11 +240,15 @@ async def test_evict_stale_backend_noop_when_backend_unchanged():
     _set_backend(rt, "gvisor")  # SAME as the cached session's backend
 
     sess = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=sess)
-    rt._loops["c1"] = object()
+    rt._run_resources.set_executor("c1", _fake_executor(sess))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
 
-    rt._evict_stale_backend("c1")
-    assert "c1" in rt._executors and "c1" in rt._loops and not sess.destroyed
+    rt._sandbox_resources.evict_stale("c1")
+    assert (
+        rt._run_resources.has_executor("c1")
+        and rt._loop_registry.loop("c1") is not None
+        and not sess.destroyed
+    )
 
 
 async def test_evict_stale_backend_uses_effective_local_podman_identity(monkeypatch):
@@ -227,21 +256,21 @@ async def test_evict_stale_backend_uses_effective_local_podman_identity(monkeypa
     session is not stale merely because the persisted UI label remains ``local``."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
 
     session = _FakeSession("podman")
     loop = object()
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=session)
-    rt._loops["c1"] = loop
+    rt._run_resources.set_executor("c1", _fake_executor(session))
+    rt._loop_registry.bind("c1", loop)  # type: ignore[arg-type]
 
-    rt._evict_stale_backend("c1")
+    rt._sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
-    assert rt._executors["c1"]._sandbox is session
-    assert rt._loops["c1"] is loop
+    assert rt._run_resources.executor("c1")._sandbox is session  # type: ignore[union-attr]
+    assert rt._loop_registry.loop("c1") is loop
     assert not session.destroyed
 
 
@@ -250,7 +279,7 @@ async def test_evict_stale_backend_uses_effective_podman_socket_identity(monkeyp
     local position whose Docker-compatible socket is visibly a Podman socket."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(
             sandbox=SandboxSettings(
                 backend="local",
@@ -263,14 +292,14 @@ async def test_evict_stale_backend_uses_effective_podman_socket_identity(monkeyp
 
     session = _FakeSession("podman")
     loop = object()
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=session)
-    rt._loops["c1"] = loop
+    rt._run_resources.set_executor("c1", _fake_executor(session))
+    rt._loop_registry.bind("c1", loop)  # type: ignore[arg-type]
 
-    rt._evict_stale_backend("c1")
+    rt._sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
-    assert rt._executors["c1"]._sandbox is session
-    assert rt._loops["c1"] is loop
+    assert rt._run_resources.executor("c1")._sandbox is session  # type: ignore[union-attr]
+    assert rt._loop_registry.loop("c1") is loop
     assert not session.destroyed
 
 
@@ -278,16 +307,16 @@ async def test_reconcile_preserves_effective_local_podman_identity(monkeypatch):
     """Bulk reconciliation uses the same effective deployment identity as a kick."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
 
     session = _FakeSession("podman")
-    rt._pending_sessions["c1"] = session
+    rt._run_resources.set_pending_session("c1", session)
 
     assert await rt.reconcile_sandbox_backend() == 0
-    assert rt._pending_sessions["c1"] is session
+    assert rt._run_resources.pending_session("c1") is session
     assert not session.destroyed
 
 
@@ -295,17 +324,17 @@ async def test_reconcile_effective_engine_change_still_evicts(monkeypatch):
     """A real deployment-engine change remains a stale-backend transition."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._config_store = types.SimpleNamespace(  # type: ignore[attr-defined]
+    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "docker")
 
     stale = _FakeSession("podman")
-    rt._pending_sessions["c1"] = stale
+    rt._run_resources.set_pending_session("c1", stale)
 
     assert await rt.reconcile_sandbox_backend() == 1
     assert stale.destroyed
-    assert "c1" not in rt._pending_sessions
+    assert not rt._run_resources.has_pending_session("c1")
 
 
 # ---- W-48 P1-2: gate-parked convs are NOT evicted on a backend change ---------
@@ -320,14 +349,18 @@ async def test_evict_stale_backend_skips_gated_conversation():
     _set_backend(rt, "local")  # NEW backend
 
     stale = _FakeSession("gvisor")  # OLD backend — would normally be evicted
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
-    rt._loops["c1"] = object()
-    rt._last_status["c1"] = ConversationStatus.AWAITING_PLAN_APPROVAL  # parked at a gate
+    rt._run_resources.set_executor("c1", _fake_executor(stale))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
+    rt._run_recovery.record_status(
+        "c1", ConversationStatus.AWAITING_PLAN_APPROVAL
+    )  # parked at a gate
 
-    rt._evict_stale_backend("c1")
+    rt._sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
-    assert "c1" in rt._executors and "c1" in rt._loops  # NOT evicted mid-gate
+    assert (
+        rt._run_resources.has_executor("c1") and rt._loop_registry.loop("c1") is not None
+    )  # NOT evicted mid-gate
     assert not stale.destroyed
 
 
@@ -338,15 +371,15 @@ async def test_evict_stale_backend_evicts_idle_conversation():
     _set_backend(rt, "local")
 
     stale = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
-    rt._loops["c1"] = object()
-    rt._last_status["c1"] = ConversationStatus.IDLE  # not a gate
+    rt._run_resources.set_executor("c1", _fake_executor(stale))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
+    rt._run_recovery.record_status("c1", ConversationStatus.IDLE)  # not a gate
 
-    rt._evict_stale_backend("c1")
+    rt._sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert "c1" not in rt._executors and "c1" not in rt._loops
+    assert not rt._run_resources.has_executor("c1") and rt._loop_registry.loop("c1") is None
     assert stale.destroyed
 
 
@@ -359,19 +392,19 @@ async def test_reconcile_skips_gated_conversation():
 
     # c1: gated (store says AWAITING_PLAN_APPROVAL) → skipped.
     gated = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=gated)
-    rt._loops["c1"] = object()
+    rt._run_resources.set_executor("c1", _fake_executor(gated))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
     await store.append("c1", StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL))
     # c2: idle (no gate event) → reconciled.
     idle = _FakeSession("gvisor")
-    rt._executors["c2"] = types.SimpleNamespace(_sandbox=idle)
-    rt._loops["c2"] = object()
+    rt._run_resources.set_executor("c2", _fake_executor(idle))
+    rt._loop_registry.bind("c2", object())  # type: ignore[arg-type]
 
     n = await rt.reconcile_sandbox_backend()
 
     assert n == 1
-    assert not gated.destroyed and "c1" in rt._executors  # gated → preserved
-    assert idle.destroyed and "c2" not in rt._executors  # idle → reconciled
+    assert not gated.destroyed and rt._run_resources.has_executor("c1")  # gated → preserved
+    assert idle.destroyed and not rt._run_resources.has_executor("c2")  # idle → reconciled
 
 
 # ---- W-48 P1-3: eviction clears the _rehydrated marker (+ siblings) -----------
@@ -386,18 +419,20 @@ async def test_evict_stale_backend_clears_rehydrated_marker():
     _set_backend(rt, "local")
 
     stale = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
-    rt._loops["c1"] = object()
-    rt._rehydrated = {"c1"}  # marker set by a prior rehydrate
-    rt._wake_locks["c1"] = asyncio.Lock()
-    rt._last_sessions["c1"] = [object()]  # type: ignore[list-item]
+    rt._run_resources.set_executor("c1", _fake_executor(stale))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
+    rt._lifecycle._rehydration._rehydrated.add("c1")  # marker set by a prior rehydrate
+    rt._connection_state._wake_locks["c1"] = asyncio.Lock()
+    rt._connection_state._last_sessions["c1"] = [object()]  # type: ignore[list-item]
 
-    rt._evict_stale_backend("c1")
+    rt._sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
-    assert "c1" not in rt._rehydrated  # marker cleared — next run rehydrates
-    assert "c1" not in rt._wake_locks  # sibling per-session markers cleared too
-    assert "c1" not in rt._last_sessions
+    assert (
+        "c1" not in rt._lifecycle._rehydration._rehydrated
+    )  # marker cleared — next run rehydrates
+    assert "c1" not in rt._connection_state._wake_locks  # sibling per-session markers cleared too
+    assert "c1" not in rt._connection_state._last_sessions
 
 
 async def test_reconcile_clears_rehydrated_marker():
@@ -407,10 +442,10 @@ async def test_reconcile_clears_rehydrated_marker():
     _set_backend(rt, "local")
 
     stale = _FakeSession("gvisor")
-    rt._executors["c1"] = types.SimpleNamespace(_sandbox=stale)
-    rt._loops["c1"] = object()
-    rt._rehydrated = {"c1"}
+    rt._run_resources.set_executor("c1", _fake_executor(stale))
+    rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
+    rt._lifecycle._rehydration._rehydrated.add("c1")
 
     await rt.reconcile_sandbox_backend()
 
-    assert "c1" not in rt._rehydrated
+    assert "c1" not in rt._lifecycle._rehydration._rehydrated

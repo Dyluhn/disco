@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import uuid
 
-from disco.agent_server import create_app
+from disco.agent_server.routes.preview_edit import make_preview_edit_router
 from disco.core import (
     ConversationStatus,
     FinalWorkspaceSeal,
@@ -28,6 +29,7 @@ from disco.core import (
     WorkspaceVersionEvent,
 )
 from disco.tools.projects import ProjectStore
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 _HTML = """<!DOCTYPE html>
@@ -70,8 +72,11 @@ class _Runtime:
 def _client(tmp_path, files: dict[str, bytes]) -> tuple[TestClient, str]:
     store = SqliteEventStore(":memory:")
     ps = ProjectStore(str(tmp_path))
-    client = TestClient(create_app(store, runtime=_Runtime(ps)))  # type: ignore[arg-type]
-    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
+    app = FastAPI()
+    app.include_router(make_preview_edit_router(store, _Runtime(ps)))  # type: ignore[arg-type]
+    client = TestClient(app)
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
     ws = ps.path_for(cid)
     ws.mkdir(parents=True, exist_ok=True)
     for rel, data in files.items():
@@ -88,8 +93,11 @@ def _finished_client(
 ) -> tuple[TestClient, str, ProjectStore, int | None]:
     store = SqliteEventStore(":memory:")
     ps = ProjectStore(str(tmp_path))
-    client = TestClient(create_app(store, runtime=_Runtime(ps)))  # type: ignore[arg-type]
-    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
+    app = FastAPI()
+    app.include_router(make_preview_edit_router(store, _Runtime(ps)))  # type: ignore[arg-type]
+    client = TestClient(app)
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
     ws = ps.path_for(cid)
     ws.mkdir(parents=True, exist_ok=True)
     (ws / "index.html").write_text(_HTML)
@@ -227,6 +235,9 @@ def test_finished_corrupt_version_edit_preview_fails_closed(tmp_path) -> None:
 
 def test_no_runtime_404(tmp_path) -> None:
     store = SqliteEventStore(":memory:")
-    client = TestClient(create_app(store, runtime=None))
-    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
+    app = FastAPI()
+    app.include_router(make_preview_edit_router(store, runtime=None))
+    client = TestClient(app)
+    cid = f"conv_{uuid.uuid4().hex}"
+    store.create_conversation(cid, owner_id="local")
     assert client.get(f"/conversations/{cid}/preview-edit/index.html").status_code == 404

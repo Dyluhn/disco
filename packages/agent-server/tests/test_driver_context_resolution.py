@@ -396,7 +396,7 @@ class TestConversationRuntimeDriverContextSeams:
         loop_sentinel = object()
         create_run_task_calls = 0
         stale_backend_checked = False
-        original_create_run_task = rt._create_run_task
+        original_create_run_task = rt._run_supervisor.create_task
 
         def create_run_task(*args: Any, **kwargs: Any) -> tuple[asyncio.Task[Any], int]:
             nonlocal create_run_task_calls
@@ -406,7 +406,7 @@ class TestConversationRuntimeDriverContextSeams:
         def evict_stale_backend(requested_cid: str) -> None:
             nonlocal stale_backend_checked
             assert requested_cid == cid
-            assert requested_cid not in rt._tasks
+            assert rt._run_registry.task(requested_cid) is None
             stale_backend_checked = True
 
         async def resolve(requested_cid: str) -> ResolvedDriverContext:
@@ -430,23 +430,23 @@ class TestConversationRuntimeDriverContextSeams:
         def legacy_compose(_cid: str) -> object:
             raise AssertionError("legacy synchronous composition ran before resolution")
 
-        monkeypatch.setattr(rt, "_resolve_driver_context", resolve, raising=False)
-        monkeypatch.setattr(rt, "_loop_for_resolved", compose, raising=False)
+        monkeypatch.setattr(rt._drivers, "resolve_context", resolve)
+        monkeypatch.setattr(rt._loop_factory, "loop_for_resolved", compose)
         monkeypatch.setattr(rt, "_loop_for", legacy_compose)
-        monkeypatch.setattr(rt, "_create_run_task", create_run_task)
-        monkeypatch.setattr(rt, "_evict_stale_backend", evict_stale_backend)
+        monkeypatch.setattr(rt._run_supervisor, "create_task", create_run_task)
+        monkeypatch.setattr(rt._sandbox_resources, "evict_stale", evict_stale_backend)
         monkeypatch.setattr(rt._workspace, "run_after_admission", admit)
 
         rt.kick(cid, claimed_user_seq=user_seq)
-        task = rt._tasks.get(cid)
+        task = rt._run_registry.task(cid)
         assert task is not None
         await asyncio.wait_for(resolve_entered.wait(), timeout=1.0)
         assert create_run_task_calls == 1
         assert stale_backend_checked
         assert not composed.is_set()
         assert not admitted.is_set()
-        assert cid not in rt._loops
-        assert cid not in rt._executors
+        assert rt._loop_registry.loop(cid) is None
+        assert rt._run_resources.executor(cid) is None
 
         release_resolution.set()
         await asyncio.wait_for(composed.wait(), timeout=1.0)
@@ -480,7 +480,7 @@ class TestConversationRuntimeDriverContextSeams:
         cid = "full-pipeline"
         await _seed_conversation(rt, cid)
         snapshot = await rt._resolve_driver_context(cid)
-        loop = rt._loop_for_resolved(cid, snapshot)
+        loop = rt._loop_factory.loop_for_resolved(cid, snapshot)
         assert loop._driver_context_window_value == 24576
         assert loop.agent._driver_context_window == 24576
         assert rt._driver_contexts.resolved_snapshot(cid) is snapshot
@@ -494,7 +494,7 @@ class TestConversationRuntimeDriverContextSeams:
         rt.set_surface(cid, "deep_research")
         snapshot = await rt._resolve_driver_context(cid)
 
-        loop = rt._loop_for_resolved(cid, snapshot)
+        loop = rt._loop_factory.loop_for_resolved(cid, snapshot)
 
         assert loop._driver_context_window_value == 32768
         assert loop.agent._driver_context_window == 32768
@@ -506,7 +506,7 @@ class TestConversationRuntimeDriverContextSeams:
         rt = _runtime("ok", model_key="resolved", context_window=8192)
         cid = "snapshot-model"
         await _seed_conversation(rt, cid)
-        rt._model_override[cid] = "stale-or-concurrently-changed"
+        rt._settings.set_model_override(cid, "stale-or-concurrently-changed")
         snapshot = ResolvedDriverContext(
             model_key="resolved",
             provider="fake",
@@ -516,14 +516,14 @@ class TestConversationRuntimeDriverContextSeams:
             resolved_at=datetime.now(UTC),
         )
         seen_picks: list[str | None] = []
-        original_router_now = rt._router_now
+        original_router = rt._drivers.router
 
-        def router_now(pick: str | None = None, **kwargs: Any) -> DefaultLLMRouter:
+        def router(pick: str | None = None, **kwargs: Any) -> DefaultLLMRouter:
             seen_picks.append(pick)
-            return original_router_now(pick=pick, **kwargs)
+            return original_router(pick=pick, **kwargs)
 
-        monkeypatch.setattr(rt, "_router_now", router_now)
-        loop = rt._loop_for_resolved(cid, snapshot)
+        monkeypatch.setattr(rt._drivers, "router", router)
+        loop = rt._loop_factory.loop_for_resolved(cid, snapshot)
         assert seen_picks == ["resolved"]
         assert loop._driver_context_window_value == 16384
 
@@ -533,7 +533,8 @@ class TestConversationRuntimeDriverContextSeams:
         cid = "provisional"
         await _seed_conversation(rt, cid)
         provisional = rt._loop_for(cid)
-        old_executor = rt._executors[cid]
+        old_executor = rt._run_resources.executor(cid)
+        assert old_executor is not None
         session = old_executor._sandbox
         resolved = ResolvedDriverContext(
             model_key="m",
@@ -543,10 +544,12 @@ class TestConversationRuntimeDriverContextSeams:
             source="live",
             resolved_at=datetime.now(UTC),
         )
-        recomposed = rt._loop_for_resolved(cid, resolved)  # type: ignore[attr-defined]
+        recomposed = rt._loop_factory.loop_for_resolved(cid, resolved)
         assert recomposed is not provisional
-        assert rt._executors[cid] is not old_executor
-        assert rt._executors[cid]._sandbox is session
+        assert rt._run_resources.executor(cid) is not old_executor
+        executor = rt._run_resources.executor(cid)
+        assert executor is not None
+        assert executor._sandbox is session
         assert recomposed._driver_context_window_value == 16384
 
     @pytest.mark.asyncio
@@ -570,14 +573,18 @@ class TestConversationRuntimeDriverContextSeams:
             source="live",
             resolved_at=datetime.now(UTC),
         )
-        loop_a = rt._loop_for_resolved(cid, first)  # type: ignore[attr-defined]
-        session = rt._executors[cid]._sandbox
-        rt._workspace._admitted_runs.add(cid)
-        assert rt._loop_for_resolved(cid, second) is loop_a  # type: ignore[attr-defined]
+        loop_a = rt._loop_factory.loop_for_resolved(cid, first)
+        executor_a = rt._run_resources.executor(cid)
+        assert executor_a is not None
+        session = executor_a._sandbox
+        rt._workspace_fence.mark_run_admitted(cid)
+        assert rt._loop_factory.loop_for_resolved(cid, second) is loop_a
         assert loop_a._driver_context_window_value == 8192
 
-        rt._workspace._admitted_runs.discard(cid)
-        loop_b = rt._loop_for_resolved(cid, second)  # type: ignore[attr-defined]
+        rt._workspace_fence.clear_run_claim(cid)
+        loop_b = rt._loop_factory.loop_for_resolved(cid, second)
         assert loop_b is not loop_a
         assert loop_b._driver_context_window_value == 16384
-        assert rt._executors[cid]._sandbox is session
+        executor_b = rt._run_resources.executor(cid)
+        assert executor_b is not None
+        assert executor_b._sandbox is session

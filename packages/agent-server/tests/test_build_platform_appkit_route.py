@@ -89,7 +89,7 @@ def test_appkit_platform_resolution_failure_has_no_freeform_fallback(
             mock.MagicMock(spec=DefaultLLMRouter),
             mock.MagicMock(spec=RouterAgent),
         )
-    assert runtime._executors == {}
+    assert runtime._run_resources.conversation_ids(executors_only=True) == ()
     assert runtime._build_platform.route_records == {}
     assert runtime._build_platform.selected_routes == {}
 

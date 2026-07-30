@@ -88,23 +88,23 @@ def test_runtime_effective_assist_default(tmp_path):
         ]:
             config.model_for.return_value = "m"
             config.models = {"m": _model_entry(url)}
-            assert rt._effective_assist(cid) is False, f"{url} should default OFF"
+            assert rt._settings._effective_assist(cid) is False, f"{url} should default OFF"
 
         # The explicit per-conversation toggle is the ONLY default-path way in: setting
         # it flips assist ON even for a local model (where the old heuristic auto-ON'd).
         config.model_for.return_value = "m"
         config.models = {"m": _model_entry("http://127.0.0.1:8080/v1")}
         rt.set_assist("c6", True)
-        assert rt._effective_assist("c6") is True
+        assert rt._settings._effective_assist("c6") is True
         rt.set_assist("c6", False)
-        assert rt._effective_assist("c6") is False
+        assert rt._settings._effective_assist("c6") is False
 
         # An explicit ModelEntry.tier='weak' in config still enables it (config escape hatch).
         weak_entry = _model_entry("https://api.anthropic.com/v1")
         weak_entry.tier = "weak"
         config.model_for.return_value = "weak-cfg"
         config.models = {"weak-cfg": weak_entry}
-        assert rt._effective_assist("c7") is True
+        assert rt._settings._effective_assist("c7") is True
 
 
 def test_create_body_sets_assist_and_state_extras(tmp_path):
@@ -163,7 +163,7 @@ def test_runtime_assist_explicit_override(tmp_path):
         # But explicitly set assist to False
         rt.set_assist("c1", False)
         assert rt.is_assist("c1") is False
-        assert rt._effective_assist("c1") is False
+        assert rt._settings._effective_assist("c1") is False
 
         # Set up cloud model which would default to False
         config.model_for.return_value = "cloud-model"
@@ -173,13 +173,13 @@ def test_runtime_assist_explicit_override(tmp_path):
         # Explicitly set assist to True
         rt.set_assist("c2", True)
         assert rt.is_assist("c2") is True
-        assert rt._effective_assist("c2") is True
+        assert rt._settings._effective_assist("c2") is True
 
         # Check sidecar was created and is valid
-        assert os.path.exists(rt._assist_path)
+        assert os.path.exists(rt._settings._assist_path)
         rt2 = ConversationRuntime(store=MagicMock())
-        assert rt2._assist["c1"] is False
-        assert rt2._assist["c2"] is True
+        assert rt2._settings._assist["c1"] is False
+        assert rt2._settings._assist["c2"] is True
 
 
 def test_metadata_policy_uses_injected_router_config_without_provider_rebuild() -> None:
@@ -207,7 +207,7 @@ def test_root5_effective_driver_endpoint_honors_override():
     config = MagicMock()
     rt._config_store.load = MagicMock(return_value=config)
     rt._router_now = MagicMock(side_effect=AssertionError("metadata read wired providers"))
-    rt._model_override = {"c1": "or-deepseek"}
+    rt._settings._model_overrides = {"c1": "or-deepseek"}
     entry = ModelEntry(
         model_id="deepseek/deepseek-v4-pro",
         provider="openrouter",
@@ -219,10 +219,10 @@ def test_root5_effective_driver_endpoint_honors_override():
     config.models = {"or-deepseek": entry}
     rt._settings._routing.origin_approved = MagicMock(return_value=True)
 
-    ep = rt._effective_driver_endpoint("c1")
+    ep = rt._settings._effective_driver_endpoint("c1")
     assert ep == ("https://openrouter.ai/api/v1", "deepseek/deepseek-v4-pro", "OPENROUTER_API_KEY")
     # the resolver consulted model_for with the per-conversation override
     config.model_for.assert_called_with(ModelRole.AGENT_DRIVER, override="or-deepseek")
     # no live base_url ⇒ None (the tool then falls back to the global resolver)
     config.models = {"or-deepseek": ModelEntry(model_id="x", provider="p", context_window=1)}
-    assert rt._effective_driver_endpoint("c1") is None
+    assert rt._settings._effective_driver_endpoint("c1") is None

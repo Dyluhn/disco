@@ -48,6 +48,16 @@ _GATE_PARAMS = [
 ]
 
 
+def _advance_generation(rt: ConversationRuntime, cid: str, target: int) -> None:
+    """Advance a run generation through the registry's public operations."""
+
+    while (rt._run_registry.generation(cid) or 0) < target:
+        task = MagicMock()
+        task.done.return_value = True
+        rt._run_registry.register_task(cid, task)
+        assert rt._run_registry.complete_task(cid, task)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("gate", _GATE_PARAMS)
 async def test_abandoned_gate_past_ttl_is_reaped(gate, monkeypatch):
@@ -98,7 +108,7 @@ async def test_connected_gate_not_reaped_even_past_ttl(monkeypatch):
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = await _gated_conv(store, "conv_connected", ConversationStatus.AWAITING_USER_DECISION)
-    rt._connections[cid] = 1  # UI attached
+    rt.on_connect(cid)  # UI attached
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
     reaped = await rt.sweep_abandoned_gates_once()
@@ -126,7 +136,7 @@ async def test_active_run_gate_not_reaped_even_past_ttl(monkeypatch):
         await asyncio.Event().wait()
 
     task = asyncio.ensure_future(_never())
-    rt._tasks[active] = task
+    rt._run_registry.register_task(active, task)  # type: ignore[arg-type]
     try:
         assert active in rt.running_conversation_ids()
 
@@ -160,8 +170,8 @@ async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
 
     # The gate-creating run pinned a kernel and recorded its run-generation.
     sentinel_kernel = object()
-    rt._pinned_kernels[cid] = sentinel_kernel
-    rt._run_generation[cid] = 5
+    rt._kernel_pin_store.set(cid, sentinel_kernel)
+    _advance_generation(rt, cid, 5)
 
     # Inject the race: a newer run kicks (generation 5 → 6, pin reused) precisely in
     # the async window the reaper captured-generation-then-awaits.
@@ -172,7 +182,7 @@ async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
         result = await real_get_events(conv_id, *a, **k)
         if conv_id == cid and not fired["done"]:
             fired["done"] = True
-            rt._run_generation[cid] = 6  # a newer run now owns the conversation
+            _advance_generation(rt, cid, 6)  # a newer run now owns the conversation
         return result
 
     monkeypatch.setattr(store, "get_events", _get_events_then_newer_run)
@@ -186,8 +196,8 @@ async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
         ConversationStatus.AWAITING_PLAN_APPROVAL
     )
     # The NEWER run's pin is left intact (that run owns it now).
-    assert rt._pinned_kernels.get(cid) is sentinel_kernel
-    assert rt._run_generation[cid] == 6
+    assert rt._kernel_pin_store.current(cid) is sentinel_kernel
+    assert rt._run_registry.generation(cid) == 6
 
 
 @pytest.mark.asyncio
@@ -202,8 +212,8 @@ async def test_genuinely_abandoned_gate_terminalizes_and_unpins(monkeypatch):
         store, "conv_abandoned_unpin", ConversationStatus.AWAITING_USER_DECISION
     )
     sentinel_kernel = object()
-    rt._pinned_kernels[cid] = sentinel_kernel
-    rt._run_generation[cid] = 3  # the gate-creating run's generation, never bumped
+    rt._kernel_pin_store.set(cid, sentinel_kernel)
+    _advance_generation(rt, cid, 3)  # the gate-creating run's generation, never bumped
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
     reaped = await rt.sweep_abandoned_gates_once()
@@ -211,7 +221,7 @@ async def test_genuinely_abandoned_gate_terminalizes_and_unpins(monkeypatch):
     assert reaped == 1
     assert (await store.get_state(cid)).execution_status is ConversationStatus.STUCK
     # Terminal reap releases the pin too (same generation → cleared).
-    assert cid not in rt._pinned_kernels
+    assert rt._kernel_pin_store.current(cid) is None
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "0e5266eb5cb127486ce34fc9c5d35fdfac652183",
+  "source_identity": "b7d2cad9c433712965653a5875ad0eac443b3a80",
   "collected": {
     "counts": {
       "packages": 9832,
@@ -11426,7 +11426,7 @@
     }
   },
   "mapping_static": {
-    "identity": "0e5266eb5cb127486ce34fc9c5d35fdfac652183",
+    "identity": "b7d2cad9c433712965653a5875ad0eac443b3a80",
     "python_test_file_count": 767,
     "python_static_test_id_count": 9298,
     "python_test_files": [
@@ -23124,6 +23124,12 @@
         "scope": "pytest.fixture(autouse=True)"
       },
       {
+        "path": "packages/agent-server/tests/test_final_workspace_commit.py",
+        "line": 96,
+        "fixture": "_fresh_deploy_lock_dir",
+        "scope": "pytest.fixture(autouse=True)"
+      },
+      {
         "path": "harness/build_soak/tests/conftest.py",
         "line": 30,
         "fixture": "_hermetic_provider_ledger_env",
@@ -26316,7 +26322,7 @@
       "package": "PKG-06-RUNTIME",
       "root": "packages",
       "source_identity_before": "e8a951dada2ed46a21c84df07391de1b2def1b02",
-      "source_identity_after": "0e5266eb5cb127486ce34fc9c5d35fdfac652183",
+      "source_identity_after": "b7d2cad9c433712965653a5875ad0eac443b3a80",
       "collected_roots": {
         "packages": {
           "before_count": 9786,
@@ -26436,6 +26442,12 @@
             "path": "packages/agent-server/tests/test_kill_generation_guard.py",
             "line": 44,
             "fixture": "_deploy_lock_dir",
+            "scope": "pytest.fixture(autouse=True)"
+          },
+          {
+            "path": "packages/agent-server/tests/test_final_workspace_commit.py",
+            "line": 96,
+            "fixture": "_fresh_deploy_lock_dir",
             "scope": "pytest.fixture(autouse=True)"
           }
         ]

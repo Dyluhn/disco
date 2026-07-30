@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from disco.agent_server.lifecycle_command_service import (
     LifecycleCommandService,
     LifecycleTransitionRejected,
 )
+from disco.agent_server.workspace_fence import WorkspaceFenceService
 from disco.agent_server.workspace_service import WorkspaceCoordinator
 from disco.core import (
     ConversationStatus,
@@ -23,18 +24,17 @@ from disco.tools.projects import ProjectStore
 CID = "conv-run-status-authority"
 
 
-class _Runtime:
-    _BUILD_LIKE_SURFACES = frozenset({"build"})
-
-    def __init__(self, store: SqliteEventStore, project_store: ProjectStore) -> None:
-        self._store = store
-        self._project_store = project_store
-
+class _Settings:
     def _surface_of(self, conversation_id: str) -> str:
         assert conversation_id == CID
         return "build"
 
-    def _project_store_now(self) -> ProjectStore:
+
+class _Projects:
+    def __init__(self, project_store: ProjectStore) -> None:
+        self._project_store = project_store
+
+    def current_project_store(self) -> ProjectStore:
         return self._project_store
 
 
@@ -53,14 +53,28 @@ def _coordinator_pair(
     project_store = ProjectStore(str(tmp_path / "projects"))
 
     def build() -> WorkspaceCoordinator:
-        runtime = _Runtime(store, project_store)
-        coordinator = WorkspaceCoordinator(runtime)
-        runtime._lifecycle_commands = LifecycleCommandService(  # type: ignore[attr-defined]
+        settings = _Settings()
+        projects = _Projects(project_store)
+        fence = WorkspaceFenceService(
+            store,
+            cast(Any, projects),
+            cast(Any, settings),
+        )
+        commands = LifecycleCommandService(
             store=store,
-            fence=coordinator,
+            fence=fence,
             terminal_effects=_TerminalEffects(),
         )
-        return coordinator
+        return WorkspaceCoordinator(
+            store,
+            cast(Any, settings),
+            cast(Any, projects),
+            commands,
+            cast(Any, object()),
+            cast(Any, object()),
+            cast(Any, object()),
+            fence,
+        )
 
     return build(), build()
 
@@ -202,7 +216,7 @@ async def test_untyped_direct_status_is_rejected_for_strict_run(
             LifecycleTransitionRejected,
             match="requires durable run authority",
         ):
-            await coordinator._rt._lifecycle_commands.append_status(
+            await coordinator._lifecycle_commands.append_status(
                 CID,
                 StatusEvent(
                     status=ConversationStatus.ERROR,
@@ -229,7 +243,7 @@ async def test_status_and_peer_ingress_are_serialized_without_a_poisoned_head(
         await _seed_view(store, view_id="view-old")
         checked = asyncio.Event()
         release = asyncio.Event()
-        commands = old_worker._rt._lifecycle_commands
+        commands = old_worker._lifecycle_commands
         original = commands._authority_is_current_locked
 
         async def checked_then_blocked(*args: Any, **kwargs: Any) -> bool:
@@ -287,11 +301,11 @@ async def test_child_task_does_not_inherit_parent_local_fence_ownership(
 
         async with coordinator.lock(CID):
             async with coordinator.interprocess_mutation_fence(CID):
-                assert coordinator.fence_owned_by_current_task(CID)
+                assert coordinator._fences.fence_owned_by_current_task(CID)
 
                 async def append_after_parent_releases() -> StatusEvent:
                     await release_child.wait()
-                    assert not coordinator.fence_owned_by_current_task(CID)
+                    assert not coordinator._fences.fence_owned_by_current_task(CID)
                     return await coordinator.append_status(
                         CID,
                         StatusEvent(status=ConversationStatus.RUNNING),

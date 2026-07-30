@@ -81,7 +81,7 @@ def _runtime(store: SqliteEventStore, tmp_path: Path) -> tuple[ConversationRunti
         sandbox_service=ProcessSandboxService(),
     )
     projects = ProjectStore(str(tmp_path / "projects"))
-    rt._project_store_now = MagicMock(return_value=projects)
+    rt._projects.current_project_store = MagicMock(return_value=projects)
     return rt, projects
 
 
@@ -119,11 +119,11 @@ async def test_kill_before_freeze_loses_the_runs_work(
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_progressing(event_store, cid)
     sandbox = _live_workspace()
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
 
     # Destructive kill FIRST (what the harness does today).
     sandbox.destroyed = True
-    rt._executors.pop(cid, None)
+    rt._run_resources.pop_executor(cid)
 
     # Now the harness reads the durable store — the only source collect_workspace uses.
     versions = await _version_events(event_store, cid)
@@ -148,7 +148,7 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_progressing(event_store, cid)
     sandbox = _live_workspace()
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
 
     # 1. pre-pause watermarks and run authority
     events_before = await event_store.get_events(cid)
@@ -158,7 +158,7 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
     # 2-4. land PAUSED, then the end-gate snapshot the product already performs
     paused = await event_store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
     async with rt._workspace.lock(cid):  # the product's own fencing
-        await rt._maybe_snapshot(cid, trigger=ConversationStatus.PAUSED.value)
+        await rt._lifecycle._maybe_snapshot(cid, trigger=ConversationStatus.PAUSED.value)
 
     versions = await _version_events(event_store, cid)
     assert len(versions) == versions_before + 1, "PAUSED end-gate must emit a durable version"
@@ -189,8 +189,8 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
 
     # 9. ordinary kill afterwards for destructive cleanup — evidence already frozen
     sandbox.destroyed = True
-    rt._executors.pop(cid, None)
-    assert cid not in rt._executors
+    rt._run_resources.pop_executor(cid)
+    assert not rt._run_resources.has_executor(cid)
 
     # the frozen version survives the kill, byte-exact
     with projects.open_verified_version(cid, record.seq) as verified:
@@ -211,7 +211,7 @@ async def test_freeze_timeout_never_claims_preservation(
     rt, projects = _runtime(event_store, tmp_path)
     await _seed_progressing(event_store, cid)
     sandbox = _live_workspace()
-    rt._executors[cid] = MagicMock(_sandbox=sandbox)
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
 
     # Pause never lands: no PAUSED status, therefore no end-gate snapshot.
     versions = await _version_events(event_store, cid)
@@ -219,7 +219,7 @@ async def test_freeze_timeout_never_claims_preservation(
 
     freeze_boundary = "FREEZE_TIMEOUT"  # explicit, not silently degraded
     sandbox.destroyed = True
-    rt._executors.pop(cid, None)
+    rt._run_resources.pop_executor(cid)
 
     assert freeze_boundary == "FREEZE_TIMEOUT"
     assert await _version_events(event_store, cid) == [], "nothing may claim a frozen version"

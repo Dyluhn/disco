@@ -48,10 +48,10 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
     # Seed per-conversation runtime state the way a live run would.
-    rt._pinned_kernels[CID] = rt._disco_kernel
-    rt._run_generation[CID] = 3
-    rt._post_terminal_rekick_seq[CID] = 7
-    rt._run_claimed_user_seq[CID] = 7
+    rt._kernel_pin_store.set(CID, rt._disco_kernel)
+    rt._run_registry._generations[CID] = 3
+    rt._run_recovery._post_terminal_rekick_seq[CID] = 7
+    rt._run_ingress._claimed_user_seqs[CID] = 7
     rt.set_surface(CID, "build")
     rt.set_autonomous(CID, True)
     rt._driver_preflight._proven.add((CID, ModelRole.AGENT_DRIVER, "m"))
@@ -60,12 +60,12 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
 
     await rt.forget_conversation(CID)
 
-    assert CID not in rt._pinned_kernels  # the leak the finding cites
-    assert CID not in rt._run_generation
-    assert CID not in rt._post_terminal_rekick_seq
-    assert CID not in rt._run_claimed_user_seq
-    assert CID not in rt._surface
-    assert CID not in rt._autonomous
+    assert rt._kernel_pin_store.current(CID) is None  # the leak the finding cites
+    assert CID not in rt._run_registry._generations
+    assert CID not in rt._run_recovery._post_terminal_rekick_seq
+    assert CID not in rt._run_ingress._claimed_user_seqs
+    assert rt._settings._surface_of(CID) != "build"
+    assert CID not in rt._settings._autonomous
     assert not any(proven[0] == CID for proven in rt._driver_preflight._proven)
     assert (
         "another-conversation",
@@ -89,12 +89,12 @@ async def test_forget_conversation_reconciles_backend_after_runtime_restart() ->
     listeners indefinitely and eventually exhaust the fixed preview-port pool."""
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
-    service = rt._injected_sandbox
+    service = rt._sandbox._injected_service
     assert isinstance(service, ProcessSandboxService)
     service.destroy_by_conversation = AsyncMock()
 
-    assert CID not in rt._executors
-    assert CID not in rt._pending_sessions
+    assert not rt._run_resources.has_executor(CID)
+    assert not rt._run_resources.has_pending_session(CID)
     await rt.forget_conversation(CID)
 
     service.destroy_by_conversation.assert_awaited_once_with(CID)
@@ -107,7 +107,7 @@ async def test_agent_delete_route_clears_pin_rows_and_audio_cache(
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._pinned_kernels[CID] = rt._disco_kernel
+    rt._kernel_pin_store.set(CID, rt._disco_kernel)
     audio_dir = tmp_path / "cache" / "tts" / CID
     audio_dir.mkdir(parents=True)
     (audio_dir / "audio_overview_single_deadbeef.mp3").write_bytes(b"generated")
@@ -121,7 +121,7 @@ async def test_agent_delete_route_clears_pin_rows_and_audio_cache(
 
     assert resp.status_code == 200
     assert resp.json()["deleted"] is True
-    assert CID not in rt._pinned_kernels  # runtime state released on delete
+    assert rt._kernel_pin_store.current(CID) is None  # runtime state released on delete
     assert await store.list_conversations(owner_id="local") == []  # rows gone
     assert not audio_dir.exists()  # generated report audio cannot leak after deletion
 

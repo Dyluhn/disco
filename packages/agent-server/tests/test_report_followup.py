@@ -40,9 +40,9 @@ async def test_followup_triggered_by_new_user_message():
     reports = [e for e in events if isinstance(e, ReportEvent)]
 
     # Before follow-up: no fresh user message
-    from disco.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.deep_research_service import DeepResearchService
 
-    assert not ConversationRuntime._has_fresh_user_message(events, reports)
+    assert not DeepResearchService._has_fresh_user_message(events, reports)
 
     # After follow-up: user sends a question
     await store.append(
@@ -55,7 +55,7 @@ async def test_followup_triggered_by_new_user_message():
 
     events_after = await store.get_events(cid)
     reports_after = [e for e in events_after if isinstance(e, ReportEvent)]
-    assert ConversationRuntime._has_fresh_user_message(events_after, reports_after)
+    assert DeepResearchService._has_fresh_user_message(events_after, reports_after)
 
 
 async def test_report_passages_present_for_grounding():
@@ -121,6 +121,6 @@ async def test_followup_requires_existing_report():
     events = await store.get_events(cid)
     reports = [e for e in events if isinstance(e, ReportEvent)]
 
-    from disco.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.deep_research_service import DeepResearchService
 
-    assert not ConversationRuntime._has_fresh_user_message(events, reports)
+    assert not DeepResearchService._has_fresh_user_message(events, reports)

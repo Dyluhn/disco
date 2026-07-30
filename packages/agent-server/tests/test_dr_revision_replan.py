@@ -72,15 +72,15 @@ async def _seed_revision_state(store, cid: str, *, planning_marker: bool) -> Non
         )
 
 
-def _rt(store) -> ConversationRuntime:
+def _rt(store, monkeypatch) -> ConversationRuntime:
     rt = ConversationRuntime(store)
     rt._settings._set_surface("c1", "deep_research")
 
     async def _preflight_ok(cid, **kw):
         return None
 
-    rt._preflight_driver = _preflight_ok
-    rt._router_now = lambda **kw: object()  # decompose is faked; router unused
+    monkeypatch.setattr(rt._driver_preflight, "check", _preflight_ok)
+    monkeypatch.setattr(rt._drivers, "router", lambda **kw: object())
     return rt
 
 
@@ -90,10 +90,10 @@ async def test_revision_via_request_plan_reproposes(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(drs, "decompose_query", _fake_decompose(captured))
     store = SqliteEventStore(":memory:")
-    rt = _rt(store)
+    rt = _rt(store, monkeypatch)
     await _seed_revision_state(store, "c1", planning_marker=True)
 
-    await rt._maybe_run_deep_research("c1")
+    await rt._dr._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     plans = [e for e in events if isinstance(e, PlanEvent)]
@@ -114,10 +114,10 @@ async def test_revision_via_plain_message_while_awaiting(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(drs, "decompose_query", _fake_decompose(captured))
     store = SqliteEventStore(":memory:")
-    rt = _rt(store)
+    rt = _rt(store, monkeypatch)
     await _seed_revision_state(store, "c1", planning_marker=False)
 
-    await rt._maybe_run_deep_research("c1")
+    await rt._dr._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     plans = [e for e in events if isinstance(e, PlanEvent)]
@@ -131,7 +131,7 @@ async def test_awaiting_approval_without_new_message_stays_parked(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(drs, "decompose_query", _fake_decompose(captured))
     store = SqliteEventStore(":memory:")
-    rt = _rt(store)
+    rt = _rt(store, monkeypatch)
     await store.append(
         "c1",
         MessageEvent(
@@ -147,7 +147,7 @@ async def test_awaiting_approval_without_new_message_stays_parked(monkeypatch):
     )
     before = len(await store.get_events("c1"))
 
-    await rt._maybe_run_deep_research("c1")
+    await rt._dr._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     assert len(events) == before, "dispatcher must not emit anything"

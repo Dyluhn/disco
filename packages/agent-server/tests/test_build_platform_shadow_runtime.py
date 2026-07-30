@@ -33,7 +33,7 @@ def test_runtime_records_freeform_shadow_without_routing_it(monkeypatch) -> None
         conversation_id="shadow-freeform",
         appkit=False,
     )
-    record = runtime._build_platform_shadow_records["shadow-freeform"]
+    record = runtime._build_shadows.snapshot()["shadow-freeform"]
     assert record.matches
     assert record.source == "freeform"
     assert record.active_route == "legacy"
@@ -47,7 +47,7 @@ def test_runtime_records_appkit_shadow_and_keeps_strict_executor(monkeypatch) ->
         conversation_id="shadow-appkit",
         appkit=True,
     )
-    record = runtime._build_platform_shadow_records["shadow-appkit"]
+    record = runtime._build_shadows.snapshot()["shadow-appkit"]
     assert record.matches
     assert record.source == "appkit"
     assert record.active_route == "legacy"
@@ -64,7 +64,7 @@ def test_shadow_disabled_has_zero_runtime_observation(monkeypatch) -> None:
             mock.MagicMock(spec=DefaultLLMRouter),
             mock.MagicMock(spec=RouterAgent),
         )
-    assert runtime._build_platform_shadow_records == {}
+    assert runtime._build_shadows.snapshot() == {}
     assert isinstance(loop.executor, DefaultToolExecutor)
 
 
@@ -75,7 +75,7 @@ def test_broken_observer_cannot_break_legacy_loop_composition(monkeypatch) -> No
     with (
         mock.patch.object(runtime, "_sandbox_service_now"),
         mock.patch(
-            "disco.agent_server.runtime.observe_legacy_build",
+            "disco.agent_server.build_loop_assembler.observe_legacy_build",
             side_effect=RuntimeError("observer defect"),
         ),
     ):
@@ -84,5 +84,5 @@ def test_broken_observer_cannot_break_legacy_loop_composition(monkeypatch) -> No
             mock.MagicMock(spec=DefaultLLMRouter),
             mock.MagicMock(spec=RouterAgent),
         )
-    assert runtime._build_platform_shadow_records == {}
+    assert runtime._build_shadows.snapshot() == {}
     assert isinstance(loop.executor, DefaultToolExecutor)
