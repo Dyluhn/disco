@@ -51,13 +51,25 @@ from ._quota_contracts import (
     _token_count,
 )
 from ._quota_sql import (
-    config_from_row,
-    exceeded_reason,
-    find_limits,
-    find_reservation,
-    idempotent_admission,
-    sweep_stale,
-    usage,
+    config_from_row as _config_from_row,
+)
+from ._quota_sql import (
+    exceeded_reason as _exceeded_reason,
+)
+from ._quota_sql import (
+    find_limits as _find_limits,
+)
+from ._quota_sql import (
+    find_reservation as _find_reservation,
+)
+from ._quota_sql import (
+    idempotent_admission as _idempotent_admission,
+)
+from ._quota_sql import (
+    sweep_stale as _sweep_stale,
+)
+from ._quota_sql import (
+    usage as _usage,
 )
 
 # Preserve the historical public type identity for introspection and pickling.
@@ -217,7 +229,7 @@ class SqliteQuotaStore:
                 )
                 .fetchone()
             )
-        return None if row is None else config_from_row(row)
+        return None if row is None else _config_from_row(row)
 
     def effective_app_config(self, owner_id: str, audience: str) -> QuotaConfig:
         """Return the explicit aggregate config or the bounded safe default."""
@@ -255,30 +267,30 @@ class SqliteQuotaStore:
         now_us = _epoch_us(instant)
 
         with self._write_transaction() as conn:
-            sweep_stale(
+            _sweep_stale(
                 conn,
                 owner,
                 app,
                 now_us,
                 reservation_ttl_seconds=self.reservation_ttl_seconds,
             )
-            existing = find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is not None:
-                return idempotent_admission(
+                return _idempotent_admission(
                     existing,
                     service=exact,
                     estimated_input_tokens=input_tokens,
                     estimated_output_tokens=output_tokens,
                 )
 
-            app_limits = find_limits(conn, owner, app, "") or self.default_config
+            app_limits = _find_limits(conn, owner, app, "") or self.default_config
             scopes: list[tuple[str | None, QuotaConfig]] = [(None, app_limits)]
-            service_limits = find_limits(conn, owner, app, exact)
+            service_limits = _find_limits(conn, owner, app, exact)
             if service_limits is not None:
                 scopes.append((exact, service_limits))
 
             for limiting_service, limits in scopes:
-                current_usage = usage(
+                current_usage = _usage(
                     conn,
                     owner,
                     app,
@@ -286,7 +298,7 @@ class SqliteQuotaStore:
                     limits.window_seconds,
                     now_us,
                 )
-                reason = exceeded_reason(current_usage, limits, input_tokens, output_tokens)
+                reason = _exceeded_reason(current_usage, limits, input_tokens, output_tokens)
                 if reason is not None:
                     remaining_us = _epoch_us(current_usage.window_end) - now_us
                     return QuotaAdmission(
@@ -307,7 +319,7 @@ class SqliteQuotaStore:
                 """,
                 (owner, app, exact, key, input_tokens, output_tokens, now_us),
             )
-            reservation = find_reservation(conn, owner, app, key)
+            reservation = _find_reservation(conn, owner, app, key)
             if reservation is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("reservation insert was not readable")
             return QuotaAdmission(allowed=True, reservation=reservation)
@@ -329,7 +341,7 @@ class SqliteQuotaStore:
         output_tokens = _token_count("actual_output_tokens", actual_output_tokens)
         completed_us = _epoch_us(_instant(now))
         with self._write_transaction() as conn:
-            existing = find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state == "released":
@@ -352,7 +364,7 @@ class SqliteQuotaStore:
                 """,
                 (input_tokens, output_tokens, completed_us, owner, app, key),
             )
-            result = find_reservation(conn, owner, app, key)
+            result = _find_reservation(conn, owner, app, key)
             if result is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("completed reservation was not readable")
             return result
@@ -364,7 +376,7 @@ class SqliteQuotaStore:
         owner, app = self._validate_app(owner_id, audience)
         key = _identity("reservation id", reservation_id)
         with self._write_transaction() as conn:
-            existing = find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state == "dispatched":
@@ -379,7 +391,7 @@ class SqliteQuotaStore:
                 """,
                 (owner, app, key),
             )
-            result = find_reservation(conn, owner, app, key)
+            result = _find_reservation(conn, owner, app, key)
             if result is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("dispatched reservation was not readable")
             return result
@@ -390,7 +402,7 @@ class SqliteQuotaStore:
         key = _identity("reservation id", reservation_id)
         released_us = _epoch_us(datetime.now(UTC))
         with self._write_transaction() as conn:
-            existing = find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state in {"dispatched", "completed", "abandoned"}:
@@ -413,7 +425,7 @@ class SqliteQuotaStore:
         owner, app = self._validate_app(owner_id, audience)
         key = _identity("reservation id", reservation_id)
         with self._lock:
-            return find_reservation(self._check_open(), owner, app, key)
+            return _find_reservation(self._check_open(), owner, app, key)
 
     def get_usage(
         self,
@@ -428,7 +440,7 @@ class SqliteQuotaStore:
         exact = None if service is None else _service(service)
         now_us = _epoch_us(_instant(now))
         with self._write_transaction() as conn:
-            sweep_stale(
+            _sweep_stale(
                 conn,
                 owner,
                 app,
@@ -436,14 +448,14 @@ class SqliteQuotaStore:
                 reservation_ttl_seconds=self.reservation_ttl_seconds,
             )
             if exact is None:
-                limits = find_limits(conn, owner, app, "") or self.default_config
+                limits = _find_limits(conn, owner, app, "") or self.default_config
             else:
                 limits = (
-                    find_limits(conn, owner, app, exact)
-                    or find_limits(conn, owner, app, "")
+                    _find_limits(conn, owner, app, exact)
+                    or _find_limits(conn, owner, app, "")
                     or self.default_config
                 )
-            return usage(conn, owner, app, exact, limits.window_seconds, now_us)
+            return _usage(conn, owner, app, exact, limits.window_seconds, now_us)
 
     def close(self) -> None:
         with self._lock:
