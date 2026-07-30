@@ -487,9 +487,9 @@ def _free_port() -> int:
 def _materialize_bundle(
     client: TestClient, ps: ProjectStore, store: SqliteEventStore, name: str, dest: Path
 ) -> Path:
-    """Seed the fixture, download its real self-host zip, and unzip it — the
-    single artifact a user would run `docker compose up` inside."""
+    """Seed, download, and unzip the real self-host artifact users run with Compose."""
     _seed_files(ps, store, _cid(name), _fixture_files(name))
+    ps.cut_version(_cid(name), trigger="live-test")
     res = client.get(f"/api/projects/{_cid(name)}/download")
     assert res.status_code == 200
     dest.mkdir(parents=True, exist_ok=True)

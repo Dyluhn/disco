@@ -183,25 +183,26 @@ class PreviewRuntimeProjection:
         *,
         owner_id: str = DEFAULT_OWNER_ID,
         ensure_preview: Callable[[str], Awaitable[bool]],
+        resolve_upstream: Callable[[str, int], str | None],
     ) -> str | None:
         cid = await self._live_sessions.resolve_owned_cid_prefix(cid8, owner_id)
         if cid is not None:
-            return self.port_upstream(cid, port)
+            return resolve_upstream(cid, port)
         cid = await self._resolve_sleeping_conversation(cid8, owner_id)
         if cid is None:
             return None
         lock = self._connections.wake_lock_for(cid)
         async with lock:
             if self._live_sessions.live_session(cid) is not None:
-                return self.port_upstream(cid, port)
+                return resolve_upstream(cid, port)
             if not await ensure_preview(cid):
                 return None
             for _ in range(10):
-                url = self.port_upstream(cid, port)
+                url = resolve_upstream(cid, port)
                 if url is not None:
                     return url
                 await asyncio.sleep(0.3)
-            return self.port_upstream(cid, port)
+            return resolve_upstream(cid, port)
 
     @staticmethod
     def _owner_json(owner: PortOwner, namespace: str) -> dict[str, Any]:
