@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "39303331bf6000b88c07e5319fdfc7deae38875b",
+  "source_identity": "554866e685c4c7d353346c0884c5eaa6f6b0ea98",
   "collected": {
     "counts": {
-      "packages": 9774,
+      "packages": 9784,
       "harness": 1236,
       "integrations": 9,
       "tests": 328
     },
-    "total": 11347,
+    "total": 11357,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5314,6 +5314,16 @@
         "packages/core/tests/test_loop_stuck.py::test_untrusted_churn_nudge_cannot_rearm_generic_coverage[source]",
         "packages/core/tests/test_loop_stuck.py::test_user_message_resets_stuck",
         "packages/core/tests/test_loop_stuck.py::test_whole_reread_without_churn_nudge_still_trips_coverage_threshold_one",
+        "packages/core/tests/test_loop_transcript_authority.py::test_extracted_dispatch_gates_declare_disp_contracts",
+        "packages/core/tests/test_loop_transcript_authority.py::test_observer_execution_honors_bound_restart_override",
+        "packages/core/tests/test_loop_transcript_authority.py::test_pause_requests_boundary_without_publishing_status",
+        "packages/core/tests/test_loop_transcript_authority.py::test_planning_visibility_retains_anonymous_legacy_tool_when_capability_unknown",
+        "packages/core/tests/test_loop_transcript_authority.py::test_provenance_search_skips_newer_unconfirmed_matching_action",
+        "packages/core/tests/test_loop_transcript_authority.py::test_selected_actions_close_before_the_next_action",
+        "packages/core/tests/test_loop_transition_authority.py::test_core_loop_has_no_concrete_server_or_locator_dependency",
+        "packages/core/tests/test_loop_transition_authority.py::test_finished_publication_crosses_transition_and_commit_hook",
+        "packages/core/tests/test_loop_transition_authority.py::test_terminal_success_has_one_persistence_route",
+        "packages/core/tests/test_loop_transition_authority.py::test_transition_rejects_non_success_terminal_request",
         "packages/core/tests/test_mcp_cap_requery.py::test_genuinely_unknown_tool_still_requeried",
         "packages/core/tests/test_mcp_cap_requery.py::test_hidden_callable_mcp_tool_not_requeried",
         "packages/core/tests/test_mcp_cap_requery.py::test_known_but_scope_denied_tool_reaches_executor_without_unknown_requery",
@@ -11368,9 +11378,9 @@
     }
   },
   "mapping_static": {
-    "identity": "39303331bf6000b88c07e5319fdfc7deae38875b",
-    "python_test_file_count": 760,
-    "python_static_test_id_count": 9242,
+    "identity": "554866e685c4c7d353346c0884c5eaa6f6b0ea98",
+    "python_test_file_count": 764,
+    "python_static_test_id_count": 9252,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11658,6 +11668,8 @@
       "packages/core/tests/fixtures/release_detect/node-and-fastapi/main.py",
       "packages/core/tests/llm_fakes.py",
       "packages/core/tests/loop_fakes.py",
+      "packages/core/tests/loop_stuck_no_progress_cases.py",
+      "packages/core/tests/loop_stuck_recovery_cases.py",
       "packages/core/tests/release_remediation/test_c9r3_build_env_lexing.py",
       "packages/core/tests/release_remediation/test_candidate_receipt_mutations.py",
       "packages/core/tests/release_remediation/test_r1_credential_grammar.py",
@@ -11805,6 +11817,8 @@
       "packages/core/tests/test_loop_step.py",
       "packages/core/tests/test_loop_stophooks.py",
       "packages/core/tests/test_loop_stuck.py",
+      "packages/core/tests/test_loop_transcript_authority.py",
+      "packages/core/tests/test_loop_transition_authority.py",
       "packages/core/tests/test_mcp_cap_requery.py",
       "packages/core/tests/test_mode_desync.py",
       "packages/core/tests/test_no_read_penalty.py",
@@ -17311,6 +17325,16 @@
       "packages/core/tests/test_loop_stuck.py::test_untrusted_churn_nudge_cannot_rearm_generic_coverage",
       "packages/core/tests/test_loop_stuck.py::test_user_message_resets_stuck",
       "packages/core/tests/test_loop_stuck.py::test_whole_reread_without_churn_nudge_still_trips_coverage_threshold_one",
+      "packages/core/tests/test_loop_transcript_authority.py::test_extracted_dispatch_gates_declare_disp_contracts",
+      "packages/core/tests/test_loop_transcript_authority.py::test_observer_execution_honors_bound_restart_override",
+      "packages/core/tests/test_loop_transcript_authority.py::test_pause_requests_boundary_without_publishing_status",
+      "packages/core/tests/test_loop_transcript_authority.py::test_planning_visibility_retains_anonymous_legacy_tool_when_capability_unknown",
+      "packages/core/tests/test_loop_transcript_authority.py::test_provenance_search_skips_newer_unconfirmed_matching_action",
+      "packages/core/tests/test_loop_transcript_authority.py::test_selected_actions_close_before_the_next_action",
+      "packages/core/tests/test_loop_transition_authority.py::test_core_loop_has_no_concrete_server_or_locator_dependency",
+      "packages/core/tests/test_loop_transition_authority.py::test_finished_publication_crosses_transition_and_commit_hook",
+      "packages/core/tests/test_loop_transition_authority.py::test_terminal_success_has_one_persistence_route",
+      "packages/core/tests/test_loop_transition_authority.py::test_transition_rejects_non_success_terminal_request",
       "packages/core/tests/test_mcp_cap_requery.py::test_genuinely_unknown_tool_still_requeried",
       "packages/core/tests/test_mcp_cap_requery.py::test_hidden_callable_mcp_tool_not_requeried",
       "packages/core/tests/test_mcp_cap_requery.py::test_known_but_scope_denied_tool_reaches_executor_without_unknown_requery",
@@ -26292,6 +26316,53 @@
           "packages/core/tests/test_event_contract_corpus.py::test_migration_is_pure_idempotent_and_defensively_copies",
           "packages/core/tests/test_event_contract_corpus.py::test_store_rejects_untyped_values_before_any_persistence",
           "packages/core/tests/test_event_contract_corpus.py::test_unknown_kind_and_unexpected_known_kind_field_fail_closed"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-05-LOOP",
+      "root": "packages",
+      "source_identity_before": "39303331bf6000b88c07e5319fdfc7deae38875b",
+      "source_identity_after": "554866e685c4c7d353346c0884c5eaa6f6b0ea98",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9774,
+          "after_count": 9784,
+          "added_ids": [
+            "packages/core/tests/test_loop_transcript_authority.py::test_extracted_dispatch_gates_declare_disp_contracts",
+            "packages/core/tests/test_loop_transcript_authority.py::test_observer_execution_honors_bound_restart_override",
+            "packages/core/tests/test_loop_transcript_authority.py::test_pause_requests_boundary_without_publishing_status",
+            "packages/core/tests/test_loop_transcript_authority.py::test_planning_visibility_retains_anonymous_legacy_tool_when_capability_unknown",
+            "packages/core/tests/test_loop_transcript_authority.py::test_provenance_search_skips_newer_unconfirmed_matching_action",
+            "packages/core/tests/test_loop_transcript_authority.py::test_selected_actions_close_before_the_next_action",
+            "packages/core/tests/test_loop_transition_authority.py::test_core_loop_has_no_concrete_server_or_locator_dependency",
+            "packages/core/tests/test_loop_transition_authority.py::test_finished_publication_crosses_transition_and_commit_hook",
+            "packages/core/tests/test_loop_transition_authority.py::test_terminal_success_has_one_persistence_route",
+            "packages/core/tests/test_loop_transition_authority.py::test_transition_rejects_non_success_terminal_request"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/loop_stuck_no_progress_cases.py",
+          "packages/core/tests/loop_stuck_recovery_cases.py",
+          "packages/core/tests/test_loop_transcript_authority.py",
+          "packages/core/tests/test_loop_transition_authority.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_loop_transcript_authority.py::test_extracted_dispatch_gates_declare_disp_contracts",
+          "packages/core/tests/test_loop_transcript_authority.py::test_observer_execution_honors_bound_restart_override",
+          "packages/core/tests/test_loop_transcript_authority.py::test_pause_requests_boundary_without_publishing_status",
+          "packages/core/tests/test_loop_transcript_authority.py::test_planning_visibility_retains_anonymous_legacy_tool_when_capability_unknown",
+          "packages/core/tests/test_loop_transcript_authority.py::test_provenance_search_skips_newer_unconfirmed_matching_action",
+          "packages/core/tests/test_loop_transcript_authority.py::test_selected_actions_close_before_the_next_action",
+          "packages/core/tests/test_loop_transition_authority.py::test_core_loop_has_no_concrete_server_or_locator_dependency",
+          "packages/core/tests/test_loop_transition_authority.py::test_finished_publication_crosses_transition_and_commit_hook",
+          "packages/core/tests/test_loop_transition_authority.py::test_terminal_success_has_one_persistence_route",
+          "packages/core/tests/test_loop_transition_authority.py::test_transition_rejects_non_success_terminal_request"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

@@ -74,17 +74,7 @@ class AgentLoop:
     _control_fence: ControlFenceFactory
     _model_policy: ModelExecutionPolicy
     _driver_context_window_value: int | None
-    conversation_id: str
-    store: EventStore
-    agent: Agent
-    executor: ToolExecutor
     _router: LLMRouter
-    analyzer: SecurityAnalyzer
-    policy: ConfirmationPolicy
-    condenser: Condenser
-    summarizer: Summarizer
-    mode: OperatingMode
-    max_iterations: int
     _planning_tools: frozenset[str]
     _plan_tool: str
     _execution_mode: OperatingMode
@@ -135,7 +125,6 @@ class AgentLoop:
     _lock: asyncio.Lock
     _pause_requested: asyncio.Event
     _retry_interrupt: asyncio.Event
-    stream_sink: Callable[[dict], None] | None
     _recitation_cadence: int
     _recitation_step_count: int
     _recitation_last_signature: str | None
@@ -228,6 +217,17 @@ class AgentLoop:
         quiet: bool = False,
         strict_appkit_active: Callable[[], bool] | None = None,
     ) -> None:
+        self.conversation_id: str
+        self.store: EventStore
+        self.agent: Agent
+        self.executor: ToolExecutor
+        self.analyzer: SecurityAnalyzer
+        self.policy: ConfirmationPolicy
+        self.condenser: Condenser
+        self.summarizer: Summarizer
+        self.mode: OperatingMode
+        self.max_iterations: int
+        self.stream_sink: Callable[[dict], None] | None
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
         # interactive behavior, fully unchanged. When True: ask_user/clarify are
