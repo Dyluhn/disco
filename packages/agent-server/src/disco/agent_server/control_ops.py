@@ -214,13 +214,11 @@ class ControlOps:
     ) -> bool:
         """Return whether a different local run now owns this conversation.
 
-        The process-local generation is only an early race cache. It can stop a
-        stale local teardown, but it never authorizes a terminal append: the
-        durable run intent/view is revalidated under the cross-process fence
-        immediately before effects and publication.
+        Process-local generation is diagnostic only. Exact task identity blocks
+        a same-process replacement; durable intent/view identity, re-read under
+        the final fence, authorizes effects and publication across restarts.
         """
-        if generation is not None and self._rt._run_generation.get(conversation_id) != generation:
-            return True
+        _ = generation
         current_task = self._rt._tasks.get(conversation_id)
         return current_task is not None and current_task is not issued_task
 

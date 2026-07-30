@@ -133,6 +133,9 @@ RESOLVED_IDS = (
 EXPECTED_ACTIVE_DEBT_ROWS = 636
 EXPECTED_OBSERVATIONS = 18
 LOCATION_OVERRIDES = {
+    "DM-001": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
+    ),
     "DM-012": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
         "_sealed_runtime_contract:234-253 + "
@@ -144,6 +147,105 @@ LOCATION_OVERRIDES = {
         "packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + "
         "frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425"
     ),
+    "PY-0189": (
+        "packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:"
+        "DiscoKernel:46-190"
+    ),
+    "PY-0192": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "DeepResearchService:86-1282"
+    ),
+    "PY-0194": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_maybe_run_deep_research:542-627"
+    ),
+    "PY-0195": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_propose_deep_research_plan:629-780"
+    ),
+    "PY-0196": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_propose_deep_research_plan:629-780"
+    ),
+    "PY-0197": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_execute_deep_research:782-1059"
+    ),
+    "PY-0198": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_execute_deep_research:782-1059"
+    ),
+    "PY-0199": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
+        "_follow_up_deep_research:1077-1254"
+    ),
+    "PY-0200": (
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1282"
+    ),
+    "PY-0305": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_sync_appkit_live_preview:512-595"
+    ),
+    "PY-0306": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_probe_live_model:651-747"
+    ),
+    "PY-0307": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
+    ),
+    "PY-0308": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
+    ),
+    "PY-0309": ("packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"),
+    "PY-0310": ("packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166"),
+    "PY-0311": ("packages/agent-server/src/disco/agent_server/runtime.py:_surface_of:1318-1389"),
+    "PY-0312": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_resolve_driver_context:1433-1505"
+    ),
+    "PY-0313": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2231-2676"
+    ),
+    "PY-0314": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2231-2676"
+    ),
+    "PY-0315": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:"
+        "_maybe_auto_resume_actionless_pause:3047-3113"
+    ),
+    "PY-0316": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3143-3281"
+    ),
+    "PY-0317": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3143-3281"
+    ),
+    "PY-0318": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_preflight_driver:3448-3570"
+    ),
+    "PY-0319": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:"
+        "reconcile_sandbox_backend:3890-3932"
+    ),
+    "PY-0320": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_run_with_persistence:3934-4066"
+    ),
+    "PY-0321": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:"
+        "_sealed_run_conversation_setup:4771-4958"
+    ),
+    "PY-0322": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4960-5182"
+    ),
+    "PY-0323": (
+        "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4960-5182"
+    ),
+    "PY-0324": ("packages/agent-server/src/disco/agent_server/runtime.py:<module>:1-5369"),
+    "PY-0357": (
+        "packages/agent-server/src/disco/agent_server/workspace_service.py:"
+        "WorkspaceCoordinator:135-922"
+    ),
+    "PY-0358": (
+        "packages/agent-server/src/disco/agent_server/workspace_service.py:"
+        "WorkspaceCoordinator:135-922"
+    ),
+    "PY-0359": ("packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-922"),
 }
 
 # The source identity the disposition rows were sealed against.
@@ -346,7 +448,7 @@ def build_debt_rows(rows: list[dict[str, Any]], repo_root: Path) -> list[dict[st
             continue
         if row["id"] in RESOLVED_IDS:
             continue
-        loc = parse_location(row["location"])
+        loc = parse_location(LOCATION_OVERRIDES.get(row["id"], row["location"]))
         role_category = str(row["role_category"])
         rule = RULE_MAP.get(role_category, role_category)
         observed = extract_observed(role_category, row["metrics"])

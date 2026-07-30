@@ -1,16 +1,12 @@
 """Finding #4 — the LAST terminalizer path: the KILL switch (BoD §13.6).
 
-`ConversationRuntime.kill` captures the run-generation, clears that generation's
-pin, and threads the generation to `ControlOps.kill`, whose teardown AWAITS the
-killed task AND the executor/sandbox teardown. In those await windows a fresh user
-turn can start a NEWER run (generation N+1) that REUSES this conversation's cached
-loop/executor/session and pin. The stale kill must then neither tear down the newer
-run's executor nor append the terminal IDLE into its log.
+`ConversationRuntime.kill` retains process generation only for cache cleanup.
+Exact task identity protects same-process replacement, while durable
+run-intent/view identity is the final transition authority across restarts.
 
-These tests bind the SHIPPED runtime + the real `ControlOps` (the runtime constructs
-one in `__init__`) so the real kill path is exercised, not a copy. The race is
-simulated by bumping `_run_generation[cid]` inside one of kill's teardown awaits —
-exactly the moment a newer run would take over.
+These tests bind the shipped runtime and real command service. Races publish an
+actual replacement task or durable peer identity; a generation-only mismatch is
+diagnostic and must not veto a current durable target.
 """
 
 from __future__ import annotations
@@ -123,9 +119,12 @@ async def test_kill_newer_run_in_task_await_window_does_not_corrupt_it() -> None
     rt._executors[CID] = survivor_executor
     survivor_loop = object()
     rt._loops[CID] = survivor_loop
+    survivor_task = MagicMock()
+    survivor_task.done.return_value = False
 
     def _newer_run_starts() -> None:
-        rt._run_generation[CID] = 2  # gen 2 takes over in the await-task window
+        rt._run_generation[CID] = 2
+        rt._tasks[CID] = survivor_task
 
     rt._tasks[CID] = _RaceTask(_newer_run_starts)
 
@@ -152,9 +151,34 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
 
     rt._run_generation[CID] = 1  # the killed run's generation; unchanged through guard A
 
+    survivor_executor = MagicMock()
+    survivor_executor.kill = AsyncMock()
+    survivor_loop = object()
+    survivor_task = MagicMock()
+    survivor_task.done.return_value = False
+
     async def _kill_then_newer_run() -> None:
-        # Tearing down the killed run's executor; a fresh user turn starts gen 2 here.
+        # A real replacement owns both local task identity and durable authority.
         rt._run_generation[CID] = 2
+        intent = await store.append(
+            CID,
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.user-turn",
+                run_protocol_version=1,
+            ),
+        )
+        await store.append(
+            CID,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id="view-new",
+                run_protocol_version=1,
+            ),
+        )
+        rt._tasks[CID] = survivor_task
+        rt._executors[CID] = survivor_executor
+        rt._loops[CID] = survivor_loop
 
     killed_executor = MagicMock()
     killed_executor.kill = AsyncMock(side_effect=_kill_then_newer_run)
@@ -167,6 +191,9 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
 
     # The killed run's OWN executor was still torn down...
     killed_executor.kill.assert_awaited_once()
+    survivor_executor.kill.assert_not_awaited()
+    assert rt._executors.get(CID) is survivor_executor
+    assert rt._loops.get(CID) is survivor_loop
     # ...but the stale terminal IDLE is NOT appended into the newer run's log.
     assert not _killed_detail_present(await store.get_events(CID))
 
@@ -245,7 +272,7 @@ async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
     assert _killed_detail_present(await store.get_events(CID))
 
 
-async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> None:
+async def test_kill_accepts_current_durable_target_despite_stale_local_generation() -> None:
     store = SqliteEventStore(":memory:")
     await _seed(store)
     rt = _runtime(store)
@@ -257,13 +284,13 @@ async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> N
     killing = asyncio.create_task(rt._control.kill(CID, generation=1))
     await asyncio.sleep(0)
     assert not killing.done()
-    # A newer ingress owns the fence and synchronously registers generation 2
-    # before releasing it. The queued kill must not land IDLE afterward.
+    # Generation alone is process-local diagnostic state. With no replacement
+    # task or durable intent/view, the queued command still targets this run.
     rt._run_generation[CID] = 2
     lock.release()
 
     await killing
-    assert not _killed_detail_present(await store.get_events(CID))
+    assert _killed_detail_present(await store.get_events(CID))
 
 
 @pytest.mark.asyncio

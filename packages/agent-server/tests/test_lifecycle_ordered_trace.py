@@ -8,6 +8,9 @@ command, and a fail-closed direct status append.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,10 +22,26 @@ from disco.core import (
     MessageEvent,
     SqliteEventStore,
     StatusEvent,
+    WorkspaceMutationEvent,
 )
 from disco.tools import ProcessSandboxService
 
 CID = "conv-lifecycle-trace"
+
+
+def test_lifecycle_service_is_the_only_agent_server_status_constructor() -> None:
+    source_root = Path(__file__).parents[1] / "src" / "disco" / "agent_server"
+    writers: set[str] = set()
+    for path in source_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "StatusEvent"
+            for node in ast.walk(tree)
+        ):
+            writers.add(path.relative_to(source_root).as_posix())
+    assert writers == {"lifecycle_command_service.py"}
 
 
 def _runtime(store: SqliteEventStore) -> ConversationRuntime:
@@ -45,16 +64,52 @@ async def _seed_running(store: SqliteEventStore) -> None:
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
 
 
+async def _admit_view(store: SqliteEventStore, view_id: str) -> None:
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-turn",
+        run_protocol_version=1,
+    )
+    await store.append_many(
+        CID,
+        [
+            intent,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id=view_id,
+                run_protocol_version=1,
+            ),
+        ],
+    )
+
+
+class _LiveTask:
+    def __init__(self, trace: list[str]) -> None:
+        self._trace = trace
+
+    def done(self) -> bool:
+        return False
+
+    def cancel(self) -> None:
+        self._trace.append("task.cancel")
+
+    def __await__(self) -> Any:
+        self._trace.append("task.await")
+        return iter(())
+
+
 async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = SqliteEventStore(":memory:")
     await _seed_running(store)
+    await _admit_view(store, "view-trace")
     rt = _runtime(store)
     rt.set_surface(CID, "build")
     rt._run_generation[CID] = 1
 
     trace: list[str] = []
+    rt._tasks[CID] = _LiveTask(trace)
     executor = MagicMock()
     executor.kill = AsyncMock(side_effect=lambda: trace.append("executor.kill"))
     pending = MagicMock()
@@ -69,6 +124,12 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
         trace.append("actions.close")
         return await close_actions(conversation_id, authority)
 
+    authority_is_current = rt._control._kill_authority_is_current
+
+    def _authority(events, authority):
+        trace.append("authority.check")
+        return authority_is_current(events, authority)
+
     append_status = rt._lifecycle_commands.append_status_locked
 
     async def _append(conversation_id: str, event: StatusEvent):
@@ -78,17 +139,24 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
         return await append_status(conversation_id, event)
 
     monkeypatch.setattr(rt, "_close_dangling_actions_for_kill_locked", _close)
+    monkeypatch.setattr(rt._control, "_kill_authority_is_current", _authority)
     monkeypatch.setattr(rt._lifecycle_commands, "append_status_locked", _append)
 
     await rt.kill(CID)
+    first_trace = list(trace)
     await rt.kill(CID)
 
-    assert trace == [
+    assert first_trace == [
+        "task.cancel",
+        "task.await",
+        "authority.check",
         "actions.close",
         "executor.kill",
         "pending.destroy",
+        "authority.check",
         "status.append",
     ]
+    assert trace == [*first_trace, "authority.check"]
     killed = [
         event
         for event in await store.get_events(CID)
@@ -97,6 +165,7 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
         and event.detail == "killed"
     ]
     assert len(killed) == 1
+    assert killed[0].agent_view_id == "view-trace"
     assert (await store.get_state(CID)).execution_status is ConversationStatus.IDLE
 
 
