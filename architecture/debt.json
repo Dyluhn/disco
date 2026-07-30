@@ -378,20 +378,6 @@
     "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
   },
   {
-    "id": "PY-0191",
-    "path": "packages/agent-server/src/disco/agent_server/control_ops.py",
-    "symbol": "kill",
-    "qualified_symbol": "ControlOps.kill",
-    "line_start": 262,
-    "line_end": 352,
-    "rule": "python_callable_ast_mccabe_gt_15",
-    "observed": 21,
-    "limit": 15,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
     "id": "PY-0192",
     "path": "packages/agent-server/src/disco/agent_server/deep_research_service.py",
     "symbol": "DeepResearchService",
@@ -770,34 +756,6 @@
     "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
   },
   {
-    "id": "PY-0220",
-    "path": "packages/agent-server/src/disco/agent_server/lifecycle.py",
-    "symbol": "LifecycleManager",
-    "qualified_symbol": "LifecycleManager",
-    "line_start": 77,
-    "line_end": 845,
-    "rule": "python_class_logical_gt_350",
-    "observed": 615,
-    "limit": 350,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0221",
-    "path": "packages/agent-server/src/disco/agent_server/lifecycle.py",
-    "symbol": "sweep_abandoned_gates_once",
-    "qualified_symbol": "LifecycleManager.sweep_abandoned_gates_once",
-    "line_start": 484,
-    "line_end": 610,
-    "rule": "python_callable_ast_mccabe_gt_15",
-    "observed": 20,
-    "limit": 15,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
     "id": "PY-0222",
     "path": "packages/agent-server/src/disco/agent_server/mcp_manager.py",
     "symbol": "McpManager",
@@ -1103,62 +1061,6 @@
     "limit": 15,
     "owner_package": "PKG-10-MEDIA",
     "delete_by": "PKG-10-MEDIA",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0244",
-    "path": "packages/agent-server/src/disco/agent_server/resume_service.py",
-    "symbol": "_condense_trailing_degeneracy",
-    "qualified_symbol": "ResumeService._condense_trailing_degeneracy",
-    "line_start": 119,
-    "line_end": 225,
-    "rule": "python_callable_ast_mccabe_gt_15",
-    "observed": 28,
-    "limit": 15,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0245",
-    "path": "packages/agent-server/src/disco/agent_server/resume_service.py",
-    "symbol": "_reconstruct_resume_context",
-    "qualified_symbol": "ResumeService._reconstruct_resume_context",
-    "line_start": 227,
-    "line_end": 360,
-    "rule": "python_callable_ast_mccabe_gt_15",
-    "observed": 25,
-    "limit": 15,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0246",
-    "path": "packages/agent-server/src/disco/agent_server/resume_service.py",
-    "symbol": "resume_conversation",
-    "qualified_symbol": "ResumeService.resume_conversation",
-    "line_start": 362,
-    "line_end": 518,
-    "rule": "python_callable_logical_gt_100",
-    "observed": 110,
-    "limit": 100,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
-    "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
-  },
-  {
-    "id": "PY-0247",
-    "path": "packages/agent-server/src/disco/agent_server/resume_service.py",
-    "symbol": "resume_conversation",
-    "qualified_symbol": "ResumeService.resume_conversation",
-    "line_start": 362,
-    "line_end": 518,
-    "rule": "python_callable_ast_mccabe_gt_15",
-    "observed": 21,
-    "limit": 15,
-    "owner_package": "PKG-06-LIFECYCLE",
-    "delete_by": "PKG-06-LIFECYCLE",
     "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
   },
   {

@@ -202,16 +202,23 @@ class ControlOps:
         if loop is not None:
             await loop.cancel()
 
-    def _superseded_by_newer_run(self, conversation_id: str, generation: int | None) -> bool:
-        """True when a NEWER run/generation has taken over the conversation since this
-        kill was issued against `generation` (finding #4 — the LAST terminalizer path).
-        `generation is None` (a legacy / direct caller with no competing newer run) is
-        NEVER superseded → terminalize as before. Mirrors the guard predicate of
-        `_unpin_if_current_generation` so the kill path stays consistent with the
-        clean-return / crash / abandoned-gate terminalizers."""
-        return (
-            generation is not None and self._rt._run_generation.get(conversation_id) != generation
-        )
+    def _local_kill_target_changed(
+        self,
+        conversation_id: str,
+        generation: int | None,
+        issued_task: Any,
+    ) -> bool:
+        """Return whether a different local run now owns this conversation.
+
+        The process-local generation is only an early race cache. It can stop a
+        stale local teardown, but it never authorizes a terminal append: the
+        durable run intent/view is revalidated under the cross-process fence
+        immediately before effects and publication.
+        """
+        if generation is not None and self._rt._run_generation.get(conversation_id) != generation:
+            return True
+        current_task = self._rt._tasks.get(conversation_id)
+        return current_task is not None and current_task is not issued_task
 
     async def _capture_kill_authority(
         self,
@@ -255,9 +262,92 @@ class ControlOps:
         current_view_id = current_workspace_agent_view_id(events)
         if agent_view_id is not None:
             return current_view_id == agent_view_id
-        # Intent-owned kill is valid only before any view wins. A view admitted
-        # after capture may belong to another process and was never cancelled.
+        # A post-capture winning view may belong to a peer and was never cancelled.
         return current_view_id is None
+
+    @staticmethod
+    def _authority_already_killed(
+        events: list,
+        authority: tuple[str | None, str | None, bool],
+    ) -> bool:
+        """Return whether this exact durable run already landed IDLE/killed."""
+        latest_status = next(
+            (event for event in reversed(events) if isinstance(event, StatusEvent)),
+            None,
+        )
+        if (
+            latest_status is None
+            or latest_status.status is not ConversationStatus.IDLE
+            or latest_status.detail != "killed"
+        ):
+            return False
+        agent_view_id, run_intent_id, strict = authority
+        if not strict:
+            return True
+        if agent_view_id is not None:
+            return latest_status.agent_view_id == agent_view_id
+        return run_intent_id is not None and latest_status.run_intent_id == run_intent_id
+
+    async def _cancel_issued_task(self, conversation_id: str) -> None:
+        """Cancel and drain only the task already validated by ``kill``."""
+        task = self._rt._tasks.pop(conversation_id, None)
+        if task is None or task.done():
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    async def _teardown_kill_resources_locked(self, conversation_id: str) -> None:
+        """Evict cached runtime state before awaiting resource destruction."""
+        executor = self._rt._executors.pop(conversation_id, None)
+        pending = self._rt._pending_sessions.pop(conversation_id, None)
+        self._rt._loops.pop(conversation_id, None)
+        if executor is not None:
+            await executor.kill()
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.destroy()
+
+    async def _kill_locked(
+        self,
+        conversation_id: str,
+        generation: int | None,
+        issued_task: Any,
+        authority: tuple[str | None, str | None, bool],
+    ) -> None:
+        """Close, clean up, and publish under one durable authority fence."""
+        if self._local_kill_target_changed(conversation_id, generation, issued_task):
+            return
+        events = await self._rt._store.get_events(conversation_id)
+        if not self._kill_authority_is_current(events, authority):
+            return
+        if self._authority_already_killed(events, authority):
+            return
+
+        await self._rt._close_dangling_actions_for_kill_locked(
+            conversation_id,
+            authority,
+        )
+        await self._teardown_kill_resources_locked(conversation_id)
+
+        if self._local_kill_target_changed(conversation_id, generation, issued_task):
+            return
+        events = await self._rt._store.get_events(conversation_id)
+        if not self._kill_authority_is_current(events, authority):
+            return
+        if self._authority_already_killed(events, authority):
+            return
+        agent_view_id, run_intent_id, strict = authority
+        await self._rt._workspace.append_status_locked(
+            conversation_id,
+            StatusEvent(
+                source=EventSource.SYSTEM,
+                status=ConversationStatus.IDLE,
+                detail="killed",
+                agent_view_id=agent_view_id if strict else None,
+                run_intent_id=(run_intent_id if strict and agent_view_id is None else None),
+            ),
+        )
 
     async def kill(self, conversation_id: str, generation: int | None = None) -> None:
         """The KILL SWITCH (BoD §13.6) — the ultimate stop above the three security
@@ -278,24 +368,15 @@ class ControlOps:
         # over in that window, leave it untouched and require a fresh kill.
         issued_task = self._rt._tasks.get(conversation_id)
         authority = await self._capture_kill_authority(conversation_id)
-        if self._superseded_by_newer_run(conversation_id, generation):
-            return
-        if self._rt._tasks.get(conversation_id) is not issued_task:
+        if self._local_kill_target_changed(conversation_id, generation, issued_task):
             return
 
         # 1. stop the exact running loop task observed above — do NOT wait for
         # the current step and never pop a replacement registered during capture.
-        task = self._rt._tasks.pop(conversation_id, None)
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        await self._cancel_issued_task(conversation_id)
         # The await above may let a newer local run take over. Never close its
         # action or tear down its executor.
-        if self._superseded_by_newer_run(conversation_id, generation):
-            return
-        current_task = self._rt._tasks.get(conversation_id)
-        if current_task is not None and current_task is not issued_task:
+        if self._local_kill_target_changed(conversation_id, generation, issued_task):
             return
 
         # Closure, executor/cache teardown, and terminal status are one durable
@@ -304,49 +385,9 @@ class ControlOps:
         # lets stale kill erase the new run's read state or sandbox resources.
         async with self._rt.workspace_lock(conversation_id):
             async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
-                if self._superseded_by_newer_run(conversation_id, generation):
-                    return
-                current_task = self._rt._tasks.get(conversation_id)
-                if current_task is not None and current_task is not issued_task:
-                    return
-                events = await self._rt._store.get_events(conversation_id)
-                if not self._kill_authority_is_current(events, authority):
-                    return
-
-                await self._rt._close_dangling_actions_for_kill_locked(
+                await self._kill_locked(
                     conversation_id,
+                    generation,
+                    issued_task,
                     authority,
-                )
-
-                # Pop all three caches synchronously before teardown. Any local
-                # direct starter that ignores the fence sees no half-dead object
-                # and composes fresh state; Build execution itself still queues
-                # behind this fence.
-                executor = self._rt._executors.pop(conversation_id, None)
-                pending = self._rt._pending_sessions.pop(conversation_id, None)
-                self._rt._loops.pop(conversation_id, None)
-                if executor is not None:
-                    await executor.kill()
-                if pending is not None:
-                    with contextlib.suppress(Exception):
-                        await pending.destroy()
-
-                if self._superseded_by_newer_run(conversation_id, generation):
-                    return
-                current_task = self._rt._tasks.get(conversation_id)
-                if current_task is not None and current_task is not issued_task:
-                    return
-                events = await self._rt._store.get_events(conversation_id)
-                if not self._kill_authority_is_current(events, authority):
-                    return
-                agent_view_id, run_intent_id, strict = authority
-                await self._rt._workspace.append_status_locked(
-                    conversation_id,
-                    StatusEvent(
-                        source=EventSource.SYSTEM,
-                        status=ConversationStatus.IDLE,
-                        detail="killed",
-                        agent_view_id=agent_view_id if strict else None,
-                        run_intent_id=(run_intent_id if strict and agent_view_id is None else None),
-                    ),
                 )

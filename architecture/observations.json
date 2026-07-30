@@ -96,14 +96,6 @@
     "source_disposition_id": "DM-015"
   },
   {
-    "id": "DM-016",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/control_ops.py:_run_generation:205-214",
-    "concern": "process-local kill generation competes with durable run_intent_id/agent_view_id authority across restart",
-    "owner_package": "PKG-06-LIFECYCLE",
-    "source_disposition_id": "DM-016"
-  },
-  {
     "id": "DM-017",
     "kind": "distributed_concern",
     "location": "packages/core/src/disco/core/events.py:Event:187-217 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",

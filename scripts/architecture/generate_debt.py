@@ -106,6 +106,18 @@ PKG05_LOOP_RESOLVED_IDS = frozenset(
         "PY-0702",
     }
 )
+PKG06_LIFECYCLE_RESOLVED_IDS = frozenset(
+    {
+        "DM-016",
+        "PY-0191",
+        "PY-0220",
+        "PY-0221",
+        "PY-0244",
+        "PY-0245",
+        "PY-0246",
+        "PY-0247",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -116,9 +128,10 @@ RESOLVED_IDS = (
     | PKG04_IDENTITY_RESOLVED_IDS
     | PKG05_CONTEXT_RESOLVED_IDS
     | PKG05_LOOP_RESOLVED_IDS
+    | PKG06_LIFECYCLE_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 643
-EXPECTED_OBSERVATIONS = 19
+EXPECTED_ACTIVE_DEBT_ROWS = 636
+EXPECTED_OBSERVATIONS = 18
 LOCATION_OVERRIDES = {
     "DM-012": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
