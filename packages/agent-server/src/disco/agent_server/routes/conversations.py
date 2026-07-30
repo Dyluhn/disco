@@ -17,7 +17,7 @@ from disco.core import (
     MessageEvent,
     active_verification_requirements_event,
 )
-from disco.core.appkit import classify_build_brief
+from disco.core.appkit import BuildBrief, classify_build_brief
 from disco.core.flags import appkit_enabled
 from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
@@ -122,24 +122,7 @@ async def _create_conversation_response(
     body: CreateConversationBody,
     request: Request | None,
 ) -> dict:
-    if body.artifact_mode and body.appkit_mode:
-        raise HTTPException(
-            status_code=409,
-            detail="artifact_mode and appkit_mode are mutually exclusive",
-        )
-    # KILL SWITCH: an explicit appkit_mode request against a deployment that
-    # disabled AppKit is refused loudly BEFORE any event is persisted — a silent
-    # downgrade to free-form would be a false affordance (the caller asked for
-    # the strict allowlist and validated mutators and would not get them).
-    if body.appkit_mode and not appkit_enabled():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "AppKit is disabled on this deployment (DISCO_APPKIT_ENABLED=0). "
-                "Create the conversation without appkit_mode to build free-form, "
-                "or re-enable the flag and restart disco-agent."
-            ),
-        )
+    _validate_create_modes(body)
     conversation_id = f"conv_{uuid.uuid4().hex}"
     session = current_session(request) if request is not None else None
     owner_id = await _owner_for_create_request(request)
@@ -180,41 +163,114 @@ async def _create_conversation_response(
                     message=LLMMessage(role="user", content=model_note),
                 ),
             )
-        if body.autonomous:
-            runtime.set_autonomous(conversation_id, True)
-        if body.quiet:
-            runtime.set_quiet(conversation_id, True)
-        # Weak-model assist tier: None ⇒ leave the model-derived default;
-        # True/False ⇒ explicit per-conversation override.
-        if body.assist is not None:
-            runtime.set_assist(conversation_id, body.assist)
-        # Deep Research depth tier (no-op for other surfaces). Was dropped before —
-        # every DR run defaulted to standard_deep regardless of the UI picker.
-        if body.depth_tier:
-            runtime.set_depth(conversation_id, body.depth_tier)
-        # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
-        # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
-        if body.iterative:
-            runtime.set_iterative(conversation_id, True)
-        # DR-3 E2: recency window for time-filtered search + prompt injection.
-        if body.recency_window is not None:
-            runtime.set_recency(conversation_id, body.recency_window)
-        if validated_space_ids:
-            runtime.set_space_ids(conversation_id, validated_space_ids)
-        if body.sources:
-            runtime.set_research_sources(conversation_id, body.sources)
-        # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
-        if body.artifact_mode:
-            runtime.set_artifact_mode(conversation_id, True)
-        # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
-        if body.appkit_mode:
-            runtime.set_appkit_mode(conversation_id, True)
+        _apply_create_runtime_settings(runtime, conversation_id, body, validated_space_ids)
     return {
         "conversation_id": conversation_id,
         "conversation_url": f"/ws/conversations/{conversation_id}",
         "surface": body.surface,
         "sandbox_backend": runtime.sandbox_backend_name() if runtime is not None else None,
     }
+
+
+def _validate_create_modes(body: CreateConversationBody) -> None:
+    """Refuse mutually-exclusive mode flags and disabled AppKit before any event is persisted."""
+    if body.artifact_mode and body.appkit_mode:
+        raise HTTPException(
+            status_code=409,
+            detail="artifact_mode and appkit_mode are mutually exclusive",
+        )
+    # KILL SWITCH: an explicit appkit_mode request against a deployment that
+    # disabled AppKit is refused loudly BEFORE any event is persisted — a silent
+    # downgrade to free-form would be a false affordance (the caller asked for
+    # the strict allowlist and validated mutators and would not get them).
+    if body.appkit_mode and not appkit_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "AppKit is disabled on this deployment (DISCO_APPKIT_ENABLED=0). "
+                "Create the conversation without appkit_mode to build free-form, "
+                "or re-enable the flag and restart disco-agent."
+            ),
+        )
+
+
+def _apply_create_runtime_settings(
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    body: CreateConversationBody,
+    validated_space_ids: frozenset[str],
+) -> None:
+    """Apply the per-conversation runtime settings from the create body."""
+    if body.autonomous:
+        runtime.set_autonomous(conversation_id, True)
+    if body.quiet:
+        runtime.set_quiet(conversation_id, True)
+    # Weak-model assist tier: None ⇒ leave the model-derived default;
+    # True/False ⇒ explicit per-conversation override.
+    if body.assist is not None:
+        runtime.set_assist(conversation_id, body.assist)
+    # Deep Research depth tier (no-op for other surfaces). Was dropped before —
+    # every DR run defaulted to standard_deep regardless of the UI picker.
+    if body.depth_tier:
+        runtime.set_depth(conversation_id, body.depth_tier)
+    # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
+    # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
+    if body.iterative:
+        runtime.set_iterative(conversation_id, True)
+    # DR-3 E2: recency window for time-filtered search + prompt injection.
+    if body.recency_window is not None:
+        runtime.set_recency(conversation_id, body.recency_window)
+    if validated_space_ids:
+        runtime.set_space_ids(conversation_id, validated_space_ids)
+    if body.sources:
+        runtime.set_research_sources(conversation_id, body.sources)
+    # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
+    if body.artifact_mode:
+        runtime.set_artifact_mode(conversation_id, True)
+    # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
+    if body.appkit_mode:
+        runtime.set_appkit_mode(conversation_id, True)
+
+
+async def _read_workspace_file(
+    runtime: ConversationRuntime, conversation_id: str, norm: str
+) -> bytes | None:
+    """Read an allowlisted workspace image from the live sandbox, falling back to
+    the project-store snapshot on disk. Returns None when no source has the file."""
+    session = runtime.live_session(conversation_id)
+    if session is not None:
+        try:
+            data = await session.read_file(norm)
+            if data is not None:
+                return data
+        except Exception:
+            pass
+    return _read_workspace_snapshot(runtime, conversation_id, norm)
+
+
+def _read_workspace_snapshot(
+    runtime: ConversationRuntime, conversation_id: str, norm: str
+) -> bytes | None:
+    """Read an allowlisted workspace image from the project-store snapshot on disk."""
+    project_store_method = getattr(runtime, "project_store", None)
+    if project_store_method is None:
+        return None
+    ps = project_store_method()
+    if ps is None:
+        return None
+    store_path = ps.path_for(conversation_id)
+    if store_path is None:
+        return None
+    disk_path = store_path / "snapshot" / norm
+    # Prevent traversal out of snapshot
+    try:
+        disk_path = disk_path.resolve()
+        snap_base = (store_path / "snapshot").resolve()
+        if disk_path.is_file() and disk_path.is_relative_to(snap_base):
+            return disk_path.read_bytes()
+    except Exception:
+        pass
+    return None
 
 
 def _register_workspace_version_routes(
@@ -313,6 +369,227 @@ def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
         runtime.set_research_sources(conversation_id, body.sources)
 
 
+async def _handle_post_message(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    body: SendMessageBody,
+) -> dict:
+    """Append a USER message, then KICK the loop (Stage 2).
+
+    Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
+    for the default `disco` kernel this is byte-identical to the inline
+    append + kick. (No runtime ⇒ wire-only: append, no kick — unchanged.)
+    """
+    brief = classify_build_brief(body.content) if body.build_brief is not None else None
+    if runtime is not None:
+        stored = await runtime.send_user_turn(
+            conversation_id,
+            body.content,
+            build_brief=brief,
+            verification_requirements=body.verification_requirements,
+        )
+    else:
+        stored = await _append_wire_only_message(store, conversation_id, body, brief)
+    return {"event_id": stored.id, "seq": stored.seq}
+
+
+async def _append_wire_only_message(
+    store: SqliteEventStore,
+    conversation_id: str,
+    body: SendMessageBody,
+    brief: BuildBrief | None,
+) -> MessageEvent:
+    """Wire-only append (no runtime ⇒ no kick): validate verification requirements
+    and append the brief + user message directly to the store."""
+    if body.verification_requirements is not None:
+        active = active_verification_requirements_event(await store.get_events(conversation_id))
+        expected = active.id if active is not None else None
+        if body.verification_requirements.supersedes_event_id != expected:
+            raise HTTPException(
+                status_code=409,
+                detail="stale_verification_requirements",
+            )
+    pending = []
+    if brief is not None:
+        pending.append(_build_brief_message(brief))
+    pending.append(
+        _user_message(
+            body.content,
+            verification_requirements=body.verification_requirements,
+        )
+    )
+    return (await store.append_many(conversation_id, pending))[-1]
+
+
+async def _handle_get_state(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+) -> dict:
+    """Build the conversation state response with sandbox-liveness and model overlays."""
+    state = await store.get_state(conversation_id)
+    # Same sandbox-liveness overlay as the WS state frame (bp-13): the HTTP
+    # surface (agentLive fallback, polling clients, the live specs) must
+    # tell the same suspended/active story as the socket.
+    if runtime is not None:
+        sstate = runtime.sandbox_state(conversation_id)
+        if sstate is not None:
+            state.extras["sandbox"] = sstate
+        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+        if sandbox_ids:
+            state.extras["sandbox_instance_ids"] = sandbox_ids
+        # Surface the autonomous flag so the UI can badge the conversation.
+        if runtime.is_autonomous(conversation_id):
+            state.extras["autonomous"] = True
+        if runtime.is_quiet(conversation_id):
+            state.extras["quiet"] = True
+        # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
+        # tier. Emitting it only-when-true let a switch to standard leave the
+        # frontend's preserved-on-absent value stuck on "Assist".
+        state.extras["assist"] = runtime.is_assist(conversation_id)
+    result = state.model_dump(mode="json")
+    # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
+    if runtime is not None:
+        sbackend = runtime.sandbox_backend_name()
+        if sbackend is not None:
+            result["sandbox_backend"] = sbackend
+    # Overlay the stored (auto-titled) conversation title so a resumed surface
+    # can render the clean H1 instead of the raw first prompt. None until the
+    # async auto-titler lands — the UI falls back to a truncated first task.
+    result["title"] = await store.get_title(conversation_id)
+    # Overlay the conversation's pinned driver model so a resumed surface seeds its
+    # model picker with the ACTUAL current model (not a misleading "default"), and so
+    # a terminal-state model swap is verifiable. None ⇒ the conversation runs the
+    # router default; the picker then falls back to last-selected/default.
+    if runtime is not None:
+        result["model_override"] = runtime._model_override.get(conversation_id)
+    return result
+
+
+async def _handle_update_settings(
+    runtime: ConversationRuntime,
+    store: SqliteEventStore,
+    conversation_id: str,
+    body: UpdateSettingsBody,
+    request: Request,
+) -> dict:
+    """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice.
+
+    STATE-AWARE gate (apply_settings_change, atomic + per-cid lock): a model_override /
+    assist change is REJECTED with 409 (settings UNMUTATED) ONLY while a run is
+    ACTIVELY in flight. It is ALLOWED on a TERMINAL conversation so the user can
+    change the model before resuming/replanning, AND on a pristine pre-kick IDLE
+    conversation. autonomous is applied unconditionally (no gate).
+    """
+    _reject_if_imported(store, conversation_id)
+    # Gate model_override + assist + Deep Research compose settings together
+    # under the state-aware pristine check. PATCH is a PARTIAL update: a
+    # model_override field PRESENT (even as null) is an explicit choice — null
+    # on a terminal conversation means "reset to default" and must be APPLIED,
+    # not dropped. A field ABSENT means leave unchanged.
+    await _apply_gated_compose_settings(runtime, conversation_id, body)
+    _apply_ungated_settings(runtime, conversation_id, body)
+    return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
+
+
+async def _handle_post_followup(
+    runtime: ConversationRuntime,
+    store: SqliteEventStore,
+    conversation_id: str,
+    body: SendMessageBody,
+) -> dict:
+    """Submit a follow-up question on a finished Deep Research report (RP-13)."""
+    _reject_if_imported(store, conversation_id)
+    state = await store.get_state(conversation_id)
+    # Only accept follow-ups on FINISHED conversations.
+    if state.execution_status not in (
+        ConversationStatus.FINISHED,
+        ConversationStatus.IDLE,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "not_finished",
+                "status": state.execution_status.value,
+            },
+        )
+    # Routed through the pinned Build kernel (A1 finding #1); `runtime` is
+    # guaranteed non-None here (checked above). disco kernel ⇒ append + kick.
+    stored = await runtime.send_user_turn(conversation_id, body.content)
+    return {"event_id": stored.id, "seq": stored.seq, "followup": True}
+
+
+async def _handle_kill(
+    runtime: ConversationRuntime | None,
+    store: SqliteEventStore,
+    host_token_store: HostTokenStore | None,
+    conversation_id: str,
+    request: Request,
+) -> dict:
+    """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
+    revoke its capabilities."""
+    _revoke_host_tokens(host_token_store, conversation_id)
+    sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
+    if runtime is not None:
+        await runtime.kill(conversation_id)
+    state = await store.get_state(conversation_id)
+    # A successful kill has already revoked host capabilities and destroyed
+    # the preview runtime. Keep the DNS-free origin durable across ordinary
+    # finish/restart, but release it after this explicit teardown so a long-
+    # lived server cannot exhaust the bounded listener pool. If a newer run
+    # superseded the kill, ControlOps leaves it non-IDLE and its lease stays.
+    if state.execution_status is ConversationStatus.IDLE:
+        store.release_local_preview_lease(
+            conversation_id=conversation_id,
+            owner_id=current_owner_id(request),
+        )
+    return {
+        "killed": True,
+        "state": state.model_dump(mode="json"),
+        "sandbox_instance_ids": sandbox_ids,
+    }
+
+
+async def _handle_resume(
+    runtime: ConversationRuntime,
+    store: SqliteEventStore,
+    conversation_id: str,
+) -> dict:
+    """Resume a PAUSED or interrupted-with-unfinished-plan conversation."""
+    _reject_if_imported(store, conversation_id)
+    result = await runtime.resume_conversation(conversation_id)
+    if not result["ok"]:
+        raise HTTPException(status_code=409, detail=result)
+    return result
+
+
+async def _handle_delete(
+    runtime: ConversationRuntime | None,
+    store: SqliteEventStore,
+    host_token_store: HostTokenStore | None,
+    conversation_id: str,
+    request: Request,
+) -> dict:
+    """Delete a conversation AND release its agent-runtime state (finding #5).
+
+    Runtime cleanup runs FIRST (cancelling the live run so its done-callback
+    can't re-pin) and is owner-agnostic — the owner-scoped DB delete is the
+    authority on whether the row is actually removed."""
+    owner_id = current_owner_id(request)
+    _revoke_host_tokens(host_token_store, conversation_id)
+    if runtime is not None:
+        await runtime.forget_conversation(conversation_id)
+    store.release_local_preview_lease(
+        conversation_id=conversation_id,
+        owner_id=owner_id,
+    )
+    deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
+    if deleted:
+        remove_report_audio_cache(conversation_id)
+    return {"id": conversation_id, "deleted": deleted}
+
+
 def make_conversations_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -331,106 +608,23 @@ def make_conversations_router(
     async def update_settings(
         conversation_id: str, body: UpdateSettingsBody, request: Request
     ) -> dict:
-        """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice.
-        The build surface pre-creates a cid on mount with defaults, then the user picks a
-        model; without this the pick was dropped and the run used the default (local Qwen).
-
-        STATE-AWARE gate (apply_settings_change, atomic + per-cid lock): a model_override /
-        assist change is REJECTED with 409 (settings UNMUTATED) ONLY while a run is
-        ACTIVELY in flight — a live run task, RUNNING, or a gate-awaiting state — because
-        swapping the brain mid-step is incoherent. It is ALLOWED on a TERMINAL conversation
-        (ERROR / STUCK / FINISHED / PAUSED, or IDLE-with-unfinished-plan) so the user can
-        change the model before resuming/replanning, AND on a pristine pre-kick IDLE
-        conversation (the original flow). On a terminal change the cached loop bound to the
-        old model is evicted so the next kick re-resolves the driver with the NEW model.
-        autonomous is applied unconditionally (no gate)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        _reject_if_imported(store, conversation_id)
-
-        # Gate model_override + assist + Deep Research compose settings together
-        # under the state-aware pristine check. This lets an upload cid keep its
-        # files while the user changes depth/recency/sources before the first kick.
-        # PATCH is a PARTIAL update: a model_override field PRESENT (even as null) is an
-        # explicit choice — null on a terminal conversation means "reset to default" and
-        # must be APPLIED, not dropped (the #24 silent-ignore). A field ABSENT means leave
-        # unchanged. `model_fields_set` (Pydantic) is the present-vs-absent signal; the
-        # sticky/clear resolution then happens inside apply_settings_change (which knows the
-        # terminal-vs-pristine state). No _resolve_model here — sticky-seeding a null is a
-        # PRE-KICK convenience owned by apply_settings_change, and applying it on the route
-        # would mask an explicit terminal reset.
-        await _apply_gated_compose_settings(runtime, conversation_id, body)
-        _apply_ungated_settings(runtime, conversation_id, body)
-        return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
+        return await _handle_update_settings(runtime, store, conversation_id, body, request)
 
     @router.post("/conversations/{conversation_id}/messages")
     async def post_message(conversation_id: str, body: SendMessageBody, request: Request) -> dict:
-        # Append a USER message, then KICK the loop (Stage 2).
-        # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
-        # for the default `disco` kernel this is byte-identical to the inline
-        # append + kick. (No runtime ⇒ wire-only: append, no kick — unchanged.)
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
-        brief = classify_build_brief(body.content) if body.build_brief is not None else None
-        if runtime is not None:
-            stored = await runtime.send_user_turn(
-                conversation_id,
-                body.content,
-                build_brief=brief,
-                verification_requirements=body.verification_requirements,
-            )
-        else:
-            if body.verification_requirements is not None:
-                active = active_verification_requirements_event(
-                    await store.get_events(conversation_id)
-                )
-                expected = active.id if active is not None else None
-                if body.verification_requirements.supersedes_event_id != expected:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="stale_verification_requirements",
-                    )
-            pending = []
-            if brief is not None:
-                pending.append(_build_brief_message(brief))
-            pending.append(
-                _user_message(
-                    body.content,
-                    verification_requirements=body.verification_requirements,
-                )
-            )
-            stored = (await store.append_many(conversation_id, pending))[-1]
-        return {"event_id": stored.id, "seq": stored.seq}
+        return await _handle_post_message(store, runtime, conversation_id, body)
 
     @router.post("/conversations/{conversation_id}/followup")
     async def post_followup(conversation_id: str, body: SendMessageBody, request: Request) -> dict:
-        """Submit a follow-up question on a finished Deep Research report (RP-13).
-
-        Appends the question as a USER message, then kicks the loop. The runtime
-        detects a ReportEvent on the conversation and runs a follow-up synthesis
-        that reuses the report's passages as grounding."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        _reject_if_imported(store, conversation_id)
-        state = await store.get_state(conversation_id)
-        # Only accept follow-ups on FINISHED conversations.
-        if state.execution_status not in (
-            ConversationStatus.FINISHED,
-            ConversationStatus.IDLE,
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "not_finished",
-                    "status": state.execution_status.value,
-                },
-            )
-        # Routed through the pinned Build kernel (A1 finding #1); `runtime` is
-        # guaranteed non-None here (checked above). disco kernel ⇒ append + kick.
-        stored = await runtime.send_user_turn(conversation_id, body.content)
-        return {"event_id": stored.id, "seq": stored.seq, "followup": True}
+        return await _handle_post_followup(runtime, store, conversation_id, body)
 
     @router.get("/conversations/{conversation_id}/events")
     async def get_events(
@@ -446,43 +640,7 @@ def make_conversations_router(
     @router.get("/conversations/{conversation_id}/state")
     async def get_state(conversation_id: str, request: Request) -> dict:
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        state = await store.get_state(conversation_id)
-        # Same sandbox-liveness overlay as the WS state frame (bp-13): the HTTP
-        # surface (agentLive fallback, polling clients, the live specs) must
-        # tell the same suspended/active story as the socket.
-        if runtime is not None:
-            sstate = runtime.sandbox_state(conversation_id)
-            if sstate is not None:
-                state.extras["sandbox"] = sstate
-            sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
-            if sandbox_ids:
-                state.extras["sandbox_instance_ids"] = sandbox_ids
-            # Surface the autonomous flag so the UI can badge the conversation.
-            if runtime.is_autonomous(conversation_id):
-                state.extras["autonomous"] = True
-            if runtime.is_quiet(conversation_id):
-                state.extras["quiet"] = True
-            # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
-            # tier. Emitting it only-when-true let a switch to standard leave the
-            # frontend's preserved-on-absent value stuck on "Assist".
-            state.extras["assist"] = runtime.is_assist(conversation_id)
-        result = state.model_dump(mode="json")
-        # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
-        if runtime is not None:
-            sbackend = runtime.sandbox_backend_name()
-            if sbackend is not None:
-                result["sandbox_backend"] = sbackend
-        # Overlay the stored (auto-titled) conversation title so a resumed surface
-        # can render the clean H1 instead of the raw first prompt. None until the
-        # async auto-titler lands — the UI falls back to a truncated first task.
-        result["title"] = await store.get_title(conversation_id)
-        # Overlay the conversation's pinned driver model so a resumed surface seeds its
-        # model picker with the ACTUAL current model (not a misleading "default"), and so
-        # a terminal-state model swap is verifiable. None ⇒ the conversation runs the
-        # router default; the picker then falls back to last-selected/default.
-        if runtime is not None:
-            result["model_override"] = runtime._model_override.get(conversation_id)
-        return result
+        return await _handle_get_state(store, runtime, conversation_id)
 
     @router.get("/conversations/{conversation_id}/workspace/{path:path}")
     async def workspace_file(conversation_id: str, path: str, request: Request) -> Response:
@@ -497,31 +655,7 @@ def make_conversations_router(
             raise HTTPException(status_code=404)
         if runtime is None:
             raise HTTPException(status_code=404)
-        session = runtime.live_session(conversation_id)
-        data = None
-        if session is not None:
-            try:
-                data = await session.read_file(norm)
-            except Exception:
-                pass
-
-        if data is None:
-            project_store_method = getattr(runtime, "project_store", None)
-            if project_store_method is not None:
-                ps = project_store_method()
-                if ps is not None:
-                    store_path = ps.path_for(conversation_id)
-                    if store_path is not None:
-                        disk_path = store_path / "snapshot" / norm
-                        # Prevent traversal out of snapshot
-                        try:
-                            disk_path = disk_path.resolve()
-                            snap_base = (store_path / "snapshot").resolve()
-                            if disk_path.is_file() and disk_path.is_relative_to(snap_base):
-                                data = disk_path.read_bytes()
-                        except Exception:
-                            pass
-
+        data = await _read_workspace_file(runtime, conversation_id, norm)
         if data is None:
             raise HTTPException(status_code=404)
         return Response(
@@ -532,49 +666,18 @@ def make_conversations_router(
 
     @router.post("/conversations/{conversation_id}/kill")
     async def kill_conversation(conversation_id: str, request: Request) -> dict:
-        """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
-        revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        _revoke_host_tokens(host_token_store, conversation_id)
-        sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
-        if runtime is not None:
-            await runtime.kill(conversation_id)
-        state = await store.get_state(conversation_id)
-        # A successful kill has already revoked host capabilities and destroyed
-        # the preview runtime. Keep the DNS-free origin durable across ordinary
-        # finish/restart, but release it after this explicit teardown so a long-
-        # lived server cannot exhaust the bounded listener pool. If a newer run
-        # superseded the kill, ControlOps leaves it non-IDLE and its lease stays.
-        if state.execution_status is ConversationStatus.IDLE:
-            store.release_local_preview_lease(
-                conversation_id=conversation_id,
-                owner_id=current_owner_id(request),
-            )
-        return {
-            "killed": True,
-            "state": state.model_dump(mode="json"),
-            "sandbox_instance_ids": sandbox_ids,
-        }
+        return await _handle_kill(runtime, store, host_token_store, conversation_id, request)
 
     @router.post("/conversations/{conversation_id}/resume")
     async def post_resume_conversation(conversation_id: str, request: Request) -> dict:
-        """Resume a PAUSED or interrupted-with-unfinished-plan conversation.
-
-        Returns {"ok": true, "status": "RUNNING"} on success.
-        Returns 409 {"ok": false, "reason": …} when the transition is illegal
-        (RUNNING, FINISHED, ERROR, or any other non-resumable state).
-        """
         if runtime is None:
             raise HTTPException(
                 status_code=409,
                 detail={"ok": False, "reason": "runtime_unavailable"},
             )
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        _reject_if_imported(store, conversation_id)
-        result = await runtime.resume_conversation(conversation_id)
-        if not result["ok"]:
-            raise HTTPException(status_code=409, detail=result)
-        return result
+        return await _handle_resume(runtime, store, conversation_id)
 
     @router.get("/conversations")
     async def list_conversations(
@@ -591,27 +694,8 @@ def make_conversations_router(
         conversation_id: str,
         request: Request,
     ) -> dict:
-        """Delete a conversation AND release its agent-runtime state (finding #5).
-
-        The app-server library delete removes the DB rows but cannot reach this
-        process's per-conversation runtime caches (the kernel pin, cached loop, live
-        task, sandbox). It best-effort notifies THIS endpoint so the leak is closed in
-        the process that owns the runtime. Runtime cleanup runs FIRST (cancelling the
-        live run so its done-callback can't re-pin) and is owner-agnostic — the
-        owner-scoped DB delete is the authority on whether the row is actually removed."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        owner_id = current_owner_id(request)
-        _revoke_host_tokens(host_token_store, conversation_id)
-        if runtime is not None:
-            await runtime.forget_conversation(conversation_id)
-        store.release_local_preview_lease(
-            conversation_id=conversation_id,
-            owner_id=owner_id,
-        )
-        deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
-        if deleted:
-            remove_report_audio_cache(conversation_id)
-        return {"id": conversation_id, "deleted": deleted}
+        return await _handle_delete(runtime, store, host_token_store, conversation_id, request)
 
     return router
 

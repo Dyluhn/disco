@@ -13,7 +13,6 @@ entry point the agent-server already calls, so routing a build through the
   * pick_alternative → the existing `_loop_for(...).pick_alternative` path
   * resume → the existing `ResumeOps.resume_conversation` (the mode-agnostic
     resume the WS `resume` frame + REST `/resume` already use)
-  * subscribe / get_state → the existing event store
 
 IMPORTANT (no recursion): this delegates to the runtime's COLLABORATORS
 (`_control`, `_resume`) and inner resolvers (`_loop_for`, `kick`, `_store`),
@@ -23,11 +22,9 @@ THROUGH the active kernel (the A1 seam), so calling them here would loop.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from disco.core import (
-    ConversationState,
     ConversationStatus,
     MessageEvent,
     active_verification_requirements_event,
@@ -37,7 +34,6 @@ from disco.core.verification import VerificationRequirementsDirective
 
 from ..build_messages import _build_brief_message, _context_message, _user_message
 from ..lifecycle_command_service import LifecycleCommandService
-from .base import KernelEvent
 
 if TYPE_CHECKING:
     from ..runtime import ConversationRuntime
@@ -179,12 +175,3 @@ class DiscoKernel:
         generation = self._rt._run_generation.get(conversation_id)
         self._rt._unpin_if_current_generation(conversation_id, generation)
         await self._rt._control.kill(conversation_id, generation)
-
-    # -- events / state -------------------------------------------------------
-    async def subscribe(
-        self, conversation_id: str, *, after_seq: int | None = None
-    ) -> AsyncIterator[KernelEvent]:
-        return await self._rt._store.subscribe(conversation_id, after_seq=after_seq)
-
-    async def get_state(self, conversation_id: str) -> ConversationState:
-        return await self._rt._store.get_state(conversation_id)
