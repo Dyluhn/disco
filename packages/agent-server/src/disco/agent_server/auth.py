@@ -7,8 +7,15 @@ import os
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from typing import Any
 
+from disco.core._auth_capability_policy import (
+    authenticated_request_refusal,
+    conversation_owner_refusal,
+    origin_refusal,
+    pairing_refusal,
+)
 from disco.core.auth import (
     CSRF_HEADER,
     ISOLATED_PATH_PREVIEW_PREFIX,
@@ -24,7 +31,6 @@ from disco.core.auth import (
     cookie_header_from_headers,
     generated_preview_request_host,
     local_preview_origin_crosses_host,
-    localhost_auto_pair_allowed,
     origin_allowed,
     origin_permitted,
     pairing_token,
@@ -42,7 +48,6 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from .host_service_bus import is_bus_route_raw
 
 _LOG = logging.getLogger(__name__)
-_UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
 _PATH_PREVIEW_RE = re.compile(
     rf"^{re.escape(ISOLATED_PATH_PREVIEW_PREFIX)}/(?P<cid>conv_[A-Za-z0-9_-]+)(?:/|$)"
@@ -87,6 +92,34 @@ _ADMIN_PREFIXES = (
 
 class MintSessionBody(BaseModel):
     pairing_token: str | None = None
+
+
+@dataclass(frozen=True)
+class _AuthRequestContext:
+    path: str
+    method: str
+    host: str
+    isolated_path: bool
+    legacy_preview_path: bool
+    isolated_preview_host: bool
+    bootstrap_cross_host_exchange: bool
+
+
+def _auth_request_context(request: Request) -> _AuthRequestContext:
+    path = request.url.path
+    method = request.method.upper()
+    host = request.headers.get("host", "")
+    return _AuthRequestContext(
+        path=path,
+        method=method,
+        host=host,
+        isolated_path=_PATH_PREVIEW_RE.match(path) is not None,
+        legacy_preview_path=_LEGACY_PATH_PREVIEW_RE.match(path) is not None,
+        isolated_preview_host=generated_preview_request_host(host),
+        bootstrap_cross_host_exchange=(
+            method == "POST" and _PATH_PREVIEW_BOOTSTRAP_RE.fullmatch(path) is not None
+        ),
+    )
 
 
 def _auto_pair_enabled() -> bool:
@@ -220,18 +253,31 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         self._preview_signer = PreviewCapabilitySigner()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        path = request.url.path
-        method = request.method.upper()
-        host = request.headers.get("host", "")
-        isolated_path = _PATH_PREVIEW_RE.match(path) is not None
-        legacy_preview_path = _LEGACY_PATH_PREVIEW_RE.match(path) is not None
-        isolated_preview_host = generated_preview_request_host(host)
-        bootstrap_cross_host_exchange = (
-            method == "POST" and _PATH_PREVIEW_BOOTSTRAP_RE.fullmatch(path) is not None
+        context = _auth_request_context(request)
+        preview_refusal = self._preview_quarantine_refusal(request, context)
+        if preview_refusal is not None:
+            return preview_refusal
+        canonical_response = await self._canonical_preview_response(
+            request,
+            context,
+            call_next,
         )
+        if canonical_response is not None:
+            return canonical_response
+        if _is_public_http(context.path, context.method):
+            return await call_next(request)
+        if is_bus_route_raw(request.scope.get("raw_path", b"")):
+            return await call_next(request)
+        return await self._dispatch_protected(request, context, call_next)
+
+    def _preview_quarantine_refusal(
+        self,
+        request: Request,
+        context: _AuthRequestContext,
+    ) -> Response | None:
         if (
-            local_preview_origin_crosses_host(request.headers.get("origin"), host)
-            and not bootstrap_cross_host_exchange
+            local_preview_origin_crosses_host(request.headers.get("origin"), context.host)
+            and not context.bootstrap_cross_host_exchange
         ):
             # The local path-preview bootstrap intentionally crosses once to its
             # dedicated p3s.*.localhost origin. No other generated-content
@@ -239,72 +285,82 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             # deny it without trusting an attacker-settable marker cookie.
             # This guard is before public auth routes by design.
             return _private_no_store(Response("forbidden preview origin", status_code=403))
-        if isolated_preview_host and not (
-            isolated_path
-            or path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
-            or path == PREVIEW_BOOTSTRAP_PATH
+        if context.isolated_preview_host and not (
+            context.isolated_path
+            or context.path.startswith(f"{PATH_PREVIEW_BOOTSTRAP_PATH}/")
+            or context.path == PREVIEW_BOOTSTRAP_PATH
         ):
             # Quarantine the versioned generated-content origin before public
             # auth routes or full session cookies are considered. Host proxy is
             # normally the outer gate; this keeps the boundary sound even if
             # middleware ordering changes.
             return _private_no_store(Response("isolated preview route required", status_code=403))
-        if (isolated_path or legacy_preview_path) and (
+        if (context.isolated_path or context.legacy_preview_path) and (
             request.headers.get("sec-fetch-dest", "").strip().lower() == "serviceworker"
             or request.headers.get("service-worker", "").strip().lower() == "script"
         ):
             return _private_no_store(Response("preview service workers disabled", status_code=403))
-        if legacy_preview_path:
+        if context.legacy_preview_path:
             # Executable generated bytes must never inherit the application's
             # full session. Canonical callers use the isolated capability route;
             # the deprecated direct path now fails closed.
             return _private_no_store(Response("preview capability required", status_code=403))
+        return None
+
+    async def _canonical_preview_response(
+        self,
+        request: Request,
+        context: _AuthRequestContext,
+        call_next: RequestResponseEndpoint,
+    ) -> Response | None:
         canonical_cap = request.scope.get("state", {}).get("canonical_preview_capability")
-        if isolated_path and isinstance(canonical_cap, PreviewCapability):
-            match = _PATH_PREVIEW_RE.match(path)
-            assert match is not None
-            if (
-                canonical_cap.authority_id is None
-                or canonical_cap.conversation_id != match.group("cid")
-                or method not in canonical_cap.http_methods
-            ):
-                return _private_no_store(Response("preview capability required", status_code=403))
-            owner = await self._store.conversation_owner_id(canonical_cap.conversation_id)
-            if owner is None:
-                return _private_no_store(Response("conversation not found", status_code=404))
-            if owner != canonical_cap.owner_id:
-                return _private_no_store(Response("conversation forbidden", status_code=403))
-            request.state.preview_capability = canonical_cap
-            return _private_no_store(await call_next(request))
-        if _is_public_http(path, method):
-            return await call_next(request)
-        # WO-A2.2: the host-service bus uses its own bearer-token auth and must
-        # never be authenticated by session cookies, admin pairing, query params,
-        # or CSRF tokens. Bypass the `/_disco/svc/` prefix so the bus route itself
-        # enforces the strict dotted-service shape and returns 400 for malformed names.
-        if is_bus_route_raw(request.scope.get("raw_path", b"")):
-            return await call_next(request)
+        if not context.isolated_path or not isinstance(canonical_cap, PreviewCapability):
+            return None
+        match = _PATH_PREVIEW_RE.match(context.path)
+        assert match is not None
+        if (
+            canonical_cap.authority_id is None
+            or canonical_cap.conversation_id != match.group("cid")
+            or context.method not in canonical_cap.http_methods
+        ):
+            return _private_no_store(Response("preview capability required", status_code=403))
+        owner = await self._store.conversation_owner_id(canonical_cap.conversation_id)
+        if owner is None:
+            return _private_no_store(Response("conversation not found", status_code=404))
+        if owner != canonical_cap.owner_id:
+            return _private_no_store(Response("conversation forbidden", status_code=403))
+        request.state.preview_capability = canonical_cap
+        return _private_no_store(await call_next(request))
+
+    async def _dispatch_protected(
+        self,
+        request: Request,
+        context: _AuthRequestContext,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
         origin = request.headers.get("origin")
-        # allowlist OR same-host (the single-front-door deploy: Origin == Host).
-        if origin and not origin_permitted(origin, request.headers.get("host")):
-            return Response("forbidden origin", status_code=403)
-        if isolated_path:
+        if context.isolated_path:
+            refusal = origin_refusal(origin, context.host)
+            if refusal is not None:
+                return Response(refusal.response_text, status_code=refusal.status_code)
             _is_path_preview, preview_error = await self._authenticate_path_preview(request)
             if preview_error is not None:
                 return _private_no_store(preview_error)
             return _private_no_store(await call_next(request))
         session = self._authenticate_request(request)
-        if session is None:
-            return Response("auth required", status_code=401)
+        refusal = authenticated_request_refusal(
+            session=session,
+            origin=origin,
+            request_host=context.host,
+            method=context.method,
+            csrf_token=request.headers.get(CSRF_HEADER),
+            admin_required=_is_admin_path(context.path),
+            test_client=_is_testclient(request),
+        )
+        if refusal is not None:
+            return Response(refusal.response_text, status_code=refusal.status_code)
+        assert session is not None
         request.state.auth_session = session
-        if _is_admin_path(path) and not session.is_admin:
-            return Response("admin required", status_code=403)
-        if (
-            method in _UNSAFE_METHODS
-            and not _is_testclient(request)
-            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
-        ):
-            return Response("csrf required", status_code=403)
         owner_check = await self._authorize_conversation_path(request, session)
         if owner_check is not None:
             return owner_check
@@ -365,17 +421,14 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
     async def _authorize_conversation_path(
         self, request: Request, session: AuthSession
     ) -> Response | None:
-        if session.session_id == "test-session":
-            return None
         match = _CID_RE.search(request.url.path)
         if match is None:
             return None
         cid = match.group(1)
         owner = await self._store.conversation_owner_id(cid)
-        if owner is None:
-            return Response("conversation not found", status_code=404)
-        if owner != session.owner_id:
-            return Response("conversation forbidden", status_code=403)
+        refusal = conversation_owner_refusal(session, owner)
+        if refusal is not None:
+            return Response(refusal.response_text, status_code=refusal.status_code)
         return None
 
 
@@ -396,29 +449,19 @@ def make_auth_router() -> APIRouter:
         # Same-host origins (the front-door deploy) are permitted: minting there
         # still requires the operator's TOKEN, so a DNS-rebound page gains nothing.
         origin = request.headers.get("origin")
-        if not origin_permitted(origin, request.headers.get("host")):
-            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
-        auto_pair = _auto_pair_enabled()
-        token_ok = _pairing_token_ok(body.pairing_token)
-        if not token_ok:
-            # The TOKENLESS shortcuts stay strict — a DNS-rebound page's Origin
-            # matches the rebound Host but is never localhost, so rebinding can't
-            # mint without the token via either branch.
-            if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
-                pass  # host-process dev convenience (unforgeable loopback TCP peer)
-            elif localhost_auto_pair_allowed(
-                origin,
-                request.headers.get("host"),
-                via_proxy=request_traversed_proxy(request.headers),
-            ):
-                # Loopback-BOUND front door (compose default): the ports are
-                # kernel-unreachable from other machines, and the page asserts a
-                # localhost origin == this app's own Host → the operator's own
-                # machine. Zero-friction first run; DISCO_BIND=0.0.0.0 (or a proxy
-                # in front, which adds a forwarding header) disables it.
-                pass
-            else:
-                raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+        refusal = pairing_refusal(
+            token_valid=_pairing_token_ok(body.pairing_token),
+            origin=origin,
+            request_host=request.headers.get("host"),
+            loopback_client=_is_loopback_client(request),
+            auto_pair_enabled=_auto_pair_enabled(),
+            traversed_proxy=request_traversed_proxy(request.headers),
+        )
+        if refusal is not None:
+            raise HTTPException(
+                status_code=refusal.status_code,
+                detail={"reason": refusal.reason},
+            )
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
         set_session_cookie(response, cookie, session)
         return {

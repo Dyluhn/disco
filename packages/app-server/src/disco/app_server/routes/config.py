@@ -25,9 +25,14 @@ from ..config.dtos import (
 from ..config_state import ConfigState, ConfigValidationError
 
 
-def make_config_router(state: ConfigState) -> APIRouter:
-    router = APIRouter()
+def _validation_http_error(exc: ConfigValidationError) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+    )
 
+
+def _register_sandbox_routes(router: APIRouter, state: ConfigState) -> None:
     @router.get("/api/sandbox/config")
     async def get_sandbox_config() -> SandboxConfigDTO:
         return state.sandbox_config()
@@ -41,10 +46,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
         try:
             return state.update_sandbox_config(dto)
         except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+            raise _validation_http_error(exc) from exc
 
     @router.post("/api/sandbox/test")
     async def test_sandbox(dto: SandboxConfigDTO) -> ProbeResult:
@@ -60,6 +62,8 @@ def make_config_router(state: ConfigState) -> APIRouter:
         probe the run path hits, so the banner and the real run agree."""
         return await state.sandbox_health()
 
+
+def _register_media_routes(router: APIRouter, state: ConfigState) -> None:
     @router.get("/api/encoders/config")
     async def get_encoders_config() -> EncodersConfigDTO:
         return state.encoders_config()
@@ -101,10 +105,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
         try:
             return state.update_role_fallback_config(dto)
         except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+            raise _validation_http_error(exc) from exc
 
     @router.post("/api/data-sources/{kind}/test")
     async def test_data_source(kind: str) -> ProbeResult:
@@ -113,6 +114,8 @@ def make_config_router(state: ConfigState) -> APIRouter:
         there's nothing to reach; remote tiers do a real GET. Always 200."""
         return await state.test_data_source(kind)
 
+
+def _register_storage_routes(router: APIRouter, state: ConfigState) -> None:
     @router.get("/api/projects/storage/config")
     async def get_projects_config() -> ProjectStorageConfigDTO:
         return state.projects_config()
@@ -127,10 +130,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
         try:
             return state.update_projects_config(dto)
         except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+            raise _validation_http_error(exc) from exc
 
     @router.get("/api/live-browser/config")
     async def get_live_browser_config() -> LiveBrowserConfigDTO:
@@ -144,10 +144,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
         try:
             return state.update_live_browser_config(dto)
         except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+            raise _validation_http_error(exc) from exc
 
     @router.get("/api/build-kernel/config")
     async def get_build_kernel_config() -> BuildKernelConfigDTO:
@@ -159,9 +156,12 @@ def make_config_router(state: ConfigState) -> APIRouter:
         try:
             return state.update_build_kernel_config(dto)
         except ConfigValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
-            ) from exc
+            raise _validation_http_error(exc) from exc
 
+
+def make_config_router(state: ConfigState) -> APIRouter:
+    router = APIRouter()
+    _register_sandbox_routes(router, state)
+    _register_media_routes(router, state)
+    _register_storage_routes(router, state)
     return router

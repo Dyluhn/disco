@@ -17,32 +17,27 @@ runtime).
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
 import logging
-import posixpath
-import shlex
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from disco.core import DEFAULT_OWNER_ID, ConversationStatus, DeliverableEvent
-from disco.core.loop.preview_target import is_managed_host_preview_port
+from disco.core import DEFAULT_OWNER_ID, ConversationStatus
 from disco.tools import SandboxSession
 from disco.tools.projects import StorageStatus
-from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
 
 from .live_session_directory import LiveSessionDirectory
-from .preview_manager import PreviewManager, preview_requires_node_dependencies
-from .preview_projection import (
-    SealedPreviewRuntimeContract,
-    derive_sealed_preview_runtime_contract,
-)
-from .preview_status import (
-    empty_preview_metadata,
-    managed_preview_metadata,
-    managed_unavailable_reason,
+from .preview_projection import SealedPreviewRuntimeContract
+from .preview_runtime_projection import PreviewRuntimeProjection
+from .preview_sealed_restore import (
+    SealedPreviewRestorer,
+    normalized_sealed_runtime_contract,
+    prepare_sealed_node_dependencies,
+    replace_with_sealed_workspace,
+    restore_succeeded,
+    sealed_path,
+    sealed_runtime_contract,
+    sealed_workspace_cwd,
+    selected_finished_app_entry,
 )
 from .runtime_settings import _BUILD_LIKE_SURFACES
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
@@ -76,13 +71,25 @@ class PreviewService:
     ) -> None:
         self._live_sessions = live_sessions
         self._store = store
-        self._config_store = config_store
         self._settings = settings
-        self._connections = connections
         self._projects = projects
         self._lifecycle = lifecycle
         self._loop_factory = loop_factory
         self._workspace = workspace
+        self._runtime_projection = PreviewRuntimeProjection(
+            live_sessions,
+            store,
+            config_store,
+            settings,
+            connections,
+        )
+        self._sealed_restorer = SealedPreviewRestorer(
+            live_sessions,
+            store,
+            projects,
+            loop_factory,
+            workspace,
+        )
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Return the already-live sandbox session without creating one."""
@@ -90,11 +97,7 @@ class PreviewService:
         return self._live_sessions.live_session(conversation_id)
 
     def _live_browser_enabled(self) -> bool:
-        """Read the live-browser Settings flag; default-deny on any config failure."""
-        try:
-            return bool(self._config_store.load().live_browser.enabled)
-        except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
-            return False
+        return self._runtime_projection.live_browser_enabled()
 
     def preview_target_port(self, conversation_id: str) -> int | None:
         """Resolve the canonical preview route to its sole managed live preview.
@@ -109,34 +112,7 @@ class PreviewService:
         the newest remaining servable selection.  Once a manager exists, no healthy
         selection means unavailable rather than a hidden legacy-8000 fallback.
         """
-        session = self._live_sessions.live_session(conversation_id)
-        manager = getattr(session, "_preview_manager", None) if session is not None else None
-        if manager is None:
-            # Owned Build sessions reserve Preview for PreviewManager from their first
-            # sandbox use.  Do not guess the legacy :8000 target before a managed launch;
-            # that would expose a second lifecycle authority and tell the user a runtime
-            # exists when the honest state is still "Preparing preview".
-            if self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES or getattr(
-                session, "_auto_preview_disabled", False
-            ):
-                return None
-            return PREVIEW_PORT
-        try:
-            port = manager.canonical_port()
-        except Exception:  # noqa: BLE001 — corrupt registry cannot select an upstream
-            return None
-        if port is None:
-            return None
-        managed_host_port = is_managed_host_preview_port(port)
-        if (
-            not isinstance(port, int)
-            or isinstance(port, bool)
-            or (port not in USER_PORTS and not managed_host_port)
-            or (managed_host_port and not getattr(session, "shares_host_network", False))
-            or port == NOVNC_PORT
-        ):
-            return None
-        return port
+        return self._runtime_projection.preview_target_port(conversation_id)
 
     async def resolve_active_preview_projection(
         self,
@@ -150,14 +126,9 @@ class PreviewService:
         starts/restarts a command.
         """
 
-        session = self._live_sessions.live_session(conversation_id)
-        manager = getattr(session, "_preview_manager", None) if session is not None else None
-        if manager is None:
-            return False
-        try:
-            return await manager.resolve_active_projection(projection) is not None
-        except Exception:  # noqa: BLE001 — a stale/malformed generation fails closed
-            return False
+        return await self._runtime_projection.resolve_active_preview_projection(
+            conversation_id, projection
+        )
 
     async def resolve_finished_preview_runtime(
         self,
@@ -166,30 +137,13 @@ class PreviewService:
     ) -> dict[str, Any] | None:
         """Resolve the exact original generation or its host-bound sealed restore."""
 
-        session = self._live_sessions.live_session(conversation_id)
-        manager = getattr(session, "_preview_manager", None) if session is not None else None
-        if manager is None:
-            return None
-        try:
-            resolved = await manager.resolve_active_projection(contract.projection)
-            if resolved is None:
-                resolved = await manager.resolve_sealed_contract(contract)
-            data = resolved.to_dict() if resolved is not None else None
-        except Exception:  # noqa: BLE001 - stale or malformed authority fails closed
-            return None
-        if not isinstance(data, dict) or data.get("status") not in {"running", "unavailable"}:
-            return None
-        return data
+        return await self._runtime_projection.resolve_finished_preview_runtime(
+            conversation_id, contract
+        )
 
     @staticmethod
     def _selected_finished_app_entry(events: list[Any], marker_seq: int) -> str | None:
-        selected: str | None = None
-        for event in events:
-            if type(getattr(event, "seq", None)) is int and event.seq > marker_seq:
-                break
-            if isinstance(event, DeliverableEvent) and event.artifact_kind == "app":
-                selected = event.path
-        return selected
+        return selected_finished_app_entry(events, marker_seq)
 
     def _sealed_runtime_contract(
         self,
@@ -197,20 +151,7 @@ class PreviewService:
         events: list[Any],
         committed: Any,
     ) -> SealedPreviewRuntimeContract | None:
-        seal = committed.event.final_seal
-        if seal is None or committed.event.seq is None:
-            return None
-        entry = self._selected_finished_app_entry(events, committed.event.seq)
-        if entry is None:
-            return None
-        return derive_sealed_preview_runtime_contract(
-            events,
-            terminal_seq=seal.terminal_seq,
-            conversation_id=conversation_id,
-            version_seq=committed.event.version_seq,
-            tree_digest=committed.event.tree_digest,
-            app_entry=entry,
-        )
+        return sealed_runtime_contract(conversation_id, events, committed)
 
     @staticmethod
     def _sealed_workspace_cwd(cwd: str | None) -> str:
@@ -222,26 +163,11 @@ class PreviewService:
         could name a different filesystem location.
         """
 
-        if cwd is None or cwd in {"", ".", "/workspace", "/workspace/"}:
-            return ""
-        if cwd != cwd.strip() or "\x00" in cwd or "\\" in cwd:
-            raise RuntimeError("sealed Preview cwd must be a clean POSIX workspace path")
-        if cwd.startswith("/workspace/"):
-            relative = cwd.removeprefix("/workspace/")
-        elif cwd.startswith("/"):
-            raise RuntimeError("sealed Preview cwd must remain inside /workspace")
-        else:
-            relative = cwd
-        parts = tuple(part for part in relative.split("/") if part not in {"", "."})
-        if not parts or any(part == ".." for part in parts):
-            if parts:
-                raise RuntimeError("sealed Preview cwd must remain inside /workspace")
-            return ""
-        return "/".join(parts)
+        return sealed_workspace_cwd(cwd)
 
     @staticmethod
     def _sealed_path(cwd: str, name: str) -> str:
-        return posixpath.join(cwd, name) if cwd else name
+        return sealed_path(cwd, name)
 
     @classmethod
     def _normalized_sealed_runtime_contract(
@@ -255,8 +181,7 @@ class PreviewService:
         directory unambiguously path-shaped for tmux and package-manager CLIs.
         """
 
-        relative_cwd = cls._sealed_workspace_cwd(contract.cwd)
-        return replace(contract, cwd=f"./{relative_cwd}" if relative_cwd else None)
+        return normalized_sealed_runtime_contract(contract)
 
     @staticmethod
     async def _prepare_sealed_node_dependencies(
@@ -265,68 +190,7 @@ class PreviewService:
     ) -> str | None:
         """Restore a Node runtime from an immutable, lockfile-owned graph."""
 
-        if not preview_requires_node_dependencies(
-            command=contract.command,
-            framework=contract.framework,
-        ):
-            return None
-        cwd = PreviewService._sealed_workspace_cwd(contract.cwd)
-        package_path = PreviewService._sealed_path(cwd, "package.json")
-        try:
-            package = json.loads((await session.read_file(package_path)).decode("utf-8"))
-        except Exception as exc:
-            raise RuntimeError("sealed Node Preview is missing a valid package.json") from exc
-        if not isinstance(package, dict):
-            raise RuntimeError("sealed Node Preview package.json must be an object")
-        dependency_sections = (
-            package.get("dependencies"),
-            package.get("devDependencies"),
-            package.get("optionalDependencies"),
-        )
-        needs_install = any(
-            isinstance(section, dict) and bool(section) for section in dependency_sections
-        )
-        if not needs_install:
-            return None
-        cli_cwd = f"./{cwd}" if cwd else ""
-        npm_prefix = f" --prefix {shlex.quote(cli_cwd)}" if cli_cwd else ""
-        pnpm_dir = f" --dir {shlex.quote(cli_cwd)}" if cli_cwd else ""
-        yarn_cwd = f" --cwd {shlex.quote(cli_cwd)}" if cli_cwd else ""
-        lock_commands = (
-            ("package-lock.json", f"npm{npm_prefix} ci --no-audit --no-fund"),
-            ("npm-shrinkwrap.json", f"npm{npm_prefix} ci --no-audit --no-fund"),
-            ("pnpm-lock.yaml", f"corepack pnpm{pnpm_dir} install --frozen-lockfile"),
-            ("yarn.lock", f"corepack yarn{yarn_cwd} install --immutable"),
-        )
-        available = [
-            (PreviewService._sealed_path(cwd, path), command)
-            for path, command in lock_commands
-            if await session.file_exists(PreviewService._sealed_path(cwd, path))
-        ]
-        if len(available) != 1:
-            found = ", ".join(path for path, _command in available) or "none"
-            raise RuntimeError(
-                "sealed Node Preview requires exactly one supported immutable lockfile "
-                f"(found: {found})"
-            )
-        lock_path, command = available[0]
-        installed = await session.exec_shell(command, timeout_s=300)
-        if getattr(installed, "exit_code", 1) != 0 or bool(getattr(installed, "timed_out", False)):
-            detail = str(
-                getattr(installed, "stderr", "")
-                or getattr(installed, "stdout", "")
-                or "dependency installation failed"
-            ).strip()
-            raise RuntimeError(
-                f"sealed Node Preview dependency restore from {lock_path} failed: {detail[-1200:]}"
-            )
-        dependency_dir = PreviewService._sealed_path(cwd, "node_modules")
-        if not await session.file_exists(dependency_dir):
-            raise RuntimeError(
-                "sealed Node Preview dependency restore did not produce node_modules; "
-                "this package-manager layout is not yet supported for sealed replay"
-            )
-        return dependency_dir
+        return await prepare_sealed_node_dependencies(session, contract)
 
     @staticmethod
     async def _replace_with_sealed_workspace(
@@ -344,116 +208,20 @@ class PreviewService:
         immutable version before launch.
         """
 
-        staged_dependency: str | None = None
-        if dependency_dir is not None:
-            normalized_dependency = dependency_dir.strip("/")
-            if not normalized_dependency or normalized_dependency.endswith("/.."):
-                raise RuntimeError("sealed Preview dependency directory is invalid")
-            dependency_prefix = normalized_dependency + "/"
-            if any(
-                path == normalized_dependency or path.startswith(dependency_prefix)
-                for path, _data in files
-            ):
-                raise RuntimeError("sealed workspace must not contain generated node_modules")
-            if not contract_id:
-                raise RuntimeError("sealed Preview dependency preservation requires authority")
-            suffix = hashlib.sha256(contract_id.encode("utf-8")).hexdigest()[:24]
-            staged_dependency = f".disco-preview-dependencies-{suffix}"
-            staged_prefix = staged_dependency + "/"
-            if any(
-                path == staged_dependency or path.startswith(staged_prefix) for path, _data in files
-            ):
-                raise RuntimeError("sealed workspace collides with dependency staging path")
-            dep_arg = shlex.quote(normalized_dependency)
-            stage_arg = shlex.quote(staged_dependency)
-            preserve = await session.exec_shell(
-                " && ".join(
-                    (
-                        f"test -d {dep_arg}",
-                        f"test ! -L {dep_arg}",
-                        f"test ! -e {stage_arg}",
-                        f"mv -- {dep_arg} {stage_arg}",
-                        "find . -mindepth 1 -maxdepth 1 "
-                        f"! -name {stage_arg} -exec rm -rf -- {{}} +",
-                    )
-                ),
-                timeout_s=30,
-            )
-            if getattr(preserve, "exit_code", 1) != 0 or bool(
-                getattr(preserve, "timed_out", False)
-            ):
-                detail = str(
-                    getattr(preserve, "stderr", "")
-                    or getattr(preserve, "stdout", "")
-                    or "dependency preservation failed"
-                ).strip()
-                raise RuntimeError(f"sealed Preview dependency preservation failed: {detail[:500]}")
-        else:
-            clear = await session.exec_shell(
-                "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
-                timeout_s=30,
-            )
-            if getattr(clear, "exit_code", 1) != 0 or bool(getattr(clear, "timed_out", False)):
-                detail = str(
-                    getattr(clear, "stderr", "")
-                    or getattr(clear, "stdout", "")
-                    or "workspace clear failed"
-                ).strip()
-                raise RuntimeError(f"sealed Preview workspace clear failed: {detail[:500]}")
-
-        for path, data in files:
-            await session.write_file(path, data)
-
-        if staged_dependency is not None:
-            dependency_parent = posixpath.dirname(dependency_dir or "")
-            parent_arg = shlex.quote(dependency_parent or ".")
-            dep_arg = shlex.quote(dependency_dir or "")
-            stage_arg = shlex.quote(staged_dependency)
-            restore = await session.exec_shell(
-                " && ".join(
-                    (
-                        f"mkdir -p -- {parent_arg}",
-                        f"test ! -e {dep_arg}",
-                        f"mv -- {stage_arg} {dep_arg}",
-                    )
-                ),
-                timeout_s=30,
-            )
-            if getattr(restore, "exit_code", 1) != 0 or bool(getattr(restore, "timed_out", False)):
-                detail = str(
-                    getattr(restore, "stderr", "")
-                    or getattr(restore, "stdout", "")
-                    or "dependency restore failed"
-                ).strip()
-                raise RuntimeError(f"sealed Preview dependency restore failed: {detail[:500]}")
-
-        for path, data in files:
-            if await session.read_file(path) != data:
-                raise RuntimeError(f"sealed Preview read-back changed: {path}")
+        await replace_with_sealed_workspace(
+            session,
+            files,
+            dependency_dir=dependency_dir,
+            contract_id=contract_id,
+        )
 
     @staticmethod
     def _restore_succeeded(restored: Any) -> bool:
-        return getattr(getattr(restored, "status", None), "value", None) in {
-            "running",
-            "unavailable",
-        }
+        return restore_succeeded(restored)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Resolve a curated port, gating noVNC on live-view enablement and capability."""
-        session = self._live_sessions.live_session(conversation_id)
-        if session is None:
-            return None
-        if port not in USER_PORTS and (
-            not is_managed_host_preview_port(port)
-            or not getattr(session, "shares_host_network", False)
-            or port != self.preview_target_port(conversation_id)
-        ):
-            return None
-        if port == NOVNC_PORT and not (
-            self._live_browser_enabled() and getattr(session, "supports_live_view", False)
-        ):
-            return None
-        return session.expose_port(port)
+        return self._runtime_projection.port_upstream(conversation_id, port)
 
     async def wake_for_preview(
         self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID
@@ -463,43 +231,12 @@ class PreviewService:
         It does NOT restart agent-started dev servers (vite/express) — requests
         for ports nothing listens on after wake will proxy to a 502.
         """
-        cid = await self._live_sessions.resolve_owned_cid_prefix(cid8, owner_id)
-        if cid is not None:
-            return self.port_upstream(cid, port)
-
-        try:
-            summaries = await self._store.list_conversation_summaries(
-                owner_id=owner_id, limit=500, cursor=None
-            )
-            matches = [
-                s.conversation_id
-                for s in summaries
-                if s.conversation_id.removeprefix("conv_").startswith(cid8)
-            ]
-            if len(matches) != 1:
-                return None
-            cid = matches[0]
-        except Exception:
-            return None
-
-        lock = self._connections.wake_lock_for(cid)
-        async with lock:
-            if self._live_sessions.live_session(cid) is not None:
-                return self.port_upstream(cid, port)
-            woke = await self.ensure_preview(cid)
-            if woke:
-                # W6: after ensure_preview launches the http.server tmux session,
-                # the process takes a moment to bind the port.  Poll briefly so
-                # expose_port()'s socket-probe finds it before we return None to
-                # the route handler and the user sees a 503.
-                for _ in range(10):
-                    url = self.port_upstream(cid, port)
-                    if url is not None:
-                        return url
-                    await asyncio.sleep(0.3)
-                # Final attempt — best effort; a 503 is still safe.
-                return self.port_upstream(cid, port)
-            return None
+        return await self._runtime_projection.wake_for_preview(
+            cid8,
+            port,
+            owner_id=owner_id,
+            ensure_preview=self.ensure_preview,
+        )
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
         """Backend-aware live preview availability. The browser iframes the agent-server's
@@ -509,98 +246,84 @@ class PreviewService:
         actually routable (expose_port / port_owners), NOT by the backend's name — a local
         rootless podman publishes real localhost URLs and previews exactly like the local
         backend; a genuinely unroutable backend still degrades honestly below."""
+        return await self._runtime_projection.preview(
+            conversation_id,
+            port_owners_fn=port_owners,
+        )
+
+    async def _restart_manager(self, manager: Any) -> bool:
+        if manager is None:
+            return False
+        try:
+            return self._restore_succeeded(await manager.restart_canonical())
+        except Exception:  # noqa: BLE001 - optional Preview remains unavailable
+            return False
+
+    async def _legacy_static_preview(
+        self,
+        conversation_id: str,
+        store: Any,
+    ) -> bool:
+        if store is None or store.status() != StorageStatus.OK:
+            return False
+        try:
+            record = store.get(conversation_id)
+        except Exception:  # noqa: BLE001 - corrupt legacy snapshot stays unavailable
+            return False
+        if record is None or record.files_missing:
+            return False
+        self._loop_factory.loop_for(conversation_id)
+        await self._lifecycle._maybe_rehydrate(conversation_id)
         session = self._live_sessions.live_session(conversation_id)
         if session is None:
-            return {
-                "available": False,
-                "reason": "The agent hasn't started a sandbox yet.",
-                "owner": None,
-                "ports": [],
-                **empty_preview_metadata(),
-            }
-        manager = getattr(session, "_preview_manager", None)
-        metadata, managed_detail = managed_preview_metadata(manager)
-        # Passive probe ONLY: this GET is polled by the UI, and a read path must not
-        # create a sandbox (that's _ensure()'s side effect) or surface its failures
-        # as a 500. No live instance → no preview, plainly stated.
-        inst = getattr(session, "_instance", None)
-        if inst is None:
-            return {
-                "available": False,
-                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
-                or "The agent's sandbox isn't running yet.",
-                "owner": None,
-                "ports": [],
-                **metadata,
-            }
-        target_port = self.preview_target_port(conversation_id)
-        probe_ports = set(USER_PORTS)
-        if target_port is not None:
-            probe_ports.add(target_port)
+            return False
         try:
-            owners = await port_owners(inst, sorted(probe_ports))
-        except Exception:  # noqa: BLE001 — a probe must never 500 the preview endpoint
-            owners = {}
-        owner = owners.get(target_port) if target_port is not None else None
+            return await session.ensure_preview()
+        except Exception:  # noqa: BLE001 - legacy compatibility stays optional
+            return False
 
-        ns = f"pmx-{session.sessions.namespace}"
+    async def _preview_without_commit(
+        self,
+        conversation_id: str,
+        session: SandboxSession | None,
+        manager: Any,
+        *,
+        finished: bool,
+    ) -> bool:
+        if finished:
+            return False
+        if manager is not None:
+            return await self._restart_manager(manager)
+        if session is None or self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES:
+            return False
+        try:
+            return await session.ensure_preview()
+        except Exception:  # noqa: BLE001 - legacy compatibility stays optional
+            return False
 
-        def _owner_json(o):  # bound ports only; normalized session name
-            sess = o.session
-            if sess and sess.startswith(ns):
-                sess = sess[len(ns) :]
-            return {"pid": o.pid, "cmdline": o.cmdline, "session": sess}
-
-        ports_payload = [
-            {"port": p, "owner": _owner_json(o)}
-            for p, o in sorted(owners.items())
-            if o is not None and o.pid is not None
-        ]
-
-        if metadata["status"] == "unavailable":
-            return {
-                "available": False,
-                "reason": managed_unavailable_reason(metadata["status"], managed_detail),
-                "owner": _owner_json(owner)
-                if owner is not None and owner.pid is not None
-                else None,
-                "ports": ports_payload,
-                **metadata,
-            }
-        if target_port is None:
-            preparing_reason = (
-                "Preparing preview: waiting for the platform-managed runtime to start."
-                if manager is None
-                and self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
-                else None
+    async def _restore_finished(
+        self,
+        conversation_id: str,
+        events: list[Any],
+        committed: Any,
+    ) -> bool:
+        contract = self._sealed_runtime_contract(conversation_id, events, committed)
+        if contract is None:
+            return False
+        try:
+            return await self._sealed_restorer.restore(
+                conversation_id,
+                events,
+                committed,
+                contract,
             )
-            return {
-                "available": False,
-                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
-                or preparing_reason
-                or "No health-verified managed preview is currently available.",
-                "owner": None,
-                "ports": ports_payload,
-                **metadata,
-            }
-        if owner is None or owner.pid is None:
-            return {
-                "available": False,
-                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
-                or f"No dev server detected. Run one on port {target_port} inside the "
-                "sandbox to see a live preview.",
-                "owner": None,
-                "ports": ports_payload,
-                **(metadata if manager is not None else empty_preview_metadata(port=target_port)),
-            }
-
-        return {
-            "available": True,
-            "proxy": True,
-            "owner": _owner_json(owner),
-            "ports": ports_payload,
-            **(metadata if manager is not None else empty_preview_metadata(port=target_port)),
-        }
+        except Exception:  # noqa: BLE001 - optional Preview remains unavailable
+            _LOG.warning(
+                "sealed Preview restore failed for %s",
+                conversation_id,
+                exc_info=True,
+            )
+            return False
 
     async def ensure_preview(self, conversation_id: str) -> bool:
         """Backend half of the UI 'Restart preview' button (§E7). Bounded + safe: the
@@ -622,23 +345,7 @@ class PreviewService:
             session is None
             and self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES
         ):
-            if store is None or store.status() != StorageStatus.OK:
-                return False
-            try:
-                record = store.get(conversation_id)
-            except Exception:  # noqa: BLE001 - corrupt legacy snapshot stays unavailable
-                return False
-            if record is None or record.files_missing:
-                return False
-            self._loop_factory.loop_for(conversation_id)
-            await self._lifecycle._maybe_rehydrate(conversation_id)
-            session = self._live_sessions.live_session(conversation_id)
-            if session is None:
-                return False
-            try:
-                return await session.ensure_preview()
-            except Exception:  # noqa: BLE001
-                return False
+            return await self._legacy_static_preview(conversation_id, store)
 
         # A nonterminal managed runtime can be repaired from its in-memory accepted
         # intent. FINISHED restores require the stronger immutable contract below.
@@ -649,105 +356,17 @@ class PreviewService:
             return False
         finished = state.execution_status is ConversationStatus.FINISHED
         if store is None or store.status() != StorageStatus.OK:
-            if manager is None or finished:
-                return False
-            try:
-                restarted = await manager.restart_canonical()
-                return self._restore_succeeded(restarted)
-            except Exception:  # noqa: BLE001
-                return False
+            return False if finished else await self._restart_manager(manager)
         try:
             committed = resolve_committed_workspace(events, store, conversation_id)
         except WorkspaceCommitUnavailable:
-            if finished:
-                return False
-            if manager is not None:
-                try:
-                    restarted = await manager.restart_canonical()
-                    return self._restore_succeeded(restarted)
-                except Exception:  # noqa: BLE001
-                    return False
-            if (
-                session is not None
-                and self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES
-            ):
-                try:
-                    return await session.ensure_preview()
-                except Exception:  # noqa: BLE001
-                    return False
-            return False
+            return await self._preview_without_commit(
+                conversation_id,
+                session,
+                manager,
+                finished=finished,
+            )
 
-        contract = self._sealed_runtime_contract(conversation_id, events, committed)
-        if contract is None:
-            return False
-
-        # Explicit user restart is the only replay boundary. Serialize it with all
-        # workspace writers, consume bytes from the freshly verified immutable
-        # version (never the mutable project mirror), and re-prove the seal before
-        # executing the raw typed intent.
-        lock = self._workspace.lock(conversation_id)
-        async with lock, self._workspace.interprocess_mutation_fence(conversation_id):
-            try:
-                with store.open_verified_version(
-                    conversation_id, committed.event.version_seq
-                ) as verified:
-                    files = tuple(
-                        (entry.path, verified.read_bytes(entry.path)) for entry in verified.files
-                    )
-                if session is None:
-                    self._loop_factory.loop_for(conversation_id)
-                    session = self._live_sessions.live_session(conversation_id)
-                if session is None:
-                    return False
-                manager = getattr(session, "_preview_manager", None)
-                if manager is not None:
-                    await manager.stop(None)
-                if manager is None or bool(getattr(manager, "_closed", False)):
-                    manager = PreviewManager(session)
-                    session._preview_manager = manager
-                await self._replace_with_sealed_workspace(session, files)
-                self._lifecycle._mark_rehydrated(conversation_id)
-
-                current_events = await self._store.get_events(conversation_id)
-                current_committed = resolve_committed_workspace(
-                    current_events, store, conversation_id
-                )
-                current_contract = self._sealed_runtime_contract(
-                    conversation_id, current_events, current_committed
-                )
-                if current_contract is None or current_contract.contract_id != contract.contract_id:
-                    return False
-
-                launch_contract = self._normalized_sealed_runtime_contract(current_contract)
-                dependency_dir = await self._prepare_sealed_node_dependencies(
-                    session, launch_contract
-                )
-                if dependency_dir is not None:
-                    await self._replace_with_sealed_workspace(
-                        session,
-                        files,
-                        dependency_dir=dependency_dir,
-                        contract_id=current_contract.contract_id,
-                    )
-                manager = getattr(session, "_preview_manager", None)
-                if manager is None:
-                    manager = PreviewManager(session)
-                    session._preview_manager = manager
-                restored = await manager.restore_sealed(launch_contract)
-                status = getattr(getattr(restored, "status", None), "value", None)
-                if not self._restore_succeeded(restored):
-                    _LOG.warning(
-                        "sealed Preview restore unavailable for %s: status=%s detail=%s",
-                        conversation_id,
-                        status,
-                        getattr(restored, "detail", ""),
-                    )
-                    return False
-                return True
-            except Exception:  # noqa: BLE001 - any authority/rehydration failure stays unavailable
-                _LOG.warning(
-                    "sealed Preview restore failed for %s",
-                    conversation_id,
-                    exc_info=True,
-                )
-                return False
+        if not finished:
+            return await self._restart_manager(manager)
+        return await self._restore_finished(conversation_id, events, committed)

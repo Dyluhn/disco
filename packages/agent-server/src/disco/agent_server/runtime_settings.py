@@ -7,9 +7,6 @@ the runtime, a callable-field facade, a dependency bag, or a service locator.
 from __future__ import annotations
 
 import asyncio
-import json
-import logging
-import os
 from typing import Any, Protocol
 
 from disco.core import (
@@ -27,6 +24,7 @@ from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectStore, StorageStatus
 
 from .run_registry import LoopRegistry, RunRegistry, RunResourceRegistry
+from .runtime_model_settings import RuntimePersistentSettings, RuntimeSettingsRepository
 
 # Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
 # the prior turn has fully concluded (or cooperatively stopped), so re-pinning the
@@ -42,8 +40,6 @@ _TERMINAL_SETTABLE_STATES = frozenset(
     }
 )
 
-
-logger = logging.getLogger(__name__)
 
 _VALID_SURFACES = frozenset({"research", "build", "agent", "deep_research"})
 _BUILD_LIKE_SURFACES = frozenset({"build", "agent"})
@@ -126,41 +122,32 @@ class _RuntimeSurfaceSettings:
     def __init__(
         self,
         *,
-        db_path: str,
+        repository: RuntimeSettingsRepository,
         store: SqliteEventStore,
         config_store: ConfigStore,
     ) -> None:
+        self._repository = repository
         self._store = store
         self._config_store = config_store
-        self._path = f"{db_path}.surfaces.json" if db_path else ""
-        self._surfaces = self._load()
+        self._path = repository.legacy_path("surfaces")
+        self._surfaces = {
+            key: surface
+            for key, surface in repository.document.surfaces.items()
+            if surface in _VALID_SURFACES
+        }
 
     def _load(self) -> dict[str, str]:
-        if self._path and os.path.exists(self._path):
-            try:
-                with open(self._path) as f:
-                    data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v in _VALID_SURFACES}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty
-                return {}
-        return {}
+        return dict(self._surfaces)
 
     def _save(self) -> None:
-        if not self._path:
-            return
-        import tempfile
-
         try:
-            dir_name = os.path.dirname(self._path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._surfaces, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort
-            pass
+            self._repository.replace_mapping("surfaces", self._surfaces)
+        except Exception:  # noqa: BLE001 - historical best-effort sidecar contract
+            return
 
     def _set(self, conversation_id: str, surface: str) -> None:
-        self._surfaces[conversation_id] = surface if surface in _VALID_SURFACES else "research"
+        selected = surface if surface in _VALID_SURFACES else "research"
+        self._surfaces[conversation_id] = selected
         self._save()
 
     def _get(self, conversation_id: str) -> str:
@@ -175,8 +162,7 @@ class _RuntimeSurfaceSettings:
                     (conversation_id,),
                 ).fetchone()
                 if row is not None and row["surface"] in _VALID_SURFACES:
-                    self._surfaces[conversation_id] = row["surface"]
-                    self._save()
+                    self._set(conversation_id, row["surface"])
                     return row["surface"]
         except Exception:  # noqa: BLE001 — best-effort recovery, fall through
             pass
@@ -184,8 +170,7 @@ class _RuntimeSurfaceSettings:
         if project_store.status() == StorageStatus.OK:
             try:
                 if project_store.get(conversation_id) is not None:
-                    self._surfaces[conversation_id] = "build"
-                    self._save()
+                    self._set(conversation_id, "build")
                     return "build"
             except Exception:  # noqa: BLE001 — best-effort recovery
                 pass
@@ -200,19 +185,18 @@ class _RuntimeSurfaceSettings:
                     )
                 }
                 if "report" in kinds:
-                    self._surfaces[conversation_id] = "deep_research"
-                    self._save()
+                    self._set(conversation_id, "deep_research")
                     return "deep_research"
                 if "plan" in kinds and "action" not in kinds:
-                    self._surfaces[conversation_id] = "deep_research"
-                    self._save()
+                    self._set(conversation_id, "deep_research")
                     return "deep_research"
         except Exception:  # noqa: BLE001 — best-effort recovery
             pass
         return "research"
 
     def forget(self, conversation_id: str) -> None:
-        self._surfaces.pop(conversation_id, None)
+        if self._surfaces.pop(conversation_id, None) is not None:
+            self._save()
 
 
 class _RuntimeModeSettings:
@@ -298,7 +282,7 @@ class _RuntimeModeSettings:
         self._research_sources.pop(conversation_id, None)
 
 
-class RuntimeSettings:
+class RuntimeSettings(RuntimePersistentSettings):
     def __init__(
         self,
         *,
@@ -313,23 +297,22 @@ class RuntimeSettings:
         self._config_store = config_store
         self._routing = routing
         self._model_bindings = model_bindings
-        self._surface_settings = _RuntimeSurfaceSettings(
-            db_path=db_path,
-            store=store,
-            config_store=config_store,
-        )
-        self._mode_settings = _RuntimeModeSettings(store, appkit_ejections)
-
-        self._override_path = f"{db_path}.overrides.json" if db_path else ""
-        self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
-        self._assist_path = f"{db_path}.assist.json" if db_path else ""
-        self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
-        self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
-
+        self._settings_repository = RuntimeSettingsRepository(db_path)
+        self._override_path = self._settings_repository.legacy_path("model_overrides")
+        self._autonomous_path = self._settings_repository.legacy_path("autonomous")
+        self._assist_path = self._settings_repository.legacy_path("assist")
+        self._quiet_path = self._settings_repository.legacy_path("quiet")
+        self._last_model_path = self._settings_repository.legacy_path("last_selected_model")
         self._model_overrides = self._load_overrides()
         self._autonomous = self._load_autonomous()
         self._assist = self._load_assist()
         self._quiet = self._load_quiet()
+        self._surface_settings = _RuntimeSurfaceSettings(
+            repository=self._settings_repository,
+            store=store,
+            config_store=config_store,
+        )
+        self._mode_settings = _RuntimeModeSettings(store, appkit_ejections)
 
         # Order C: per-conversation lock for atomic pre-kick settings changes.
         # Acquired by apply_settings_change so concurrent PATCHes are serialized
@@ -340,61 +323,19 @@ class RuntimeSettings:
         return self._model_overrides.get(conversation_id)
 
     def _forget(self, conversation_id: str) -> None:
+        self._settings_repository.forget(conversation_id)
         self._model_overrides.pop(conversation_id, None)
         self._autonomous.pop(conversation_id, None)
         self._assist.pop(conversation_id, None)
         self._quiet.pop(conversation_id, None)
+        self._surface_settings._surfaces.pop(conversation_id, None)
         self._settings_locks.pop(conversation_id, None)
-        self._surface_settings.forget(conversation_id)
         self._mode_settings.forget(conversation_id)
 
     def _evict_model_binding(self, conversation_id: str) -> None:
         self._model_bindings.evict_for_model_change(conversation_id)
 
     # ---- driver model override ---------------------------------------------
-
-    def _load_overrides(self) -> dict[str, str]:
-        if self._override_path and os.path.exists(self._override_path):
-            try:
-                with open(self._override_path) as f:
-                    data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
-                return {}
-        return {}
-
-    def _save_overrides(self) -> None:
-        if not self._override_path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(self._override_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._model_overrides, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._override_path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
-            pass
-
-    def _set_model_override_unlocked(self, conversation_id: str, model_id: str | None) -> None:
-        """Inner setter — does NOT acquire the per-cid lock; call ONLY from
-        apply_settings_change (which holds the lock) or from set_model_override
-        (non-route, non-concurrent callers that don't need the atomic gate)."""
-        if model_id:
-            self._model_overrides[conversation_id] = model_id
-            self._save_overrides()
-            # P3: also persist as the last-selected model so new conversations
-            # seed from it by default (server-side, no localStorage).
-            self.set_last_selected_model(model_id)
-
-    def _clear_model_override_unlocked(self, conversation_id: str) -> None:
-        """Explicit RESET — drop the per-conversation override so the next kick composes
-        the SERVER-DEFAULT driver. Does NOT touch last-selected (the global P3 sticky is a
-        convenience for NEW conversations, not this one's pin). Inner (non-locking) form;
-        call ONLY from apply_settings_change (which holds the per-cid lock)."""
-        if self._model_overrides.pop(conversation_id, None) is not None:
-            self._save_overrides()
 
     def _resolve_sticky_model(self) -> str | None:
         """The validated last-selected model (P3 sticky), or None. Mirrors the cfg guard in
@@ -406,46 +347,6 @@ class RuntimeSettings:
             if last in cfg.models:
                 return last
         return None
-
-    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
-        """Pin the driver model for a conversation (the Build chat model picker). The id
-        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
-        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick.
-
-        Non-route callers (create-conversation, tests) use this directly; the PATCH route
-        uses apply_settings_change so the atomic pristine check covers the change."""
-        self._set_model_override_unlocked(conversation_id, model_id)
-
-    # ---- last-selected model (P3) ------------------------------------------
-
-    def get_last_selected_model(self) -> str | None:
-        """Return the last globally-picked driver model, or None if no pick has
-        ever been made. Server-side, per-owner sidecar (B0 pattern)."""
-        path = self._last_model_path
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            return data.get("model") or None
-        except Exception:  # noqa: BLE001 — corrupt/missing → None, never crash
-            return None
-
-    def set_last_selected_model(self, model_id: str | None) -> None:
-        """Persist the last-picked driver model (atomic temp-file replace, B0 pattern)."""
-        path = self._last_model_path
-        if not path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump({"model": model_id}, f)
-                tmp_name = f.name
-            os.replace(tmp_name, path)
-        except Exception:  # noqa: BLE001 — best-effort, never fatal
-            pass
 
     # ---- surface map -------------------------------------------------------
 
@@ -463,35 +364,6 @@ class RuntimeSettings:
 
     # ---- autonomous (headless) ---------------------------------------------
 
-    def _load_autonomous(self) -> dict[str, bool]:
-        if self._autonomous_path and os.path.exists(self._autonomous_path):
-            try:
-                with open(self._autonomous_path) as f:
-                    return {str(k): bool(v) for k, v in json.load(f).items()}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty
-                return {}
-        return {}
-
-    def _save_autonomous(self) -> None:
-        if not self._autonomous_path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(self._autonomous_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._autonomous, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._autonomous_path)
-        except Exception:  # noqa: BLE001 — best-effort, but VISIBLE (a silent
-            # no-op here cost autonomy-across-restart, live-caught 2026-07-03)
-            logger.warning("autonomous sidecar save failed", exc_info=True)
-
-    def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a conversation autonomous (headless) BEFORE it runs. Persisted (B0)."""
-        self._autonomous[conversation_id] = bool(value)
-        self._save_autonomous()
-
     def _effective_autonomous(self, conversation_id: str) -> bool:
         """The SINGLE source of truth for "is this conversation actually running
         headless". Autonomous governs the plan-gate auto-approve + ask/clarify
@@ -505,49 +377,13 @@ class RuntimeSettings:
             and self._surface_of(conversation_id) in _AUTONOMOUS_SURFACES
         )
 
-    def is_autonomous(self, conversation_id: str) -> bool:
-        # The public read (UI badge via /state extras) — gated, so the badge can't
-        # show "autonomous" on a surface that has no headless affordance.
-        return self._effective_autonomous(conversation_id)
-
     # ---- quiet mode --------------------------------------------------------
-
-    def _load_quiet(self) -> dict[str, bool]:
-        if self._quiet_path and os.path.exists(self._quiet_path):
-            try:
-                with open(self._quiet_path) as f:
-                    return {str(k): bool(v) for k, v in json.load(f).items()}
-            except Exception:  # noqa: BLE001
-                return {}
-        return {}
-
-    def _save_quiet(self) -> None:
-        if not self._quiet_path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(self._quiet_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._quiet, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._quiet_path)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def set_quiet(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a build-like conversation as quiet. Persisted (B0)."""
-        self._quiet[conversation_id] = bool(value)
-        self._save_quiet()
 
     def _effective_quiet(self, conversation_id: str) -> bool:
         return (
             self._quiet.get(conversation_id, False)
             and self._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
         )
-
-    def is_quiet(self, conversation_id: str) -> bool:
-        return self._effective_quiet(conversation_id)
 
     # ---- assist tier -------------------------------------------------------
 
@@ -559,43 +395,6 @@ class RuntimeSettings:
         # conversation UI toggle (or an explicit ModelEntry.tier in config) is the only
         # way in. So this default is always False.
         return False
-
-    def _load_assist(self) -> dict[str, bool]:
-        if self._assist_path and os.path.exists(self._assist_path):
-            try:
-                with open(self._assist_path) as f:
-                    return {str(k): bool(v) for k, v in json.load(f).items()}
-            except Exception:  # noqa: BLE001
-                return {}
-        return {}
-
-    def _save_assist(self) -> None:
-        if not self._assist_path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(self._assist_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._assist, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._assist_path)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _set_assist_unlocked(self, conversation_id: str, value: bool) -> None:
-        """Inner setter — does NOT acquire the per-cid lock; call ONLY from
-        apply_settings_change (which holds the lock) or from set_assist
-        (non-route, non-concurrent callers that don't need the atomic gate)."""
-        self._assist[conversation_id] = bool(value)
-        self._save_assist()
-
-    def set_assist(self, conversation_id: str, value: bool = True) -> None:
-        """Mark a conversation assist tier (T1). Persisted.
-
-        Non-route callers (create-conversation, tests) use this directly; the PATCH route
-        uses apply_settings_change so the atomic pristine check covers the change."""
-        self._set_assist_unlocked(conversation_id, value)
 
     def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
         """The SINGLE source of truth for model-tier execution — the ONLY place that
@@ -667,9 +466,6 @@ class RuntimeSettings:
         if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
             return None
         return (entry.base_url, entry.model_id, entry.api_key_env)
-
-    def is_assist(self, conversation_id: str) -> bool:
-        return self._effective_assist(conversation_id)
 
     # ---- atomic pre-kick settings gate (Order C) ---------------------------
 

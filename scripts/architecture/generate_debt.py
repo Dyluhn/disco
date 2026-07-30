@@ -143,6 +143,48 @@ PKG06_RUNTIME_RESOLVED_IDS = frozenset(
         "PY-0898",
     }
 )
+PKG07_WORKSPACE_RESOLVED_IDS = frozenset(
+    {
+        "DM-002",
+        *(f"PY-{number:04d}" for number in range(252, 257)),
+        *(f"PY-{number:04d}" for number in range(281, 287)),
+        *(f"PY-{number:04d}" for number in range(294, 298)),
+        *(f"PY-{number:04d}" for number in range(346, 360)),
+        "PY-0361",
+    }
+)
+PKG07_PREVIEW_RESOLVED_IDS = frozenset(
+    {
+        "DM-003",
+        "DM-012",
+        *(f"PY-{number:04d}" for number in range(225, 239)),
+        *(f"PY-{number:04d}" for number in range(258, 275)),
+        "PY-0362",
+        "PY-0363",
+    }
+)
+PKG11_AUTH_QUOTA_RESOLVED_IDS = frozenset(
+    {
+        "PY-0186",
+        "PY-0372",
+        *(f"PY-{number:04d}" for number in range(421, 427)),
+        "PY-0632",
+        "PY-0633",
+        "PY-0670",
+        "PY-0671",
+    }
+)
+PKG11_SETTINGS_RESOLVED_IDS = frozenset(
+    {
+        "DM-015",
+        *(f"PY-{number:04d}" for number in range(275, 281)),
+        *(f"PY-{number:04d}" for number in range(325, 329)),
+        *(f"PY-{number:04d}" for number in range(364, 367)),
+        *(f"PY-{number:04d}" for number in range(368, 372)),
+        *(f"PY-{number:04d}" for number in range(457, 461)),
+        "PY-0473",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -155,9 +197,13 @@ RESOLVED_IDS = (
     | PKG05_LOOP_RESOLVED_IDS
     | PKG06_LIFECYCLE_RESOLVED_IDS
     | PKG06_RUNTIME_RESOLVED_IDS
+    | PKG07_WORKSPACE_RESOLVED_IDS
+    | PKG07_PREVIEW_RESOLVED_IDS
+    | PKG11_AUTH_QUOTA_RESOLVED_IDS
+    | PKG11_SETTINGS_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 599
-EXPECTED_OBSERVATIONS = 16
+EXPECTED_ACTIVE_DEBT_ROWS = 502
+EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
     "DM-001": (
