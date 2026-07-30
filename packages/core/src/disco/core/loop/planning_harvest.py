@@ -9,7 +9,7 @@ from . import signals
 from .control import Disp
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 
 async def harvest_revision_plan_after_refusal(loop: AgentLoop) -> Disp | None:

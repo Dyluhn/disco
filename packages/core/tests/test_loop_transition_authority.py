@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import disco.core.loop.engine as engine_module
@@ -72,6 +73,11 @@ def test_terminal_success_has_one_persistence_route() -> None:
             if target == "_route_event" and relative != "loop_runtime.py":
                 offenders.append(f"{relative}:{node.lineno}:{target}")
     assert offenders == []
+
+
+def test_agent_loop_compatibility_facade_stays_below_250_lines() -> None:
+    source_lines, _line_number = inspect.getsourcelines(AgentLoop)
+    assert len(source_lines) < 250
 
 
 async def test_finished_publication_crosses_transition_and_commit_hook() -> None:

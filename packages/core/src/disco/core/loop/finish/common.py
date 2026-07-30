@@ -103,7 +103,7 @@ from ..preview_target import (
 from ..signals import _NON_PRODUCTIVE_TOOLS
 
 if TYPE_CHECKING:
-    from ..engine import AgentLoop
+    from ..loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 

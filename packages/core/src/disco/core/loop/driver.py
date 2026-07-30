@@ -65,7 +65,7 @@ from .tool_visibility import ToolVisibility
 if TYPE_CHECKING:
     from ..llm import StreamChunk
     from .boundaries import StreamHook
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 

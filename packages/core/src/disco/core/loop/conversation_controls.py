@@ -20,7 +20,7 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 
 class ConversationControls:

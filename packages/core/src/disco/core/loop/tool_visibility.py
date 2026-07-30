@@ -18,7 +18,7 @@ from .tool_specs import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _FORCE_SUBMIT_READ_GRACE = 3
 
