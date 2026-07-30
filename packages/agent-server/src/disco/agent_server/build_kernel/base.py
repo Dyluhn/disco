@@ -15,7 +15,7 @@ is an adapter over the EXISTING entry points —
   * approve_plan / reject_plan /
     confirm / reject / request_plan  → `ControlOps` (the plan/action gate)
   * pick_alternative / pause /
-    cancel / resume / kill           → the existing control surface
+    cancel / kill                    → the existing control surface
 
 — it does NOT turn `AgentLoop.run()` into an `AsyncIterator[KernelEvent]`.
 `KernelEvent` is therefore just a reuse of the existing `disco.core.Event`
@@ -56,7 +56,7 @@ class BuildKernel(Protocol):
     `DiscoKernel` is a faithful pass-through (ZERO behavior change).
 
     The campaign's "core" surface is start / send_user_turn / approve_plan /
-    reject_plan / cancel / resume; the remaining methods (confirm / reject /
+    reject_plan / cancel; the remaining methods (confirm / reject /
     request_plan / pick_alternative / pause / kill) round out the real Disco
     control surface the WS and REST routes already drive, so the seam is
     implementable end-to-end today.
@@ -120,10 +120,6 @@ class BuildKernel(Protocol):
 
     async def cancel(self, conversation_id: str) -> None:
         """Cooperative stop — the run winds down to a terminal status."""
-        ...
-
-    async def resume(self, conversation_id: str) -> None:
-        """Continue a stopped/incomplete run (mode-agnostic resume)."""
         ...
 
     async def kill(self, conversation_id: str) -> None:

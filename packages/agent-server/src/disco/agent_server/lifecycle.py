@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import math
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,6 @@ from disco.core.loop import SealabilityProbeResult
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import (
     StorageStatus,
-    rehydrate_workspace,
     snapshot_workspace,
 )
 
@@ -49,20 +47,17 @@ from .lifecycle_ports import (
     LifecycleConnections,
     LifecycleIdleSweepDeps,
     LifecycleKernelPins,
-    LifecyclePersistenceNotifier,
     LifecyclePersistenceOwner,
     LifecycleRunState,
     LifecycleSandboxAccess,
     LifecycleStoreAccess,
-    LifecycleUploads,
     WorkspaceSealProbe,
 )
+from .lifecycle_rehydration import Rehydration
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
-from .workspace_service import WorkspaceCoordinator
+from .workspace_fence import WorkspaceFenceService
 
 _LOG = logging.getLogger(__name__)
-_DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
-_MIN_IDLE_SWEEP_INTERVAL_S = 5.0
 
 
 # P-C: the gate states a conversation parks at while waiting on the human. The
@@ -110,9 +105,7 @@ class GateReaper:
         cursor: str | None = None
         page = 200
         while True:
-            ids = await self._store.list_conversations(
-                owner_id=owner_id, limit=page, cursor=cursor
-            )
+            ids = await self._store.list_conversations(owner_id=owner_id, limit=page, cursor=cursor)
             if not ids:
                 break
             for cid in ids:
@@ -260,9 +253,7 @@ class OrphanReconciler:
         cursor: str | None = None
         page = 200
         while True:
-            ids = await self._store.list_conversations(
-                owner_id=owner_id, limit=page, cursor=cursor
-            )
+            ids = await self._store.list_conversations(owner_id=owner_id, limit=page, cursor=cursor)
             if not ids:
                 break
             for cid in ids:
@@ -380,110 +371,6 @@ class OrphanReconciler:
         return destroyed
 
 
-class Rehydration:
-    """Workspace durability — restore snapshot files + uploads into a live sandbox."""
-
-    def __init__(
-        self,
-        sandbox: LifecycleSandboxAccess,
-        run_state: LifecycleRunState,
-        notifier: LifecyclePersistenceNotifier,
-        uploads: LifecycleUploads,
-    ) -> None:
-        self._sandbox = sandbox
-        self._run_state = run_state
-        self._notifier = notifier
-        self._uploads = uploads
-        self._rehydrated: set[str] = set()
-
-    def _mark_rehydrated(self, conversation_id: str) -> None:
-        self._rehydrated.add(conversation_id)
-
-    async def _maybe_rehydrate(self, conversation_id: str) -> None:
-        """Restore the workspace files from a prior snapshot into the live
-        sandbox, if a snapshot exists. Idempotent: tracked via an in-process
-        flag so a second kick on the same conversation doesn't re-write the
-        files."""
-        if conversation_id in self._rehydrated:
-            return
-        self._rehydrated.add(conversation_id)
-        store = self._sandbox.current_project_store()
-        if store is None or store.status() != StorageStatus.OK:
-            return
-        record = None
-        try:
-            record = store.get(conversation_id)
-        except Exception:  # noqa: BLE001 — manifest unreadable: treat as no record
-            return
-        if record is None or record.files_missing:
-            return
-        executor = self._run_state.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            return
-        try:
-            await rehydrate_workspace(session, store.path_for(conversation_id))
-        except Exception as exc:  # noqa: BLE001 — surface, don't crash the run
-            await self._notifier.emit(
-                conversation_id,
-                f"Could not restore project files: {exc}",
-            )
-
-    async def _rehydrate_after_recreate(self, conversation_id: str) -> None:
-        """Mid-run recreate (transport drop / OOM-killed box): SandboxSession
-        replaced a dead instance with a FRESH one whose workspace is EMPTY — the
-        conv_f3bdc842 production incident ("all files were lost"). Clear the
-        idempotency flag and rehydrate so the agent's retry lands on its files,
-        not a bare dir. _maybe_rehydrate writes through the executor's session,
-        which already points at the new instance — no extra plumbing needed.
-        Best-effort: with no snapshot yet (first run), there is nothing to
-        restore and the agent rebuilds, exactly as before."""
-        self._rehydrated.discard(conversation_id)
-        await self._maybe_rehydrate(conversation_id)
-        # DC-07: also re-materialize uploaded files.
-        await self._rematerialize_uploads(conversation_id)
-
-    async def _rematerialize_uploads(self, conversation_id: str) -> None:
-        """[DC-07] Copy server-held uploads back into the fresh sandbox."""
-        # We need the session to write files. The executor's session if a loop
-        # exists; otherwise the pending session if it's a pre-kick recreation.
-        executor = self._run_state.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
-        if session is None:
-            session = self._run_state.pending_session(conversation_id)
-
-        if session is None:
-            return
-
-        uploads_dir = self._uploads.directory(conversation_id)
-        if uploads_dir is None:
-            return
-
-        # Write them back into the sandbox.
-        written = 0
-        for p in uploads_dir.iterdir():
-            if p.is_file():
-                try:
-                    data = p.read_bytes()
-                    await session.write_file(f"uploads/{p.name}", data)
-                    written += 1
-                except Exception:  # noqa: BLE001 — best effort
-                    _LOG.warning(
-                        "[dc-07] failed to re-materialize upload %r for %s",
-                        p.name,
-                        conversation_id,
-                    )
-        if written:
-            _LOG.info(
-                "[dc-07] re-materialized %d upload(s) for %s",
-                written,
-                conversation_id,
-            )
-
-    def clear(self, conversation_id: str) -> None:
-        self._rehydrated.discard(conversation_id)
-
-
 class LifecycleManager:
     """Sandbox lifecycle logic; live state through explicit typed named owners.
 
@@ -504,7 +391,7 @@ class LifecycleManager:
         connections: LifecycleConnections,
         sandbox: LifecycleSandboxAccess,
         idle_sweep_deps: LifecycleIdleSweepDeps,
-        workspace: WorkspaceCoordinator,
+        workspace: WorkspaceFenceService,
     ) -> None:
         self._persistence = persistence
         self._gate_reaper = gate_reaper
@@ -516,7 +403,7 @@ class LifecycleManager:
         self._sandbox = sandbox
         self._idle_sweep_deps = idle_sweep_deps
         self._workspace = workspace
-        self._seal_probe = WorkspaceSealProbe(run_state.resources_registry())
+        self._seal_probe = WorkspaceSealProbe(run_state._resources_registry())
 
     async def commit_finished_workspace(
         self,
@@ -580,9 +467,7 @@ class LifecycleManager:
         # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
         executor = self._run_state.pop_executor(conversation_id)
         pending = self._run_state.pop_pending_session(conversation_id)
-        self._run_state.forget(
-            conversation_id
-        )  # force a fresh sandbox on the next run
+        self._run_state.forget(conversation_id)  # force a fresh sandbox on the next run
         self.clear_session_markers(conversation_id)
         # Best-effort resource reclaim LAST (safe to cancel — resume state already consistent).
         if executor is not None:
@@ -616,20 +501,6 @@ class LifecycleManager:
         return await self._orphan_reconciler._sweep_orphan_containers(
             owner_id=owner_id, terminal_statuses=terminal_statuses
         )
-
-    def on_connect(self, conversation_id: str) -> None:
-        """A UI WebSocket connected — track it and cancel any pending idle-suspend
-        (the user is back before the grace elapsed, or the WS reconnected)."""
-        self._connections.on_connect(conversation_id)
-
-    def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
-        """A UI WebSocket closed. When the LAST connection for a conversation goes,
-        schedule an idle-suspend after `grace_s` — long enough that a brief blip (the
-        WS-reconnect backoff) reconnects and cancels it before it fires."""
-        self._connections.on_disconnect(conversation_id, grace_s=grace_s)
-
-    async def _suspend_after_grace(self, conversation_id: str, grace_s: float) -> None:
-        await self._connections.suspend_after_grace(conversation_id, grace_s)
 
     def _has_active_work(self, conversation_id: str) -> bool:
         """LIFE-3 — True when a suspend would KILL in-flight work even though the
@@ -688,9 +559,9 @@ class LifecycleManager:
         conversation_id. Return 'suspended' when a snapshot record exists (the sandbox
         was torn down but is restorable). Return None when no sandbox context exists
         (research surface / no snapshot)."""
-        if self._run_state.has_executor(
+        if self._run_state.has_executor(conversation_id) or self._run_state.has_pending_session(
             conversation_id
-        ) or self._run_state.has_pending_session(conversation_id):
+        ):
             return "active"
         store = self._sandbox.current_project_store()
         if store is None:
@@ -764,67 +635,6 @@ class LifecycleManager:
 
     async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         return await self._gate_reaper.sweep_abandoned_gates_once(owner_id=owner_id)
-
-    async def _sweep_abandoned_gates_logged(self) -> None:
-        """Keep the background loop alive while making whole-sweep failures visible."""
-
-        try:
-            await self.sweep_abandoned_gates_once()
-        except Exception:
-            _LOG.exception("abandoned gate sweep failed")
-
-    @staticmethod
-    def _idle_sweep_interval_s() -> float:
-        raw = disco_env("IDLE_SWEEP_INTERVAL_S", str(_DEFAULT_IDLE_SWEEP_INTERVAL_S))
-        assert raw is not None  # default above is non-None
-        try:
-            interval_s = float(raw)
-        except ValueError:
-            interval_s = 0.0
-        if not math.isfinite(interval_s) or interval_s < _MIN_IDLE_SWEEP_INTERVAL_S:
-            _LOG.error(
-                "DISCO_IDLE_SWEEP_INTERVAL_S must be finite and at least %.0fs; "
-                "using bounded %.0fs default",
-                _MIN_IDLE_SWEEP_INTERVAL_S,
-                _DEFAULT_IDLE_SWEEP_INTERVAL_S,
-            )
-            return _DEFAULT_IDLE_SWEEP_INTERVAL_S
-        return interval_s
-
-    async def _idle_sweep_loop(self) -> None:
-        """Background task: periodically sweep idle sandboxes. Created by the app
-        lifespan alongside reconcile_orphaned_runs; cancelled cleanly on shutdown.
-
-        Also reclaims the bundled audio-overview TTS model (RP-09): the in-process
-        Kokoro engine stays resident after a synth, so this sweep unloads it once it
-        has been idle past its TTL — freeing ~0.5 GB without the user toggling Audio
-        off. The bundled Kokoro engine ships in core deps, but the import stays lazy
-        and suppressed so a missing/broken native onnxruntime can't wedge startup, and
-        a sweep failure never disturbs the sandbox sweep."""
-        while True:
-            interval_s = self._idle_sweep_interval_s()
-            try:
-                await asyncio.sleep(interval_s)
-            except asyncio.CancelledError:
-                return
-            with contextlib.suppress(Exception):
-                await self.sweep_idle_once()
-            # W11 backstop: reconcile conversations stranded at RUNNING with no live
-            # task (lost done-callback / never re-kicked) so a stall self-heals or
-            # becomes visibly STUCK instead of hanging RUNNING forever.
-            with contextlib.suppress(Exception):
-                await self._idle_sweep_deps.sweep_stranded_once()
-            # P-C: reap conversations abandoned at an AWAITING_* gate past a long TTL
-            # so open gates don't accumulate (the idle sweep only frees their sandbox).
-            await self._sweep_abandoned_gates_logged()
-            with contextlib.suppress(Exception):
-                tts_idle_ttl = disco_env("TTS_IDLE_TTL_S", "1800")
-                assert tts_idle_ttl is not None  # default above is non-None
-                # maybe_unload_if_idle takes int; env values are integer TTLs.
-                ttl_s = int(float(tts_idle_ttl))
-                from disco.agent_server import tts_local
-
-                await tts_local.maybe_unload_if_idle(ttl_s=ttl_s)
 
     async def _maybe_rehydrate(self, conversation_id: str) -> None:
         return await self._rehydration._maybe_rehydrate(conversation_id)

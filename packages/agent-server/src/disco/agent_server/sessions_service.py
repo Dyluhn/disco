@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, cast
 from disco.tools import SandboxSession
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+from .preview_session_ports import LiveSessionAccess
 from .runtime_settings import _BUILD_LIKE_SURFACES
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ class SessionsService:
         mcp: McpManager,
         lifecycle: LifecycleManager,
         connections: ConnectionTracker,
+        live_sessions: LiveSessionAccess,
     ) -> None:
         self._run_resources = run_resources
         self._sandbox = sandbox
@@ -55,6 +57,7 @@ class SessionsService:
         self._mcp = mcp
         self._lifecycle = lifecycle
         self._connections = connections
+        self._live_sessions = live_sessions
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
         """Session uploads write through. The executor's live session when a
@@ -90,8 +93,7 @@ class SessionsService:
         transport failure retry twice (0.25 s apart), then degrade to the
         last-known list marked stale=True — a read-only listing must never
         500 the UI poll loop (DEFECT-1). No sandbox -> ([], False)."""
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         if session is None:
             return ([], False)
         last_exc: BaseException | None = None
@@ -118,8 +120,7 @@ class SessionsService:
     ) -> SessionView | None:
         """Coalesced capture-pane: at most one in-flight call per (cid, name),
         result cached 0.5s so concurrent polls share one exec_shell round-trip."""
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         if session is None:
             return None
         lock = self._connections.session_view_lock(conversation_id, name)

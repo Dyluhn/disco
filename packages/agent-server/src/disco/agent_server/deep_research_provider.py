@@ -129,6 +129,20 @@ class DeepResearchProvider:
         """Compose bundled search/extraction with MCP retrieval providers."""
         return self._mcp._compose_mcp_retrieval(deps)
 
+    def _approved_secret(
+        self,
+        url: str,
+        purpose: str,
+        secret_ref: str | None,
+    ) -> str:
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        if not self._origin_approved(url, purpose, secret_ref):
+            return ""
+        if not secret_ref_allowed_for_origin(secret_ref, url):
+            return ""
+        return self._resolve_secret(secret_ref) or ""
+
     def research(
         self,
         search_override: Any | None = None,
@@ -150,7 +164,6 @@ class DeepResearchProvider:
             return self._injected_providers
         cfg = self._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
-        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 
         search_secret_url = {
             "tavily": "https://api.tavily.com",
@@ -164,20 +177,15 @@ class DeepResearchProvider:
         )
         search_purpose = f"search:{sch.provider}"
         extraction_purpose = f"extraction:{ext.provider}"
-        # paid-provider keys resolve by the configured env-var NAME (same
-        # mechanism as model api_key_env): the encrypted store wins, else the
-        # live env. Bundled providers (ddgs/local) need no key.
-        search_key = (
-            self._resolve_secret(sch.api_key_env) or ""
-            if self._origin_approved(search_secret_url, search_purpose, sch.api_key_env)
-            and secret_ref_allowed_for_origin(sch.api_key_env, search_secret_url)
-            else ""
+        search_key = self._approved_secret(
+            search_secret_url,
+            search_purpose,
+            sch.api_key_env,
         )
-        ext_key = (
-            self._resolve_secret(ext.api_key_env) or ""
-            if self._origin_approved(extraction_secret_url, extraction_purpose, ext.api_key_env)
-            and secret_ref_allowed_for_origin(ext.api_key_env, extraction_secret_url)
-            else ""
+        ext_key = self._approved_secret(
+            extraction_secret_url,
+            extraction_purpose,
+            ext.api_key_env,
         )
         approval_key = self._config_store.approval_store(
             secret_store=self._secret_store

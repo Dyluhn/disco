@@ -47,7 +47,7 @@ from .build_platform_shadow import (
     select_appkit_platform_route,
     select_freeform_platform_route,
 )
-from .workspace_service import WorkspaceCoordinator
+from .workspace_fence import WorkspaceFenceService
 
 BuildRoute = Literal["legacy", "platform"]
 CompositionAuthority = Literal["legacy", "build_platform_core"]
@@ -262,7 +262,7 @@ class BuildPlatformRuntime:
         self,
         *,
         store: EventStore,
-        workspace: WorkspaceCoordinator,
+        workspace: WorkspaceFenceService,
         surfaces: BuildSurfaceClassifier,
         rollback: BuildRouteRollback,
         ejections: AppKitEjectionLedger,

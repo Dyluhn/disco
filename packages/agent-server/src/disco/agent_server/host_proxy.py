@@ -48,6 +48,8 @@ from disco.tools.sandbox._container import PREVIEW_PORT
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from websockets.typing import Subprotocol
 
+from . import preview_session_ports as pp
+
 _LOG = logging.getLogger(__name__)
 
 # Versioned live (p2) and path/static (p3s) labels work beneath localhost or a
@@ -364,7 +366,7 @@ class HostPreviewProxyMiddleware:
         app: ASGIApp,
         *,
         upstream_resolver: Callable[..., str | None | Awaitable[str | None]],
-        session_resolver: Callable[..., object | None | Awaitable[object | None]] | None = None,
+        session_resolver: pp.PreviewSessionResolver | None = None,
         require_capability: bool = False,
         redemption_store: PreviewIntentRedemptionStore | None = None,
         local_lease_resolver: Callable[..., object | None] | None = None,
@@ -1048,7 +1050,7 @@ class HostPreviewProxyMiddleware:
             rel = path.lstrip("/")
             if query_string:
                 rel = f"{rel}?{query_string}"
-            got = await session.fetch_inside(port, rel)  # type: ignore[attr-defined]
+            got = await session.fetch_inside(port, rel)
         except Exception as error:  # noqa: BLE001 — a liveness probe must never 500 the iframe
             _LOG.warning(
                 "preview in-session fallback failed category=%s class=%s",
@@ -1568,26 +1570,22 @@ async def _proxy_websocket(
 
 
 def make_preview_session_resolver(
-    runtime: object | None,
-) -> Callable[..., Awaitable[object | None]]:
-    """Fix 2 (codex P1): build the `cid8 -> live SandboxSession | None` resolver the
-    HostPreviewProxyMiddleware uses for its in-sandbox liveness fallback. Captures
-    `runtime` (None in wire-only tests → always None). Read-only: resolves the full
-    conversation id from the 8-char prefix, then the live session (no creation)."""
+    preview: pp.PreviewSessionAccess | None,
+) -> pp.AsyncPreviewSessionResolver:
+    """Build the host proxy's read-only cid8 -> live SandboxSession resolver.
+    It returns the existing session; None in wire-only tests and never creates one."""
 
-    async def _resolve(cid8: str, owner_id: str | None = None) -> object | None:
-        if runtime is None:
+    async def _resolve(cid8: str, owner_id: str | None = None) -> pp.PreviewSession | None:
+        if preview is None:
             return None
         try:
             if owner_id is not None:
-                cid = await runtime.resolve_owned_cid_prefix(cid8, owner_id)  # type: ignore[attr-defined]
+                cid = await preview.resolve_owned_cid_prefix(cid8, owner_id)
             else:
-                cid = runtime.resolve_cid_prefix(cid8)  # type: ignore[attr-defined]
+                cid = preview.resolve_cid_prefix(cid8)
             if not cid:
                 return None
-            resources = runtime._run_resources  # type: ignore[attr-defined]
-            executor = resources.executor(cid)
-            return executor.sandbox if executor is not None else None
+            return preview.live_session(cid)
         except Exception:  # noqa: BLE001 — resolver must never raise into the proxy
             return None
 

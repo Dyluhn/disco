@@ -156,9 +156,9 @@ class _StubSuspend:
 def test_on_connect_increments_and_cancels_pending_suspend() -> None:
     tracker = ConnectionTracker(_StubSuspend())
     tracker.on_connect("conv_a")
-    assert tracker._connections["conv_a"] == 1
+    assert tracker._state._connections["conv_a"] == 1
     tracker.on_connect("conv_a")
-    assert tracker._connections["conv_a"] == 2
+    assert tracker._state._connections["conv_a"] == 2
 
 
 async def test_on_disconnect_decrements_and_keeps_count_when_remaining() -> None:
@@ -166,7 +166,7 @@ async def test_on_disconnect_decrements_and_keeps_count_when_remaining() -> None
     tracker.on_connect("conv_a")
     tracker.on_connect("conv_a")
     tracker.on_disconnect("conv_a")
-    assert tracker._connections["conv_a"] == 1
+    assert tracker._state._connections["conv_a"] == 1
     assert "conv_a" not in tracker._suspend_tasks
 
 
@@ -174,7 +174,7 @@ async def test_on_disconnect_last_connection_schedules_suspend() -> None:
     tracker = ConnectionTracker(_StubSuspend())
     tracker.on_connect("conv_a")
     tracker.on_disconnect("conv_a", grace_s=0.01)
-    assert "conv_a" not in tracker._connections
+    assert "conv_a" not in tracker._state._connections
     assert "conv_a" in tracker._suspend_tasks
 
 
@@ -186,7 +186,7 @@ async def test_on_disconnect_reconnect_cancels_suspend() -> None:
     # Reconnect before grace elapses.
     tracker.on_connect("conv_a")
     assert "conv_a" not in tracker._suspend_tasks
-    assert tracker._connections["conv_a"] == 1
+    assert tracker._state._connections["conv_a"] == 1
 
 
 async def test_suspend_after_grace_fires_when_no_connections() -> None:
@@ -306,8 +306,8 @@ def test_clear_conversation_drops_all_caches_and_locks() -> None:
     tracker.clear_conversation("conv_a")
 
     assert tracker.session_view_cache_get("conv_a", "dev") is None
-    assert ("conv_a", "dev") not in tracker._session_view_locks
-    assert "conv_a" not in tracker._wake_locks
+    assert ("conv_a", "dev") not in tracker._state._session_view_locks
+    assert "conv_a" not in tracker._state._wake_locks
     assert tracker.last_sessions_get("conv_a") == []
     assert tracker.has_connections("conv_a") is False
     assert "conv_a" not in tracker._suspend_tasks

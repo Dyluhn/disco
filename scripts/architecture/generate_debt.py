@@ -133,6 +133,7 @@ PKG06_RUNTIME_RESOLVED_IDS = frozenset(
         "PY-0188",
         "PY-0189",
         "PY-0190",
+        "PY-0193",
     }
 ) | frozenset(
     {
@@ -154,7 +155,7 @@ RESOLVED_IDS = (
     | PKG06_LIFECYCLE_RESOLVED_IDS
     | PKG06_RUNTIME_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 601
+EXPECTED_ACTIVE_DEBT_ROWS = 600
 EXPECTED_OBSERVATIONS = 16
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
@@ -178,34 +179,34 @@ LOCATION_OVERRIDES = {
     ),
     "PY-0192": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "DeepResearchService:59-1235"
+        "DeepResearchService:66-1083"
     ),
     "PY-0194": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_maybe_run_deep_research:502-587"
+        "_maybe_run_deep_research:350-435"
     ),
     "PY-0195": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_propose_deep_research_plan:589-742"
+        "_propose_deep_research_plan:437-590"
     ),
     "PY-0196": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_propose_deep_research_plan:589-742"
+        "_propose_deep_research_plan:437-590"
     ),
     "PY-0197": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_execute_deep_research:744-1012"
+        "_execute_deep_research:592-860"
     ),
     "PY-0198": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_execute_deep_research:744-1012"
+        "_execute_deep_research:592-860"
     ),
     "PY-0199": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_follow_up_deep_research:1030-1207"
+        "_follow_up_deep_research:878-1055"
     ),
     "PY-0200": (
-        "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1235"
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1083"
     ),
     "PY-0305": (
         "packages/agent-server/src/disco/agent_server/runtime.py:_sync_appkit_live_preview:512-595"
@@ -264,13 +265,13 @@ LOCATION_OVERRIDES = {
     "PY-0324": ("packages/agent-server/src/disco/agent_server/runtime.py:<module>:1-5369"),
     "PY-0357": (
         "packages/agent-server/src/disco/agent_server/workspace_service.py:"
-        "WorkspaceCoordinator:136-911"
+        "WorkspaceCoordinator:125-815"
     ),
     "PY-0358": (
         "packages/agent-server/src/disco/agent_server/workspace_service.py:"
-        "WorkspaceCoordinator:136-911"
+        "WorkspaceCoordinator:125-815"
     ),
-    "PY-0359": ("packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-922"),
+    "PY-0359": ("packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-815"),
 }
 
 # The source identity the disposition rows were sealed against.
@@ -473,7 +474,8 @@ def build_debt_rows(rows: list[dict[str, Any]], repo_root: Path) -> list[dict[st
             continue
         if row["id"] in RESOLVED_IDS:
             continue
-        loc = parse_location(LOCATION_OVERRIDES.get(row["id"], row["location"]))
+        location = LOCATION_OVERRIDES.get(row["id"]) or row["location"]
+        loc = parse_location(location)
         role_category = str(row["role_category"])
         rule = RULE_MAP.get(role_category, role_category)
         observed = extract_observed(role_category, row["metrics"])

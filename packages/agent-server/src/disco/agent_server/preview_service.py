@@ -24,10 +24,11 @@ import logging
 import posixpath
 import shlex
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import Any, cast
 
 from disco.core import DEFAULT_OWNER_ID, ConversationStatus, DeliverableEvent
 from disco.core.loop.preview_target import is_managed_host_preview_port
+from disco.tools import SandboxSession
 from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
@@ -37,46 +38,20 @@ from .preview_projection import (
     SealedPreviewRuntimeContract,
     derive_sealed_preview_runtime_contract,
 )
+from .preview_service_dependencies import PreviewServiceDependencies
 from .runtime_settings import _BUILD_LIKE_SURFACES
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
-
-if TYPE_CHECKING:
-    from disco.core.llm import ConfigStore
-    from disco.core.store.sqlite import SqliteEventStore
-
-    from .build_loop_factory import BuildLoopFactory
-    from .connection_tracker import ConnectionTracker
-    from .lifecycle import LifecycleManager
-    from .project_runtime_service import ProjectRuntimeService
-    from .run_registry import RunResourceRegistry
-    from .runtime_settings import RuntimeSettings
-    from .workspace_service import WorkspaceCoordinator
 
 _LOG = logging.getLogger(__name__)
 
 
-class PreviewService:
-    def __init__(
-        self,
-        run_resources: RunResourceRegistry,
-        store: SqliteEventStore,
-        config_store: ConfigStore,
-        settings: RuntimeSettings,
-        connections: ConnectionTracker,
-        projects: ProjectRuntimeService,
-        lifecycle: LifecycleManager,
-        loop_factory: BuildLoopFactory,
-        workspace: WorkspaceCoordinator,
-    ) -> None:
-        self._run_resources = run_resources
-        self._store = store
-        self._config_store = config_store
-        self._settings = settings
-        self._connections = connections
-        self._projects = projects
-        self._lifecycle = lifecycle
-        self._loop_factory = loop_factory
-        self._workspace = workspace
+class PreviewService(PreviewServiceDependencies):
+    def live_session(self, conversation_id: str) -> SandboxSession | None:
+        """Return the already-live sandbox session without creating one."""
+
+        executor = self._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
+        return cast(SandboxSession | None, session)
 
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         """Full conversation id whose uuid part starts with cid8 — live executors only

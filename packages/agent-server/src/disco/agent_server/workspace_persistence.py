@@ -6,8 +6,7 @@ workspace capture/version/seal publication, strict snapshot-completeness, and
 synthetic deliverable logic.  ``LifecycleManager`` retains thin one-line
 delegates so the existing runtime/test seams are undisturbed.
 
-Receives its actual collaborators directly — no runtime back-ref, no
-``rt: Any``, no multi-domain locator.
+Receives its actual collaborators directly, without a runtime handle.
 """
 
 from __future__ import annotations
@@ -55,15 +54,12 @@ from disco.tools.projects import (
 )
 
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
+from .workspace_persistence_dependencies import WorkspacePersistenceDependencies
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
 
-    from .artifact_manifest_shadow import ArtifactManifestShadow
-    from .persistence_notifier import PersistenceNotifier
-    from .project_runtime_service import ProjectRuntimeService
-    from .run_registry import RunRegistry, RunResourceRegistry
-    from .workspace_service import WorkspaceCoordinator
+    from .run_registry import RunResourceRegistry
 
 _LOG = logging.getLogger(__name__)
 
@@ -292,32 +288,8 @@ def _skipped_capture(conversation_id: str, trigger: str) -> None:
     return None
 
 
-class WorkspacePersistence:
-    """Collaborator owned by ``LifecycleManager`` — all workspace durability logic.
-
-    Receives its actual collaborators directly.  Does NOT import
-    ``snapshot_workspace`` — the caller (``LifecycleManager``'s thin delegate)
-    passes it per-call so tests that monkeypatch
-    ``disco.agent_server.lifecycle.snapshot_workspace`` continue to work.
-    """
-
-    def __init__(
-        self,
-        store: SqliteEventStore,
-        run_resources: RunResourceRegistry,
-        workspace: WorkspaceCoordinator,
-        projects: ProjectRuntimeService,
-        artifact_manifest_shadow: ArtifactManifestShadow,
-        persistence_notifier: PersistenceNotifier,
-        run_registry: RunRegistry,
-    ) -> None:
-        self._store = store
-        self._run_resources = run_resources
-        self._workspace = workspace
-        self._projects = projects
-        self._artifact_manifest_shadow = artifact_manifest_shadow
-        self._persistence_notifier = persistence_notifier
-        self._run_registry = run_registry
+class WorkspacePersistence(WorkspacePersistenceDependencies):
+    """Own workspace durability while callers supply the snapshot operation."""
 
     # -- journal helper methods ------------------------------------------------
 
@@ -611,10 +583,10 @@ class WorkspacePersistence:
 
         store = self._projects.current_project_store()
         if store is None or store.status() is not StorageStatus.OK:
-            stored = await self._store.append(conversation_id, terminal_event)
-            if not isinstance(stored, StatusEvent):
+            unavailable_terminal = await self._store.append(conversation_id, terminal_event)
+            if not isinstance(unavailable_terminal, StatusEvent):
                 raise RuntimeError("event store returned wrong terminal event type")
-            return stored
+            return unavailable_terminal
 
         journal: dict[str, Any] = {
             "schema_version": 1,
@@ -630,10 +602,10 @@ class WorkspacePersistence:
                 conversation_id,
                 exc_info=True,
             )
-            stored = await self._store.append(conversation_id, terminal_event)
-            if not isinstance(stored, StatusEvent):
+            unjournaled_terminal = await self._store.append(conversation_id, terminal_event)
+            if not isinstance(unjournaled_terminal, StatusEvent):
                 raise RuntimeError("event store returned wrong terminal event type") from exc
-            return stored
+            return unjournaled_terminal
 
         async def finalize() -> tuple[StatusEvent, WorkspaceVersionEvent | None]:
             # The whole terminal pipeline is one drained task. Cancellation can

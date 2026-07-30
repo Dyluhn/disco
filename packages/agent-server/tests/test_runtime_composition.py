@@ -172,7 +172,7 @@ async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> N
     runtime._mcp._start_mcp_pool = AsyncMock()
     runtime._mcp._close_mcp_pool = AsyncMock()
     runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
-    runtime._lifecycle._idle_sweep_loop = AsyncMock()
+    runtime._idle_sweeper.run = AsyncMock()
     runtime._schedule._schedule_manager_loop = AsyncMock()
     runtime._drivers.prewarm_model_probe = AsyncMock()
     runtime._drivers.prewarm_vision_probe = AsyncMock()

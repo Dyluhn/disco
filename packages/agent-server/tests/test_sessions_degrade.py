@@ -31,14 +31,14 @@ def _make_runtime_with_mock_session(list_mock: AsyncMock) -> ConversationRuntime
     fake_session = MagicMock()
     fake_session.sessions = fake_manager
 
-    runtime.live_session = MagicMock(return_value=fake_session)
+    runtime._preview.live_session = MagicMock(return_value=fake_session)
     return runtime
 
 
 def _make_runtime_no_sandbox() -> ConversationRuntime:
     store = SqliteEventStore(":memory:")
     runtime = ConversationRuntime(store)
-    runtime.live_session = MagicMock(return_value=None)
+    runtime._preview.live_session = MagicMock(return_value=None)
     return runtime
 
 
@@ -57,7 +57,7 @@ def test_transient_failure_succeeds_on_second_attempt() -> None:
     cid = "conv_transient"
 
     async def run():
-        result, stale = await runtime.sessions_snapshot(cid)
+        result, stale = await runtime._sessions.sessions_snapshot(cid)
         return result, stale
 
     result, stale = asyncio.run(run())
@@ -79,7 +79,7 @@ def test_dead_pipe_with_history_returns_stale() -> None:
 
     async def run():
         # Seed the cache with a successful call.
-        first, stale0 = await runtime.sessions_snapshot(cid)
+        first, stale0 = await runtime._sessions.sessions_snapshot(cid)
         assert stale0 is False
         assert first == fresh
         assert list_mock.call_count == 1
@@ -89,7 +89,7 @@ def test_dead_pipe_with_history_returns_stale() -> None:
         list_mock.reset_mock()
 
         # The degraded snapshot should return the seeded list marked stale.
-        degraded, stale1 = await runtime.sessions_snapshot(cid)
+        degraded, stale1 = await runtime._sessions.sessions_snapshot(cid)
         return degraded, stale1, list_mock.call_count
 
     degraded, stale1, call_count = asyncio.run(run())
@@ -108,7 +108,7 @@ def test_dead_pipe_cold_no_history_returns_empty_stale() -> None:
     cid = "conv_dead_cold"
 
     async def run():
-        return await runtime.sessions_snapshot(cid)
+        return await runtime._sessions.sessions_snapshot(cid)
 
     result, stale = asyncio.run(run())
 
@@ -123,13 +123,13 @@ def test_no_sandbox_returns_empty_not_stale() -> None:
     cid = "conv_no_sandbox"
 
     async def run():
-        return await runtime.sessions_snapshot(cid)
+        return await runtime._sessions.sessions_snapshot(cid)
 
     result, stale = asyncio.run(run())
 
     assert result == []
     assert stale is False
-    assert cid not in runtime._connections._last_sessions
+    assert cid not in runtime._connections._state._last_sessions
 
 
 def test_teardown_hygiene() -> None:
@@ -141,11 +141,11 @@ def test_teardown_hygiene() -> None:
 
     async def run():
         # Populate the connection owner's last-session cache.
-        await runtime.sessions_snapshot(cid)
-        assert cid in runtime._connections._last_sessions
+        await runtime._sessions.sessions_snapshot(cid)
+        assert cid in runtime._connections._state._last_sessions
         # Teardown should evict it.
         await runtime._teardown_sandbox(cid)
-        assert cid not in runtime._connections._last_sessions
+        assert cid not in runtime._connections._state._last_sessions
 
     asyncio.run(run())
 

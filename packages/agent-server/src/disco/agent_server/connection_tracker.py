@@ -61,6 +61,28 @@ class LifecycleSuspender:
         await self._lifecycle._suspend(conversation_id)
 
 
+class ConnectionState:
+    """Own connection counts and session-facing caches without lifecycle effects."""
+
+    def __init__(self) -> None:
+        self._connections: dict[str, int] = {}
+        self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
+        self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._wake_locks: dict[str, asyncio.Lock] = {}
+        self._last_sessions: dict[str, list[SessionInfo]] = {}
+
+    def has_connections(self, conversation_id: str) -> bool:
+        return self._connections.get(conversation_id, 0) > 0
+
+    def clear_session_state(self, conversation_id: str) -> None:
+        for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
+            del self._session_view_cache[key]
+        for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
+            del self._session_view_locks[key]
+        self._wake_locks.pop(conversation_id, None)
+        self._last_sessions.pop(conversation_id, None)
+
+
 class ConnectionTracker:
     """Owner of connection tracking, suspend scheduling, and session caches.
 
@@ -71,26 +93,26 @@ class ConnectionTracker:
     context object.
     """
 
-    def __init__(self, suspend: SuspendCallback) -> None:
+    def __init__(
+        self,
+        suspend: SuspendCallback,
+        *,
+        state: ConnectionState | None = None,
+    ) -> None:
         self._suspend = suspend
+        self._state = state or ConnectionState()
         # Auto-suspend (lifecycle G): a build session is live only while a UI is
         # watching it. Track open WS connections per conversation; when the last
         # one closes, free the idle sandbox after a grace period.
-        self._connections: dict[str, int] = {}
         self._suspend_tasks: dict[str, asyncio.Task] = {}
-        # BP-14: per-(cid, name) coalescing cache for capture-pane calls.
-        self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
-        self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
-        self._wake_locks: dict[str, asyncio.Lock] = {}
-        # DC-04b: last-known session list per cid for stale-on-failure degradation.
-        self._last_sessions: dict[str, list[SessionInfo]] = {}
 
     # ---- auto-suspend (lifecycle G) ----------------------------------------
 
     def on_connect(self, conversation_id: str) -> None:
         """A UI WebSocket connected — track it and cancel any pending idle-suspend
         (the user is back before the grace elapsed, or the WS reconnected)."""
-        self._connections[conversation_id] = self._connections.get(conversation_id, 0) + 1
+        connections = self._state._connections
+        connections[conversation_id] = connections.get(conversation_id, 0) + 1
         task = self._suspend_tasks.pop(conversation_id, None)
         if task is not None:
             task.cancel()
@@ -99,11 +121,12 @@ class ConnectionTracker:
         """A UI WebSocket closed. When the LAST connection for a conversation goes,
         schedule an idle-suspend after `grace_s` — long enough that a brief blip (the
         WS-reconnect backoff) reconnects and cancels it before it fires."""
-        n = self._connections.get(conversation_id, 0) - 1
+        connections = self._state._connections
+        n = connections.get(conversation_id, 0) - 1
         if n > 0:
-            self._connections[conversation_id] = n
+            connections[conversation_id] = n
             return
-        self._connections.pop(conversation_id, None)
+        connections.pop(conversation_id, None)
         old = self._suspend_tasks.pop(conversation_id, None)
         if old is not None:
             old.cancel()
@@ -116,13 +139,13 @@ class ConnectionTracker:
             await asyncio.sleep(grace_s)
         except asyncio.CancelledError:
             return
-        if self._connections.get(conversation_id, 0) <= 0:
+        if not self._state.has_connections(conversation_id):
             await self._suspend.suspend(conversation_id)
         self._suspend_tasks.pop(conversation_id, None)
 
     def has_connections(self, conversation_id: str) -> bool:
         """True when at least one WS connection is open for this conversation."""
-        return self._connections.get(conversation_id, 0) > 0
+        return self._state.has_connections(conversation_id)
 
     def cancel_suspension(self, conversation_id: str) -> None:
         """Cancel a pending idle-suspend without touching the connection count.
@@ -138,13 +161,16 @@ class ConnectionTracker:
 
     def session_view_lock(self, conversation_id: str, name: str) -> asyncio.Lock:
         """Get or create the coalescing lock for a (cid, name) capture-pane call."""
-        return self._session_view_locks.setdefault((conversation_id, name), asyncio.Lock())
+        return self._state._session_view_locks.setdefault(
+            (conversation_id, name),
+            asyncio.Lock(),
+        )
 
     def session_view_cache_get(
         self, conversation_id: str, name: str
     ) -> tuple[float, SessionView] | None:
         """Read the cached capture-pane view for (cid, name), or ``None``."""
-        return self._session_view_cache.get((conversation_id, name))
+        return self._state._session_view_cache.get((conversation_id, name))
 
     def session_view_cache_set(
         self,
@@ -154,39 +180,34 @@ class ConnectionTracker:
         view: SessionView,
     ) -> None:
         """Write/overwrite the cached capture-pane view for (cid, name)."""
-        self._session_view_cache[(conversation_id, name)] = (timestamp, view)
+        self._state._session_view_cache[(conversation_id, name)] = (timestamp, view)
 
     # ---- wake-lock (suspended-sandbox wake serialization) -----------------
 
     def wake_lock_for(self, conversation_id: str) -> asyncio.Lock:
         """Get or create the wake lock for a conversation."""
-        return self._wake_locks.setdefault(conversation_id, asyncio.Lock())
+        return self._state._wake_locks.setdefault(conversation_id, asyncio.Lock())
 
     # ---- last-sessions degrade (DC-04b) ------------------------------------
 
     def last_sessions_get(self, conversation_id: str) -> list[SessionInfo]:
         """Read the last-known session list, or ``[]`` when none recorded."""
-        return self._last_sessions.get(conversation_id, [])
+        return self._state._last_sessions.get(conversation_id, [])
 
     def set_last_sessions(self, conversation_id: str, sessions: list[SessionInfo]) -> None:
         """Record the last-known session list for stale-on-failure degradation."""
-        self._last_sessions[conversation_id] = sessions
+        self._state._last_sessions[conversation_id] = sessions
 
     # ---- per-conversation cleanup -----------------------------------------
 
     def clear_session_state(self, conversation_id: str) -> None:
         """Drop session caches without changing live connection ownership."""
-        for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
-            del self._session_view_cache[key]
-        for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
-            del self._session_view_locks[key]
-        self._wake_locks.pop(conversation_id, None)
-        self._last_sessions.pop(conversation_id, None)
+        self._state.clear_session_state(conversation_id)
 
     def clear_conversation(self, conversation_id: str) -> None:
         """Forget all session and connection state for a deleted conversation."""
         self.clear_session_state(conversation_id)
-        self._connections.pop(conversation_id, None)
+        self._state._connections.pop(conversation_id, None)
         task = self._suspend_tasks.pop(conversation_id, None)
         if task is not None:
             task.cancel()

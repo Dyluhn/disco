@@ -16,21 +16,16 @@ from disco.core.llm import ConfigStore
 from disco.core.loop import SealabilityProbeResult
 from disco.tools.projects import ProjectStore
 
-from .connection_tracker import ConnectionTracker
+from .connection_tracker import ConnectionState
 from .persistence_notifier import PersistenceNotifier
 from .project_runtime_service import ProjectRuntimeService
-from .run_registry import KernelPinRegistry, LoopRegistry, RunRegistry, RunResourceRegistry
-from .run_stranded_sweep import RunStrandedSweep
+from .run_registry import KernelPinStore, LoopRegistry, RunRegistry, RunResourceRegistry
 from .sandbox_runtime_service import SandboxRuntimeService
 from .upload_store import UploadStore
 from .workspace_persistence import WorkspacePersistence, probe_finish_sealability
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
-
-_DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
-_MIN_IDLE_SWEEP_INTERVAL_S = 5.0
-
 
 class LifecycleStoreAccess:
     """Narrow the event store to the reads lifecycle sweeps and suspend need."""
@@ -45,9 +40,7 @@ class LifecycleStoreAccess:
         limit: int,
         cursor: str | None,
     ) -> list[str]:
-        return await self._store.list_conversations(
-            owner_id=owner_id, limit=limit, cursor=cursor
-        )
+        return await self._store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
 
     async def get_state(self, conversation_id: str):
         return await self._store.get_state(conversation_id)
@@ -102,20 +95,6 @@ class LifecycleRunState:
     ) -> bool:
         return self._runs.generation_is_current(conversation_id, generation)
 
-    def task(self, conversation_id: str):
-        return self._runs.task(conversation_id)
-
-    def detach_task_if_owned(self, conversation_id: str, task) -> bool:
-        return self._runs.detach_task_if_owned(conversation_id, task)
-
-    def restore_task_if_generation(
-        self,
-        conversation_id: str,
-        task,
-        generation: int | None,
-    ) -> bool:
-        return self._runs.restore_task_if_generation(conversation_id, task, generation)
-
     # -- RunResourceRegistry -------------------------------------------------
 
     def executor(self, conversation_id: str):
@@ -139,14 +118,11 @@ class LifecycleRunState:
     def conversation_ids(self, *, executors_only: bool = False) -> tuple[str, ...]:
         return self._resources.conversation_ids(executors_only=executors_only)
 
-    def resources_registry(self) -> RunResourceRegistry:
+    def _resources_registry(self) -> RunResourceRegistry:
         """Expose the backing resource registry for the seal-probe adapter."""
         return self._resources
 
     # -- LoopRegistry --------------------------------------------------------
-
-    def loop(self, conversation_id: str):
-        return self._loops.loop(conversation_id)
 
     def forget(self, conversation_id: str) -> None:
         self._loops.forget(conversation_id)
@@ -155,7 +131,7 @@ class LifecycleRunState:
 class LifecycleKernelPins:
     """Generation-safe kernel-pin clearing for the gate reaper."""
 
-    def __init__(self, pins: KernelPinRegistry, runs: RunRegistry) -> None:
+    def __init__(self, pins: KernelPinStore, runs: RunRegistry) -> None:
         self._pins = pins
         self._runs = runs
 
@@ -188,7 +164,7 @@ class LifecycleSandboxAccess:
 class LifecycleConnections:
     """Narrow connection tracker for lifecycle connect/disconnect/suspend."""
 
-    def __init__(self, connections: ConnectionTracker) -> None:
+    def __init__(self, connections: ConnectionState) -> None:
         self._connections = connections
 
     def has_connections(self, conversation_id: str) -> bool:
@@ -197,33 +173,14 @@ class LifecycleConnections:
     def clear_session_state(self, conversation_id: str) -> None:
         self._connections.clear_session_state(conversation_id)
 
-    def on_connect(self, conversation_id: str) -> None:
-        self._connections.on_connect(conversation_id)
-
-    def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
-        self._connections.on_disconnect(conversation_id, grace_s=grace_s)
-
-    async def suspend_after_grace(
-        self,
-        conversation_id: str,
-        grace_s: float,
-    ) -> None:
-        await self._connections._suspend_after_grace(conversation_id, grace_s)
-
-
 class LifecycleIdleSweepDeps:
-    """Idle-sweep-loop dependencies: stranded run sweep and idle TTL config."""
+    """Idle TTL configuration for lifecycle suspension decisions."""
 
     def __init__(
         self,
-        run_sweep: RunStrandedSweep,
         config_store: ConfigStore,
     ) -> None:
-        self._run_sweep = run_sweep
         self._config_store = config_store
-
-    async def sweep_stranded_once(self) -> None:
-        await self._run_sweep.sweep_once()
 
     def idle_ttl_s(self) -> float:
         return float(self._config_store.load().sandbox.idle_ttl_s)
@@ -249,25 +206,11 @@ class LifecyclePersistenceNotifier:
         await self._notifier.emit(conversation_id, message)
 
 
-class _SealProbeRuntime:
-    """Minimal adapter for the module-level ``probe_finish_sealability``.
-
-    The probe function in ``workspace_persistence`` (not allowlisted for this
-    package) accepts a runtime-typed argument and reads only its
-    ``_run_resources.executor``.  This adapter exposes exactly that one
-    attribute — it is not a runtime mirror, a dependency dataclass, or a
-    service locator.
-    """
-
-    def __init__(self, resources: RunResourceRegistry) -> None:
-        self._run_resources = resources
-
-
 class WorkspaceSealProbe:
     """Adapt the sealability probe to the run-resource owner."""
 
     def __init__(self, resources: RunResourceRegistry) -> None:
-        self._runtime = _SealProbeRuntime(resources)
+        self._resources = resources
 
     async def probe(
         self,
@@ -276,7 +219,7 @@ class WorkspaceSealProbe:
         snapshot_fn,
     ) -> SealabilityProbeResult:
         return await probe_finish_sealability(
-            self._runtime,
+            self._resources,
             conversation_id,
             snapshot_fn=snapshot_fn,
         )

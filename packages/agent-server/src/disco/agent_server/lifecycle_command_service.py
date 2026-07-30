@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AbstractAsyncContextManager
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import Protocol
 
 from disco.core import (
     ConversationStatus,
@@ -16,9 +16,6 @@ from disco.core import (
     current_workspace_agent_view_id,
     latest_workspace_run_intent,
 )
-
-if TYPE_CHECKING:
-    from .lifecycle import LifecycleManager
 
 LifecycleAuthority = tuple[str | None, str | None, bool]
 
@@ -114,13 +111,6 @@ class LifecyclePersistence(Protocol):
         host_mirror: bool,
         snapshot_fn: Callable[..., object] | None,
     ) -> StatusEvent: ...
-
-
-class LifecycleCompositionRoot(Protocol):
-    """Runtime dependencies used only at composition."""
-
-    _store: EventStore
-    _workspace: LifecycleFence
 
 
 class WorkspaceLifecycleTerminalEffects:
@@ -522,23 +512,3 @@ class LifecycleCommandService:
                 conversation_id,
                 authorized,
             )
-
-
-def compose_lifecycle_service(
-    root: object,
-) -> tuple[LifecycleManager, LifecycleCommandService]:
-    """Build the lifecycle boundary outside the runtime's size-constrained class."""
-
-    from . import lifecycle as lifecycle_module
-
-    runtime = cast(LifecycleCompositionRoot, root)
-    manager = lifecycle_module.LifecycleManager(runtime)
-    service = LifecycleCommandService(
-        store=runtime._store,
-        fence=runtime._workspace,
-        terminal_effects=WorkspaceLifecycleTerminalEffects(
-            manager._persistence,
-            snapshot_provider=lambda: lifecycle_module.snapshot_workspace,
-        ),
-    )
-    return manager, service

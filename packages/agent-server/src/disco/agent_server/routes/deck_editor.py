@@ -517,8 +517,7 @@ async def _patch_deck_response(
             status_code=422, detail={"reason": "render_failed", "message": str(exc)}
         ) from exc
 
-    executor = live_runtime._run_resources.executor(conversation_id)
-    session = executor.sandbox if executor is not None else None
+    session = live_runtime._preview.live_session(conversation_id)
     if session is None:
         raise HTTPException(status_code=409, detail={"reason": "no_live_sandbox"})
 

@@ -18,6 +18,7 @@ from disco.core.llm.config import RouterConfig
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools import SandboxService, SandboxSpec
 
+from . import lifecycle as lifecycle_module
 from .appkit_ejection import AppKitEjectionService
 from .artifact_manifest_shadow import ArtifactManifestShadow
 from .build_composition_ports import (
@@ -39,7 +40,7 @@ from .build_loop_factory import (
 )
 from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
 from .build_retrieval import BuildRetrievalCapabilities
-from .connection_tracker import ConnectionTracker, LifecycleSuspender
+from .connection_tracker import ConnectionState, ConnectionTracker, LifecycleSuspender
 from .control_ops import ControlOps
 from .conversation_control_service import ConversationControlService
 from .deep_research_provider import DeepResearchProvider
@@ -52,11 +53,35 @@ from .driver_runtime_ports import (
     RuntimeDriverPromptState,
     RuntimeDriverSelections,
 )
-from .lifecycle_command_service import compose_lifecycle_service
+from .lifecycle import GateReaper, LifecycleManager, OrphanReconciler, Rehydration
+from .lifecycle_command_service import (
+    LifecycleCommandService,
+    WorkspaceLifecycleTerminalEffects,
+)
+from .lifecycle_idle_sweep import LifecycleIdleSweeper
+from .lifecycle_ports import (
+    LifecycleConnections,
+    LifecycleIdleSweepDeps,
+    LifecycleKernelPins,
+    LifecyclePersistenceNotifier,
+    LifecyclePersistenceOwner,
+    LifecycleRunState,
+    LifecycleSandboxAccess,
+    LifecycleStoreAccess,
+    LifecycleUploads,
+)
 from .mcp_manager import McpManager
 from .persistence_notifier import PersistenceNotifier
 from .preview_service import PreviewService
 from .project_runtime_service import ProjectRuntimeService
+from .resume_ports import (
+    PinnedRunStart,
+    ResumeEnvironmentProbe,
+    ResumeRunState,
+    ResumeStoreAccess,
+    ResumeSurfaceSettings,
+    ResumeWorkspaceFence,
+)
 from .resume_service import ResumeService
 from .run_completion import DeferredRunCompletion
 from .run_controller import RunController
@@ -64,6 +89,7 @@ from .run_kill_service import RunKillService
 from .run_registry import (
     CancellationRegistry,
     KernelPinRegistry,
+    KernelPinStore,
     LoopRegistry,
     RunAuthorityLedger,
     RunIngressLedger,
@@ -78,6 +104,7 @@ from .run_supervision_ports import (
     RunObservability,
     RunPersistence,
     RunPreflight,
+    RunReentry,
     RunSurfaceSettings,
 )
 from .run_supervisor import RunFinalizer, RunPersistenceSupervisor, RunSupervisor
@@ -104,6 +131,15 @@ from .workflow_runtime_ports import (
     WorkflowProjectAccessAdapter,
     WorkflowRunControlAdapter,
 )
+from .workspace_fence import WorkspaceFenceService
+from .workspace_ownership import (
+    ConversationContextDisposal,
+    ConversationRegistryDisposal,
+    RunTaskDisposal,
+    WorkspaceOwnership,
+    WorkspaceRestoreSession,
+)
+from .workspace_persistence import WorkspacePersistence
 from .workspace_service import WorkspaceCoordinator
 
 if TYPE_CHECKING:
@@ -195,6 +231,14 @@ def _wire_foundation(
     rt._driver_preflight = DriverPreflight(rt._drivers)
     rt._cancellations = CancellationRegistry()
     rt._mcp = McpManager(rt._config_store, rt._secret_store, store)
+    rt._kernel_pin_store = KernelPinStore()
+    rt._connection_state = ConnectionState()
+    rt._lifecycle_idle = LifecycleIdleSweepDeps(rt._config_store)
+    rt._workspace_fence = WorkspaceFenceService(
+        rt._store,
+        rt._projects,
+        rt._settings,
+    )
     rt._title_service = TitleService(store, rt._router_now)
     rt._suggestion_service = SuggestionService(
         rt._router_now,
@@ -202,38 +246,91 @@ def _wire_foundation(
     )
 
 
-def _wire_domains(
-    rt: ConversationRuntime,
-    *,
-    research_providers: dict[str, Any] | None,
-) -> None:
+def _wire_lifecycle(rt: ConversationRuntime) -> None:
     executors = BuildExecutorAccess(rt._run_resources)
     rt._share = ShareService(
         rt._store,
         rt._settings._surface_of,
         rt._projects.current_project_store,
     )
-    rt._resume = ResumeService(rt)
-    rt._workspace = WorkspaceCoordinator(rt)
     rt._persistence_notifier = PersistenceNotifier(rt._store)
     rt._contract = BuildContractService(rt._store, rt._settings, executors)
+    rt._artifact_manifest_shadow = ArtifactManifestShadow(
+        rt._store,
+        rt._run_resources,
+    )
+    persistence = WorkspacePersistence(
+        rt._store,
+        rt._run_resources,
+        rt._workspace_fence,
+        rt._projects,
+        rt._artifact_manifest_shadow,
+        rt._persistence_notifier,
+        rt._run_registry,
+    )
+    persistence_owner = LifecyclePersistenceOwner(persistence)
+    rt._lifecycle_commands = LifecycleCommandService(
+        store=rt._store,
+        fence=rt._workspace_fence,
+        terminal_effects=WorkspaceLifecycleTerminalEffects(
+            persistence,
+            snapshot_provider=lambda: lifecycle_module.snapshot_workspace,
+        ),
+    )
+    lifecycle_store = LifecycleStoreAccess(rt._store)
+    lifecycle_runs = LifecycleRunState(
+        rt._run_registry,
+        rt._run_resources,
+        rt._loop_registry,
+    )
+    lifecycle_connections = LifecycleConnections(rt._connection_state)
+    lifecycle_sandbox = LifecycleSandboxAccess(rt._sandbox, rt._projects)
+    rt._lifecycle = LifecycleManager(
+        persistence_owner,
+        GateReaper(
+            lifecycle_store,
+            lifecycle_runs,
+            lifecycle_connections,
+            rt._lifecycle_commands,
+            LifecycleKernelPins(rt._kernel_pin_store, rt._run_registry),
+        ),
+        OrphanReconciler(
+            lifecycle_store,
+            lifecycle_sandbox,
+            rt._lifecycle_commands,
+            persistence_owner,
+        ),
+        Rehydration(
+            lifecycle_sandbox,
+            lifecycle_runs,
+            LifecyclePersistenceNotifier(rt._persistence_notifier),
+            LifecycleUploads(rt._uploads),
+        ),
+        lifecycle_store,
+        lifecycle_runs,
+        lifecycle_connections,
+        lifecycle_sandbox,
+        rt._lifecycle_idle,
+        rt._workspace_fence,
+    )
+    rt._connections = ConnectionTracker(
+        LifecycleSuspender(rt._lifecycle),
+        state=rt._connection_state,
+    )
     rt._build_platform = BuildPlatformRuntime(
         store=rt._store,
-        workspace=rt._workspace,
+        workspace=rt._workspace_fence,
         surfaces=BuildSurfacePolicy(rt._settings),
         rollback=executors,
         ejections=rt._appkit_ejections,
     )
-    rt._lifecycle, rt._lifecycle_commands = compose_lifecycle_service(rt)
-    rt._connections = ConnectionTracker(LifecycleSuspender(rt._lifecycle))
-    rt._appkit_ejection = AppKitEjectionService(
-        event_store=rt._store,
-        workspace=rt._workspace,
-        revision_capture=WorkspaceRevisionCapture(rt._lifecycle),
-        project_stores=rt._projects,
-        sandboxes=executors,
-        transitions=rt._build_platform,
-    )
+
+
+def _wire_research(
+    rt: ConversationRuntime,
+    *,
+    research_providers: dict[str, Any] | None,
+) -> None:
     rt._research_state = DeepResearchState()
     rt._research_live_state = DeepResearchLiveState()
     research_provider = DeepResearchProvider(
@@ -258,12 +355,65 @@ def _wire_domains(
         state=rt._research_state,
         live_state=rt._research_live_state,
     )
+
+
+def _wire_workspace(rt: ConversationRuntime) -> None:
+    executors = BuildExecutorAccess(rt._run_resources)
+    rt._workspace_ownership = WorkspaceOwnership(
+        RunTaskDisposal(
+            rt._kernel_pin_store,
+            rt._run_registry,
+            rt._run_authorities,
+            rt._run_resources,
+            rt._sandbox,
+        ),
+        ConversationRegistryDisposal(
+            rt._run_ingress,
+            rt._loop_registry,
+            rt._run_recovery,
+            rt._cancellations,
+            rt._settings,
+            rt._contract,
+            rt._dr,
+            rt._mcp,
+            rt._spaces,
+        ),
+        ConversationContextDisposal(
+            rt._connections,
+            rt._driver_contexts,
+            rt._driver_preflight,
+        ),
+    )
+    rt._workspace = WorkspaceCoordinator(
+        rt._store,
+        rt._settings,
+        rt._projects,
+        rt._lifecycle_commands,
+        rt._lifecycle,
+        rt._build_platform,
+        rt._workspace_ownership,
+        rt._workspace_fence,
+    )
+    rt._appkit_ejection = AppKitEjectionService(
+        event_store=rt._store,
+        workspace=rt._workspace,
+        revision_capture=WorkspaceRevisionCapture(rt._lifecycle),
+        project_stores=rt._projects,
+        sandboxes=executors,
+        transitions=rt._build_platform,
+    )
     rt._build_retrieval = BuildRetrievalCapabilities(rt._dr, rt._mcp)
     rt._build_shadows = BuildShadowLedger()
-    rt._artifact_manifest_shadow = ArtifactManifestShadow(
-        rt._store,
-        rt._run_resources,
-    )
+
+
+def _wire_domains(
+    rt: ConversationRuntime,
+    *,
+    research_providers: dict[str, Any] | None,
+) -> None:
+    _wire_lifecycle(rt)
+    _wire_research(rt, research_providers=research_providers)
+    _wire_workspace(rt)
 
 
 def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
@@ -311,9 +461,36 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._driver_contexts,
         mode,
     )
+    rt._preview = PreviewService(
+        rt._run_resources,
+        rt._store,
+        rt._config_store,
+        rt._settings,
+        rt._connections,
+        rt._projects,
+        rt._lifecycle,
+        rt._loop_factory,
+        rt._workspace,
+    )
+    rt._sessions = SessionsService(
+        rt._run_resources,
+        rt._sandbox,
+        rt._settings,
+        rt._mcp,
+        rt._lifecycle,
+        rt._connections,
+        rt._preview,
+    )
+    rt._workspace_ownership.bind_restore_session(
+        WorkspaceRestoreSession(
+            rt._run_resources,
+            rt._preview,
+            rt._loop_factory,
+        )
+    )
 
 
-def _wire_runs(rt: ConversationRuntime) -> None:
+def _wire_run_control(rt: ConversationRuntime) -> DeferredRunCompletion:
     rt._sandbox_resources = SandboxResourceReconciler(
         rt._sandbox,
         rt._run_registry,
@@ -340,7 +517,6 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         rt._build_platform,
         rt._drivers,
         rt._loop_factory,
-        rt._resume,
     )
     rt._run_kills = RunKillService(
         rt._store,
@@ -365,11 +541,27 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         rt._run_controller,
         rt._control,
         rt._loop_factory,
-        rt._resume,
         rt._run_registry,
+        rt._kernel_pin_store,
     )
-    rt._kernel_pins = KernelPinRegistry(DiscoKernelSelector(rt._disco_kernel))
-    rt._disco_kernel._bind_pins(rt._kernel_pins)
+    rt._kernel_pins = KernelPinRegistry(
+        DiscoKernelSelector(rt._disco_kernel),
+        store=rt._kernel_pin_store,
+    )
+    rt._resume = ResumeService(
+        ResumeStoreAccess(rt._store),
+        ResumeRunState(
+            rt._run_registry,
+            rt._run_resources,
+            rt._loop_registry,
+            rt._cancellations,
+        ),
+        ResumeWorkspaceFence(rt._workspace),
+        ResumeSurfaceSettings(rt._settings),
+        rt._lifecycle_commands,
+        ResumeEnvironmentProbe(rt._projects, rt._uploads, rt._sessions),
+        PinnedRunStart(rt._kernel_pins),
+    )
     rt._conversation_control = ConversationControlService(
         rt._contract,
         rt._kernel_pins,
@@ -379,6 +571,13 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         rt._control,
         rt._resume,
     )
+    return completion
+
+
+def _wire_run_completion(
+    rt: ConversationRuntime,
+    completion: DeferredRunCompletion,
+) -> None:
     run_policy = RunSurfaceSettings(rt._settings)
     observability = RunObservability(rt._contract, rt._store)
     rt._run_finalizer = RunFinalizer(
@@ -389,7 +588,7 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         rt._store,
         rt._workspace,
         rt._lifecycle_commands,
-        rt._run_controller,
+        RunReentry(rt._run_controller, rt._resume),
         run_policy,
         observability,
     )
@@ -400,6 +599,7 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         rt._store,
         rt._run_finalizer,
     )
+    rt._idle_sweeper = LifecycleIdleSweeper(rt._lifecycle, rt._run_sweep)
     rt._run_execution = RunPersistenceSupervisor(
         rt._run_registry,
         rt._run_authorities,
@@ -411,6 +611,13 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         RunPersistence(rt._workspace, rt._lifecycle),
         DeepResearchRun(rt._dr),
     )
+    rt._workspace.bind_run_collaborators(
+        rt._run_controller,
+        rt._run_execution,
+    )
+
+
+def _wire_workflows(rt: ConversationRuntime) -> None:
     workflow_runs = WorkflowRunService(
         rt._store,
         lifecycle_commands=rt._lifecycle_commands,
@@ -441,8 +648,12 @@ def _wire_runs(rt: ConversationRuntime) -> None:
             rt._dr,
         ),
     )
-    rt._sessions = SessionsService(rt)
-    rt._preview = PreviewService(rt)
+
+
+def _wire_runs(rt: ConversationRuntime) -> None:
+    completion = _wire_run_control(rt)
+    _wire_run_completion(rt, completion)
+    _wire_workflows(rt)
 
 
 def wire_runtime(

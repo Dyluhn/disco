@@ -434,8 +434,7 @@ async def _fetch_inside_response(
     if port == NOVNC_PORT:
         return None
     try:
-        executor = runtime._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
+        session = runtime._preview.live_session(conversation_id)
         if session is None:
             return None
         got = await session.fetch_inside(port, rel_path)
@@ -1339,8 +1338,7 @@ def _register_live_browser_start_route(
             return Response("config unavailable", status_code=503, media_type="text/plain")
 
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        executor = runtime._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
+        session = runtime._preview.live_session(conversation_id)
         if session is None:
             return Response(
                 _json.dumps(
@@ -1449,8 +1447,7 @@ def _register_live_browser_status_routes(
                 return JSONResponse({"ready": False, "reason": "disabled"})
         except Exception:  # noqa: BLE001
             return JSONResponse({"ready": False, "reason": "config_unavailable"})
-        executor = runtime._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
+        session = runtime._preview.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ready": False, "reason": "no_sandbox"})
         if not getattr(session, "supports_live_view", False):
@@ -1469,8 +1466,7 @@ def _register_live_browser_status_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
-        executor = runtime._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
+        session = runtime._preview.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
@@ -1490,8 +1486,7 @@ def _register_live_browser_status_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
-        executor = runtime._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
+        session = runtime._preview.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
@@ -1892,10 +1887,7 @@ def _register_preview_app_websocket_routes(
             if current_authority != canonical_cap.authority_id:
                 await _close_ws(websocket, 1008, "preview generation changed")
                 return
-        latest_status = next(
-            (event for event in reversed(events) if isinstance(event, StatusEvent)),
-            None,
-        )
+        latest_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
         if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
             # FINISHED WebSockets obey the same no-wake boundary as HTTP.  They
             # may use only the exact active-live generation bound to the current

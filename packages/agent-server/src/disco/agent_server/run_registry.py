@@ -338,23 +338,17 @@ class CancellationRegistry:
         self._flags.pop(conversation_id, None)
 
 
-class KernelPinRegistry:
-    """Generation-safe Build-kernel selection and pinning."""
+class KernelPinStore:
+    """Own the mutable per-conversation kernel pins independently of selection."""
 
-    def __init__(self, selector: KernelSelector) -> None:
-        self._selector = selector
+    def __init__(self) -> None:
         self._pins: dict[str, BuildKernel] = {}
 
     def current(self, conversation_id: str) -> BuildKernel | None:
         return self._pins.get(conversation_id)
 
-    def ensure(self, conversation_id: str) -> BuildKernel:
-        current = self._pins.get(conversation_id)
-        if current is not None:
-            return current
-        selected = self._selector.select_kernel(conversation_id)
-        self._pins[conversation_id] = selected
-        return selected
+    def set(self, conversation_id: str, kernel: BuildKernel) -> None:
+        self._pins[conversation_id] = kernel
 
     def clear(self, conversation_id: str) -> None:
         self._pins.pop(conversation_id, None)
@@ -367,3 +361,38 @@ class KernelPinRegistry:
     ) -> None:
         if registry.generation_is_current(conversation_id, generation):
             self.clear(conversation_id)
+
+
+class KernelPinRegistry:
+    """Generation-safe kernel selection over the dedicated pin-state owner."""
+
+    def __init__(
+        self,
+        selector: KernelSelector,
+        *,
+        store: KernelPinStore | None = None,
+    ) -> None:
+        self._selector = selector
+        self._store = store or KernelPinStore()
+
+    def current(self, conversation_id: str) -> BuildKernel | None:
+        return self._store.current(conversation_id)
+
+    def ensure(self, conversation_id: str) -> BuildKernel:
+        current = self._store.current(conversation_id)
+        if current is not None:
+            return current
+        selected = self._selector.select_kernel(conversation_id)
+        self._store.set(conversation_id, selected)
+        return selected
+
+    def clear(self, conversation_id: str) -> None:
+        self._store.clear(conversation_id)
+
+    def clear_if_current(
+        self,
+        conversation_id: str,
+        generation: int | None,
+        registry: RunRegistry,
+    ) -> None:
+        self._store.clear_if_current(conversation_id, generation, registry)

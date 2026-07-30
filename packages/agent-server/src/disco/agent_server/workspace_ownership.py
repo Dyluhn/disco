@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from .preview_service import PreviewService
     from .run_registry import (
         CancellationRegistry,
-        KernelPinRegistry,
+        KernelPinStore,
         LoopRegistry,
         RunAuthorityLedger,
         RunIngressLedger,
@@ -56,7 +56,7 @@ class RunTaskDisposal:
 
     def __init__(
         self,
-        kernel_pins: KernelPinRegistry,
+        kernel_pins: KernelPinStore,
         run_registry: RunRegistry,
         run_authorities: RunAuthorityLedger,
         run_resources: RunResourceRegistry,

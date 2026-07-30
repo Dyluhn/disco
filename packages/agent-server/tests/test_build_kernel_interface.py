@@ -33,6 +33,7 @@ from disco.agent_server.routes._common import _context_message, _user_message
 from disco.agent_server.run_registry import (
     CancellationRegistry,
     KernelPinRegistry,
+    KernelPinStore,
     RunRegistry,
 )
 from disco.agent_server.run_supervision_ports import DiscoKernelSelector
@@ -109,6 +110,7 @@ def _kernel_harness(store: SqliteEventStore) -> types.SimpleNamespace:
     controller = MagicMock()
     controller.kick = MagicMock()
     runs = RunRegistry()
+    pin_store = KernelPinStore()
     kernel = DiscoKernel(
         store,
         workspace,
@@ -116,11 +118,10 @@ def _kernel_harness(store: SqliteEventStore) -> types.SimpleNamespace:
         controller,
         controls,
         loops,
-        resume,
         runs,
+        pin_store,
     )
-    pins = KernelPinRegistry(DiscoKernelSelector(kernel))
-    kernel._bind_pins(pins)
+    pins = KernelPinRegistry(DiscoKernelSelector(kernel), store=pin_store)
     contract = MagicMock()
     contract._fold_contract_from_history = AsyncMock()
     contract.has_declared_contract.return_value = False
@@ -215,8 +216,10 @@ async def test_disco_kernel_control_ops_delegate_unchanged(store: SqliteEventSto
     # no run task bumped it) to the control op so it terminalizes ONLY its own run.
     rt.controls.kill.assert_awaited_once_with(CID, None)
 
-    await k.resume(CID)
-    rt.resume.resume_conversation.assert_awaited_once_with(CID)
+    rt.controller.kick.reset_mock()
+    await rt.control.resume(CID)
+    rt.controller.kick.assert_called_once_with(CID)
+    rt.resume.resume_conversation.assert_not_awaited()
 
     await k.pick_alternative(CID, "opt-2")
     rt.loops.loop_for.assert_called_with(CID)

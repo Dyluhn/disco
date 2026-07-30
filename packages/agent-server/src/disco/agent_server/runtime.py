@@ -107,7 +107,7 @@ if TYPE_CHECKING:
     from .build_loop_factory import BuildLoopFactory
     from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
     from .build_retrieval import BuildRetrievalCapabilities
-    from .connection_tracker import ConnectionTracker
+    from .connection_tracker import ConnectionState, ConnectionTracker
     from .control_ops import ControlOps
     from .conversation_control_service import ConversationControlService
     from .deep_research_service import DeepResearchService
@@ -116,6 +116,8 @@ if TYPE_CHECKING:
     from .driver_runtime import DriverPreflight, DriverRuntime
     from .lifecycle import LifecycleManager
     from .lifecycle_command_service import LifecycleCommandService
+    from .lifecycle_idle_sweep import LifecycleIdleSweeper
+    from .lifecycle_ports import LifecycleIdleSweepDeps
     from .mcp_manager import McpManager
     from .persistence_notifier import PersistenceNotifier
     from .preview_service import PreviewService
@@ -126,6 +128,7 @@ if TYPE_CHECKING:
     from .run_registry import (
         CancellationRegistry,
         KernelPinRegistry,
+        KernelPinStore,
         LoopRegistry,
         RunAuthorityLedger,
         RunIngressLedger,
@@ -149,6 +152,8 @@ if TYPE_CHECKING:
     from .suggestion_service import SuggestionService
     from .title_service import TitleService
     from .upload_store import UploadStore
+    from .workspace_fence import WorkspaceFenceService
+    from .workspace_ownership import WorkspaceOwnership
     from .workspace_service import WorkspaceCoordinator
 
 
@@ -229,11 +234,17 @@ class _RuntimeWiringSchema:
     _driver_preflight: DriverPreflight
     _cancellations: CancellationRegistry
     _mcp: McpManager
+    _kernel_pin_store: KernelPinStore
+    _connection_state: ConnectionState
+    _lifecycle_idle: LifecycleIdleSweepDeps
+    _idle_sweeper: LifecycleIdleSweeper
+    _workspace_fence: WorkspaceFenceService
     _title_service: TitleService
     _suggestion_service: SuggestionService
     _share: ShareService
     _resume: ResumeService
     _workspace: WorkspaceCoordinator
+    _workspace_ownership: WorkspaceOwnership
     _persistence_notifier: PersistenceNotifier
     _contract: BuildContractService
     _build_platform: BuildPlatformRuntime

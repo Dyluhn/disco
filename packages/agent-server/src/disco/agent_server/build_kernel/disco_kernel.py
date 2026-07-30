@@ -17,12 +17,11 @@ from ..build_loop_factory import BuildLoopFactory
 from ..build_messages import _build_brief_message, _context_message, _user_message
 from ..control_ops import ControlOps
 from ..lifecycle_command_service import LifecycleCommandService
-from ..resume_service import ResumeService
 from ..run_controller import RunController
 from ..workspace_service import WorkspaceCoordinator
 
 if TYPE_CHECKING:
-    from ..run_registry import KernelPinRegistry, RunRegistry
+    from ..run_registry import KernelPinStore, RunRegistry
 
 
 class DiscoKernel:
@@ -38,8 +37,8 @@ class DiscoKernel:
         controller: RunController,
         controls: ControlOps,
         loops: BuildLoopFactory,
-        resume: ResumeService,
         runs: RunRegistry,
+        pins: KernelPinStore,
     ) -> None:
         self._store = store
         self._workspace = workspace
@@ -47,13 +46,7 @@ class DiscoKernel:
         self._controller = controller
         self._controls = controls
         self._loops = loops
-        self._resume = resume
         self._runs = runs
-        self._pins: KernelPinRegistry | None = None
-
-    def _bind_pins(self, pins: KernelPinRegistry) -> None:
-        if self._pins is not None:
-            raise RuntimeError("kernel pins are already bound")
         self._pins = pins
 
     # -- lifecycle ------------------------------------------------------------
@@ -172,15 +165,11 @@ class DiscoKernel:
     async def cancel(self, conversation_id: str) -> None:
         await self._controls.cancel(conversation_id)
 
-    async def resume(self, conversation_id: str) -> None:
-        await self._resume.resume_conversation(conversation_id)
-
     async def kill(self, conversation_id: str) -> None:
         # Generation-guarded kill (finding #4) — mirror `ConversationRuntime.kill`:
         # capture the run-generation, clear only THIS generation's pin, and thread the
         # generation to the control op so a newer run that starts during teardown is
         # neither terminalized nor torn down.
         generation = self._runs.generation(conversation_id)
-        if self._pins is not None:
-            self._pins.clear_if_current(conversation_id, generation, self._runs)
+        self._pins.clear_if_current(conversation_id, generation, self._runs)
         await self._controls.kill(conversation_id, generation)

@@ -241,7 +241,9 @@ class AppKitEjectionService:
 
     def _require_workspace_authority(self, conversation_id: str) -> None:
         lock = self._workspace.lock(conversation_id)
-        if not lock.locked() or not self._workspace.fence_owned_by_current_task(conversation_id):
+        if not lock.locked() or not self._workspace._fence_owned_by_current_task(
+            conversation_id
+        ):
             raise RuntimeError("AppKit ejection requires the workspace process fence")
         if self._event_store.conversation_appkit_mode_sync(conversation_id) is not True:
             raise RuntimeError("the conversation is not governed by AppKit")

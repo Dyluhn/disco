@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 from disco.core import (
     ConversationStatus,
@@ -20,6 +21,54 @@ from .lifecycle import LifecycleManager
 from .runtime_settings import RuntimeSettings
 from .sandbox_runtime_service import SandboxRuntimeService
 from .workspace_service import WorkspaceCoordinator
+
+if TYPE_CHECKING:
+    from .resume_service import ResumeService
+    from .run_controller import RunController
+
+
+class DeferredKernelSelector:
+    """Typed one-time kernel binding used to break the pin/start cycle."""
+
+    def __init__(self) -> None:
+        self._kernel: BuildKernel | None = None
+
+    def bind(self, kernel: BuildKernel) -> None:
+        if self._kernel is not None:
+            raise RuntimeError("kernel selector is already bound")
+        self._kernel = kernel
+
+    def select_kernel(self, conversation_id: str) -> BuildKernel:
+        del conversation_id
+        if self._kernel is None:
+            raise RuntimeError("kernel selector is not bound")
+        return self._kernel
+
+
+class RunReentry:
+    """Join run kick and resume without restoring a runtime-shaped owner."""
+
+    def __init__(
+        self,
+        controller: RunController,
+        resume: ResumeService,
+    ) -> None:
+        self._controller = controller
+        self._resume = resume
+
+    def kick(
+        self,
+        conversation_id: str,
+        *,
+        claimed_user_seq: int | None = None,
+    ) -> None:
+        self._controller.kick(
+            conversation_id,
+            claimed_user_seq=claimed_user_seq,
+        )
+
+    async def resume_conversation(self, conversation_id: str) -> dict[str, object]:
+        return dict(await self._resume.resume_conversation(conversation_id))
 
 
 class RunSurfaceSettings:

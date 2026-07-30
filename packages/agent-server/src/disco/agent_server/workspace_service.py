@@ -16,7 +16,6 @@ import logging
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -50,11 +49,8 @@ from .workspace_commit import (
     WorkspaceRunSuperseded,
     resolve_committed_workspace,
 )
+from .workspace_fence import WorkspaceFenceService
 from .workspace_ownership import WorkspaceOwnership
-from .workspace_process_fence import (
-    workspace_process_fence,
-    workspace_process_fence_held,
-)
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
@@ -126,24 +122,8 @@ async def _apply_restore_to_session(
     )
 
 
-_OWNED_WORKSPACE_FENCES: ContextVar[frozenset[tuple[str, asyncio.Task[Any]]]] = ContextVar(
-    "disco_owned_workspace_fences", default=frozenset()
-)
-
-
 class WorkspaceCoordinator:
-    """Own the permanent workspace lock and all cross-surface coordination.
-
-    A state-free compatibility delegate over the named collaborators: the
-    permanent lock registry and run-claim sets live here; disposal and
-    restore-session acquisition are delegated to :class:`WorkspaceOwnership`.
-
-    ``run_controller`` and ``run_execution`` are bound after construction
-    (see :meth:`bind_run_collaborators`) because they are themselves wired
-    after the coordinator in the composition order — they depend on the
-    coordinator for fence/admission authority, so the cycle is broken here
-    rather than with a runtime back-ref.
-    """
+    """Coordinate workspace operations through explicit named owners."""
 
     def __init__(
         self,
@@ -154,6 +134,7 @@ class WorkspaceCoordinator:
         lifecycle: LifecycleManager,
         build_platform: BuildPlatformRuntime,
         ownership: WorkspaceOwnership,
+        fence_service: WorkspaceFenceService,
     ) -> None:
         self._store = store
         self._settings = settings
@@ -162,13 +143,9 @@ class WorkspaceCoordinator:
         self._lifecycle = lifecycle
         self._build_platform = build_platform
         self._ownership = ownership
+        self._fences = fence_service
         self._run_controller: RunController | None = None
         self._run_execution: RunPersistenceSupervisor | None = None
-        # Never remove an entry. Replacing a lock after forget/recreate would
-        # split waiters across two coordination domains (an ABA race).
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._pending_runs: set[str] = set()
-        self._admitted_runs: set[str] = set()
 
     def bind_run_collaborators(
         self,
@@ -185,26 +162,7 @@ class WorkspaceCoordinator:
         self._run_execution = run_execution
 
     def lock(self, conversation_id: str) -> asyncio.Lock:
-        lock = self._locks.get(conversation_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[conversation_id] = lock
-        return lock
-
-    def _process_fence_workspace(self, conversation_id: str) -> Path | None:
-        store = self._projects.current_project_store()
-        if store is not None:
-            # Lock identity must not change merely because the projects volume
-            # is temporarily unwritable or unavailable. ``path_for`` is a pure,
-            # validated identity derivation and does not require the workspace
-            # directory to exist, so the same configured root remains the
-            # coordination key in healthy and degraded states.
-            return store.path_for(conversation_id)
-        # In-memory/test stores have no shared cross-process event log. Keep a
-        # stable identity within this process rather than silently dropping the
-        # fence entirely; production runtimes always take the ProjectStore path.
-        store_key = hashlib.sha256(f"{id(self._store)}:{conversation_id}".encode()).hexdigest()
-        return Path(tempfile.gettempdir()) / "disco-ephemeral-workspaces" / store_key
+        return self._fences.lock(conversation_id)
 
     @asynccontextmanager
     async def interprocess_mutation_fence(
@@ -215,33 +173,17 @@ class WorkspaceCoordinator:
     ) -> AsyncIterator[None]:
         """Extend the caller-owned local fence across Agent server processes."""
 
-        if not self.lock(conversation_id).locked():
-            raise RuntimeError("process workspace fence requires the conversation lock")
-        owner = asyncio.current_task()
-        if owner is None:
-            raise RuntimeError("process workspace fence requires an asyncio task")
-        workspace = self._process_fence_workspace(conversation_id)
-        token = _OWNED_WORKSPACE_FENCES.set(
-            _OWNED_WORKSPACE_FENCES.get() | {(conversation_id, owner)}
-        )
-        try:
-            if workspace is None:
-                yield
-                return
-            async with workspace_process_fence(workspace, wait=wait):
-                yield
-        finally:
-            _OWNED_WORKSPACE_FENCES.reset(token)
+        async with self._fences.interprocess_mutation_fence(
+            conversation_id,
+            wait=wait,
+        ):
+            yield
 
-    @staticmethod
-    def fence_owned_by_current_task(conversation_id: str) -> bool:
-        owner = asyncio.current_task()
-        return owner is not None and (conversation_id, owner) in _OWNED_WORKSPACE_FENCES.get()
+    def _fence_owned_by_current_task(self, conversation_id: str) -> bool:
+        return self._fences.fence_owned_by_current_task(conversation_id)
 
     def _require_process_fence_locked(self, conversation_id: str) -> None:
-        workspace = self._process_fence_workspace(conversation_id)
-        if workspace is not None and not workspace_process_fence_held(workspace):
-            raise RuntimeError("durable run intent requires the workspace process fence")
+        self._fences.require_process_fence_locked(conversation_id)
 
     async def run_after_admission(
         self,
@@ -257,9 +199,7 @@ class WorkspaceCoordinator:
         barrier. Whichever side wins first therefore has an unambiguous head.
         """
 
-        build_run = (
-            self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
-        )
+        build_run = self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
         assert self._run_execution is not None, "run collaborators not yet bound"
         try:
             if build_run:
@@ -277,8 +217,7 @@ class WorkspaceCoordinator:
                             conversation_id,
                             "agent.run-claimed",
                         )
-                        self._pending_runs.discard(conversation_id)
-                        self._admitted_runs.add(conversation_id)
+                        self._fences.mark_run_admitted(conversation_id)
             return await self._run_execution.run(conversation_id, loop)
         finally:
             if build_run:
@@ -287,59 +226,39 @@ class WorkspaceCoordinator:
     def claim_registered_run_locked(self, conversation_id: str) -> None:
         """Publish an ingress-first run claim before releasing its workspace fence."""
 
-        if not self.lock(conversation_id).locked():
-            raise RuntimeError("run claim requires the workspace fence")
         task = self._ownership.active_task(conversation_id)
-        if task is not None and conversation_id not in self._admitted_runs:
-            self._pending_runs.add(conversation_id)
+        self._fences.mark_registered_run_locked(
+            conversation_id,
+            active=task is not None,
+        )
 
     def clear_run_claim(self, conversation_id: str) -> None:
-        self._pending_runs.discard(conversation_id)
-        self._admitted_runs.discard(conversation_id)
+        self._fences.clear_run_claim(conversation_id)
 
     def has_admitted_run(self, conversation_id: str) -> bool:
-        return conversation_id in self._admitted_runs
+        return self._fences.has_admitted_run(conversation_id)
 
     def has_run_claim(self, conversation_id: str) -> bool:
-        return conversation_id in self._pending_runs or self.has_admitted_run(conversation_id)
+        return self._fences.has_run_claim(conversation_id)
 
     @asynccontextmanager
     async def _lifecycle_fence(self, conversation_id: str) -> AsyncIterator[None]:
         """Expose only serialization; lifecycle policy stays in its command service."""
 
-        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
+        async with self._fences._lifecycle_fence(conversation_id):
             yield
-            return
-        if self.fence_owned_by_current_task(conversation_id):
-            yield
-            return
-        async with self.lock(conversation_id):
-            async with self.interprocess_mutation_fence(conversation_id):
-                yield
 
     @asynccontextmanager
     async def _lifecycle_locked_fence(self, conversation_id: str) -> AsyncIterator[None]:
         """Extend a caller-owned local lock across the process fence."""
 
-        if not self.lock(conversation_id).locked():
-            raise RuntimeError("locked lifecycle transition requires the workspace fence")
-        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
-            yield
-            return
-        if self.fence_owned_by_current_task(conversation_id):
-            yield
-            return
-        async with self.interprocess_mutation_fence(conversation_id):
+        async with self._fences._lifecycle_locked_fence(conversation_id):
             yield
 
     def _require_lifecycle_fence(self, conversation_id: str) -> None:
         """Fail closed unless a Build transition owns both workspace fences."""
 
-        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
-            return
-        if not self.lock(conversation_id).locked():
-            raise RuntimeError("locked status append requires the workspace fence")
-        self._require_process_fence_locked(conversation_id)
+        self._fences._require_lifecycle_fence(conversation_id)
 
     async def append_status(
         self,
@@ -826,9 +745,7 @@ class WorkspaceCoordinator:
                         conversation_id,
                         exc_info=True,
                     )
-                    fresh = await self._ownership.restore_session(
-                        conversation_id, exclude=session
-                    )
+                    fresh = await self._ownership.restore_session(conversation_id, exclude=session)
                     await _apply_restore_to_session(fresh, entries, stage, store, conversation_id)
         except WorkspaceRestoreStorageError as exc:
             _LOG.error("workspace restore failed for %s: %s", conversation_id, exc)
