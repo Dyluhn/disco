@@ -1,13 +1,5 @@
 [
   {
-    "id": "DM-002",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py + packages/agent-server/src/disco/agent_server/workspace_persistence.py + packages/agent-server/src/disco/agent_server/lifecycle.py",
-    "concern": "workspace authority distributed through runtime back-reference",
-    "owner_package": "PKG-07-WORKSPACE",
-    "source_disposition_id": "DM-002"
-  },
-  {
     "id": "DM-003",
     "kind": "distributed_concern",
     "location": "packages/agent-server/src/disco/agent_server/preview_manager.py + packages/agent-server/src/disco/agent_server/preview_projection.py",

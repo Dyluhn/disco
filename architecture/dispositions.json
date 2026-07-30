@@ -11,7 +11,7 @@
   {
     "id": "DM-002",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_service.py + packages/agent-server/src/disco/agent_server/workspace_persistence.py + packages/agent-server/src/disco/agent_server/lifecycle.py",

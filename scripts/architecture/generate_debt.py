@@ -145,6 +145,7 @@ PKG06_RUNTIME_RESOLVED_IDS = frozenset(
 )
 PKG07_WORKSPACE_RESOLVED_IDS = frozenset(
     {
+        "DM-002",
         *(f"PY-{number:04d}" for number in range(252, 257)),
         *(f"PY-{number:04d}" for number in range(281, 287)),
         *(f"PY-{number:04d}" for number in range(294, 298)),
@@ -191,7 +192,7 @@ RESOLVED_IDS = (
     | PKG11_SETTINGS_RESOLVED_IDS
 )
 EXPECTED_ACTIVE_DEBT_ROWS = 535
-EXPECTED_OBSERVATIONS = 15
+EXPECTED_OBSERVATIONS = 14
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
     "DM-001": (
