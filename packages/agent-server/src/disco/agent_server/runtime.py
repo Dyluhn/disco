@@ -1295,10 +1295,10 @@ class ConversationRuntime:
     _AUTONOMOUS_SURFACES: frozenset[str] = frozenset({"build", "agent", "deep_research"})
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
-        self._settings.set_surface(conversation_id, surface)
+        self._settings._set_surface(conversation_id, surface)
 
     def _surface_of(self, conversation_id: str) -> str:
-        return self._settings.surface_of(conversation_id)
+        return self._settings._surface_of(conversation_id)
 
     def _sandbox_service_now(self) -> SandboxService:
         return self._sandbox._sandbox_service_now()
@@ -1319,7 +1319,7 @@ class ConversationRuntime:
         try:
             cfg = self._routing_config_now()
             override = (
-                self._settings.get_model_override(conversation_id)
+                self._settings._get_model_override(conversation_id)
                 if conversation_id is not None
                 else None
             )
@@ -1353,7 +1353,7 @@ class ConversationRuntime:
         keyless local endpoints (no base_url) are probeable; an unavailable or
         invalid configured fallback raises before any provider or tool spend.
         """
-        override = self._settings.get_model_override(conversation_id)
+        override = self._settings._get_model_override(conversation_id)
         unresolved_key = override or "<configured-default>"
         try:
             cfg = self._routing_config_now()
@@ -1472,59 +1472,59 @@ class ConversationRuntime:
 
     @property
     def _model_override(self) -> dict[str, str]:
-        return self._settings._model_overrides_view
+        return self._settings._model_overrides
 
     @_model_override.setter
     def _model_override(self, value: dict[str, str]) -> None:
-        self._settings._model_overrides_view = value
+        self._settings._model_overrides = value
 
     @property
     def _surface(self) -> dict[str, str]:
-        return self._settings._surfaces_view
+        return self._settings._surface_settings._surfaces
 
     @property
     def _autonomous(self) -> dict[str, bool]:
-        return self._settings._autonomous_view
+        return self._settings._autonomous
 
     @property
     def _assist(self) -> dict[str, bool]:
-        return self._settings._assist_view
+        return self._settings._assist
 
     @property
     def _quiet(self) -> dict[str, bool]:
-        return self._settings._quiet_view
+        return self._settings._quiet
 
     @property
     def _artifact_mode(self) -> dict[str, bool]:
-        return self._settings._artifact_mode_view
+        return self._settings._mode_settings._artifact_mode
 
     @property
     def _appkit_mode(self) -> dict[str, bool]:
-        return self._settings._appkit_mode_view
+        return self._settings._mode_settings._appkit_mode
 
     @property
     def _override_path(self) -> str:
-        return self._settings._override_sidecar_path
+        return self._settings._override_path
 
     @property
     def _surface_path(self) -> str:
-        return self._settings._surface_sidecar_path
+        return self._settings._surface_settings._path
 
     @property
     def _autonomous_path(self) -> str:
-        return self._settings._autonomous_sidecar_path
+        return self._settings._autonomous_path
 
     @property
     def _assist_path(self) -> str:
-        return self._settings._assist_sidecar_path
+        return self._settings._assist_path
 
     @property
     def _quiet_path(self) -> str:
-        return self._settings._quiet_sidecar_path
+        return self._settings._quiet_path
 
     @property
     def _last_model_path(self) -> str:
-        return self._settings._last_model_sidecar_path
+        return self._settings._last_model_path
 
     def _load_overrides(self) -> dict[str, str]:
         return self._settings._load_overrides()
@@ -1825,7 +1825,7 @@ class ConversationRuntime:
         override = (
             compose_snapshot.model_key
             if compose_snapshot is not None
-            else self._settings.get_model_override(conversation_id)
+            else self._settings._get_model_override(conversation_id)
         )
         # Surface FIRST: it scopes which skills the router injects (a build-only
         # skill shouldn't reach an agent conversation's prompt, and vice versa).
@@ -3440,7 +3440,7 @@ class ConversationRuntime:
             return None
         cid = conversation_id or ""
         override = (
-            override if override is not None else self._settings.get_model_override(cid)
+            override if override is not None else self._settings._get_model_override(cid)
         )
         cfg = self._config_store.load()
         if override and override in cfg.models:
@@ -3788,7 +3788,7 @@ class ConversationRuntime:
             clear_conversation_read_state(conversation_id)
 
     def _evict_loop_for_model_change(self, conversation_id: str) -> None:
-        self._settings.evict_model_binding(conversation_id)
+        self._settings._evict_model_binding(conversation_id)
 
     def _evict_stale_backend(self, conversation_id: str) -> None:
         """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
