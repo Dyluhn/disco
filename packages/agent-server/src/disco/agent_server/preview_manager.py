@@ -112,11 +112,7 @@ class PreviewManager(
     ) -> None:
         self._resource = PreviewResource(
             sandbox,
-            port_pool=(
-                _PreviewPortPool(tuple(port_pool))
-                if port_pool is not None
-                else None
-            ),
+            port_pool=(_PreviewPortPool(tuple(port_pool)) if port_pool is not None else None),
             health_attempts=health_attempts,
             health_interval_s=health_interval_s,
             supervise_interval_s=supervise_interval_s,
@@ -134,6 +130,13 @@ class PreviewManager(
     @property
     def _closed(self) -> bool:
         return self._resource._closed
+
+    @property
+    def _supervisor(self) -> Any:
+        return self._resource._supervisor
+
+    def _ensure_supervisor(self) -> None:
+        self._resource._ensure_supervisor()
 
     async def _allocate_port(self, *, reclaim_name: str | None = None) -> int:
         return await self._resource._allocate_port(reclaim_name=reclaim_name)
