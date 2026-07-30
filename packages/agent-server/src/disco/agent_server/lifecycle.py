@@ -53,6 +53,7 @@ from disco.tools.projects import (
     snapshot_workspace,
 )
 
+from .lifecycle_command_service import LifecycleCommandService
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 from .workspace_persistence import WorkspacePersistence, probe_finish_sealability
 
@@ -182,8 +183,8 @@ class GateReaper:
                         ),
                     )
                 ],
-                StatusEvent(
-                    status=ConversationStatus.STUCK,
+                LifecycleCommandService.build_status(
+                    ConversationStatus.STUCK,
                     detail="reaped: abandoned at gate past TTL",
                 ),
                 expected_statuses=frozenset(_GATE_STATES),
@@ -255,8 +256,8 @@ class OrphanReconciler:
                                     ),
                                 )
                             ],
-                            StatusEvent(
-                                status=ConversationStatus.PAUSED,
+                            LifecycleCommandService.build_status(
+                                ConversationStatus.PAUSED,
                                 detail="reconciled: orphaned RUNNING after server restart",
                             ),
                             expected_statuses=frozenset({ConversationStatus.RUNNING}),

@@ -74,6 +74,7 @@ from disco.retrieval.deep_research import (
 )
 from disco.tools.projects import StorageStatus
 
+from .lifecycle_command_service import LifecycleCommandService
 from .space_store import JsonSpaceStore
 
 _LOG = logging.getLogger(__name__)
@@ -605,7 +606,10 @@ class DeepResearchService:
             partial = reports[-1] if reports else None
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.RUNNING,
+                    detail="plan_approved",
+                ),
             )
             await self._rt._execute_deep_research(conversation_id, plans[-1], resume_from=partial)
             return
@@ -672,7 +676,10 @@ class DeepResearchService:
         if preflight_reason is not None:
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.ERROR, detail=preflight_reason[:200]),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
+                    detail=preflight_reason[:200],
+                ),
             )
             return
 
@@ -692,13 +699,16 @@ class DeepResearchService:
         if rewriter_reason is not None:
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.ERROR, detail=rewriter_reason[:200]),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
+                    detail=rewriter_reason[:200],
+                ),
             )
             return
 
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(status=ConversationStatus.RUNNING),
+            LifecycleCommandService.build_status(ConversationStatus.RUNNING),
         )
         tier = self._rt._depth_for(conversation_id)
         from disco.retrieval.deep_research import bounds_for
@@ -742,8 +752,8 @@ class DeepResearchService:
             # reminder above (the conversation would otherwise spin forever).
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.ERROR,
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
                     detail=(f"Plan decomposition failed: {type(exc).__name__}: {exc}")[:200],
                 ),
             )
@@ -776,13 +786,19 @@ class DeepResearchService:
             # plan auto-approve (engine.py).
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.RUNNING,
+                    detail="plan_approved",
+                ),
             )
             await self._rt._execute_deep_research(conversation_id, plan)
             return
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id),
+            LifecycleCommandService.build_status(
+                ConversationStatus.AWAITING_PLAN_APPROVAL,
+                detail=plan.id,
+            ),
         )
 
     async def _execute_deep_research(
@@ -861,7 +877,10 @@ class DeepResearchService:
             )
             await self._rt._store.append(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.ERROR, detail=preflight_reason[:200]),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
+                    detail=preflight_reason[:200],
+                ),
             )
             return
         # RP-05b §3: deep research's discovery/extraction also flows MCP providers
@@ -1061,8 +1080,8 @@ class DeepResearchService:
         stopped = getattr(result, "bounded_by", None) == "stopped"
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(
-                status=ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,
+            LifecycleCommandService.build_status(
+                ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,
                 detail="stopped" if stopped else None,
             ),
         )
@@ -1116,7 +1135,10 @@ class DeepResearchService:
 
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(status=ConversationStatus.RUNNING, detail="follow_up"),
+            LifecycleCommandService.build_status(
+                ConversationStatus.RUNNING,
+                detail="follow_up",
+            ),
         )
 
         # Reuse the prior report's passages as the grounding corpus.
@@ -1169,7 +1191,7 @@ class DeepResearchService:
                 )
                 await self._rt._store.append(
                     conversation_id,
-                    StatusEvent(status=ConversationStatus.ERROR),
+                    LifecycleCommandService.build_status(ConversationStatus.ERROR),
                 )
                 return
         else:
@@ -1255,13 +1277,16 @@ class DeepResearchService:
                 )
                 await self._rt._store.append(
                     conversation_id,
-                    StatusEvent(status=ConversationStatus.ERROR),
+                    LifecycleCommandService.build_status(ConversationStatus.ERROR),
                 )
                 return
 
         await self._rt._store.append(
             conversation_id,
-            StatusEvent(status=ConversationStatus.FINISHED, detail="follow_up_complete"),
+            LifecycleCommandService.build_status(
+                ConversationStatus.FINISHED,
+                detail="follow_up_complete",
+            ),
         )
 
     async def export_report(

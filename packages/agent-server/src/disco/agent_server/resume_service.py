@@ -33,13 +33,14 @@ from disco.core import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
-    StatusEvent,
     ToolResult,
     agent_view_consistent_events,
 )
 from disco.core.loop.engine import _BOOKKEEPING_TOOLS
 from disco.core.view import effective_plan_progress
 from disco.tools.projects import StorageStatus
+
+from .lifecycle_command_service import LifecycleCommandService
 
 _RESUME_DRAIN_TIMEOUT_S = 10.0
 _RESUME_CANCEL_GRACE_S = 0.25
@@ -619,8 +620,10 @@ class ResumeService:
         synthetic results append atomically with the ingress RUNNING flip.
 
         Rechecks the exact runtime identity after reconstruction's awaited
-        environment probes and immediately before mutating volatile flags or
-        the append-only log, then clears the old run's cooperative-stop state.
+        environment probes and immediately before the append-only log append.
+        Volatile resume flag clearing is deferred to AFTER the atomic
+        transition append (``_clear_volatile_resume_flags``) so an append
+        failure leaves local and durable state consistent.
 
         Returns either a non-ok rejection dict or the tuple
         ``(None, tombstone, new_events)`` for the ingress phase.
@@ -640,21 +643,29 @@ class ResumeService:
         # A direct/nonstandard task starter does not necessarily honor
         # the workspace lock. Recheck the exact runtime identity after
         # reconstruction's awaited environment probes and immediately
-        # before mutating volatile flags or the append-only log.
+        # before the append-only log append. Volatile flag clearing is
+        # deferred to after the append so an append failure leaves local
+        # and durable state consistent.
         current_task = self._rt._tasks.get(conversation_id)
         if self._rt._run_generation.get(conversation_id) != observed_generation:
             return {"ok": False, "reason": "resume_superseded"}
         if current_task is not None and not current_task.done():
             return {"ok": False, "reason": "already_running"}
 
-        # Clear only the old run's cooperative-stop state after the final
-        # authority check. A losing resume never mutates a newer loop.
+        return None, tombstone, new_events
+
+    def _clear_volatile_resume_flags(self, conversation_id: str) -> None:
+        """Clear the old run's cooperative-stop state AFTER the atomic append.
+
+        PKG-06-LIFECYCLE: volatile resume flag clearing moved after the
+        atomic transition append so an append failure leaves local and
+        durable state consistent. A losing resume never mutates a newer
+        loop; this is called only after the append succeeds.
+        """
         self._rt._cancel_flags.pop(conversation_id, None)
         loop = self._rt._loops.get(conversation_id)
         if loop is not None and hasattr(loop, "_pause_requested"):
             loop._pause_requested.clear()
-
-        return None, tombstone, new_events
 
     async def _resume_ingress_append_locked(
         self,
@@ -686,7 +697,12 @@ class ResumeService:
                         run_protocol_version=1,
                     )
                 )
-            pending.append(StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+            pending.append(
+                LifecycleCommandService.build_status(
+                    ConversationStatus.RUNNING,
+                    detail="resumed",
+                )
+            )
         await self._rt._store.append_many(conversation_id, pending)
 
     async def resume_conversation(self, conversation_id: str) -> dict:
@@ -744,6 +760,10 @@ class ResumeService:
                 await self._resume_ingress_append_locked(
                     conversation_id, surface, tombstone, new_events
                 )
+                # PKG-06-LIFECYCLE: clear volatile resume flags AFTER the atomic
+                # transition append so an append failure leaves local and durable
+                # state consistent.
+                self._clear_volatile_resume_flags(conversation_id)
 
         # Route the resume through the PINNED start path (finding #2), NOT a raw
         # `kick`. A bare kick starts a NEW run UNPINNED. `runtime.start` resolves +

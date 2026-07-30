@@ -179,6 +179,7 @@ from .driver_context import (
     ResolvedDriverContext,
 )
 from .lifecycle import _GATE_STATES, LifecycleManager
+from .lifecycle_command_service import LifecycleCommandService
 from .mcp_manager import McpManager
 from .preview_manager import PreviewManager
 from .preview_service import PreviewService
@@ -1097,6 +1098,19 @@ class ConversationRuntime:
         self._resume = ResumeService(self)
         # Permanent workspace locks shared by lifecycle delegates.
         self._workspace = WorkspaceCoordinator(self)
+        # PKG-06-LIFECYCLE: the sole agent-server application service that
+        # decides lifecycle transition legality and idempotency, constructs
+        # lifecycle StatusEvent values, validates durable agent_view_id/
+        # run_intent_id under the final workspace fence, and orders transition
+        # persistence with lifecycle effects. EventStore remains the
+        # persistence/sequence port and WorkspaceCoordinator remains the
+        # lock/process-fence port; neither decides transitions. See
+        # lifecycle_command_service.py.
+        self._lifecycle_commands = LifecycleCommandService(
+            sink=self._workspace,
+            fence=self._workspace,
+            reader=self._store,
+        )
         self._lifecycle = LifecycleManager(self)
         # Deep Research surface (plan→iterate→report) + live research stream.
         # _depth / _research_* cache / _cancel_flags stay on the runtime
@@ -3121,17 +3135,17 @@ class ConversationRuntime:
     ) -> bool:
         """Append a supervisor/preflight status only for its durable run.
 
-        Historical and non-Build callers do not have strict run authority and
-        retain the legacy behavior. Registered Build tasks always capture at
-        least the ingress intent; after materialization they prefer the exact
-        view id. The coordinator performs the last-moment recheck and append
-        under the local plus process workspace fence.
+        PKG-06-LIFECYCLE: routed through the sole LifecycleCommandService so
+        transition legality, durable authority validation, and ordered
+        persistence are centralized. Historical and non-Build callers do not
+        have strict run authority and retain the legacy behavior. Registered
+        Build tasks always capture at least the ingress intent; after
+        materialization they prefer the exact view id. The service performs
+        the last-moment recheck and append under the local plus process
+        workspace fence.
         """
 
-        if agent_view_id is None and run_intent_id is None:
-            await self._workspace.append_status(conversation_id, event)
-            return True
-        stored = await self._workspace.append_run_status_if_current(
+        stored = await self._lifecycle_commands.append_task_status_if_current(
             conversation_id,
             event,
             agent_view_id=agent_view_id,
@@ -3249,8 +3263,8 @@ class ConversationRuntime:
             )
             stored = await self._append_task_status_if_current(
                 conversation_id,
-                StatusEvent(
-                    status=ConversationStatus.STUCK,
+                LifecycleCommandService.build_status(
+                    ConversationStatus.STUCK,
                     detail="loop ended without reaching a terminal state",
                 ),
                 agent_view_id=agent_view_id,
@@ -3397,7 +3411,10 @@ class ConversationRuntime:
             logger.error("run task for %s crashed: %s", conversation_id, detail, exc_info=exc)
             stored = await self._append_task_status_if_current(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.ERROR, detail=detail),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
+                    detail=detail,
+                ),
                 agent_view_id=agent_view_id,
                 run_intent_id=run_intent_id,
             )
@@ -3968,7 +3985,10 @@ class ConversationRuntime:
         if reason is not None:
             stored = await self._append_task_status_if_current(
                 conversation_id,
-                StatusEvent(status=ConversationStatus.ERROR, detail=reason[:200]),
+                LifecycleCommandService.build_status(
+                    ConversationStatus.ERROR,
+                    detail=reason[:200],
+                ),
                 agent_view_id=None,
                 run_intent_id=run_intent_id,
             )
@@ -3993,7 +4013,10 @@ class ConversationRuntime:
             if sandbox_reason is not None:
                 stored = await self._append_task_status_if_current(
                     conversation_id,
-                    StatusEvent(status=ConversationStatus.ERROR, detail=sandbox_reason[:200]),
+                    LifecycleCommandService.build_status(
+                        ConversationStatus.ERROR,
+                        detail=sandbox_reason[:200],
+                    ),
                     agent_view_id=None,
                     run_intent_id=run_intent_id,
                 )
@@ -4754,7 +4777,10 @@ class ConversationRuntime:
                 source=EventSource.AGENT,
                 message=LLMMessage(role="assistant", content=explanation),
             ),
-            StatusEvent(status=ConversationStatus.ERROR, detail=detail),
+            LifecycleCommandService.build_status(
+                ConversationStatus.ERROR,
+                detail=detail,
+            ),
         ]
         has_authority = agent_view_id is not None or run_intent_id is not None
         if not has_authority:
