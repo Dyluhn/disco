@@ -1,9 +1,14 @@
-"""SQLite schedule / scheduled-run persistence collaborator.
+"""SQLite schedule / scheduled-run persistence collaborator + delegate mixin.
 
 Extracted from ``SqliteEventStore`` so the store class stays within its
 architecture budget. This module owns the CRUD and run-history queries for the
 ``schedules`` and ``schedule_runs`` tables; the schema itself remains in
-``sqlite.py`` so all table creation stays in one migration script.
+``store/schema.py`` so all table creation stays in one migration script.
+
+The ``ScheduleStore`` collaborator holds a reference to the parent
+``SqliteEventStore`` connection and delegates back to it for any shared
+behavior. The ``_ScheduleMixin`` is a private static mixin inherited by
+``SqliteEventStore`` so the store retains the exact public schedule surface.
 
 Behavior preserved exactly:
 
@@ -17,6 +22,10 @@ Behavior preserved exactly:
 from __future__ import annotations
 
 import sqlite3
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass
 
 
 class ScheduleStore:
@@ -133,3 +142,42 @@ class ScheduleStore:
             (owner_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+class _ScheduleMixin:
+    """Private static mixin: schedule compatibility delegates (RP-08).
+
+    Inherited by ``SqliteEventStore``; not instantiated directly. All methods
+    delegate to ``self._schedules`` (a ``ScheduleStore``) provided by the host
+    class, preserving the exact pre-extraction public surface.
+    """
+
+    # Host-provided attribute (declared for type-checking; assigned by SqliteEventStore).
+    _schedules: ScheduleStore
+
+    def create_schedule(self, row: dict) -> None:
+        self._schedules.create_schedule(row)
+
+    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
+        return self._schedules.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
+
+    def list_enabled_schedules(self) -> list[dict]:
+        return self._schedules.list_enabled_schedules()
+
+    def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
+        return self._schedules.delete_schedule(schedule_id, owner_id=owner_id)
+
+    def update_schedule_next_run(self, schedule_id: str, next_run: str | None) -> None:
+        self._schedules.update_schedule_next_run(schedule_id, next_run)
+
+    def create_schedule_run(self, row: dict) -> None:
+        self._schedules.create_schedule_run(row)
+
+    def list_schedule_runs(self, schedule_id: str) -> list[dict]:
+        return self._schedules.list_schedule_runs(schedule_id)
+
+    def list_recent_schedule_runs(self, owner_id: str, limit: int = 50) -> list[dict]:
+        return self._schedules.list_recent_schedule_runs(owner_id, limit)
+
+
+__all__ = ["ScheduleStore", "_ScheduleMixin"]
