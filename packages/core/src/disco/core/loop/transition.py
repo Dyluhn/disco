@@ -67,7 +67,8 @@ class TransitionCoordinator:
         self._loop._recitation_last_signature = None
         # HS-03 — fresh segment → fresh re-ground cadence. The brief
         # asks for "ONCE immediately after a restart/resume" and a
-        # per-segment cadence thereafter. Both flags reset here so a
+        # per-segment cadence thereafter. The compatibility facade resets both
+        # flags immediately before entering this coordinator so a
         # resume (or a steer / first start) gets a fresh post-resume
         # one-shot AND a fresh per-boundary counter (the per-boundary
         # counter is what prevents re-emit on consecutive steps at
