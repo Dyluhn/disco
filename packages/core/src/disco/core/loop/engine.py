@@ -65,80 +65,7 @@ if TYPE_CHECKING:
 class _AgentLoopRuntimeCompatibility:
     """Removable private delegation surface for legacy AgentLoop seams."""
 
-    _autonomous: bool
-    _quiet: bool
-    _strict_appkit_active_reader: Callable[[], bool] | None
-    _finish_alias: str | None
-    _workflow_run: WorkflowRun | None
-    _terminal_commit_hook: TerminalCommitHook
-    _control_fence: ControlFenceFactory
-    _model_policy: ModelExecutionPolicy
-    _driver_context_window_value: int | None
-    _router: LLMRouter
-    _planning_tools: frozenset[str]
-    _plan_tool: str
-    _execution_mode: OperatingMode
-    _plan_nudges: int
-    _revision_force_submit_enabled: bool
-    _plan_explore_reads: int
-    _execution_nudges: int
-    _browser_verify_refusals: int
-    _identical_plan_revisions: int
-    _finish_verify_refusals: int
-    _finish_verify_strips: int
-    _finish_seal_refusals: int
-    _workflow_output_contract_refusals: int
-    _fanout_count: int
-    _fanout_max: int
-    _ACTIONLESS_BREAK_CAP: int
-    _invisible_steps: int
-    _max_consecutive_noops: int
-    _circuit_breaker_threshold: int
-    _auto_continue_cap: int
-    _stop_hooks: list[StopHook]
-    _stuck: StuckDetector
-    _recit: RecitationRegrounder
-    _view: view_render.ViewBuilder
-    _plan_cond: PlanStepConditions
-    _observe: Observer
-    _driver: Driver
-    _finish: FinishGate
-    _valve: Valve
-    _meta: MetaToolHandlers
-    _planner: Planner
-    _veto_feedback: str
-    _dod_evaluator_factory: (
-        Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
-    )
-    _host_verifier: HostVerifier | None
-    _host_verify_timeout_s: float
-    _host_verifier_verdict_hook: (
-        Callable[[VerifierVerdictEvent], Awaitable[None]] | None
-    )
-    _host_verify_authoritative: bool
-    _verifier_judge: VerifierJudge | None
-    _verifier_judge_timeout_s: float
-    _finish_sealability_probe: SealabilityProbe | None
-    _finish_seal_timeout_s: float
-    _dod_refusals: int
-    _dictated_content_refusals: int
-    _lock: asyncio.Lock
-    _pause_requested: asyncio.Event
-    _retry_interrupt: asyncio.Event
-    _recitation_cadence: int
-    _recitation_step_count: int
-    _recitation_last_signature: str | None
-    _hs03_reground_cadence: int
-    _plan_step_predicates: dict[tuple[int, int], DoDPredicate]
-    _bootstrap_emitted: bool
-    _hs03_reground_post_resume_emitted: bool
-    _hs03_reground_last_action_count: int
     _runtime: _LoopRuntime
-    _planning_gates: _PlanningGateController
-    _transition: _TransitionCoordinator
-    _conversation_controls: _ConversationControls
-    _plan_controls: _PlanApprovalController
-    _replanning: _ReplanningController
 
     _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file", "file_edit")
     _STREAM_FLUSH_CHARS = 24
@@ -301,6 +228,81 @@ class _AgentLoopRuntimeCompatibility:
 class AgentLoop:
     """[CONTRACT] The orchestrator and stable compatibility surface."""
 
+    _autonomous: bool
+    _quiet: bool
+    _strict_appkit_active_reader: Callable[[], bool] | None
+    _finish_alias: str | None
+    _workflow_run: WorkflowRun | None
+    _terminal_commit_hook: TerminalCommitHook
+    _control_fence: ControlFenceFactory
+    _model_policy: ModelExecutionPolicy
+    _driver_context_window_value: int | None
+    _router: LLMRouter
+    _planning_tools: frozenset[str]
+    _plan_tool: str
+    _execution_mode: OperatingMode
+    _plan_nudges: int
+    _revision_force_submit_enabled: bool
+    _plan_explore_reads: int
+    _execution_nudges: int
+    _browser_verify_refusals: int
+    _identical_plan_revisions: int
+    _finish_verify_refusals: int
+    _finish_verify_strips: int
+    _finish_seal_refusals: int
+    _workflow_output_contract_refusals: int
+    _fanout_count: int
+    _fanout_max: int
+    _ACTIONLESS_BREAK_CAP: int
+    _invisible_steps: int
+    _max_consecutive_noops: int
+    _circuit_breaker_threshold: int
+    _auto_continue_cap: int
+    _stop_hooks: list[StopHook]
+    _stuck: StuckDetector
+    _recit: RecitationRegrounder
+    _view: view_render.ViewBuilder
+    _plan_cond: PlanStepConditions
+    _observe: Observer
+    _driver: Driver
+    _finish: FinishGate
+    _valve: Valve
+    _meta: MetaToolHandlers
+    _planner: Planner
+    _veto_feedback: str
+    _dod_evaluator_factory: (
+        Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
+    )
+    _host_verifier: HostVerifier | None
+    _host_verify_timeout_s: float
+    _host_verifier_verdict_hook: (
+        Callable[[VerifierVerdictEvent], Awaitable[None]] | None
+    )
+    _host_verify_authoritative: bool
+    _verifier_judge: VerifierJudge | None
+    _verifier_judge_timeout_s: float
+    _finish_sealability_probe: SealabilityProbe | None
+    _finish_seal_timeout_s: float
+    _dod_refusals: int
+    _dictated_content_refusals: int
+    _lock: asyncio.Lock
+    _pause_requested: asyncio.Event
+    _retry_interrupt: asyncio.Event
+    _recitation_cadence: int
+    _recitation_step_count: int
+    _recitation_last_signature: str | None
+    _hs03_reground_cadence: int
+    _plan_step_predicates: dict[tuple[int, int], DoDPredicate]
+    _bootstrap_emitted: bool
+    _hs03_reground_post_resume_emitted: bool
+    _hs03_reground_last_action_count: int
+    _runtime: _LoopRuntime
+    _planning_gates: _PlanningGateController
+    _transition: _TransitionCoordinator
+    _conversation_controls: _ConversationControls
+    _plan_controls: _PlanApprovalController
+    _replanning: _ReplanningController
+
     _compat = _AgentLoopRuntimeCompatibility
     _STREAMING_WRITE_TOOLS = _compat._STREAMING_WRITE_TOOLS
     _STREAM_FLUSH_CHARS = _compat._STREAM_FLUSH_CHARS
@@ -350,12 +352,6 @@ class AgentLoop:
     )
     _route_plan_approval_gate = _compat._route_plan_approval_gate
     _harvest_prose_plan = _compat._harvest_prose_plan
-    _runtime: _LoopRuntime
-    _planning_gates: _PlanningGateController
-    _transition: _TransitionCoordinator
-    _conversation_controls: _ConversationControls
-    _plan_controls: _PlanApprovalController
-    _replanning: _ReplanningController
     del _compat
 
     def __init__(
