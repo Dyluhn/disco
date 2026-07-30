@@ -238,7 +238,7 @@ class _WorkflowRunExecution:
                 ),
             )
             return failed(str(exc))
-        self._run_control._resolved_context_for_compose[conversation_id] = snapshot
+        self._run_control._driver_contexts.begin_compose(conversation_id, snapshot)
         try:
             router = self._model_access._router_now(
                 pick=snapshot.model_key,
@@ -273,10 +273,8 @@ class _WorkflowRunExecution:
                 )
                 return failed(str(exc))
         finally:
-            current = self._run_control._resolved_context_for_compose.get(conversation_id)
-            if current is snapshot:
-                self._run_control._resolved_context_for_compose.pop(conversation_id, None)
-        self._run_control._resolved_driver_contexts[conversation_id] = snapshot
+            self._run_control._driver_contexts.end_compose(conversation_id, snapshot)
+        self._run_control._driver_contexts.bind_resolved(conversation_id, snapshot)
         sealed_executor = self._run_control._executors.get(conversation_id)
         loop.stream_sink = lambda frame: self._store.publish_ephemeral(conversation_id, frame)
         return _ExecutionPlan(

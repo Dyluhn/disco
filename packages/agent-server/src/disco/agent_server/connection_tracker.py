@@ -174,19 +174,18 @@ class ConnectionTracker:
 
     # ---- per-conversation cleanup -----------------------------------------
 
-    def clear_conversation(self, conversation_id: str) -> None:
-        """Drop all caches, locks, and connection/suspend state for a conversation.
-
-        Used by ``_teardown_sandbox``, ``_clear_evicted_session_markers``, and
-        ``forget_locked`` so a stale handle can't ghost the fresh backend's
-        session and caches don't accumulate for the life of the server process.
-        """
+    def clear_session_state(self, conversation_id: str) -> None:
+        """Drop session caches without changing live connection ownership."""
         for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
             del self._session_view_cache[key]
         for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
             del self._session_view_locks[key]
         self._wake_locks.pop(conversation_id, None)
         self._last_sessions.pop(conversation_id, None)
+
+    def clear_conversation(self, conversation_id: str) -> None:
+        """Forget all session and connection state for a deleted conversation."""
+        self.clear_session_state(conversation_id)
         self._connections.pop(conversation_id, None)
         task = self._suspend_tasks.pop(conversation_id, None)
         if task is not None:

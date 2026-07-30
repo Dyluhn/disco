@@ -528,7 +528,7 @@ class LifecycleManager:
         # BP-14: drop the capture-pane coalescing cache + locks for this conversation —
         # each cache entry pins up to 100KB of captured output and would otherwise
         # accumulate for the life of the server process.
-        self._rt._connections.clear_conversation(conversation_id)
+        self._rt._connections.clear_session_state(conversation_id)
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,

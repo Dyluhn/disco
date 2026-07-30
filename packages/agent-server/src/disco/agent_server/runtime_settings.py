@@ -28,8 +28,6 @@ from disco.core.store.sqlite import SqliteEventStore
 from disco.tools import DefaultToolExecutor, SandboxSession
 from disco.tools.projects import ProjectStore, StorageStatus
 
-from .driver_context import ResolvedDriverContext
-
 # Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
 # the prior turn has fully concluded (or cooperatively stopped), so re-pinning the
 # driver before the NEXT kick (resume / replan) can't land incoherently mid-step.
@@ -54,6 +52,12 @@ _AUTONOMOUS_SURFACES = frozenset({"build", "agent", "deep_research"})
 
 class _AppKitEjectionLookup(Protocol):
     def is_appkit_ejected(self, conversation_id: str) -> bool: ...
+
+
+class _DriverContextBindings(Protocol):
+    def compose_model_key(self, conversation_id: str) -> str | None: ...
+
+    def discard(self, conversation_id: str) -> None: ...
 
 
 class _RuntimeSettingsRouting:
@@ -91,15 +95,13 @@ class _RuntimeModelBindings:
         *,
         loops: dict[str, AgentLoop],
         tasks: dict[str, asyncio.Task[Any]],
-        compose_contexts: dict[str, ResolvedDriverContext],
-        resolved_contexts: dict[str, ResolvedDriverContext],
+        contexts: _DriverContextBindings,
         executors: dict[str, DefaultToolExecutor],
         pending_sessions: dict[str, SandboxSession],
     ) -> None:
         self._loops = loops
         self._tasks = tasks
-        self._compose_contexts = compose_contexts
-        self._resolved_contexts = resolved_contexts
+        self._contexts = contexts
         self._executors = executors
         self._pending_sessions = pending_sessions
 
@@ -111,14 +113,13 @@ class _RuntimeModelBindings:
         return task is not None and not task.done()
 
     def compose_model_key(self, conversation_id: str) -> str | None:
-        context = self._compose_contexts.get(conversation_id)
-        return context.model_key if context is not None else None
+        return self._contexts.compose_model_key(conversation_id)
 
     def evict_for_model_change(self, conversation_id: str) -> None:
         if self.live_task_exists(conversation_id):
             return
         self._loops.pop(conversation_id, None)
-        self._resolved_contexts.pop(conversation_id, None)
+        self._contexts.discard(conversation_id)
         executor = self._executors.pop(conversation_id, None)
         if conversation_id not in self._pending_sessions:
             session = getattr(executor, "_sandbox", None) if executor is not None else None
@@ -336,6 +337,9 @@ class RuntimeSettings:
 
     def _get_model_override(self, conversation_id: str) -> str | None:
         return self._model_overrides.get(conversation_id)
+
+    def assist_override(self, conversation_id: str) -> bool | None:
+        return self._assist.get(conversation_id)
 
     def _evict_model_binding(self, conversation_id: str) -> None:
         self._model_bindings.evict_for_model_change(conversation_id)

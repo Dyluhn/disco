@@ -31,6 +31,9 @@ class BuildExecutorAccess:
     def discard_composed_executor(self, conversation_id: str) -> None:
         self._executors.pop(conversation_id, None)
 
+    def executor_for(self, conversation_id: str) -> DefaultToolExecutor | None:
+        return self._executors.get(conversation_id)
+
     def sandbox_for(self, conversation_id: str) -> SandboxInstance | None:
         executor = self._executors.get(conversation_id)
         return executor.sandbox if executor is not None else None

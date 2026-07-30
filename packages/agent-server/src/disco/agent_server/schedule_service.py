@@ -59,8 +59,7 @@ class WorkflowRunControl(Protocol):
     _executors: dict[str, DefaultToolExecutor]
     _run_task_authorities: dict[asyncio.Task[Any], tuple[str | None, str | None]]
     _run_claimed_user_seq: dict[str, int]
-    _resolved_context_for_compose: dict[str, ResolvedDriverContext]
-    _resolved_driver_contexts: dict[str, ResolvedDriverContext]
+    _driver_contexts: WorkflowDriverContexts
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
 
@@ -83,6 +82,14 @@ class WorkflowRunControl(Protocol):
     ) -> None: ...
 
     async def _rekick_unadmitted_superseding_intent(self, conversation_id: str) -> None: ...
+
+
+class WorkflowDriverContexts(Protocol):
+    def begin_compose(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None: ...
+
+    def end_compose(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None: ...
+
+    def bind_resolved(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None: ...
 
 
 class WorkflowRunner(Protocol):

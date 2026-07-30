@@ -891,9 +891,8 @@ class WorkspaceCoordinator:
         self._rt._dr.forget(conversation_id)
         self._rt._spaces.forget(conversation_id)
         self._rt._connections.clear_conversation(conversation_id)
-        self._rt._driver_proven = {
-            proven for proven in self._rt._driver_proven if proven[0] != conversation_id
-        }
+        self._rt._driver_contexts.discard(conversation_id)
+        self._rt._driver_preflight.discard_conversation(conversation_id)
 
     def _conversation_caches(self) -> tuple[dict, ...]:
         return (

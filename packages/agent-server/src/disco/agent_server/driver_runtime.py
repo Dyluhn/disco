@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any, Protocol, TypedDict
 
 from disco.core import LLMMessage, SkillStore, render_skills_for_prompt
@@ -42,11 +42,8 @@ from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allow
 from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
 from disco.core.loop import host_verify_authoritative_enabled
 
-from .driver_context import (
-    DriverContextResolutionError,
-    DriverContextResolver,
-    ResolvedDriverContext,
-)
+from .driver_context import DriverContextResolutionError, ResolvedDriverContext
+from .driver_context_state import DriverContextState
 
 logger = logging.getLogger(__name__)
 
@@ -101,50 +98,6 @@ class DriverPromptState(Protocol):
     def workflow_router_active(self, conversation_id: str) -> bool: ...
 
     def appkit_mode_active(self, conversation_id: str) -> bool: ...
-
-
-class DriverContextState:
-    """Own immutable per-run snapshots and the bounded context resolver."""
-
-    def __init__(self, timeout_s: float = 5.0) -> None:
-        self._resolver = DriverContextResolver(timeout_s=timeout_s)
-        self._compose: dict[str, ResolvedDriverContext] = {}
-        self._resolved: dict[str, ResolvedDriverContext] = {}
-
-    async def resolve(
-        self,
-        *,
-        model_key: str,
-        entry: ModelEntry,
-        probe: Callable[[], Awaitable[dict[str, Any]]] | None,
-        unavailable_source: str | None,
-    ) -> ResolvedDriverContext:
-        return await self._resolver.resolve(
-            model_key=model_key,
-            entry=entry,
-            probe=probe,
-            unavailable_source=unavailable_source,
-        )
-
-    def compose_snapshot(self, conversation_id: str) -> ResolvedDriverContext | None:
-        return self._compose.get(conversation_id)
-
-    def resolved_snapshot(self, conversation_id: str) -> ResolvedDriverContext | None:
-        return self._resolved.get(conversation_id)
-
-    def begin_compose(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None:
-        self._compose[conversation_id] = snapshot
-
-    def end_compose(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None:
-        if self._compose.get(conversation_id) is snapshot:
-            self._compose.pop(conversation_id, None)
-
-    def bind_resolved(self, conversation_id: str, snapshot: ResolvedDriverContext) -> None:
-        self._resolved[conversation_id] = snapshot
-
-    def discard(self, conversation_id: str) -> None:
-        self._compose.pop(conversation_id, None)
-        self._resolved.pop(conversation_id, None)
 
 
 class DriverRuntime:
@@ -416,9 +369,10 @@ class DriverRuntime:
         return (entry.base_url, entry.model_id, entry.api_key_env)
 
     def _effective_model_key(self, conversation_id: str) -> str | None:
-        return self._selections.compose_model_key(
-            conversation_id
-        ) or self._selections.model_override(conversation_id)
+        compose_key = self._selections.compose_model_key(conversation_id)
+        if compose_key is not None:
+            return compose_key
+        return self._selections.model_override(conversation_id)
 
     def _selected_entry(
         self,

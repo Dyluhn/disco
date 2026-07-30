@@ -313,6 +313,24 @@ def test_clear_conversation_drops_all_caches_and_locks() -> None:
     assert "conv_a" not in tracker._suspend_tasks
 
 
+def test_clear_session_state_preserves_connection_ownership() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    tracker.on_connect("conv_a")
+    tracker.session_view_cache_set(
+        "conv_a",
+        "dev",
+        0.0,
+        SessionView(running=True, output="out"),
+    )
+    tracker.set_last_sessions("conv_a", [])
+
+    tracker.clear_session_state("conv_a")
+
+    assert tracker.has_connections("conv_a")
+    assert tracker.session_view_cache_get("conv_a", "dev") is None
+    assert tracker.last_sessions_get("conv_a") == []
+
+
 async def test_clear_conversation_cancels_pending_suspend() -> None:
     tracker = ConnectionTracker(_StubSuspend())
     tracker.on_connect("conv_a")

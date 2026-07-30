@@ -20,7 +20,6 @@ import contextvars
 import hashlib
 import logging
 import os
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
@@ -49,7 +48,6 @@ from disco.core import (
     agent_view_consistent_events,
     current_workspace_agent_view_id,
     latest_workspace_run_intent,
-    render_skills_for_prompt,
     workspace_run_intent_admission_required,
 )
 from disco.core.appkit import BuildBrief
@@ -70,21 +68,11 @@ from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled, routing_sink_for
 from disco.core.inspect import install as install_inspect
 from disco.core.llm import (
-    CallContext,
     CapabilityProfile,
-    CompletionRequest,
     ConfigStore,
     DefaultLLMRouter,
-    DriverPrompts,
-    LLMAuthError,
-    LLMContentFiltered,
-    LLMContextWindowExceeded,
-    LLMError,
-    LLMProviderUnavailable,
-    LLMTransientError,
     ModelExecutionPolicy,
     ModelRole,
-    NoEligibleModel,
     OperatingMode,
     RouterSummarizer,
     RoutingDecision,
@@ -93,8 +81,7 @@ from disco.core.llm import (
     ToolSpec,
 )
 from disco.core.llm.config import RouterConfig
-from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
-from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
+from disco.core.llm.secret_refs import resolve_provider_secret
 from disco.core.loop import (
     AgentLoop,
     AgentViewSuperseded,
@@ -175,10 +162,16 @@ from .build_platform_shadow import (
 from .connection_tracker import ConnectionTracker, LifecycleSuspender
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
-from .driver_context import (
-    DriverContextResolutionError,
-    DriverContextResolver,
-    ResolvedDriverContext,
+from .driver_context import ResolvedDriverContext
+from .driver_context_state import DriverContextState
+from .driver_runtime import (
+    DriverPreflight,
+    DriverRuntime,
+)
+from .driver_runtime_ports import (
+    RuntimeDriverProbeSeams,
+    RuntimeDriverPromptState,
+    RuntimeDriverSelections,
 )
 from .lifecycle import _GATE_STATES
 from .lifecycle_command_service import LifecycleCommandService, compose_lifecycle_service
@@ -200,7 +193,9 @@ from .runtime_model_probe import (
 )
 from .runtime_model_probe import (
     _do_live_model_probe,
-    _model_label,
+)
+from .runtime_model_probe import (
+    _model_label as _model_label,
 )
 from .runtime_model_probe import (
     _probe_live_model as _owned_probe_live_model,
@@ -790,37 +785,6 @@ class ConversationRuntime:
         # Settings assignments are actually honored.
         self._injected_router = router
         self._enable_thinking = enable_thinking
-        # Per-run driver context-window resolver (singleflight-bounded live probing).
-        self._driver_context = DriverContextResolver(timeout_s=5.0)
-        # Per-conversation immutable context snapshots. The transient map is populated
-        # only for the synchronous composition call, preserving the one-argument
-        # _loop_for seam while preventing one conversation/model from contaminating
-        # another. The durable-in-process map identifies the binding of a cached loop.
-        self._resolved_context_for_compose: dict[str, ResolvedDriverContext] = {}
-        self._resolved_driver_contexts: dict[str, ResolvedDriverContext] = {}
-        # W-35: short-TTL success cache for the driver pre-flight, keyed by the
-        # RESOLVED driver model key → monotonic timestamp of the last OK probe. A
-        # healthy driver is re-probed at most once per _DRIVER_PREFLIGHT_TTL_S, so
-        # back-to-back kicks don't each pay a live round-trip.
-        self._driver_preflight_ok: dict[str, float] = {}
-        # Concurrent cold-start kicks for the same model share one readiness call.
-        # Without this single-flight slot, a six-worker Build wave sends six
-        # simultaneous 1-token probes before any can populate the success cache;
-        # a subscription endpoint may queue them past the hard timeout even though
-        # the exact same probe succeeds immediately when serialized.
-        self._driver_preflight_inflight: dict[
-            str, tuple[asyncio.Task[tuple[str | None, bool]], float | None]
-        ] = {}
-        # W-35 (resilience): (conversation_id, role, resolved_model_key) tuples whose
-        # driver has ALREADY answered a pre-flight successfully in THIS process. An
-        # established run that has proven THAT SPECIFIC driver reachable must NOT be
-        # hard-failed by a single transient pre-flight timeout (a remote reasoning
-        # model — e.g. minimax — is intermittently slow under load): for these we
-        # soft-degrade a transient probe failure to a warning and let the REAL call
-        # surface a genuine error. Keying on (role, model) — not the conversation
-        # alone — means a build's proven AGENT_DRIVER can NOT mask a genuinely-dead
-        # DR RAG_ANSWERER (or a switched model) in the same conversation.
-        self._driver_proven: set[tuple[str, ModelRole, str]] = set()
         if config_store is not None:
             self._config_store = config_store
         elif config is not None:
@@ -846,6 +810,8 @@ class ConversationRuntime:
             install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._driver_contexts = DriverContextState(timeout_s=5.0)
+        build_executors = BuildExecutorAccess(self._executors)
         self._appkit_ejections = AppKitEjectionLedger()
         # Persisted settings own their collections and sidecar paths. Named,
         # cohesive ports expose only routing metadata and model-binding cache
@@ -858,8 +824,7 @@ class ConversationRuntime:
         model_bindings = _RuntimeModelBindings(
             loops=self._loops,
             tasks=self._tasks,
-            compose_contexts=self._resolved_context_for_compose,
-            resolved_contexts=self._resolved_driver_contexts,
+            contexts=self._driver_contexts,
             executors=self._executors,
             pending_sessions=self._pending_sessions,
         )
@@ -871,6 +836,18 @@ class ConversationRuntime:
             model_bindings=model_bindings,
             appkit_ejections=self._appkit_ejections,
         )
+        self._drivers = DriverRuntime(
+            config_store=self._config_store,
+            secret_store=self._secret_store,
+            skill_store=self._skill_store,
+            prompt_state=RuntimeDriverPromptState(build_executors),
+            selections=RuntimeDriverSelections(self._settings, self._driver_contexts),
+            probes=RuntimeDriverProbeSeams(),
+            contexts=self._driver_contexts,
+            injected_router=router,
+            enable_thinking=enable_thinking,
+        )
+        self._driver_preflight = DriverPreflight(self._drivers)
         # Durable authority captured by each registered Build task.  The
         # in-memory generation remains useful for local lifecycle cleanup, but
         # it cannot arbitrate another Agent-server process.  These ids are
@@ -935,7 +912,6 @@ class ConversationRuntime:
         self._resume = ResumeService(self)
         # Permanent workspace locks shared by lifecycle delegates.
         self._workspace = WorkspaceCoordinator(self)
-        build_executors = BuildExecutorAccess(self._executors)
         self._contract = BuildContractService(
             self._store,
             self._settings,
@@ -1057,22 +1033,10 @@ class ConversationRuntime:
         )
 
     def _workflow_router_prompt_active(self, conversation_id: str) -> bool:
-        executor = self._executors.get(conversation_id)
-        scope = getattr(executor, "_scope", None)
-        return getattr(scope, "preset", None) == "workflow_router"
+        return self._drivers._prompt_state.workflow_router_active(conversation_id)
 
     def _routing_config_now(self) -> RouterConfig:
-        """Current routing metadata without constructing live providers.
-
-        Tests and embedded callers may inject an authoritative router whose config
-        intentionally differs from the on-disk ConfigStore.  Read-only metadata paths
-        must preserve that seam while avoiding the origin/secret/provider work performed
-        by :meth:`_router_now`.
-        """
-
-        if self._injected_router is not None:
-            return self._injected_router._config
-        return self._config_store.load()
+        return self._drivers.config_now()
 
     def _router_now(
         self,
@@ -1084,80 +1048,13 @@ class ConversationRuntime:
         conversation_id: str | None = None,
         appkit_mode: bool = False,
     ) -> DefaultLLMRouter:
-        """The router for the CURRENT assignments. Cheap to rebuild (providers are
-        plain objects; the HTTP client is created per call), so we reload the config
-        each request rather than cache a stale router. `pick` (the model pill) is a
-        catalogue key the user explicitly chose for THIS conversation; `enable_thinking`
-        overrides the default reasoning mode for this request (the Think toggle)."""
-        if self._injected_router is not None:
-            return self._injected_router
-        cfg = self._config_store.load()
-        # A model PICK drives the ENTIRE generative pipeline, not just one role.
-        # When the user picks (say) an OpenRouter DeepSeek, the expectation is that
-        # DeepSeek does the whole job — the brain AND the context condensation AND
-        # query rewriting AND answer synthesis — not that the picked model "leads"
-        # while local models quietly do the summarizing/rewriting underneath. So we
-        # reassign every generative role to the pick for this request. (Unknown keys
-        # are ignored — fail safe to the saved assignment.)
-        if pick and pick in cfg.models:
-            reassigned = {**cfg.assignments, **{r: pick for r in self._GENERATIVE_ROLES}}
-            cfg = cfg.model_copy(update={"assignments": reassigned})
-        thinking = self._enable_thinking if enable_thinking is None else enable_thinking
-        providers = build_providers(
-            cfg,
-            enable_thinking=thinking,
-            origin_approved=self._origin_approved,
-        )
-        # DriverPrompts gives the AGENT_DRIVER role phase-aware system prompts (the
-        # plan→approve→build flow); every other role/mode defers to the default
-        # provider, so Research is unaffected. Enabled SKILLS (the user's reusable
-        # .md instructions) are rendered and prepended to the driver prompts —
-        # read fresh each request so a Settings toggle takes effect next run.
-        # `surface` filters to skills scoped to it (build vs agent) — None = all.
-        skills_block = render_skills_for_prompt(self._skill_store.enabled(), surface=surface)
-        # The "agent" surface gets the task-agent prompt flavor (an identity reframe);
-        # build + every other surface keep the build driver prompts unchanged.
-        flavor = "agent" if surface == "agent" else "build"
-        workflow_router_active: Callable[[], bool] | None = None
-        if workflow_router_enabled() and surface == "agent" and conversation_id:
-            cid = conversation_id
-
-            def _workflow_router_active() -> bool:
-                return self._workflow_router_prompt_active(cid)
-
-            workflow_router_active = _workflow_router_active
-
-        appkit_mode_active: Callable[[], bool] | None = None
-        if appkit_mode and conversation_id:
-            appkit_cid = conversation_id
-
-            def _appkit_mode_active() -> bool:
-                executor = self._executors.get(appkit_cid)
-                phase_state = getattr(executor, "appkit_phase", None)
-                # Before loop composition installs its executor, fail closed to
-                # strict. Once the confirmed hatch advances CUSTOM_BUILD, every
-                # subsequent router injection uses the ordinary Build profile.
-                return getattr(phase_state, "phase", None) != AppKitPhase.CUSTOM_BUILD
-
-            appkit_mode_active = _appkit_mode_active
-
-        # DISCO_INSPECT: when on, bind a per-conversation routing sink so every
-        # RoutingDecision this (per-conversation) router emits lands in the trace.
-        # Off → None → the router's NullRoutingSink, i.e. zero overhead.
-        sink = routing_sink_for(conversation_id)
-        return DefaultLLMRouter(
-            cfg,
-            providers,
-            prompt_provider=DriverPrompts(
-                skills_block=skills_block,
-                flavor=flavor,
-                autonomous=autonomous,
-                host_verify_authoritative=host_verify_authoritative_enabled(),
-                workflow_router_active=workflow_router_active,
-                appkit_mode=appkit_mode,
-                appkit_mode_active=appkit_mode_active,
-            ),
-            sink=sink,
+        return self._drivers.router(
+            pick,
+            enable_thinking=enable_thinking,
+            surface=surface,
+            autonomous=autonomous,
+            conversation_id=conversation_id,
+            appkit_mode=appkit_mode,
         )
 
     # Four surfaces: research (single-pass /ws/research stream), build (agent +
@@ -1194,163 +1091,16 @@ class ConversationRuntime:
         return await self._sandbox.probe_sandbox_config(settings)
 
     def _driver_context_window(self, conversation_id: str | None = None) -> int | None:
-        """Resolve the effective AGENT_DRIVER window for one conversation.
-
-        The per-conversation model pick must govern context budgeting just as it
-        governs routing. A stale persisted pick falls back to the configured
-        driver instead of disconnecting the view/executor/condenser budgets.
-        """
-        try:
-            cfg = self._routing_config_now()
-            override = (
-                self._settings._get_model_override(conversation_id)
-                if conversation_id is not None
-                else None
-            )
-            key = cfg.model_for(ModelRole.AGENT_DRIVER, override=override)
-            if key not in cfg.models and override is not None:
-                key = cfg.model_for(ModelRole.AGENT_DRIVER)
-            entry = cfg.entry_for(key)
-            # Prefer the model server's ACTUAL n_ctx over the static config — the
-            # condenser must budget against the window the backend really serves,
-            # not a config that may assume 128k (the "assuming 128k context" bug).
-            if not entry.base_url or not self._origin_approved(
-                entry.base_url, f"model:{entry.provider}", entry.api_key_env
-            ):
-                return entry.context_window
-            if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
-                return entry.context_window
-            api_key = self._resolve_secret(entry.api_key_env)
-            if entry.api_key_env and not api_key:
-                return entry.context_window
-            live = _probe_live_model(entry.base_url, api_key, entry.model_id)
-            return live["n_ctx"] or entry.context_window
-        except Exception:  # noqa: BLE001 — never block loop construction on this
-            return None
+        return self._drivers.context_window(conversation_id)
 
     async def _resolve_driver_context(self, conversation_id: str) -> ResolvedDriverContext:
-        """Return a frozen snapshot of the effective driver model and its resolved
-        context window for this run.
-
-        The override-aware ModelEntry identity is frozen BEFORE any await so the
-        resolver works with a stable entry. Origin/secret policy is re-checked;
-        keyless local endpoints (no base_url) are probeable; an unavailable or
-        invalid configured fallback raises before any provider or tool spend.
-        """
-        override = self._settings._get_model_override(conversation_id)
-        unresolved_key = override or "<configured-default>"
-        try:
-            cfg = self._routing_config_now()
-            key = cfg.model_for(ModelRole.AGENT_DRIVER, override=override)
-            if key not in cfg.models and override is not None:
-                key = cfg.model_for(ModelRole.AGENT_DRIVER)
-            entry = cfg.entry_for(key)
-        except Exception as exc:
-            raise DriverContextResolutionError(
-                model_key=unresolved_key,
-                provider="<unresolved>",
-                reason=f"invalid driver configuration ({type(exc).__name__})",
-            ) from exc
-
-        base_url: str | None = getattr(entry, "base_url", None) or None
-
-        try:
-            origin_approved = base_url is not None and self._origin_approved(
-                base_url, f"model:{entry.provider}", entry.api_key_env
-            )
-            secret_ref_allowed = base_url is None or secret_ref_allowed_for_origin(
-                entry.api_key_env, base_url
-            )
-            api_key = self._resolve_secret(entry.api_key_env) if base_url is not None else None
-        except Exception as exc:
-            raise DriverContextResolutionError(
-                model_key=key,
-                provider=entry.provider,
-                reason=f"driver credential policy could not be resolved ({type(exc).__name__})",
-            ) from exc
-
-        if base_url is None or not origin_approved:
-            unavailable: str | None = "unapproved_origin" if base_url else None
-            return await self._driver_context.resolve(
-                model_key=key,
-                entry=entry,
-                probe=None,
-                unavailable_source=unavailable,
-            )
-        if not secret_ref_allowed:
-            return await self._driver_context.resolve(
-                model_key=key,
-                entry=entry,
-                probe=None,
-                unavailable_source="disallowed_secret_ref",
-            )
-        if entry.api_key_env and not api_key:
-            return await self._driver_context.resolve(
-                model_key=key,
-                entry=entry,
-                probe=None,
-                unavailable_source="missing_secret",
-            )
-
-        async def probe() -> dict[str, Any]:
-            return await asyncio.to_thread(_probe_live_model, base_url, api_key, entry.model_id)
-
-        return await self._driver_context.resolve(
-            model_key=key,
-            entry=entry,
-            probe=probe,
-            unavailable_source=None,
-        )
+        return await self._drivers.resolve_context(conversation_id)
 
     async def prewarm_model_probe(self) -> None:
-        """Warm the live-model /props cache OFF the event loop at startup, so the
-        FIRST build's condenser budgets against the REAL context window, not the
-        static config. _probe_live_model is non-blocking on the loop (it returns the
-        static fallback and fills the cache from a worker thread), so without a
-        pre-warm the very first _compose_build_loop reads the fallback and caches it
-        for that loop's life. Here we await the blocking probe in a thread, so by the
-        time any conversation composes, the cache is hot. Passing the driver model_id
-        ALSO warms the /models context_length path (CW-1) so an OpenRouter driver's
-        first build budgets against its live window, not the static config.
-        Best-effort: never blocks boot."""
-        try:
-            cfg = self._config_store.load()
-            key = cfg.model_for(ModelRole.AGENT_DRIVER)
-            entry = cfg.entry_for(key)
-            if (
-                entry
-                and entry.base_url
-                and self._origin_approved(
-                    entry.base_url, f"model:{entry.provider}", entry.api_key_env
-                )
-            ):
-                if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
-                    return
-                api_key = self._resolve_secret(entry.api_key_env)
-                if entry.api_key_env and not api_key:
-                    return
-                await asyncio.to_thread(
-                    _do_live_model_probe, entry.base_url, api_key, entry.model_id
-                )
-        except Exception:  # noqa: BLE001 — best effort; the static config is the fallback
-            pass
+        await self._drivers.prewarm_model_probe()
 
     async def prewarm_vision_probe(self) -> None:
-        """V2/V4 (§2): run the async network vision probe ONCE at startup and install
-        the results as a process-lifetime overlay on the shared ConfigStore, so every
-        per-request config load reflects a model server's REAL vision modality
-        (llama.cpp `/props.modalities.vision`, OpenRouter `input_modalities`) over the
-        static table. Fail-soft: `probe_all_vision` never raises, and this call is
-        additionally wrapped so a probe failure can NEVER block boot — the overlay is
-        just not installed and load() keeps the static table."""
-        try:
-            self._config_store.apply_vision_probe(
-                await probe_all_vision_with_approvals(
-                    self._config_store.load(), origin_approved=self._origin_approved
-                )
-            )
-        except Exception:  # noqa: BLE001 — best effort; the static table is the fallback
-            pass
+        await self._drivers.prewarm_vision_probe()
 
     # ---- persisted settings (B0) — delegators to RuntimeSettings ------------
 
@@ -1468,22 +1218,18 @@ class ConversationRuntime:
         self._settings.set_assist(conversation_id, value)
 
     def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
-        """Delegator: the SINGLE source of truth for model-tier execution. See
-        RuntimeSettings._effective_policy for the full contract."""
-        return self._settings._effective_policy(conversation_id)
+        return self._drivers.effective_policy(conversation_id)
 
     def _effective_driver_endpoint(
         self, conversation_id: str
     ) -> tuple[str, str, str | None] | None:
-        """Delegator (ROOT-5): the conversation's override-aware driver endpoint for
-        LLM-using tools. See RuntimeSettings._effective_driver_endpoint."""
-        return self._settings._effective_driver_endpoint(conversation_id)
+        return self._drivers.effective_endpoint(conversation_id)
 
     def _effective_assist(self, conversation_id: str) -> bool:
-        return self._settings._effective_assist(conversation_id)
+        return self._drivers.effective_policy(conversation_id).assist
 
     def is_assist(self, conversation_id: str) -> bool:
-        return self._settings.is_assist(conversation_id)
+        return self._drivers.effective_policy(conversation_id).assist
 
     async def apply_settings_change(
         self,
@@ -1635,57 +1381,7 @@ class ConversationRuntime:
         self._settings.set_last_selected_model(model_id)
 
     def driver_models(self) -> dict[str, Any]:
-        """The driver-eligible models (live + tool-calling), deduped by underlying model,
-        for the Build model picker — with the current default. Cost-legible: provider +
-        free flag. Sourced from the live router config (Settings assignments honored)."""
-        from disco.core.llm import ModelRole, Requirement
-
-        cfg = self._config_store.load()
-        seen: set[str] = set()
-        models: list[dict[str, Any]] = []
-        for key, m in cfg.models.items():
-            if m.base_url is None or Requirement.TOOL_CALLING not in m.capabilities:
-                continue
-            # The Build picker is an execution surface, not a Settings catalogue.
-            # Models the live router cannot wire must not be selectable here.
-            if not self._origin_approved(m.base_url, f"model:{m.provider}", m.api_key_env):
-                continue
-            if not secret_ref_allowed_for_origin(m.api_key_env, m.base_url):
-                continue
-            api_key = self._resolve_secret(m.api_key_env)
-            if m.api_key_env and not api_key:
-                continue
-            if m.model_id in seen:
-                continue
-            seen.add(m.model_id)
-            # Ground truth over declaration: prefer the live-served model name +
-            # context window; fall back to the static ModelEntry on any probe miss.
-            live = _probe_live_model(m.base_url, api_key, m.model_id)
-            label = _model_label(live["model_id"] or m.model_id)
-            ctx = live["n_ctx"] or m.context_window
-            # W-05-fu: expose pricing_mode so the picker can tell a SUBSCRIPTION
-            # model (flat-rate plan, price 0/token) apart from a genuinely FREE
-            # one. None → derive for back-compat (price 0 → free, else metered),
-            # matching the frontend isFree/isSubscription helpers. `free` is then
-            # keyed off the effective mode so a subscription model is NOT free.
-            pricing_mode = m.pricing_mode
-            if pricing_mode is None:
-                pricing_mode = "free" if m.price_out_per_m == 0.0 else "metered"
-            models.append(
-                {
-                    "id": key,
-                    "label": label,
-                    "provider": "openrouter" if m.provider == "openrouter" else "local",
-                    "free": pricing_mode == "free",
-                    "pricing_mode": pricing_mode,
-                    "context_window": ctx,
-                }
-            )
-        try:
-            default = cfg.model_for(ModelRole.AGENT_DRIVER)
-        except Exception:  # noqa: BLE001 — no assignment → no default highlight
-            default = None
-        return {"models": models, "default": _default_in_catalog(default, models)}
+        return cast(dict[str, Any], self._drivers.catalog())
 
     def _retrieval_handlers(self) -> dict[str, Any]:
         """Lazily build the search/extract capability handlers from the research
@@ -1722,7 +1418,7 @@ class ConversationRuntime:
         *,
         driver_context_window: int | None = None,
     ) -> AgentLoop:
-        compose_snapshot = self._resolved_context_for_compose.get(conversation_id)
+        compose_snapshot = self._driver_contexts.compose_snapshot(conversation_id)
         if driver_context_window is None and compose_snapshot is not None:
             driver_context_window = compose_snapshot.context_window
         if driver_context_window is None:
@@ -1831,7 +1527,7 @@ class ConversationRuntime:
                 raise RuntimeError("admitted conversation has no composed loop")
             return existing_loop
 
-        previous_snapshot = self._resolved_driver_contexts.get(conversation_id)
+        previous_snapshot = self._driver_contexts.resolved_snapshot(conversation_id)
         if existing_loop is not None and previous_snapshot is not None:
             previous_binding = (
                 previous_snapshot.model_key,
@@ -1856,7 +1552,7 @@ class ConversationRuntime:
         if old_sandbox is not None:
             self._pending_sessions[conversation_id] = old_sandbox
 
-        self._resolved_context_for_compose[conversation_id] = snapshot
+        self._driver_contexts.begin_compose(conversation_id, snapshot)
         try:
             loop = self._loop_for(conversation_id)
         except BaseException:
@@ -1872,9 +1568,8 @@ class ConversationRuntime:
                 self._pending_sessions.pop(conversation_id, None)
             raise
         finally:
-            if self._resolved_context_for_compose.get(conversation_id) is snapshot:
-                self._resolved_context_for_compose.pop(conversation_id, None)
-        self._resolved_driver_contexts[conversation_id] = snapshot
+            self._driver_contexts.end_compose(conversation_id, snapshot)
+        self._driver_contexts.bind_resolved(conversation_id, snapshot)
         return loop
 
     def _executor_for(self, conversation_id: str) -> DefaultToolExecutor:
@@ -3333,155 +3028,18 @@ class ConversationRuntime:
         override: str | None = None,
         role: ModelRole = ModelRole.AGENT_DRIVER,
     ) -> str | None:
-        """W-35: make ONE cheap (1-token) real call against the RESOLVED driver
-        endpoint+key BEFORE the loop composes, so a dead / unauthed / misconfigured
-        driver fails fast with a NAMED reason instead of stalling silently on the
-        first mid-loop call. Returns None when the driver is reachable, else a
-        human-readable reason string (the caller surfaces it as StatusEvent(ERROR)
-        / an error frame and does NOT start the loop).
-
-        A SUCCESS is cached for _DRIVER_PREFLIGHT_TTL_S (keyed by the resolved model)
-        so a healthy driver adds no latency to every kick. Error classification is
-        owned by the provider (openai_provider._raise_typed): LLMAuthError /
-        LLMProviderUnavailable / LLMTransientError / NoEligibleModel all block; a
-        content-filter or context-window response means the endpoint ANSWERED, so it
-        passes (the endpoint is reachable — that's all pre-flight checks)."""
-        if self._injected_router is not None:
-            # Test/dev seam: a pinned router has no real endpoint to probe.
-            return None
-        cid = conversation_id or ""
-        override = override if override is not None else self._settings._get_model_override(cid)
-        cfg = self._config_store.load()
-        if override and override in cfg.models:
-            key = override
-        else:
-            try:
-                key = cfg.model_for(role)
-            except Exception:  # noqa: BLE001 — resolution failure ⇒ generic label
-                key = "?"
-        # Proven-state is keyed by the SPECIFIC driver being probed — (conversation,
-        # role, resolved model) — so a soft-degrade only ever applies to the same
-        # driver that previously succeeded HERE, never a different role/model.
-        proven_key = (cid, role, key)
-        cached = self._driver_preflight_ok.get(key)
-        if cached is not None and time.monotonic() - cached < self._DRIVER_PREFLIGHT_TTL_S:
-            self._driver_proven.add(proven_key)
-            self._record_shared_driver_preflight_success(cid, cfg, key, override, role, "cached")
-            return None
-        now = time.monotonic()
-        slot = self._driver_preflight_inflight.get(key)
-        created_probe = False
-        if slot is not None:
-            task, completed_at = slot
-            if (
-                task.done()
-                and completed_at is not None
-                and now - completed_at >= self._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S
-            ):
-                self._driver_preflight_inflight.pop(key, None)
-                slot = None
-        if slot is None:
-            created_probe = True
-            task = asyncio.create_task(
-                self._probe_driver(cid, key=key, override=override, role=role),
-                name=f"driver-preflight:{key}",
-            )
-            # None means the task is still running or its completion has not yet
-            # been observed.  The first observer stamps completion exactly once.
-            self._driver_preflight_inflight[key] = (task, None)
-            task.add_done_callback(
-                lambda completed, model_key=key: self._complete_driver_preflight_slot(
-                    model_key, completed
-                )
-            )
-        else:
-            task = slot[0]
-        try:
-            result, transient = await asyncio.shield(task)
-        except asyncio.CancelledError:
-            # Cancelling one waiter must not cancel the shared provider probe.  If
-            # the shared task itself was cancelled during shutdown, discard it so
-            # a later kick cannot inherit a permanently-cancelled slot.
-            current = self._driver_preflight_inflight.get(key)
-            if current is not None and current[0] is task and task.cancelled():
-                self._driver_preflight_inflight.pop(key, None)
-            raise
-        except Exception:
-            current = self._driver_preflight_inflight.get(key)
-            if current is not None and current[0] is task:
-                self._driver_preflight_inflight.pop(key, None)
-            raise
-        if result is None:
-            current = self._driver_preflight_inflight.get(key)
-            if current is not None and current[0] is task:
-                self._driver_preflight_inflight.pop(key, None)
-            self._driver_proven.add(proven_key)
-            # The provider request is intentionally shared, but every caller
-            # consumes the successful readiness verdict.  Record that fact per
-            # conversation so a later pre-loop sandbox failure still has exact
-            # model/provider routing evidence instead of an absent trace.
-            if not created_probe:
-                self._record_shared_driver_preflight_success(
-                    cid, cfg, key, override, role, "shared"
-                )
-            return None
-
-        # Ensure the completion callback's write-once timestamp/eviction has run
-        # before this caller returns.  The helper is idempotent when the callback
-        # already ran.
-        self._complete_driver_preflight_slot(key, task)
-
-        # Only transient failures may soft-degrade after this exact conversation,
-        # role, and model previously succeeded.  Auth, configuration, provider
-        # unavailable, and generic model errors remain hard terminal verdicts.
-        if transient and proven_key in self._driver_proven:
-            logger.warning(
-                "driver pre-flight for %r (role=%s) failed transiently (%s) but it "
-                "already succeeded in conversation %s — proceeding (soft-degrade)",
-                key,
-                role,
-                result,
-                cid or "<none>",
-            )
-            return None
-
-        # Every terminal caller needs attributable routing evidence even though
-        # only the single-flight leader touched the provider.
-        self._record_shared_driver_preflight_failure(cid, cfg, key, override, role)
-        return result
+        return await self._driver_preflight.check(
+            conversation_id,
+            override=override,
+            role=role,
+        )
 
     def _complete_driver_preflight_slot(
         self,
         key: str,
         task: asyncio.Task[tuple[str | None, bool]],
     ) -> None:
-        """Timestamp and schedule eviction for one completed shared failure."""
-
-        current = self._driver_preflight_inflight.get(key)
-        if current is None or current[0] is not task or current[1] is not None:
-            return
-        if task.cancelled():
-            self._driver_preflight_inflight.pop(key, None)
-            return
-        try:
-            result, _transient = task.result()
-        except BaseException:
-            # Never retain an unexpected exception/traceback: transport exception
-            # strings can contain request headers or other credential material.
-            self._driver_preflight_inflight.pop(key, None)
-            return
-        if result is None:
-            self._driver_preflight_inflight.pop(key, None)
-            return
-        completed_at = time.monotonic()
-        self._driver_preflight_inflight[key] = (task, completed_at)
-        task.get_loop().call_later(
-            self._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S,
-            self._expire_driver_preflight_slot,
-            key,
-            task,
-            completed_at,
-        )
+        self._driver_preflight._complete(key, task)
 
     def _expire_driver_preflight_slot(
         self,
@@ -3489,11 +3047,7 @@ class ConversationRuntime:
         task: asyncio.Task[tuple[str | None, bool]],
         completed_at: float,
     ) -> None:
-        """Evict exactly the failure generation whose short share window ended."""
-
-        current = self._driver_preflight_inflight.get(key)
-        if current is not None and current == (task, completed_at):
-            self._driver_preflight_inflight.pop(key, None)
+        self._driver_preflight._expire(key, task, completed_at)
 
     async def _probe_driver(
         self,
@@ -3503,65 +3057,12 @@ class ConversationRuntime:
         override: str | None,
         role: ModelRole,
     ) -> tuple[str | None, bool]:
-        """Run one bounded probe and preserve whether its failure is transient."""
-
-        cid = conversation_id
-        router = self._router_now(pick=override, conversation_id=cid)
-        req = CompletionRequest(
-            profile=CapabilityProfile(role=role),
-            messages=[LLMMessage(role="user", content="ping")],
-            max_tokens=1,
+        return await self._driver_preflight._probe(
+            conversation_id,
+            key=key,
+            override=override,
+            role=role,
         )
-        # A TRANSIENT verdict (timeout / LLMTransientError) is retried up to
-        # _DRIVER_PREFLIGHT_ATTEMPTS before it counts; a HARD verdict (auth /
-        # misconfig / unavailable / other) returns immediately. transient_reason
-        # holds the last transient verdict; it is cleared the moment a probe
-        # reaches the endpoint (a real answer OR a content-filter/context reply).
-        transient_reason: str | None = None
-        for attempt in range(self._DRIVER_PREFLIGHT_ATTEMPTS):
-            try:
-                # P1-1: bound the probe so it FAILS FAST. asyncio.wait_for caps the
-                # whole call (resolution + any same-model transient retries + the
-                # provider round-trip) at _DRIVER_PREFLIGHT_TIMEOUT_S; a black-holed
-                # driver is cancelled at the deadline instead of stalling for minutes.
-                await asyncio.wait_for(
-                    router.complete(
-                        req,
-                        context=CallContext(conversation_id=cid, model_override=override),
-                    ),
-                    self._DRIVER_PREFLIGHT_TIMEOUT_S,
-                )
-                transient_reason = None
-                break  # reachable
-            except TimeoutError:
-                transient_reason = (
-                    f"Driver '{key}' unreachable: no response within "
-                    f"{self._DRIVER_PREFLIGHT_TIMEOUT_S:.0f}s (pre-flight timed out)"
-                )
-            except (LLMContentFiltered, LLMContextWindowExceeded):
-                transient_reason = None
-                break  # the endpoint answered → reachable
-            except NoEligibleModel as exc:
-                return f"Driver '{key}' is misconfigured: {exc}", False
-            except LLMAuthError as exc:
-                return f"Driver '{key}' rejected the API key: {exc}", False
-            except LLMProviderUnavailable as exc:
-                return f"Driver '{key}' is unavailable: {exc}", False
-            except LLMTransientError as exc:
-                transient_reason = f"Driver '{key}' unreachable: {exc}"
-            except LLMError as exc:
-                return f"Driver '{key}' error: {exc}", False
-            except Exception as exc:  # noqa: BLE001 — terminalize without leaking details
-                return f"Driver '{key}' pre-flight failed ({type(exc).__name__})", False
-            # transient verdict: brief escalating backoff, then re-probe (unless
-            # this was the final attempt).
-            if attempt + 1 < self._DRIVER_PREFLIGHT_ATTEMPTS:
-                await asyncio.sleep(self._DRIVER_PREFLIGHT_BACKOFF_S * (attempt + 1))
-
-        if transient_reason is not None:
-            return transient_reason, True
-        self._driver_preflight_ok[key] = time.monotonic()
-        return None, False
 
     @staticmethod
     def _record_shared_driver_preflight_success(
@@ -3682,7 +3183,7 @@ class ConversationRuntime:
         start in an EMPTY workspace (silently losing prior work). The view-cache /
         wake-lock / last-session entries are dropped too so a stale handle can't ghost
         the fresh backend's session."""
-        self._connections.clear_conversation(conversation_id)
+        self._connections.clear_session_state(conversation_id)
         rehydrated = getattr(self, "_rehydrated", None)
         if rehydrated is not None:
             rehydrated.discard(conversation_id)
@@ -4544,12 +4045,7 @@ class ConversationRuntime:
     async def aclose(self) -> None:
         for task in self._tasks.values():
             task.cancel()
-        preflight_tasks = {slot[0] for slot in self._driver_preflight_inflight.values()}
-        for task in preflight_tasks:
-            task.cancel()
-        if preflight_tasks:
-            await asyncio.gather(*preflight_tasks, return_exceptions=True)
-        self._driver_preflight_inflight.clear()
+        await self._driver_preflight.aclose()
         for executor in self._executors.values():
             with contextlib.suppress(Exception):
                 await executor.kill()
