@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from disco.core.llm import SecretBox, SecretStore, ensure_process_secret_key
-from disco.core.llm.secrets import _default_secrets_path
+from disco.core.llm.secrets import SecretRotationError, _default_secrets_path
 
 
 def test_box_round_trips_and_ciphertext_is_not_plaintext():
@@ -166,6 +166,49 @@ def test_clear_removes_the_key(tmp_path):
     store.clear_openrouter_key()
     assert not store.has_openrouter_key()
     assert store.get_openrouter_key() is None
+
+
+def test_key_rotation_reencrypts_every_secret_atomically(tmp_path):
+    path = tmp_path / "secrets.json"
+    store = SecretStore(path, box=SecretBox("old-app-secret"))
+    store.set_secret("OPENAI_API_KEY", "sk-openai-plain")
+    store.set_openrouter_key("sk-openrouter-plain")
+    before = path.read_bytes()
+
+    store.rotate_key("new-app-secret")
+
+    after = path.read_bytes()
+    assert after != before
+    assert b"plain" not in after
+    assert SecretStore(path, box=SecretBox("old-app-secret")).undecryptable_names()
+    restarted = SecretStore(path, box=SecretBox("new-app-secret"))
+    assert restarted.get_secret("OPENAI_API_KEY") == "sk-openai-plain"
+    assert restarted.get_openrouter_key() == "sk-openrouter-plain"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_key_rotation_with_wrong_current_key_preserves_original_bytes(tmp_path):
+    path = tmp_path / "secrets.json"
+    SecretStore(path, box=SecretBox("correct-old-secret")).set_secret("KEY", "value")
+    before = path.read_bytes()
+    wrong = SecretStore(path, box=SecretBox("wrong-old-secret"))
+
+    with pytest.raises(SecretRotationError, match="undecryptable"):
+        wrong.rotate_key("new-secret")
+
+    assert path.read_bytes() == before
+    assert SecretStore(path, box=SecretBox("correct-old-secret")).get_secret("KEY") == "value"
+
+
+def test_key_rotation_refuses_corrupt_ciphertext_store(tmp_path):
+    path = tmp_path / "secrets.json"
+    path.write_text("{broken")
+    before = path.read_bytes()
+
+    with pytest.raises(SecretRotationError, match="corrupt"):
+        SecretStore(path, box=SecretBox("old-secret")).rotate_key("new-secret")
+
+    assert path.read_bytes() == before
 
 
 # ---- default path: out of the project tree (security defense-in-depth) -------

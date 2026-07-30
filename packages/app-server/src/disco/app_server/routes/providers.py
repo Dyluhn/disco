@@ -143,6 +143,14 @@ def _output_limit(*values: object) -> int | None:
     return None
 
 
+def _first_value(values: dict, *keys: str) -> object:
+    for key in keys:
+        value = values.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _caps(
     *,
     context_window: int | None,
@@ -168,54 +176,56 @@ def _caps(
 
 
 def _normalize_openai_compat(payload: dict) -> list[ProviderCatalogueModelDTO]:
-    out: list[ProviderCatalogueModelDTO] = []
     data = payload.get("data")
     if not isinstance(data, list):
-        return out
-    for raw in data:
-        if not isinstance(raw, dict) or raw.get("id") is None:
-            continue
-        raw_pricing = raw.get("pricing")
-        raw_arch = raw.get("architecture")
-        pricing = raw_pricing if isinstance(raw_pricing, dict) else {}
-        arch = raw_arch if isinstance(raw_arch, dict) else {}
-        raw_top_provider = raw.get("top_provider")
-        top_provider = raw_top_provider if isinstance(raw_top_provider, dict) else {}
-        context_window = _context(
-            raw.get("context_length")
-            or raw.get("context_window")
-            or raw.get("contextWindow")
-            or raw.get("max_context_tokens")
+        return []
+    return [
+        model
+        for raw in data
+        if isinstance(raw, dict) and (model := _normalize_openai_model(raw)) is not None
+    ]
+
+
+def _normalize_openai_model(raw: dict) -> ProviderCatalogueModelDTO | None:
+    if raw.get("id") is None:
+        return None
+    raw_pricing = raw.get("pricing")
+    raw_arch = raw.get("architecture")
+    pricing = raw_pricing if isinstance(raw_pricing, dict) else {}
+    architecture = raw_arch if isinstance(raw_arch, dict) else {}
+    raw_top_provider = raw.get("top_provider")
+    top_provider = raw_top_provider if isinstance(raw_top_provider, dict) else {}
+    context_window = _context(
+        _first_value(
+            raw,
+            "context_length",
+            "context_window",
+            "contextWindow",
+            "max_context_tokens",
         )
-        model_id = str(raw["id"])
-        out.append(
-            ProviderCatalogueModelDTO(
-                model_id=model_id,
-                label=str(raw.get("name") or raw.get("display_name") or model_id),
-                context_window=context_window,
-                max_output_tokens=_output_limit(
-                    raw.get("max_output_tokens"),
-                    raw.get("max_completion_tokens"),
-                    raw.get("output_token_limit"),
-                    top_provider.get("max_completion_tokens"),
-                ),
-                price_in_per_m=_token_price_per_m(
-                    pricing.get("prompt") or pricing.get("input") or pricing.get("input_token")
-                ),
-                price_out_per_m=_token_price_per_m(
-                    pricing.get("completion")
-                    or pricing.get("output")
-                    or pricing.get("output_token")
-                ),
-                capabilities=_caps(
-                    context_window=context_window,
-                    input_modalities=arch.get("input_modalities") or (),
-                    supported_parameters=raw.get("supported_parameters") or (),
-                    explicit=raw.get("capabilities") or (),
-                ),
-            )
-        )
-    return out
+    )
+    model_id = str(raw["id"])
+    return ProviderCatalogueModelDTO(
+        model_id=model_id,
+        label=str(raw.get("name") or raw.get("display_name") or model_id),
+        context_window=context_window,
+        max_output_tokens=_output_limit(
+            raw.get("max_output_tokens"),
+            raw.get("max_completion_tokens"),
+            raw.get("output_token_limit"),
+            top_provider.get("max_completion_tokens"),
+        ),
+        price_in_per_m=_token_price_per_m(_first_value(pricing, "prompt", "input", "input_token")),
+        price_out_per_m=_token_price_per_m(
+            _first_value(pricing, "completion", "output", "output_token")
+        ),
+        capabilities=_caps(
+            context_window=context_window,
+            input_modalities=architecture.get("input_modalities") or (),
+            supported_parameters=raw.get("supported_parameters") or (),
+            explicit=raw.get("capabilities") or (),
+        ),
+    )
 
 
 def _normalize_anthropic(payload: dict) -> list[ProviderCatalogueModelDTO]:
@@ -302,13 +312,14 @@ def _error_text(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
 
 
-def make_providers_router(state: ConfigState) -> APIRouter:
-    router = APIRouter()
-    cache: dict[str, tuple[float, list[ProviderCatalogueModelDTO]]] = {}
-    locks: dict[str, asyncio.Lock] = {}
+class _ProviderRouteState:
+    def __init__(self, state: ConfigState) -> None:
+        self._state = state
+        self._cache: dict[str, tuple[float, list[ProviderCatalogueModelDTO]]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
-    async def _probe(provider: ProviderDTO, api_key: str) -> tuple[bool, str | None]:
-        if not state.provider_origin_approved(provider):
+    async def _probe(self, provider: ProviderDTO, api_key: str) -> tuple[bool, str | None]:
+        if not self._state.provider_origin_approved(provider):
             return False, "provider key is not approved for this origin"
         try:
             await _fetch_provider_catalogue(provider, api_key)
@@ -316,24 +327,21 @@ def make_providers_router(state: ConfigState) -> APIRouter:
         except (httpx.HTTPError, ValueError) as exc:
             return False, _error_text(exc)
 
-    async def _cached_models(provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:
-        # Gate before consulting the cache or decrypting the key. A tampered
-        # persisted base_url must neither receive a credential nor inherit a
-        # catalogue cached under the previously approved host.
-        if not state.provider_origin_approved(provider):
+    async def _models(self, provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:
+        if not self._state.provider_origin_approved(provider):
             raise HTTPException(
                 status_code=403,
                 detail="Provider key is not approved for this origin. Re-save the provider.",
             )
-        hit = cache.get(provider.id)
-        if hit and time.monotonic() - hit[0] < _CATALOGUE_TTL_S:
-            return hit[1]
-        lock = locks.setdefault(provider.id, asyncio.Lock())
+        hit = self._fresh(provider.id)
+        if hit is not None:
+            return hit
+        lock = self._locks.setdefault(provider.id, asyncio.Lock())
         async with lock:
-            hit = cache.get(provider.id)
-            if hit and time.monotonic() - hit[0] < _CATALOGUE_TTL_S:
-                return hit[1]
-            key = state._resolve_secret_value(provider.secret_name)
+            hit = self._fresh(provider.id)
+            if hit is not None:
+                return hit
+            key = self._state._resolve_secret_value(provider.secret_name)
             if not key:
                 raise HTTPException(
                     status_code=400,
@@ -346,16 +354,39 @@ def make_providers_router(state: ConfigState) -> APIRouter:
                     status_code=502,
                     detail=f"{provider.label} /models probe failed: {_error_text(exc)}",
                 ) from exc
-            cache[provider.id] = (time.monotonic(), models)
+            self._cache[provider.id] = (time.monotonic(), models)
             return models
 
-    def _provider_or_404(provider_id: str) -> ProviderDTO:
+    def _fresh(self, provider_id: str) -> list[ProviderCatalogueModelDTO] | None:
+        hit = self._cache.get(provider_id)
+        if hit and time.monotonic() - hit[0] < _CATALOGUE_TTL_S:
+            return hit[1]
+        return None
+
+    def _provider_or_404(self, provider_id: str) -> ProviderDTO:
         try:
-            return state._provider_dto(state.provider_settings(provider_id))
+            return self._state._provider_dto(self._state.provider_settings(provider_id))
         except KeyError as exc:
             raise HTTPException(
-                status_code=404, detail=f"unknown provider {provider_id!r}"
+                status_code=404,
+                detail=f"unknown provider {provider_id!r}",
             ) from exc
+
+    def _catalogue_model(
+        self,
+        provider_id: str,
+        model_id: str,
+    ) -> ProviderCatalogueModelDTO | None:
+        models = self._fresh(provider_id) or ()
+        return next((model for model in models if model.model_id == model_id), None)
+
+    def _invalidate(self, provider_id: str) -> None:
+        self._cache.pop(provider_id, None)
+
+
+def make_providers_router(state: ConfigState) -> APIRouter:
+    router = APIRouter()
+    route_state = _ProviderRouteState(state)
 
     @router.get("/api/providers/presets")
     async def get_provider_presets() -> list[ProviderPresetDTO]:
@@ -371,8 +402,8 @@ def make_providers_router(state: ConfigState) -> APIRouter:
             provider = state.create_provider(body)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        ok, error = await _probe(provider, body.api_key.strip())
-        cache.pop(provider.id, None)
+        ok, error = await route_state._probe(provider, body.api_key.strip())
+        route_state._invalidate(provider.id)
         return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
 
     @router.put("/api/providers/{provider_id}")
@@ -391,10 +422,10 @@ def make_providers_router(state: ConfigState) -> APIRouter:
             else state._resolve_secret_value(provider.secret_name)
         )
         if key:
-            ok, error = await _probe(provider, key)
+            ok, error = await route_state._probe(provider, key)
         else:
             ok, error = False, f"No decryptable key stored for {provider.label}."
-        cache.pop(provider.id, None)
+        route_state._invalidate(provider.id)
         return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
 
     @router.delete("/api/providers/{provider_id}", status_code=204)
@@ -410,23 +441,20 @@ def make_providers_router(state: ConfigState) -> APIRouter:
                 status_code=409,
                 detail=f"Provider is still used by catalogue models: {', '.join(exc.model_names)}",
             ) from exc
-        cache.pop(provider_id, None)
+        route_state._invalidate(provider_id)
         return Response(status_code=204)
 
     @router.get("/api/providers/{provider_id}/models")
     async def get_provider_models(provider_id: str) -> list[ProviderCatalogueModelDTO]:
-        return await _cached_models(_provider_or_404(provider_id))
+        return await route_state._models(route_state._provider_or_404(provider_id))
 
     @router.post("/api/providers/{provider_id}/enable")
     async def enable_provider_model(
         provider_id: str,
         body: ProviderEnableBody,
     ) -> list[ModelDTO]:
-        provider = _provider_or_404(provider_id)
-        catalogue_model = None
-        hit = cache.get(provider.id)
-        if hit and time.monotonic() - hit[0] < _CATALOGUE_TTL_S:
-            catalogue_model = next((m for m in hit[1] if m.model_id == body.model_id), None)
+        provider = route_state._provider_or_404(provider_id)
+        catalogue_model = route_state._catalogue_model(provider.id, body.model_id)
         try:
             return state.enable_provider_model(provider_id, body, catalogue_model)
         except ValueError as exc:
@@ -434,7 +462,7 @@ def make_providers_router(state: ConfigState) -> APIRouter:
 
     @router.delete("/api/providers/{provider_id}/enable/{catalogue_id}")
     async def disable_provider_model(provider_id: str, catalogue_id: str) -> list[ModelDTO]:
-        _provider_or_404(provider_id)
+        route_state._provider_or_404(provider_id)
         try:
             return state.disable_provider_model(provider_id, catalogue_id)
         except ValueError as exc:

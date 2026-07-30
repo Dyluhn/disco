@@ -140,6 +140,10 @@ class WeakSecretError(RuntimeError):
     """
 
 
+class SecretRotationError(RuntimeError):
+    """Rotation cannot decrypt every existing value and leaves the file untouched."""
+
+
 def _warn_if_weak_secret(secret: str) -> None:
     """Log ONCE per process if the app secret looks weak. A warning, not an
     error: an existing deployment with a short key must keep working (raising
@@ -216,7 +220,39 @@ class SecretBox:
             return None
 
 
-class SecretStore:
+class _OpenRouterSecretAdapter:
+    def has_secret(self, name: str) -> bool:
+        raise NotImplementedError
+
+    def get_secret(self, name: str, *, strong_required: bool = False) -> str | None:
+        raise NotImplementedError
+
+    def set_secret(
+        self,
+        name: str,
+        plaintext: str,
+        *,
+        strong_required: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
+    def clear_secret(self, name: str) -> None:
+        raise NotImplementedError
+
+    def has_openrouter_key(self) -> bool:
+        return self.has_secret("openrouter")
+
+    def get_openrouter_key(self) -> str | None:
+        return self.get_secret("openrouter")
+
+    def set_openrouter_key(self, plaintext: str) -> None:
+        self.set_secret("openrouter", plaintext)
+
+    def clear_openrouter_key(self) -> None:
+        self.clear_secret("openrouter")
+
+
+class SecretStore(_OpenRouterSecretAdapter):
     """Persists named secrets encrypted at rest. Today: the OpenRouter API key."""
 
     def __init__(
@@ -242,7 +278,7 @@ class SecretStore:
     @property
     def locked(self) -> bool:
         """An encrypted secret exists but can't be decrypted (no/wrong app secret)."""
-        return bool(self._raw().get("openrouter")) and not self._box.available
+        return bool(self.undecryptable_names())
 
     @property
     def signing_secret(self) -> str | None:
@@ -309,19 +345,29 @@ class SecretStore:
                 bad.append(name)
         return bad
 
-    # -- OpenRouter convenience wrappers (the reserved "openrouter" slot) ------
+    def rotate_key(self, new_app_secret: str) -> None:
+        """Atomically re-encrypt every stored value under ``new_app_secret``.
 
-    def has_openrouter_key(self) -> bool:
-        return self.has_secret("openrouter")
-
-    def get_openrouter_key(self) -> str | None:
-        return self.get_secret("openrouter")
-
-    def set_openrouter_key(self, plaintext: str) -> None:
-        self.set_secret("openrouter", plaintext)
-
-    def clear_openrouter_key(self) -> None:
-        self.clear_secret("openrouter")
+        The current box must decrypt every non-empty token. A missing/wrong key
+        or corrupted token aborts before the replacement file is written.
+        """
+        replacement = SecretBox(new_app_secret)
+        if not replacement.available:
+            raise SecretRotationError("new app secret is unavailable")
+        raw = self._raw_for_rotation()
+        plaintext: dict[str, str] = {}
+        for name, token in raw.items():
+            if not isinstance(token, str) or not token:
+                continue
+            value = self._box.decrypt(token)
+            if value is None:
+                raise SecretRotationError(
+                    f"cannot rotate: existing secret {name!r} is undecryptable"
+                )
+            plaintext[name] = value
+        rotated = {name: replacement.encrypt(value) for name, value in plaintext.items()}
+        self._write(rotated)
+        self._box = replacement
 
     # -- internals ------------------------------------------------------------
 
@@ -330,6 +376,17 @@ class SecretStore:
             return json.loads(self._path.read_text())
         except (FileNotFoundError, ValueError, OSError):
             return {}
+
+    def _raw_for_rotation(self) -> dict:
+        try:
+            raw = json.loads(self._path.read_text())
+        except FileNotFoundError:
+            return {}
+        except (ValueError, OSError) as exc:
+            raise SecretRotationError("cannot rotate a corrupt secrets file") from exc
+        if not isinstance(raw, dict):
+            raise SecretRotationError("cannot rotate a non-object secrets file")
+        return raw
 
     def _write(self, data: dict) -> None:
         # The secrets file holds credential ciphertext — lock it to the owner

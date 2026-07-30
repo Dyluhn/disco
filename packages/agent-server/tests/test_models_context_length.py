@@ -22,6 +22,7 @@ Contract locked here:
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 
@@ -29,6 +30,11 @@ import httpx
 import pytest
 from disco.agent_server import runtime as rt
 from disco.agent_server import runtime_model_probe as probe
+from disco.agent_server.runtime_model_settings import (
+    RuntimeSettingsCorruptionError,
+    RuntimeSettingsRepository,
+    RuntimeSettingsVersionError,
+)
 
 
 class _FakeResp:
@@ -301,3 +307,52 @@ async def test_fresh_empty_models_map_suppresses_reprobe(monkeypatch):
     # No probe was scheduled — the fresh negative cache short-circuits.
     assert not probe_called
     assert base not in rt._LIVE_MODEL_PROBE_INFLIGHT
+
+
+def test_valid_legacy_sidecars_migrate_and_remain_rollback_readable(tmp_path):
+    db_path = str(tmp_path / "events.db")
+    (tmp_path / "events.db.overrides.json").write_text(json.dumps({"conv": "driver-local"}))
+    (tmp_path / "events.db.autonomous.json").write_text(json.dumps({"conv": True}))
+    (tmp_path / "events.db.surfaces.json").write_text(json.dumps({"conv": "build"}))
+    (tmp_path / "events.db.last_model.json").write_text(json.dumps({"model": "driver-local"}))
+
+    repository = RuntimeSettingsRepository(db_path)
+    assert repository.document.model_overrides == {"conv": "driver-local"}
+    assert repository.document.autonomous == {"conv": True}
+    assert repository.document.surfaces == {"conv": "build"}
+    assert repository.document.last_selected_model == "driver-local"
+
+    repository.set_value("quiet", "conv", True)
+    versioned = json.loads((tmp_path / "events.db.runtime-settings.json").read_text())
+    assert versioned["schema_version"] == 1
+    assert versioned["quiet"] == {"conv": True}
+    assert json.loads((tmp_path / "events.db.quiet.json").read_text()) == {"conv": True}
+
+
+def test_runtime_settings_restart_reads_one_typed_document(tmp_path):
+    db_path = str(tmp_path / "events.db")
+    first = RuntimeSettingsRepository(db_path)
+    first.set_value("assist", "conv", True)
+    first.set_value("model_overrides", "conv", "driver-overflow")
+    first.set_last_selected_model("driver-overflow")
+
+    restarted = RuntimeSettingsRepository(db_path)
+    assert restarted.document.assist == {"conv": True}
+    assert restarted.document.model_overrides == {"conv": "driver-overflow"}
+    assert restarted.document.last_selected_model == "driver-overflow"
+
+
+def test_corrupt_authoritative_runtime_document_fails_explicitly(tmp_path):
+    db_path = str(tmp_path / "events.db")
+    (tmp_path / "events.db.runtime-settings.json").write_text("{broken")
+
+    with pytest.raises(RuntimeSettingsCorruptionError, match="cannot decode"):
+        RuntimeSettingsRepository(db_path)
+
+
+def test_future_runtime_settings_version_fails_closed(tmp_path):
+    db_path = str(tmp_path / "events.db")
+    (tmp_path / "events.db.runtime-settings.json").write_text(json.dumps({"schema_version": 2}))
+
+    with pytest.raises(RuntimeSettingsVersionError, match="schema_version 2"):
+        RuntimeSettingsRepository(db_path)
