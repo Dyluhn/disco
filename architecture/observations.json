@@ -1,13 +1,5 @@
 [
   {
-    "id": "DM-003",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/preview_manager.py + packages/agent-server/src/disco/agent_server/preview_projection.py",
-    "concern": "bidirectional preview resource/projection coupling",
-    "owner_package": "PKG-07-PREVIEW",
-    "source_disposition_id": "DM-003"
-  },
-  {
     "id": "DM-004",
     "kind": "distributed_concern",
     "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState",
@@ -54,14 +46,6 @@
     "concern": "persisted vectors with process-only ownership",
     "owner_package": "PKG-11-RETRIEVAL",
     "source_disposition_id": "DM-011"
-  },
-  {
-    "id": "DM-012",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/preview_service.py:_sealed_runtime_contract:194-213 + harness/build_soak/adapters/_client_collection.py:_CollectionMixin.collect_browser_evidence:409-491",
-    "concern": "product preview evidence binds FINISHED while harness PAUSED freeze uses a WorkspaceVersionEvent horizon",
-    "owner_package": "PKG-07-PREVIEW",
-    "source_disposition_id": "DM-012"
   },
   {
     "id": "DM-013",
