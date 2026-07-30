@@ -5,6 +5,11 @@ The mcp_approvals table lives in the same SQLite DB as the events/state store
 for the table creation and the store-level methods for reading/writing
 approval rows.
 
+The three MCP approval CREATE statements live in one Core source location only
+(``disco.core.store.schema``); this module is a thin compatibility delegate so
+bare connections and store-created schemas are identical. Core must not import
+Tools; Tools imports Core.
+
 The companion mcp_approval_pending table records, per-server, the *new*
 description_hash the agent-server's live pool computed at startup when it
 detected drift against the stored mcp_approvals row. The app-server reads
@@ -19,6 +24,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
+
+from disco.core.store.schema import ensure_mcp_approval_tables as _core_ensure_mcp_approval_tables
 
 
 @runtime_checkable
@@ -36,43 +43,14 @@ class _ApprovalConn(Protocol):
     def commit(self) -> None: ...
 
 
-_MCP_APPROVALS_SQL = """CREATE TABLE IF NOT EXISTS mcp_approvals (
-    server          TEXT PRIMARY KEY,
-    description_hash TEXT NOT NULL,
-    approved_at     TEXT NOT NULL,
-    approved_by     TEXT NOT NULL
-);
-"""
-
-# E6 (#10): the drift table the agent-server writes + the app-server reads.
-# Distinct from mcp_approvals: mcp_approvals holds the LAST APPROVED hash
-# (operator intent); mcp_approval_pending holds the CURRENT hash the live
-# pool saw (the one waiting for re-approval). They are intentionally
-# independent rows — the pending row can exist only while the two hashes
-# disagree.
-_MCP_APPROVAL_PENDING_SQL = """CREATE TABLE IF NOT EXISTS mcp_approval_pending (
-    server          TEXT PRIMARY KEY,
-    old_hash        TEXT NOT NULL,
-    new_hash        TEXT NOT NULL,
-    detected_at     TEXT NOT NULL
-);
-"""
-
-_MCP_CONFIG_APPROVALS_SQL = """CREATE TABLE IF NOT EXISTS mcp_config_approvals (
-    server          TEXT PRIMARY KEY,
-    config_hash     TEXT NOT NULL,
-    approved_at     TEXT NOT NULL,
-    approved_by     TEXT NOT NULL
-);
-"""
-
-
 def ensure_mcp_approval_tables(conn: _ApprovalConn) -> None:
-    """Create both approval ledgers for old databases and lightweight tests."""
-    conn.execute(_MCP_APPROVALS_SQL)
-    conn.execute(_MCP_APPROVAL_PENDING_SQL)
-    conn.execute(_MCP_CONFIG_APPROVALS_SQL)
-    conn.commit()
+    """Create both approval ledgers for old databases and lightweight tests.
+
+    Thin compatibility delegate to ``disco.core.store.schema`` so the three
+    MCP CREATE statements live in one Core source location only. Bare
+    connections and store-created schemas are identical.
+    """
+    _core_ensure_mcp_approval_tables(conn)
 
 
 def create_mcp_approval(

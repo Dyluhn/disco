@@ -497,6 +497,12 @@ def make_event_corpus() -> tuple[BaseEvent, ...]:
 CORPUS = make_event_corpus()
 
 
+class _OutOfUnionEvent(BaseEvent):
+    """Concrete BaseEvent subclass deliberately absent from Event."""
+
+    kind: str = "out_of_union"
+
+
 def _json_digest(event: BaseEvent) -> str:
     encoded = json.dumps(
         event_to_json_dict(event), ensure_ascii=False, separators=(",", ":")
@@ -517,8 +523,11 @@ def test_every_event_has_stable_json_shape_bytes_and_round_trip(event: BaseEvent
     assert tuple(raw) == _BASE_KEYS + _PAYLOAD_KEYS[event.kind.value]
     assert _json_digest(event) == _EXPECTED_DIGESTS[event.kind.value]
     restored = event_from_json_dict(migrate_event(raw))
+    adapted = EventAdapter.validate_python(raw)
     assert type(restored) is type(event)
+    assert type(adapted) is type(event)
     assert restored == event
+    assert adapted == event
 
 
 @pytest.mark.parametrize("event", CORPUS, ids=lambda event: event.kind.value)
@@ -586,6 +595,11 @@ async def test_store_rejects_untyped_values_before_any_persistence() -> None:
             await store.append("corpus", {"kind": "message"})  # type: ignore[arg-type]
         with pytest.raises(TypeError, match="concrete Event"):
             await store.append("corpus", BaseEvent(source=EventSource.USER))  # type: ignore[arg-type]
+        with pytest.raises(TypeError, match="concrete Event"):
+            await store.append(
+                "corpus",
+                _OutOfUnionEvent(source=EventSource.USER),  # type: ignore[arg-type]
+            )
         with pytest.raises(TypeError, match="concrete Event"):
             await store.append_many(
                 "corpus",

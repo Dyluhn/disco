@@ -119,7 +119,7 @@
   {
     "id": "DM-014",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/sqlite.py:441-477 + packages/core/src/disco/core/migration.py:migrate_event:14-32",
@@ -173,7 +173,7 @@
   {
     "id": "DM-020",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/sqlite.py:198-233 + packages/tools/src/disco/tools/mcp/migrations.py:39-67",
@@ -6140,7 +6140,7 @@
   {
     "id": "PY-0661",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-IDENTITY",
     "location": "packages/core/src/disco/core/semantic_refs.py:resolve_human_reference:291-374",
@@ -6167,7 +6167,7 @@
   {
     "id": "PY-0664",
     "disposition": "TYPED_NON_VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "TYPED_NON_VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/base.py:EventStore:56-177",
@@ -6176,7 +6176,7 @@
   {
     "id": "PY-0665",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/preview_leases.py:acquire:68-180",
@@ -6185,7 +6185,7 @@
   {
     "id": "PY-0666",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/preview_leases.py:acquire:68-180",
@@ -6194,7 +6194,7 @@
   {
     "id": "PY-0667",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/sqlite.py:SqliteEventStore:422-1201",
@@ -6203,7 +6203,7 @@
   {
     "id": "PY-0668",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/sqlite.py:SqliteEventStore:422-1201",
@@ -6212,7 +6212,7 @@
   {
     "id": "PY-0669",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-STORES",
     "location": "packages/core/src/disco/core/store/sqlite.py:<module>:1-1201",

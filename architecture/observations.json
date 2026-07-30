@@ -88,14 +88,6 @@
     "source_disposition_id": "DM-013"
   },
   {
-    "id": "DM-014",
-    "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/store/sqlite.py:441-477 + packages/core/src/disco/core/migration.py:migrate_event:14-32",
-    "concern": "additive SQLite/event migration has no database version or downgrade-write proof",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "DM-014"
-  },
-  {
     "id": "DM-015",
     "kind": "distributed_concern",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
@@ -136,14 +128,6 @@
     "source_disposition_id": "DM-019"
   },
   {
-    "id": "DM-020",
-    "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/store/sqlite.py:198-233 + packages/tools/src/disco/tools/mcp/migrations.py:39-67",
-    "concern": "MCP approval tables have duplicate CREATE authorities that can drift",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "DM-020"
-  },
-  {
     "id": "DM-021",
     "kind": "distributed_concern",
     "location": "packages/tools/src/disco/tools/registry.py:AGENT_TOOLS/ARTIFACT_TOOLS/RESEARCH_TOOLS:84-213",
@@ -166,13 +150,5 @@
     "classification": "typed protocol contract (not a concrete service)",
     "owner_package": "PKG-06-RUNTIME",
     "source_disposition_id": "PY-0188"
-  },
-  {
-    "id": "PY-0664",
-    "kind": "typed_non_violation",
-    "location": "packages/core/src/disco/core/store/base.py:EventStore:56-177",
-    "classification": "typed protocol contract (not a concrete service)",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "PY-0664"
   }
 ]

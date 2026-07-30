@@ -11,6 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 
+class EventMigrationError(ValueError):
+    """Typed error raised when a persisted event schema_version is unsupported.
+
+    Event-payload evolution is intentionally separate from database-schema
+    evolution in ``disco.core.store.schema``.
+    """
+
+
 def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
     """Upgrade a persisted event dict to the current SCHEMA_VERSION before
     validation. Pure, idempotent, append-only migrations.
@@ -25,8 +33,23 @@ def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
             v = 2
         # ... and so on, each step forward-only and lossless.
         return raw
+
+    A persisted event with an integer ``schema_version`` ABOVE the canonical
+    Event SCHEMA_VERSION (defined in ``_event_types``) is rejected with a
+    typed ``EventMigrationError`` rather than mis-read under an older shape.
+    The Event schema is NOT bumped here; current event bytes are unchanged.
     """
     # Defensive copy so callers' inputs are never mutated (purity).
     raw = dict(raw)
-    _ = raw.get("schema_version", 1)
+    version = raw.get("schema_version", 1)
+    # The canonical Event SCHEMA_VERSION lives in _event_types to avoid a
+    # circular import. We import it lazily for the same reason.
+    from ._event_types import SCHEMA_VERSION as CURRENT_EVENT_SCHEMA_VERSION
+
+    if isinstance(version, int) and version > CURRENT_EVENT_SCHEMA_VERSION:
+        raise EventMigrationError(
+            f"event schema_version {version} is newer than the canonical "
+            f"Event SCHEMA_VERSION {CURRENT_EVENT_SCHEMA_VERSION}; the event "
+            "cannot be read under an older shape"
+        )
     return raw
