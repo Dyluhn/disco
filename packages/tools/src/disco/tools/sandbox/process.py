@@ -651,7 +651,9 @@ class ProcessSandboxInstance:
 
     @property
     def workspace_path(self) -> str | None:
-        """Expose the dev backend's absolute workspace root for path predicates."""
+        """W5 — expose the workspace root for C18 / C1c predicate resolution.
+        Process backend: always an absolute host path (the temp dir is on the host).
+        Container backends return None (they have a separate FS namespace)."""
         return str(self._workspace)
 
     def display_url(self) -> str | None:
