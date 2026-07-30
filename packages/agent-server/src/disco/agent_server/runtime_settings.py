@@ -1,11 +1,13 @@
-"""Persisted per-conversation settings (B0) — extracted from `runtime.py`.
+"""Persisted per-conversation settings and surface identity.
 
-God-file decomposition (pure move, zero behavior change). The B0 persisted-
-settings accessors move out of runtime.py into a `RuntimeSettings`
-collaborator constructed once in `ConversationRuntime`:
+``RuntimeSettings`` owns the settings collections, their sidecar paths, and all
+read/write/recovery behavior. ``ConversationRuntime`` retains only narrow
+compatibility delegates while the remaining runtime collaborators migrate to
+this boundary.
 
   - driver model override:  _load_overrides / _save_overrides / set_model_override
-  - surface map:            _load_surfaces / _save_surfaces
+  - surface map:            _load_surfaces / _save_surfaces / set_surface
+                            / surface_of
   - autonomous (headless):  _load_autonomous / _save_autonomous / set_autonomous
                             / _effective_autonomous / is_autonomous
   - assist tier:            _load_assist / _save_assist / set_assist
@@ -16,14 +18,8 @@ collaborator constructed once in `ConversationRuntime`:
   - atomic settings gate:   apply_settings_change / _conversation_is_pristine
                             per-cid asyncio.Lock in _settings_locks
 
-The mutable dicts (`_model_override`, `_surface`, `_autonomous`, `_assist`, `_quiet`)
-and their sidecar paths stay declared on `ConversationRuntime`; the service is
-stateless and reaches them — plus `_router_now`, `_surface_of`, the
-`_AUTONOMOUS_SURFACES` set — via a back-reference. `set_surface` / `_surface_of`
-stay on the runtime (they own the surface recovery ladder) but call the moved
-`_save_surfaces` / `_load_surfaces` through the runtime delegators. Every moved
-method keeps a one-line delegator on `ConversationRuntime` because the
-test-suite + app routes call each directly on the runtime.
+The constructor accepts concrete stores and narrowly typed hooks. It never
+receives the runtime, a dependency bag, or a service locator.
 """
 
 from __future__ import annotations
@@ -32,7 +28,8 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from disco.core import (
     ActionEvent,
@@ -42,7 +39,15 @@ from disco.core import (
     PlanEvent,
     StatusEvent,
 )
-from disco.core.llm import ModelExecutionPolicy
+from disco.core.llm import ConfigStore, DefaultLLMRouter, ModelExecutionPolicy, SecretStore
+from disco.core.llm.config import RouterConfig
+from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+from disco.core.loop import AgentLoop
+from disco.core.store.sqlite import SqliteEventStore
+from disco.tools import DefaultToolExecutor, SandboxSession
+from disco.tools.projects import ProjectStore, StorageStatus
+
+from .driver_context import ResolvedDriverContext
 
 # Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
 # the prior turn has fully concluded (or cooperatively stopped), so re-pinning the
@@ -61,21 +66,190 @@ _TERMINAL_SETTABLE_STATES = frozenset(
 
 logger = logging.getLogger(__name__)
 
+_VALID_SURFACES = frozenset({"research", "build", "agent", "deep_research"})
+_BUILD_LIKE_SURFACES = frozenset({"build", "agent"})
+_AUTONOMOUS_SURFACES = frozenset({"build", "agent", "deep_research"})
+
+
+class _RuntimeSettingsRouting:
+    """Current routing metadata and origin policy needed by settings reads."""
+
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        secret_store: SecretStore,
+        injected_router: DefaultLLMRouter | None,
+    ) -> None:
+        self._config_store = config_store
+        self._secret_store = secret_store
+        self._injected_router = injected_router
+
+    def config_now(self) -> RouterConfig:
+        if self._injected_router is not None:
+            return self._injected_router._config
+        return self._config_store.load()
+
+    def origin_approved(self, url: str, purpose: str, secret_ref: str | None) -> bool:
+        return self._config_store.origin_approved(
+            url,
+            purpose,
+            secret_ref,
+            secret_store=self._secret_store,
+        )
+
+
+class _RuntimeModelBindings:
+    """The live/cache state affected by an atomic model settings change."""
+
+    def __init__(
+        self,
+        *,
+        loops: dict[str, AgentLoop],
+        tasks: dict[str, asyncio.Task[Any]],
+        compose_contexts: dict[str, ResolvedDriverContext],
+        resolved_contexts: dict[str, ResolvedDriverContext],
+        executors: dict[str, DefaultToolExecutor],
+        pending_sessions: dict[str, SandboxSession],
+    ) -> None:
+        self._loops = loops
+        self._tasks = tasks
+        self._compose_contexts = compose_contexts
+        self._resolved_contexts = resolved_contexts
+        self._executors = executors
+        self._pending_sessions = pending_sessions
+
+    def loop_exists(self, conversation_id: str) -> bool:
+        return conversation_id in self._loops
+
+    def live_task_exists(self, conversation_id: str) -> bool:
+        task = self._tasks.get(conversation_id)
+        return task is not None and not task.done()
+
+    def compose_model_key(self, conversation_id: str) -> str | None:
+        context = self._compose_contexts.get(conversation_id)
+        return context.model_key if context is not None else None
+
+    def evict_for_model_change(self, conversation_id: str) -> None:
+        if self.live_task_exists(conversation_id):
+            return
+        self._loops.pop(conversation_id, None)
+        self._resolved_contexts.pop(conversation_id, None)
+        executor = self._executors.pop(conversation_id, None)
+        if conversation_id not in self._pending_sessions:
+            session = getattr(executor, "_sandbox", None) if executor is not None else None
+            if session is not None:
+                self._pending_sessions[conversation_id] = cast(SandboxSession, session)
+
 
 class RuntimeSettings:
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        *,
+        db_path: str,
+        store: SqliteEventStore,
+        config_store: ConfigStore,
+        routing: _RuntimeSettingsRouting,
+        model_bindings: _RuntimeModelBindings,
+        appkit_ejections: Mapping[str, bool],
+    ) -> None:
+        self._store = store
+        self._config_store = config_store
+        self._routing = routing
+        self._model_bindings = model_bindings
+        self._appkit_ejections = appkit_ejections
+
+        self._override_path = f"{db_path}.overrides.json" if db_path else ""
+        self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
+        self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
+        self._assist_path = f"{db_path}.assist.json" if db_path else ""
+        self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
+        self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
+
+        self._model_overrides = self._load_overrides()
+        self._surfaces = self._load_surfaces()
+        self._autonomous = self._load_autonomous()
+        self._assist = self._load_assist()
+        self._quiet = self._load_quiet()
+        self._artifact_mode: dict[str, bool] = {}
+        self._appkit_mode: dict[str, bool] = {}
+        self._research_sources: dict[str, tuple[str, ...]] = {}
+
         # Order C: per-conversation lock for atomic pre-kick settings changes.
         # Acquired by apply_settings_change so concurrent PATCHes are serialized
         # and a PATCH can't race the loop-compose+register step in kick().
         self._settings_locks: dict[str, asyncio.Lock] = {}
 
+    # Narrow compatibility views. The collections remain owned and initialized
+    # here; ConversationRuntime's temporary properties only delegate to these.
+
+    @property
+    def _model_overrides_view(self) -> dict[str, str]:
+        return self._model_overrides
+
+    @_model_overrides_view.setter
+    def _model_overrides_view(self, value: dict[str, str]) -> None:
+        self._model_overrides = value
+
+    @property
+    def _surfaces_view(self) -> dict[str, str]:
+        return self._surfaces
+
+    @property
+    def _autonomous_view(self) -> dict[str, bool]:
+        return self._autonomous
+
+    @property
+    def _assist_view(self) -> dict[str, bool]:
+        return self._assist
+
+    @property
+    def _quiet_view(self) -> dict[str, bool]:
+        return self._quiet
+
+    @property
+    def _artifact_mode_view(self) -> dict[str, bool]:
+        return self._artifact_mode
+
+    @property
+    def _appkit_mode_view(self) -> dict[str, bool]:
+        return self._appkit_mode
+
+    @property
+    def _override_sidecar_path(self) -> str:
+        return self._override_path
+
+    @property
+    def _surface_sidecar_path(self) -> str:
+        return self._surface_path
+
+    @property
+    def _autonomous_sidecar_path(self) -> str:
+        return self._autonomous_path
+
+    @property
+    def _assist_sidecar_path(self) -> str:
+        return self._assist_path
+
+    @property
+    def _quiet_sidecar_path(self) -> str:
+        return self._quiet_path
+
+    @property
+    def _last_model_sidecar_path(self) -> str:
+        return self._last_model_path
+
+    def get_model_override(self, conversation_id: str) -> str | None:
+        return self._model_overrides.get(conversation_id)
+
+    def evict_model_binding(self, conversation_id: str) -> None:
+        self._model_bindings.evict_for_model_change(conversation_id)
+
     # ---- driver model override ---------------------------------------------
 
     def _load_overrides(self) -> dict[str, str]:
-        if self._rt._override_path and os.path.exists(self._rt._override_path):
+        if self._override_path and os.path.exists(self._override_path):
             try:
-                with open(self._rt._override_path) as f:
+                with open(self._override_path) as f:
                     data = json.load(f)
                 return {str(k): str(v) for k, v in data.items() if v}
             except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
@@ -83,16 +257,16 @@ class RuntimeSettings:
         return {}
 
     def _save_overrides(self) -> None:
-        if not self._rt._override_path:
+        if not self._override_path:
             return
         import tempfile
 
         try:
-            dir_name = os.path.dirname(self._rt._override_path)
+            dir_name = os.path.dirname(self._override_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._rt._model_override, f)
+                json.dump(self._model_overrides, f)
                 tmp_name = f.name
-            os.replace(tmp_name, self._rt._override_path)
+            os.replace(tmp_name, self._override_path)
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
 
@@ -101,8 +275,8 @@ class RuntimeSettings:
         apply_settings_change (which holds the lock) or from set_model_override
         (non-route, non-concurrent callers that don't need the atomic gate)."""
         if model_id:
-            self._rt._model_override[conversation_id] = model_id
-            self._rt._save_overrides()
+            self._model_overrides[conversation_id] = model_id
+            self._save_overrides()
             # P3: also persist as the last-selected model so new conversations
             # seed from it by default (server-side, no localStorage).
             self.set_last_selected_model(model_id)
@@ -112,8 +286,8 @@ class RuntimeSettings:
         the SERVER-DEFAULT driver. Does NOT touch last-selected (the global P3 sticky is a
         convenience for NEW conversations, not this one's pin). Inner (non-locking) form;
         call ONLY from apply_settings_change (which holds the per-cid lock)."""
-        if self._rt._model_override.pop(conversation_id, None) is not None:
-            self._rt._save_overrides()
+        if self._model_overrides.pop(conversation_id, None) is not None:
+            self._save_overrides()
 
     def _resolve_sticky_model(self) -> str | None:
         """The validated last-selected model (P3 sticky), or None. Mirrors the cfg guard in
@@ -121,7 +295,7 @@ class RuntimeSettings:
         seed an explicit-null model_override on the PRISTINE pre-kick path (NOT terminal)."""
         last = self.get_last_selected_model()
         if last:
-            cfg = self._rt._config_store.load()
+            cfg = self._config_store.load()
             if last in cfg.models:
                 return last
         return None
@@ -140,7 +314,7 @@ class RuntimeSettings:
     def get_last_selected_model(self) -> str | None:
         """Return the last globally-picked driver model, or None if no pick has
         ever been made. Server-side, per-owner sidecar (B0 pattern)."""
-        path = getattr(self._rt, "_last_model_path", "")
+        path = self._last_model_path
         if not path or not os.path.exists(path):
             return None
         try:
@@ -152,7 +326,7 @@ class RuntimeSettings:
 
     def set_last_selected_model(self, model_id: str | None) -> None:
         """Persist the last-picked driver model (atomic temp-file replace, B0 pattern)."""
-        path = getattr(self._rt, "_last_model_path", "")
+        path = self._last_model_path
         if not path:
             return
         import tempfile
@@ -172,59 +346,116 @@ class RuntimeSettings:
         """The persisted surface map (sidecar next to PMX_DB). Unknown values are
         dropped (treated as never-set → the recovery ladder still applies), so a
         hand-edited or future-versioned sidecar can't compose an invalid loop."""
-        if self._rt._surface_path and os.path.exists(self._rt._surface_path):
+        if self._surface_path and os.path.exists(self._surface_path):
             try:
-                with open(self._rt._surface_path) as f:
+                with open(self._surface_path) as f:
                     data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v in self._rt._VALID_SURFACES}
+                return {str(k): str(v) for k, v in data.items() if v in _VALID_SURFACES}
             except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
                 return {}
         return {}
 
     def _save_surfaces(self) -> None:
-        if not self._rt._surface_path:
+        if not self._surface_path:
             return
         import tempfile
 
         try:
-            dir_name = os.path.dirname(self._rt._surface_path)
+            dir_name = os.path.dirname(self._surface_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._rt._surface, f)
+                json.dump(self._surfaces, f)
                 tmp_name = f.name
-            os.replace(tmp_name, self._rt._surface_path)
+            os.replace(tmp_name, self._surface_path)
         except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
             pass
+
+    def set_surface(self, conversation_id: str, surface: str) -> None:
+        """Select and persist a conversation surface before it runs."""
+        self._surfaces[conversation_id] = surface if surface in _VALID_SURFACES else "research"
+        self._save_surfaces()
+
+    def surface_of(self, conversation_id: str) -> str:
+        """Recover a conversation's surface from durable signals in priority order."""
+        cached = self._surfaces.get(conversation_id)
+        if cached is not None:
+            return cached
+        # Rung 0 — authoritative DB column written at conversation creation.
+        try:
+            conn0 = getattr(self._store, "_conn", None)
+            if conn0 is not None:
+                row = conn0.execute(
+                    "SELECT surface FROM conversations WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is not None and row["surface"] in _VALID_SURFACES:
+                    self._surfaces[conversation_id] = row["surface"]
+                    self._save_surfaces()
+                    return row["surface"]
+        except Exception:  # noqa: BLE001 — best-effort recovery, fall through
+            pass
+        project_store = ProjectStore(self._config_store.load().projects.projects_root)
+        if project_store.status() == StorageStatus.OK:
+            try:
+                if project_store.get(conversation_id) is not None:
+                    self._surfaces[conversation_id] = "build"
+                    self._save_surfaces()
+                    return "build"
+            except Exception:  # noqa: BLE001 — best-effort recovery
+                pass
+        # ReportEvent is the durable Deep Research discriminator. A plan without
+        # an action is the legacy paused-at-plan-gate fallback.
+        try:
+            conn = getattr(self._store, "_conn", None)
+            if conn is not None:
+                kinds = {
+                    row["kind"]
+                    for row in conn.execute(
+                        "SELECT DISTINCT kind FROM events WHERE conversation_id = ?",
+                        (conversation_id,),
+                    )
+                }
+                if "report" in kinds:
+                    self._surfaces[conversation_id] = "deep_research"
+                    self._save_surfaces()
+                    return "deep_research"
+                if "plan" in kinds and "action" not in kinds:
+                    self._surfaces[conversation_id] = "deep_research"
+                    self._save_surfaces()
+                    return "deep_research"
+        except Exception:  # noqa: BLE001 — best-effort recovery
+            pass
+        return "research"
 
     # ---- autonomous (headless) ---------------------------------------------
 
     def _load_autonomous(self) -> dict[str, bool]:
-        if self._rt._autonomous_path and os.path.exists(self._rt._autonomous_path):
+        if self._autonomous_path and os.path.exists(self._autonomous_path):
             try:
-                with open(self._rt._autonomous_path) as f:
+                with open(self._autonomous_path) as f:
                     return {str(k): bool(v) for k, v in json.load(f).items()}
             except Exception:  # noqa: BLE001 — corrupt/missing → start empty
                 return {}
         return {}
 
     def _save_autonomous(self) -> None:
-        if not self._rt._autonomous_path:
+        if not self._autonomous_path:
             return
         import tempfile
 
         try:
-            dir_name = os.path.dirname(self._rt._autonomous_path)
+            dir_name = os.path.dirname(self._autonomous_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._rt._autonomous, f)
+                json.dump(self._autonomous, f)
                 tmp_name = f.name
-            os.replace(tmp_name, self._rt._autonomous_path)
+            os.replace(tmp_name, self._autonomous_path)
         except Exception:  # noqa: BLE001 — best-effort, but VISIBLE (a silent
             # no-op here cost autonomy-across-restart, live-caught 2026-07-03)
             logger.warning("autonomous sidecar save failed", exc_info=True)
 
     def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
         """Mark a conversation autonomous (headless) BEFORE it runs. Persisted (B0)."""
-        self._rt._autonomous[conversation_id] = bool(value)
-        self._rt._save_autonomous()
+        self._autonomous[conversation_id] = bool(value)
+        self._save_autonomous()
 
     def _effective_autonomous(self, conversation_id: str) -> bool:
         """The SINGLE source of truth for "is this conversation actually running
@@ -235,8 +466,8 @@ class RuntimeSettings:
         AND the UI badge from disagreeing. The plain `research` surface has no plan
         gate, so an autonomous=True flag there is uniformly treated as interactive."""
         return (
-            self._rt._autonomous.get(conversation_id, False)
-            and self._rt._surface_of(conversation_id) in self._rt._AUTONOMOUS_SURFACES
+            self._autonomous.get(conversation_id, False)
+            and self.surface_of(conversation_id) in _AUTONOMOUS_SURFACES
         )
 
     def is_autonomous(self, conversation_id: str) -> bool:
@@ -247,37 +478,37 @@ class RuntimeSettings:
     # ---- quiet mode --------------------------------------------------------
 
     def _load_quiet(self) -> dict[str, bool]:
-        if self._rt._quiet_path and os.path.exists(self._rt._quiet_path):
+        if self._quiet_path and os.path.exists(self._quiet_path):
             try:
-                with open(self._rt._quiet_path) as f:
+                with open(self._quiet_path) as f:
                     return {str(k): bool(v) for k, v in json.load(f).items()}
             except Exception:  # noqa: BLE001
                 return {}
         return {}
 
     def _save_quiet(self) -> None:
-        if not self._rt._quiet_path:
+        if not self._quiet_path:
             return
         import tempfile
 
         try:
-            dir_name = os.path.dirname(self._rt._quiet_path)
+            dir_name = os.path.dirname(self._quiet_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._rt._quiet, f)
+                json.dump(self._quiet, f)
                 tmp_name = f.name
-            os.replace(tmp_name, self._rt._quiet_path)
+            os.replace(tmp_name, self._quiet_path)
         except Exception:  # noqa: BLE001
             pass
 
     def set_quiet(self, conversation_id: str, value: bool = True) -> None:
         """Mark a build-like conversation as quiet. Persisted (B0)."""
-        self._rt._quiet[conversation_id] = bool(value)
-        self._rt._save_quiet()
+        self._quiet[conversation_id] = bool(value)
+        self._save_quiet()
 
     def _effective_quiet(self, conversation_id: str) -> bool:
         return (
-            self._rt._quiet.get(conversation_id, False)
-            and self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES
+            self._quiet.get(conversation_id, False)
+            and self.surface_of(conversation_id) in _BUILD_LIKE_SURFACES
         )
 
     def is_quiet(self, conversation_id: str) -> bool:
@@ -295,25 +526,25 @@ class RuntimeSettings:
         return False
 
     def _load_assist(self) -> dict[str, bool]:
-        if self._rt._assist_path and os.path.exists(self._rt._assist_path):
+        if self._assist_path and os.path.exists(self._assist_path):
             try:
-                with open(self._rt._assist_path) as f:
+                with open(self._assist_path) as f:
                     return {str(k): bool(v) for k, v in json.load(f).items()}
             except Exception:  # noqa: BLE001
                 return {}
         return {}
 
     def _save_assist(self) -> None:
-        if not self._rt._assist_path:
+        if not self._assist_path:
             return
         import tempfile
 
         try:
-            dir_name = os.path.dirname(self._rt._assist_path)
+            dir_name = os.path.dirname(self._assist_path)
             with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._rt._assist, f)
+                json.dump(self._assist, f)
                 tmp_name = f.name
-            os.replace(tmp_name, self._rt._assist_path)
+            os.replace(tmp_name, self._assist_path)
         except Exception:  # noqa: BLE001
             pass
 
@@ -321,8 +552,8 @@ class RuntimeSettings:
         """Inner setter — does NOT acquire the per-cid lock; call ONLY from
         apply_settings_change (which holds the lock) or from set_assist
         (non-route, non-concurrent callers that don't need the atomic gate)."""
-        self._rt._assist[conversation_id] = bool(value)
-        self._rt._save_assist()
+        self._assist[conversation_id] = bool(value)
+        self._save_assist()
 
     def set_assist(self, conversation_id: str, value: bool = True) -> None:
         """Mark a conversation assist tier (T1). Persisted.
@@ -344,22 +575,22 @@ class RuntimeSettings:
         from disco.core.llm import ModelRole, resolve_policy
         from disco.core.llm.types import Requirement
 
-        compose_snapshot = self._rt._resolved_context_for_compose.get(conversation_id)
+        compose_model_key = self._model_bindings.compose_model_key(conversation_id)
         override = (
-            compose_snapshot.model_key
-            if compose_snapshot is not None
-            else self._rt._model_override.get(conversation_id)
+            compose_model_key
+            if compose_model_key is not None
+            else self._model_overrides.get(conversation_id)
         )
         # This is a metadata read used by every /state response (the Assist badge).
         # Building a live router here needlessly resolves/decrypts every provider and
         # logs every disapproved catalogue entry on every poll.  The policy needs only
         # the current config entry; actual model calls still rebuild the live router.
-        config = self._rt._routing_config_now()
+        config = self._routing.config_now()
         key = config.model_for(ModelRole.AGENT_DRIVER, override=override)
         entry = config.models.get(key)
         anchored = entry is not None and Requirement.ANCHORED_EDIT in entry.capabilities
         return resolve_policy(
-            assist_override=self._rt._assist.get(conversation_id),
+            assist_override=self._assist.get(conversation_id),
             entry_tier=getattr(entry, "tier", None),
             hosting_weak_default=self._is_small_assist_default(entry),
             anchored_edit=anchored,
@@ -379,23 +610,23 @@ class RuntimeSettings:
         falls back to the global resolver). Mirrors _effective_policy's entry resolution."""
         from disco.core.llm import ModelRole
 
-        compose_snapshot = self._rt._resolved_context_for_compose.get(conversation_id)
+        compose_model_key = self._model_bindings.compose_model_key(conversation_id)
         override = (
-            compose_snapshot.model_key
-            if compose_snapshot is not None
-            else self._rt._model_override.get(conversation_id)
+            compose_model_key
+            if compose_model_key is not None
+            else self._model_overrides.get(conversation_id)
         )
         # Tool-context metadata resolution needs the selected endpoint, not a live
         # provider object.  Avoid provider construction on read-only setup paths.
-        config = self._rt._routing_config_now()
+        config = self._routing.config_now()
         key = config.model_for(ModelRole.AGENT_DRIVER, override=override)
         entry = config.models.get(key)
         if entry is None or not entry.base_url:
             return None
-        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
-
-        if not self._rt._origin_approved(
-            entry.base_url, f"model:{entry.provider}", entry.api_key_env
+        if not self._routing.origin_approved(
+            entry.base_url,
+            f"model:{entry.provider}",
+            entry.api_key_env,
         ):
             return None
         if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
@@ -421,13 +652,12 @@ class RuntimeSettings:
         DatasourceEvent from pre-kick uploads (files.py:191) must remain patchable
         so the user can change the model after attaching a file."""
         # --- in-memory checks (cheap, no I/O) ---
-        if conversation_id in self._rt._loops:
+        if self._model_bindings.loop_exists(conversation_id):
             return False
-        task = self._rt._tasks.get(conversation_id)
-        if task is not None and not task.done():
+        if self._model_bindings.live_task_exists(conversation_id):
             return False
         # --- event-store check (async, catches post-restart state) ---
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         for event in events:
             if isinstance(event, PlanEvent):
                 return False
@@ -456,11 +686,10 @@ class RuntimeSettings:
         A live in-flight task is the hard "actively running" signal and rejects in EVERY
         case — even a status that reads terminal can't be mutated while its task drains."""
         # Never mutate settings under a live run (the only genuinely-incoherent case).
-        task = self._rt._tasks.get(conversation_id)
-        if task is not None and not task.done():
+        if self._model_bindings.live_task_exists(conversation_id):
             return (False, False)
         # Authoritative status from the event store (covers post-restart state too).
-        state = await self._rt._store.get_state(conversation_id)
+        state = await self._store.get_state(conversation_id)
         status = state.execution_status
         if status in _TERMINAL_SETTABLE_STATES:
             return (True, True)
@@ -469,10 +698,13 @@ class RuntimeSettings:
             # a terminal-style resume target → settable; a truly-fresh IDLE conversation
             # falls through to the strict pristine check (which also catches the
             # compose-gap: a loop composed / task scheduled but RUNNING not yet emitted).
-            from .runtime import _has_unfinished_plan
-
-            events = await self._rt._store.get_events(conversation_id)
-            if _has_unfinished_plan(events):
+            events = await self._store.get_events(conversation_id)
+            has_plan = any(isinstance(event, PlanEvent) for event in events)
+            has_finished = any(
+                isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+                for event in events
+            )
+            if has_plan and not has_finished:
                 return (True, True)
             return (await self._conversation_is_pristine(conversation_id), False)
         # RUNNING / WAITING_FOR_CONFIRMATION / AWAITING_* → mid-run, not settable.
@@ -529,10 +761,9 @@ class RuntimeSettings:
             # mutation. A live task disqualifies in EVERY case; a freshly-composed loop
             # disqualifies the pristine pre-kick path (the terminal path expects a cached
             # loop and evicts it below).
-            live = self._rt._tasks.get(conversation_id)
-            if live is not None and not live.done():
+            if self._model_bindings.live_task_exists(conversation_id):
                 return False
-            if not terminal and conversation_id in self._rt._loops:
+            if not terminal and self._model_bindings.loop_exists(conversation_id):
                 return False
             if model_provided:
                 if model_override:
@@ -551,7 +782,7 @@ class RuntimeSettings:
             # Terminal swap: drop the loop/executor bound to the OLD model so the next
             # kick re-composes with the NEW one (the model-pill-silently-ignored fix).
             if terminal and (model_provided or assist is not None):
-                self._rt._evict_loop_for_model_change(conversation_id)
+                self._model_bindings.evict_for_model_change(conversation_id)
             return True
 
     # ---- artifact_mode (C6) ------------------------------------------------
@@ -560,14 +791,14 @@ class RuntimeSettings:
         """Mark a conversation as artifact-mode (C6). In-memory only — the flag
         is set at create time from the body and is not needed to survive a restart
         (artifact-mode conversations are short-lived authoring sessions)."""
-        stored_appkit = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        stored_appkit = self._store.conversation_appkit_mode_sync(conversation_id)
         if on and stored_appkit:
             raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
-        self._rt._artifact_mode[conversation_id] = bool(on)
+        self._artifact_mode[conversation_id] = bool(on)
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
         """True when the conversation was created with artifact_mode=True."""
-        return self._rt._artifact_mode.get(conversation_id, False)
+        return self._artifact_mode.get(conversation_id, False)
 
     # ---- appkit_mode (EPIC F) ----------------------------------------------
 
@@ -580,17 +811,17 @@ class RuntimeSettings:
         """
 
         requested = bool(on)
-        if requested and self._rt._artifact_mode.get(conversation_id, False):
+        if requested and self._artifact_mode.get(conversation_id, False):
             raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
-        stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
+        stored = self._store.conversation_appkit_mode_sync(conversation_id)
         if stored is None:
-            self._rt._store.create_conversation(conversation_id, appkit_mode=requested)
+            self._store.create_conversation(conversation_id, appkit_mode=requested)
             stored = requested
         elif stored != requested:
             raise ValueError("appkit_mode is immutable after conversation creation")
         # Retain the old map as a non-authoritative compatibility cache for code
         # inspecting runtime internals. Every effective read below goes to SQLite.
-        self._rt._appkit_mode[conversation_id] = stored
+        self._appkit_mode[conversation_id] = stored
 
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
         """Return immutable AppKit identity or fail closed when unavailable.
@@ -601,8 +832,8 @@ class RuntimeSettings:
         """
         from disco.core.flags import appkit_enabled
 
-        stored = self._rt._store.conversation_appkit_mode_sync(conversation_id)
-        if stored is True and self._rt._build_platform.appkit_ejected.get(conversation_id, False):
+        stored = self._store.conversation_appkit_mode_sync(conversation_id)
+        if stored is True and self._appkit_ejections.get(conversation_id, False):
             return False
         if stored is True and not appkit_enabled():
             raise RuntimeError(
@@ -627,19 +858,17 @@ class RuntimeSettings:
     )
 
     def set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
-        if not hasattr(self._rt, "_research_sources"):
-            self._rt._research_sources = {}
         clean: list[str] = []
         for raw in sources:
             source = str(raw).strip().lower()
             if source in self._VALID_RESEARCH_SOURCES and source not in clean:
                 clean.append(source)
         if clean:
-            self._rt._research_sources[conversation_id] = tuple(clean)
+            self._research_sources[conversation_id] = tuple(clean)
         else:
-            self._rt._research_sources.pop(conversation_id, None)
+            self._research_sources.pop(conversation_id, None)
 
     def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
-        if not conversation_id or not hasattr(self._rt, "_research_sources"):
+        if not conversation_id:
             return ()
-        return self._rt._research_sources.get(conversation_id, ())
+        return self._research_sources.get(conversation_id, ())
