@@ -120,7 +120,7 @@ async def test_healthy_tail():
         ),
         _msg("assistant", "I see files", 4),
     ]
-    assert runtime._condense_trailing_degeneracy(events) is None
+    assert runtime._resume._condense_trailing_degeneracy(events) is None
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_breaker_paused_tail():
         _msg("assistant", "two", 4),
         _msg("assistant", "three", 5),
     ]
-    assert runtime._condense_trailing_degeneracy(events) is None
+    assert runtime._resume._condense_trailing_degeneracy(events) is None
 
 
 @pytest.mark.asyncio
@@ -152,7 +152,7 @@ async def test_degenerate_prose_tail():
     for i in range(8):
         events.append(_msg("assistant", f"message {i}", 3 + i))
 
-    tombstone = runtime._condense_trailing_degeneracy(events)
+    tombstone = runtime._resume._condense_trailing_degeneracy(events)
     assert tombstone is not None
     assert tombstone.forgotten_start_seq == 3
     assert tombstone.forgotten_end_seq == 10
@@ -176,7 +176,7 @@ async def test_duplicate_knowledge_tail():
     for i in range(10):
         events.append(_knowledge(fact, 3 + i))
 
-    tombstone = runtime._condense_trailing_degeneracy(events)
+    tombstone = runtime._resume._condense_trailing_degeneracy(events)
     assert tombstone is not None
     # Seq 2 (first instance) is OUTSIDE. So span starts at seq 3.
     assert tombstone.forgotten_start_seq == 3
@@ -201,7 +201,7 @@ async def test_defect4_replay():
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
 
-    tombstone = runtime._condense_trailing_degeneracy(events)
+    tombstone = runtime._resume._condense_trailing_degeneracy(events)
     assert tombstone is not None
 
     # "then View.of(events + [tombstone]) renders WITHOUT the ×179 repeats"

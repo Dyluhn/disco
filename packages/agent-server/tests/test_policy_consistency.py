@@ -403,7 +403,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         import asyncio
 
         for _ in range(20):
-            if cid in rt._executors:
+            if rt._run_resources.has_executor(cid):
                 break
             await asyncio.sleep(0.05)
 
@@ -411,8 +411,8 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         assert rt.is_assist(cid) is True
 
         # Executor threading (Order B): executor._model_policy is the resolved policy
-        assert cid in rt._executors, "executor must be stored by _compose_build_loop"
-        executor = rt._executors[cid]
+        executor = rt._run_resources.executor(cid)
+        assert executor is not None, "executor must be stored by _compose_build_loop"
         assert executor._model_policy.assist is True, (
             f"executor._model_policy.assist={executor._model_policy.assist!r} "
             f"but runtime.is_assist={rt.is_assist(cid)!r} — policy not threaded"
@@ -424,8 +424,8 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         assert "update_plan_progress" not in advertised
 
         # Loop threading (Order A): loop._model_policy is the resolved policy
-        if cid in rt._loops:
-            loop = rt._loops[cid]
+        loop = rt._loop_registry.loop(cid)
+        if loop is not None:
             assert loop._model_policy.assist is True, (
                 f"loop._model_policy.assist={loop._model_policy.assist!r} "
                 f"but runtime.is_assist={rt.is_assist(cid)!r} — policy not threaded"
@@ -510,13 +510,13 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
         import asyncio
 
         for _ in range(20):
-            if cid in rt._executors:
+            if rt._run_resources.has_executor(cid):
                 break
             await asyncio.sleep(0.05)
 
         assert rt.is_assist(cid) is False
-        assert cid in rt._executors
-        executor = rt._executors[cid]
+        executor = rt._run_resources.executor(cid)
+        assert executor is not None
         assert executor._model_policy.assist is False, (
             "executor must carry standard policy when assist=False is set"
         )

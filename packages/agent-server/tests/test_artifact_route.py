@@ -6,8 +6,6 @@ Like test_workspace_route, the stub session serves ANY path, so a 404 proves the
 route's OWN jail rejected the path before any read.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 
@@ -73,6 +71,7 @@ class _SnapshotRuntime:
 
     def __init__(self, ps: ProjectStore) -> None:
         self._ps = ps
+        _wire_live_runtime(self)
 
     def set_surface(self, cid: str, surface: object) -> None: ...
     def set_model_override(self, cid: str, model: object) -> None: ...
@@ -215,12 +214,36 @@ def _seal_finished_workspace(store: SqliteEventStore, projects: ProjectStore, ci
     return version.seq
 
 
+# Preserve the accepted fixture identity while runtime ports move to named owners.
 @pytest.fixture
 def live_client() -> TestClient:
     store = SqliteEventStore(":memory:")
-    client = TestClient(create_app(store, runtime=_LiveRuntime()))  # type: ignore[arg-type]
+    runtime = _LiveRuntime()
+    _wire_live_runtime(runtime)
+    client = TestClient(create_app(store, runtime=runtime))  # type: ignore[arg-type]
     client._store = store  # type: ignore[attr-defined]
     return client
+
+
+class _LiveSessions:
+    """Minimal stand-in for the LiveSessionDirectory named owner."""
+
+    def live_session(self, cid: str) -> _Session | None:
+        return None
+
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        return None
+
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return None
+
+
+def _wire_live_runtime(runtime: object) -> None:
+    from disco.core.llm import ConfigStore, SecretStore
+
+    runtime._live_sessions = _LiveSessions()  # type: ignore[attr-defined]
+    runtime._config_store = ConfigStore()  # type: ignore[attr-defined]
+    runtime._secret_store = SecretStore()  # type: ignore[attr-defined]
 
 
 def _create(client: TestClient) -> str:

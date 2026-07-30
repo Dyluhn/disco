@@ -488,7 +488,7 @@ async def test_deep_research_kick_blocks_on_dead_driver():
     async def _dead(cid, **kw):
         return "Driver 'm' rejected the API key: invalid api key"
 
-    rt._preflight_driver = _dead  # type: ignore[assignment]
+    rt._driver_preflight.check = _dead  # type: ignore[method-assign]
 
     await store.append(
         "c1",
@@ -497,7 +497,7 @@ async def test_deep_research_kick_blocks_on_dead_driver():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -519,7 +519,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
     async def _ok(cid, **kw):
         return None  # pre-flight passes
 
-    rt._preflight_driver = _ok  # type: ignore[assignment]
+    rt._driver_preflight.check = _ok  # type: ignore[method-assign]
 
     # Make decompose_query blow up: the router its decompose uses raises.
     class _DeadRewriterRouter:
@@ -529,7 +529,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
         def stream_complete(self, req, *, context=None):  # pragma: no cover
             raise LLMAuthError("rewriter key rejected", provider="x")
 
-    rt._router_now = lambda **kw: _DeadRewriterRouter()
+    rt._drivers.router = lambda **kw: _DeadRewriterRouter()
 
     await store.append(
         "c1",
@@ -538,7 +538,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -567,7 +567,7 @@ async def test_deep_research_kick_bounds_query_rewriter_role():
             return "Driver 'rw' unreachable: no response within 8s (pre-flight timed out)"
         return None  # RAG_ANSWERER healthy
 
-    rt._preflight_driver = _by_role  # type: ignore[assignment]
+    rt._driver_preflight.check = _by_role  # type: ignore[method-assign]
 
     await store.append(
         "c1",
@@ -576,7 +576,7 @@ async def test_deep_research_kick_bounds_query_rewriter_role():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -610,7 +610,7 @@ async def test_deep_research_preflights_rag_answerer_role():
         probed["role"] = role
         return "stop here"  # short-circuit before the real stream
 
-    rt._preflight_driver = _capture  # type: ignore[assignment]
+    rt._driver_preflight.check = _capture  # type: ignore[method-assign]
     frames = [f async for f in rt.research_stream("q")]
 
     assert probed.get("role") == ModelRole.RAG_ANSWERER

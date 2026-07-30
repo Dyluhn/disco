@@ -15,6 +15,8 @@ import asyncio
 import contextlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 from disco.agent_server import ConversationRuntime
 from disco.core import (
@@ -159,7 +161,7 @@ def _upp(steps: list[dict]) -> ActionEvent:
 
 
 async def _cancel_task(rt: ConversationRuntime) -> None:
-    task = rt._tasks.get(CID)
+    task = rt._run_registry.task(CID)
     if task is not None and not task.done():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -176,7 +178,7 @@ async def test_dangling_action_gets_synthesized_observation():
     rt = _runtime(store)
 
     action = _action("npm_install", cmd="npm install")
-    new_events = await rt._reconstruct_resume_context(CID, [action])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [action])
 
     obs = [e for e in new_events if isinstance(e, ObservationEvent)]
     assert len(obs) == 1
@@ -199,7 +201,7 @@ async def test_no_dangling_action_means_no_synthetic_observation():
 
     action = _action("shell_exec", command="echo hello")
     obs = _observation_for(action)
-    new_events = await rt._reconstruct_resume_context(CID, [action, obs])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [action, obs])
 
     assert not any(isinstance(e, ObservationEvent) for e in new_events)
 
@@ -212,7 +214,7 @@ async def test_agent_error_resolves_dangling_action():
 
     action = _action("risky_op")
     err = _agent_error_for(action)
-    new_events = await rt._reconstruct_resume_context(CID, [action, err])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [action, err])
 
     assert not any(isinstance(e, ObservationEvent) for e in new_events)
 
@@ -226,7 +228,7 @@ async def test_reality_block_contains_sandbox_sentence():
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
 
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "sandbox was reclaimed" in msg.message.content
@@ -250,7 +252,7 @@ async def test_reality_block_contains_restore_files(tmp_path: Path):
     manifest.write_text(json.dumps({"file_count": 2, "total_bytes": 100}))
 
     rt = _runtime(store, projects_root=str(tmp_path))
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     content = msg.message.content
@@ -265,7 +267,7 @@ async def test_reality_block_no_snapshot_shows_empty_message():
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)  # no projects_root → no snapshot
 
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "No saved files" in msg.message.content
@@ -277,9 +279,12 @@ async def test_reality_block_live_sandbox_not_described_as_reclaimed():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._executors[CID] = object()  # liveness probe is membership, same as _suspend's
+    rt._run_resources.set_executor(
+        CID,
+        cast(Any, SimpleNamespace(sandbox=None)),
+    )  # liveness probe is membership, same as suspend's
 
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "sandbox was reclaimed" not in msg.message.content
@@ -292,7 +297,7 @@ async def test_reality_block_sessions_line_no_sandbox():
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
 
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "No shell sessions are running." in msg.message.content
@@ -311,7 +316,7 @@ async def test_plan_restatement_names_first_undone_step():
     done1 = _plan_step(1, "done")
     done2 = _plan_step(2, "done")
 
-    new_events = await rt._reconstruct_resume_context(CID, [plan, done1, done2])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [plan, done1, done2])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     content = msg.message.content
@@ -331,7 +336,7 @@ async def test_plan_restatement_reads_update_plan_progress():
     plan = _plan(["Step A", "Step B", "Step C", "Step D"])
     snapshot = _upp([{"index": 1, "state": "done"}, {"index": 2, "state": "done"}])
 
-    new_events = await rt._reconstruct_resume_context(CID, [plan, snapshot])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [plan, snapshot])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     content = msg.message.content
@@ -345,7 +350,7 @@ async def test_plan_restatement_absent_when_no_plan():
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
 
-    new_events = await rt._reconstruct_resume_context(CID, [])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "Next actionable step" not in msg.message.content
@@ -361,7 +366,7 @@ async def test_plan_restatement_absent_when_all_steps_done():
     done1 = _plan_step(1, "done")
     done2 = _plan_step(2, "done")
 
-    new_events = await rt._reconstruct_resume_context(CID, [plan, done1, done2])
+    new_events = await rt._resume._reconstruct_resume_context(CID, [plan, done1, done2])
 
     msg = next(e for e in new_events if isinstance(e, MessageEvent))
     assert "Next actionable step" not in msg.message.content
@@ -392,7 +397,7 @@ async def test_defect4_replay():
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
 
-    new_events = await rt._reconstruct_resume_context(CID, events)
+    new_events = await rt._resume._reconstruct_resume_context(CID, events)
 
     # seq-20 action must get a synthetic observation
     obs = [e for e in new_events if isinstance(e, ObservationEvent)]

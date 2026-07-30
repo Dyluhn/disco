@@ -25,7 +25,7 @@ def make_suggestions_router(
     ) -> dict:
         if runtime is not None:
             try:
-                suggestions = await runtime._suggestion_service.get_generated(surface)
+                suggestions = await runtime.suggestion_service().get_generated(surface)
                 return {
                     "surface": surface,
                     "suggestions": suggestions[:8],

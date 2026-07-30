@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 from disco.core import (
@@ -473,18 +473,26 @@ class RunSupervisor:
     def create_task(
         self,
         conversation_id: str,
-        loop: AgentLoop | Awaitable[AgentLoop],
+        loop: AgentLoop | Awaitable[AgentLoop] | None = None,
         *,
+        loop_factory: Callable[[], Awaitable[AgentLoop]] | None = None,
         claimed_user_seq: int | None = None,
         expected_run_intent_id: str | None = None,
         task_context: contextvars.Context | None = None,
+        completion_managed_externally: bool = False,
     ) -> tuple[RunTask, int]:
         if self._registry.active_task(conversation_id) is not None:
             raise RuntimeError("conversation already has a live run task")
+        if (loop is None) == (loop_factory is None):
+            raise ValueError("provide exactly one of loop or loop_factory")
 
         async def run() -> ConversationState:
+            selected = loop_factory() if loop_factory is not None else loop
+            assert selected is not None
             selected_loop = (
-                loop if isinstance(loop, AgentLoop) else await cast(Awaitable[AgentLoop], loop)
+                selected
+                if isinstance(selected, AgentLoop)
+                else await cast(Awaitable[AgentLoop], selected)
             )
             return await self._workspace.run_after_admission(
                 conversation_id,
@@ -496,9 +504,10 @@ class RunSupervisor:
         generation = self._registry.register_task(conversation_id, task)
         if claimed_user_seq is not None:
             self._ingress.claim_user_seq(conversation_id, claimed_user_seq)
-        task.add_done_callback(
-            lambda completed: self.on_task_done(conversation_id, completed, generation)
-        )
+        if not completion_managed_externally:
+            task.add_done_callback(
+                lambda completed: self.on_task_done(conversation_id, completed, generation)
+            )
         return task, generation
 
     def on_task_done(
@@ -620,8 +629,8 @@ class RunPersistenceSupervisor:
     ) -> str | None:
         if not registered or task is None or not self._policy.is_build_surface(surface):
             return None
-        agent_view_id, run_intent_id, _strict = (
-            await self._lifecycle.resolve_current_authority(conversation_id)
+        agent_view_id, run_intent_id, _strict = await self._lifecycle.resolve_current_authority(
+            conversation_id
         )
         self._authorities.bind(
             task,

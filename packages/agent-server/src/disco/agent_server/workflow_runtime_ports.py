@@ -180,6 +180,7 @@ class WorkflowRunControlAdapter:
             loop,
             expected_run_intent_id=expected_run_intent_id,
             task_context=task_context,
+            completion_managed_externally=True,
         )
 
     async def _finalize_clean_return(

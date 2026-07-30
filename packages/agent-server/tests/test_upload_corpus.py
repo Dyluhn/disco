@@ -22,6 +22,8 @@ from unittest import mock
 import pytest
 from disco.agent_server import create_app
 from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, SecretStore
+from disco.tools.projects import StorageStatus
 from fastapi.testclient import TestClient
 
 # ── minimal fakes ─────────────────────────────────────────────────────────────
@@ -49,6 +51,34 @@ class _FakeExecutor:
     def __init__(self, session: _FakeSession) -> None:
         self._sandbox = session
 
+    @property
+    def sandbox(self) -> _FakeSession:
+        return self._sandbox
+
+
+class _LiveSessions:
+    def __init__(self, executors: dict[str, _FakeExecutor] | None = None) -> None:
+        self._executors = executors or {}
+
+    def live_session(self, cid: str) -> _FakeSession | None:
+        executor = self._executors.get(cid)
+        return executor.sandbox if executor is not None else None
+
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        return None
+
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return None
+
+
+class _EmptyProjectStore:
+    def status(self) -> StorageStatus:
+        return StorageStatus.NOT_FOUND
+
+    @property
+    def root(self) -> None:
+        return None
+
 
 class _FakeRuntime:
     def __init__(self) -> None:
@@ -71,6 +101,9 @@ class _FakeRuntime:
             add_upload_passages=self.add_upload_passages,
             get_upload_passages=self.get_upload_passages,
         )
+        self._live_sessions = _LiveSessions(self._executors)
+        self._config_store = ConfigStore()
+        self._secret_store = SecretStore()
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
@@ -207,9 +240,8 @@ def test_corpus_accumulates_multiple_uploads() -> None:
 def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime = mock.MagicMock()
     runtime._dr = SimpleNamespace(research_stream=research_stream)
-    runtime._settings = SimpleNamespace(
-        get_last_selected_model=mock.MagicMock(return_value=None)
-    )
+    runtime.research_stream = research_stream
+    runtime._settings = SimpleNamespace(get_last_selected_model=mock.MagicMock(return_value=None))
     runtime._mcp = SimpleNamespace(
         _start_mcp_pool=mock.AsyncMock(),
         _close_mcp_pool=mock.AsyncMock(),
@@ -223,6 +255,15 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
         prewarm_vision_probe=mock.AsyncMock(),
     )
     runtime._schedule = SimpleNamespace(_schedule_manager_loop=mock.AsyncMock())
+    runtime._idle_sweeper = SimpleNamespace(run=mock.AsyncMock())
+    runtime._live_sessions = _LiveSessions()
+    runtime._config_store = ConfigStore()
+    runtime._secret_store = SecretStore()
+    runtime.reconcile_orphaned_runs = mock.AsyncMock(return_value=0)
+    runtime.prewarm_model_probe = mock.AsyncMock()
+    runtime.prewarm_vision_probe = mock.AsyncMock()
+    runtime.aclose = mock.AsyncMock()
+    runtime.project_store = lambda: _EmptyProjectStore()
     return runtime
 
 

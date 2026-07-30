@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from disco.agent_server import create_app
+from disco.agent_server.auth import AgentAuthMiddleware
+from disco.agent_server.routes.conversations import make_conversation_library_router
+from disco.agent_server.routes.spaces import make_spaces_router
 from disco.agent_server.space_store import JsonSpaceStore
 from disco.core import SqliteEventStore
 from disco.retrieval import DiskVectorStore
 from disco.tools.projects import ProjectStore
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
@@ -26,7 +29,11 @@ class _FakeRuntime:
 def _client(tmp_path: Path) -> tuple[TestClient, SqliteEventStore]:
     store = SqliteEventStore(":memory:")
     rt = _FakeRuntime(tmp_path / "projects")
-    return TestClient(create_app(store, runtime=rt)), store
+    app = FastAPI()
+    app.add_middleware(AgentAuthMiddleware, store=store)
+    app.include_router(make_spaces_router(store, rt))  # type: ignore[arg-type]
+    app.include_router(make_conversation_library_router(store, rt))  # type: ignore[arg-type]
+    return TestClient(app), store
 
 
 def test_space_crud_rename_and_membership_round_trip(tmp_path: Path) -> None:

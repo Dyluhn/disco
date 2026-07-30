@@ -122,9 +122,9 @@ def test_activity_lists_running_tasks_and_count(store):
     store.create_conversation("c_run", owner_id="local", title="A live task", surface="agent")
     store.create_conversation("c_idle", owner_id="local", title="Finished", surface="build")
     # one live task, one done task (excluded), and a cid with no conversation row
-    runtime._tasks["c_run"] = _FakeTask(done=False)  # type: ignore[assignment]
-    runtime._tasks["c_idle"] = _FakeTask(done=True)  # type: ignore[assignment]
-    runtime._tasks["c_ghost"] = _FakeTask(done=False)  # type: ignore[assignment]
+    runtime._run_registry.register_task("c_run", _FakeTask(done=False))  # type: ignore[arg-type]
+    runtime._run_registry.register_task("c_idle", _FakeTask(done=True))  # type: ignore[arg-type]
+    runtime._run_registry.register_task("c_ghost", _FakeTask(done=False))  # type: ignore[arg-type]
 
     client = TestClient(create_app(store, runtime=runtime))
     body = client.get("/api/activity").json()
@@ -140,7 +140,7 @@ def test_activity_lists_running_tasks_and_count(store):
 def test_activity_excludes_other_owners_running_tasks(store):
     runtime = _runtime(store)
     store.create_conversation("c_other", owner_id="someone_else", title="Not yours")
-    runtime._tasks["c_other"] = _FakeTask(done=False)  # type: ignore[assignment]
+    runtime._run_registry.register_task("c_other", _FakeTask(done=False))  # type: ignore[arg-type]
 
     client = TestClient(create_app(store, runtime=runtime))
     body = client.get("/api/activity?owner_id=local").json()

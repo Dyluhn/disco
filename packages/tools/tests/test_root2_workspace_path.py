@@ -6,9 +6,9 @@ redundant leading 'workspace/' or '/workspace/'. This guards the normalization."
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
+from disco.tools.sandbox.base import SandboxSpec
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix as strip
 from disco.tools.sandbox.process import ProcessSandboxInstance
 
@@ -22,10 +22,14 @@ def test_strip_redundant_workspace_prefix_cases():
     assert strip("/workspace") == ""
 
 
-def test_process_resolver_does_not_double_workspace():
-    inst = ProcessSandboxInstance.__new__(ProcessSandboxInstance)
-    inst._workspace = Path(tempfile.mkdtemp())
-    inst._destroyed = False
+def test_process_resolver_does_not_double_workspace(tmp_path: Path):
+    inst = ProcessSandboxInstance(
+        id="root2-test",
+        owner_id="owner-root2",
+        conversation_id="conv-root2",
+        spec=SandboxSpec(),
+        workspace=tmp_path,
+    )
     # the agent writing "workspace/index.html" must land at the SAME place as "index.html"
     assert inst._resolve("workspace/index.html") == inst._resolve("index.html")
     assert inst._resolve("/workspace/css/app.css") == inst._resolve("css/app.css")

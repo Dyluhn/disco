@@ -13,9 +13,11 @@ the work-gate is open, guarded so it fires ONCE per new follow-up.
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from disco.agent_server.run_supervisor import _MAX_NONTERMINAL_REKICKS
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     ActionEvent,
@@ -81,13 +83,14 @@ async def test_clean_finalize_rekicks_stranded_followup(tmp_path, monkeypatch):
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)
     # Follow-up lands during the finalization window (after the terminal marker).
     await rt._store.append(CID, _user("now also add a footer"))
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    await rt._finalize_clean_return(CID)
+    await rt._run_finalizer.finalize_clean(CID)
 
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=5)
+    kick.assert_called_once_with(CID, claimed_user_seq=5)
     # The follow-up's seq is recorded so a stalled same-seq segment can't loop.
-    assert rt._post_terminal_rekick_seq[CID] == 5
+    assert not rt._run_recovery.claim_terminal_rekick(CID, 5)
 
 
 @pytest.mark.asyncio
@@ -96,23 +99,24 @@ async def test_newer_user_turn_after_run_claim_is_rekicked_exactly_once(tmp_path
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)
     # The run claimed its original user turn (seq 1) synchronously when its task
     # started. A genuinely newer follow-up lands while that task is finalizing.
-    rt._run_claimed_user_seq[CID] = 1
+    rt._run_ingress.claim_user_seq(CID, 1)
     await rt._store.append(CID, _user("now also add a footer"))  # seq 5
     blocker = asyncio.create_task(asyncio.Event().wait())
-    rt._tasks[CID] = blocker
-    rt.kick(CID, claimed_user_seq=5)
-    assert rt._run_claimed_user_seq[CID] == 1  # live task must not claim the follow-up
-    rt._tasks.pop(CID)
+    rt._run_registry.register_task(CID, cast(Any, blocker))
+    rt._run_controller.kick(CID, claimed_user_seq=5)
+    assert rt._run_ingress.claimed_user_seq(CID) == 1
+    assert rt._run_registry.detach_task_if_owned(CID, cast(Any, blocker))
     blocker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await blocker
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    await rt._finalize_clean_return(CID)
-    await rt._finalize_clean_return(CID)
+    await rt._run_finalizer.finalize_clean(CID)
+    await rt._run_finalizer.finalize_clean(CID)
 
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=5)
-    assert rt._post_terminal_rekick_seq[CID] == 5
+    kick.assert_called_once_with(CID, claimed_user_seq=5)
+    assert not rt._run_recovery.claim_terminal_rekick(CID, 5)
 
 
 # ── strand repro: CRASH terminalize (ERROR) ────────────────────────────────────
@@ -123,14 +127,15 @@ async def test_crash_terminalize_rekicks_stranded_followup(tmp_path, monkeypatch
     rt = _rt(tmp_path, monkeypatch)
     await _seed_build(rt, terminal=None)  # no terminal marker yet → not concluded
     await rt._store.append(CID, _user("change the headline copy"))
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    await rt._terminalize_crashed(CID, RuntimeError("boom"), None)
+    await rt._run_finalizer.terminalize_crash(CID, RuntimeError("boom"), None)
 
     # ERROR was appended by the terminalizer, then the stranded follow-up re-kicked.
     state = await rt._store.get_state(CID)
     assert state.execution_status is ConversationStatus.ERROR
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=4)
+    kick.assert_called_once_with(CID, claimed_user_seq=4)
 
 
 @pytest.mark.asyncio
@@ -157,10 +162,23 @@ async def test_deterministic_preflight_error_does_not_retry_original_user_turn(
             )
 
     router = _MisconfiguredRouter()
-    rt._loops[CID] = _Loop()  # type: ignore[assignment]
-    rt._router_now = lambda **_kwargs: router  # type: ignore[method-assign]
 
-    rt.kick(CID, claimed_user_seq=initial.seq)
+    async def _misconfigured_preflight(_conversation_id):
+        try:
+            await router.complete(None)
+        except NoEligibleModel as exc:
+            return f"misconfigured: {exc}"
+        raise AssertionError("misconfigured router unexpectedly passed preflight")
+
+    async def _loop_factory():
+        return cast(Any, _Loop())
+
+    monkeypatch.setattr(rt._driver_preflight, "check", _misconfigured_preflight)
+    rt._run_controller.create_task(
+        CID,
+        loop_factory=_loop_factory,
+        claimed_user_seq=initial.seq,
+    )
     for _ in range(20):
         await asyncio.sleep(0)
 
@@ -197,15 +215,17 @@ async def test_stuck_wedge_rekicks_stranded_followup(tmp_path, monkeypatch):
     # since the last re-kick (watermark past the last productive action), so this
     # finalize takes the STUCK-append (wedge) path rather than another recovery
     # re-kick. (A run that keeps making progress resets the budget and never STUCKs.)
-    rt._nonterminal_rekicks[CID] = rt._MAX_NONTERMINAL_REKICKS
-    rt._last_rekick_progress_seq[CID] = 10_000
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    rt._run_recovery.record_progress(CID, 10_000)
+    for _ in range(_MAX_NONTERMINAL_REKICKS):
+        rt._run_recovery.increment_stall(CID)
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    await rt._finalize_clean_return(CID)
+    await rt._run_finalizer.finalize_clean(CID)
 
     state = await rt._store.get_state(CID)
     assert state.execution_status is ConversationStatus.STUCK
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=4)
+    kick.assert_called_once_with(CID, claimed_user_seq=4)
 
 
 # ── progress-reset: a WORKING iteration never falsely STUCKs ────────────────────
@@ -220,9 +240,10 @@ async def test_progressing_run_never_stucks(tmp_path, monkeypatch):
     rt._store.create_conversation(CID, owner_id="local")
     await rt._store.append(CID, _user("build me a landing page"))
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    boundaries = rt._MAX_NONTERMINAL_REKICKS + 5
+    boundaries = _MAX_NONTERMINAL_REKICKS + 5
     for i in range(boundaries):
         act = ActionEvent(
             thought="writing",
@@ -238,10 +259,10 @@ async def test_progressing_run_never_stucks(tmp_path, monkeypatch):
                 action_id=act.id,
             ),
         )
-        await rt._finalize_clean_return(CID)
+        await rt._run_finalizer.finalize_clean(CID)
         state = await rt._store.get_state(CID)
         assert state.execution_status is ConversationStatus.RUNNING, f"false STUCK at boundary {i}"
-    assert rt.kick.call_count == boundaries
+    assert kick.call_count == boundaries
 
 
 @pytest.mark.asyncio
@@ -252,11 +273,11 @@ async def test_no_progress_run_still_stucks(tmp_path, monkeypatch):
     rt._store.create_conversation(CID, owner_id="local")
     await rt._store.append(CID, _user("build me a landing page"))
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(rt._run_controller, "kick", MagicMock())
 
     stuck = False
-    for _ in range(rt._MAX_NONTERMINAL_REKICKS + 2):
-        await rt._finalize_clean_return(CID)
+    for _ in range(_MAX_NONTERMINAL_REKICKS + 2):
+        await rt._run_finalizer.finalize_clean(CID)
         if (await rt._store.get_state(CID)).execution_status is ConversationStatus.STUCK:
             stuck = True
             break
@@ -270,12 +291,13 @@ async def test_no_progress_run_still_stucks(tmp_path, monkeypatch):
 async def test_no_followup_does_not_rekick(tmp_path, monkeypatch):
     rt = _rt(tmp_path, monkeypatch)
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)  # no follow-up
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
-    await rt._finalize_clean_return(CID)
+    await rt._run_finalizer.finalize_clean(CID)
 
-    rt.kick.assert_not_called()
-    assert CID not in rt._post_terminal_rekick_seq
+    kick.assert_not_called()
+    assert rt._run_recovery.claim_terminal_rekick(CID, 0)
 
 
 # ── guard: same-seq never loops; a NEWER follow-up recovers once ────────────────
@@ -286,21 +308,22 @@ async def test_same_seq_does_not_loop_but_newer_seq_recovers(tmp_path, monkeypat
     rt = _rt(tmp_path, monkeypatch)
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)
     await rt._store.append(CID, _user("add a footer"))  # seq 5
-    rt.kick = MagicMock()  # type: ignore[method-assign]
+    kick = MagicMock()
+    monkeypatch.setattr(rt._run_controller, "kick", kick)
 
     # First conclusion → re-kicks for the follow-up once.
-    await rt._finalize_clean_return(CID)
-    assert rt.kick.call_count == 1
-    assert rt._post_terminal_rekick_seq[CID] == 5
+    await rt._run_finalizer.finalize_clean(CID)
+    assert kick.call_count == 1
+    assert not rt._run_recovery.claim_terminal_rekick(CID, 5)
 
     # The re-kicked run produced NO real progress and concluded again (FINISHED
     # appended, still the same latest follow-up seq) → must NOT re-kick again.
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))  # seq 6
-    await rt._finalize_clean_return(CID)
-    assert rt.kick.call_count == 1  # no loop on the same follow-up
+    await rt._run_finalizer.finalize_clean(CID)
+    assert kick.call_count == 1  # no loop on the same follow-up
 
     # A genuinely NEWER follow-up → recovers exactly once more.
     await rt._store.append(CID, _user("actually make it blue"))  # seq 7
-    await rt._finalize_clean_return(CID)
-    assert rt.kick.call_count == 2
-    assert rt._post_terminal_rekick_seq[CID] == 7
+    await rt._run_finalizer.finalize_clean(CID)
+    assert kick.call_count == 2
+    assert not rt._run_recovery.claim_terminal_rekick(CID, 7)

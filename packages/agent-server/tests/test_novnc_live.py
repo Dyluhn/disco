@@ -246,16 +246,27 @@ def test_port_upstream_gates_novnc_when_disabled():
             default_model="m",
             live_browser=LiveBrowserSettings(enabled=enabled),
         )
-        rt = MagicMock()
-        rt._config_store.load.return_value = cfg
+        config_store = MagicMock()
+        config_store.load.return_value = cfg
         # A live session whose expose_port would otherwise hand back a URL.
         sess = MagicMock()
         sess._service.name = "gvisor"
         sess.expose_port.return_value = "http://host:40000"
-        executor = MagicMock()
-        executor._sandbox = sess
-        rt._executors = {"conv_aabbccdd11223344": executor}
-        return PreviewService(rt)
+        live_sessions = MagicMock()
+        live_sessions.live_session.return_value = sess
+        settings = MagicMock()
+        settings._surface_of.return_value = "build"
+        return PreviewService(
+            live_sessions=live_sessions,
+            store=MagicMock(),
+            config_store=config_store,
+            settings=settings,
+            connections=MagicMock(),
+            projects=MagicMock(),
+            lifecycle=MagicMock(),
+            loop_factory=MagicMock(),
+            workspace=MagicMock(),
+        )
 
     # Disabled → NOVNC_PORT refused (None), even though expose_port would resolve.
     assert _svc(False).port_upstream("conv_aabbccdd11223344", NOVNC_PORT) is None
@@ -288,17 +299,28 @@ def test_port_upstream_gates_novnc_on_unsupported_backend_even_if_enabled():
             default_model="m",
             live_browser=LiveBrowserSettings(enabled=True),
         )
-        rt = MagicMock()
-        rt._config_store.load.return_value = cfg
+        config_store = MagicMock()
+        config_store.load.return_value = cfg
         sess = MagicMock()
         # a non-gVisor backend that does NOT support live view (e.g. switched to local)
         sess._service.name = "local"
         sess.supports_live_view = supports_live_view
         sess.expose_port.return_value = "http://host:40000"
-        executor = MagicMock()
-        executor._sandbox = sess
-        rt._executors = {"conv_aabbccdd11223344": executor}
-        return PreviewService(rt)
+        live_sessions = MagicMock()
+        live_sessions.live_session.return_value = sess
+        settings = MagicMock()
+        settings._surface_of.return_value = "build"
+        return PreviewService(
+            live_sessions=live_sessions,
+            store=MagicMock(),
+            config_store=config_store,
+            settings=settings,
+            connections=MagicMock(),
+            projects=MagicMock(),
+            lifecycle=MagicMock(),
+            loop_factory=MagicMock(),
+            workspace=MagicMock(),
+        )
 
     # enabled=True but the session can't stream → noVNC port stays CLOSED (the fix).
     svc_unsupported = _svc(supports_live_view=False)

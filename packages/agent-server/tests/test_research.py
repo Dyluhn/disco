@@ -256,8 +256,8 @@ def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
     )
     on = rt._router_now(enable_thinking=True)._providers["qwen"]
     off = rt._router_now(enable_thinking=False)._providers["qwen"]
-    assert on._drivers._enable_thinking is True
-    assert off._drivers._enable_thinking is False
+    assert on._enable_thinking is True
+    assert off._enable_thinking is False
 
 
 def test_research_rejects_empty_query():
@@ -323,8 +323,8 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     rt._settings._set_surface(cid, "deep_research")
     rt.set_autonomous(cid, True)
     exec_mock = AsyncMock()
-    monkeypatch.setattr(rt, "_execute_deep_research", exec_mock)
-    asyncio.run(rt._propose_deep_research_plan(cid, asyncio.run(store.get_events(cid))))
+    monkeypatch.setattr(rt._dr, "_execute_deep_research", exec_mock)
+    asyncio.run(rt._dr._propose_deep_research_plan(cid, asyncio.run(store.get_events(cid))))
     details = _details(asyncio.run(store.get_events(cid)))
     assert "plan_approved" in details, details
     assert "AWAITING_PLAN_APPROVAL" not in [str(d) for d in details]
@@ -345,8 +345,8 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     )
     rt2.set_surface(cid2, "deep_research")  # autonomous NOT set
     exec_mock2 = AsyncMock()
-    monkeypatch.setattr(rt2, "_execute_deep_research", exec_mock2)
-    asyncio.run(rt2._propose_deep_research_plan(cid2, asyncio.run(store2.get_events(cid2))))
+    monkeypatch.setattr(rt2._dr, "_execute_deep_research", exec_mock2)
+    asyncio.run(rt2._dr._propose_deep_research_plan(cid2, asyncio.run(store2.get_events(cid2))))
     statuses2 = [e for e in asyncio.run(store2.get_events(cid2)) if isinstance(e, StatusEvent)]
     assert any(e.status == ConversationStatus.AWAITING_PLAN_APPROVAL for e in statuses2)
     assert exec_mock2.await_count == 0

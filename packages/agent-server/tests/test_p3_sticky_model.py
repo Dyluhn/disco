@@ -60,17 +60,17 @@ def test_context_window_uses_the_conversation_model_override(tmp_path, monkeypat
     _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
     cid = "conv_context_override"
 
-    assert rt._driver_context_window(cid) == 32768
+    assert rt._drivers.context_window(cid) == 32768
     rt.set_model_override(cid, "or-test-model")
-    assert rt._driver_context_window(cid) == 128000
+    assert rt._drivers.context_window(cid) == 128000
 
 
 def test_stale_context_window_override_falls_back_to_default(tmp_path, monkeypatch):
     _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
     cid = "conv_stale_context_override"
-    rt._model_override[cid] = "deleted-model"
+    rt.set_model_override(cid, "deleted-model")
 
-    assert rt._driver_context_window(cid) == 32768
+    assert rt._drivers.context_window(cid) == 32768
 
 
 def test_no_db_path_returns_none(tmp_path, monkeypatch):
@@ -142,7 +142,7 @@ def test_create_conversation_seeds_last_selected_when_no_override(tmp_path, monk
     cid = resp.json()["conversation_id"]
 
     # The conversation's model override should be the last-selected model
-    assert rt._model_override.get(cid) == "or-test-model"
+    assert rt._settings._get_model_override(cid) == "or-test-model"
 
 
 def test_create_conversation_explicit_override_wins(tmp_path, monkeypatch):
@@ -162,7 +162,7 @@ def test_create_conversation_explicit_override_wins(tmp_path, monkeypatch):
     cid = resp.json()["conversation_id"]
 
     # Explicit pick must win
-    assert rt._model_override.get(cid) == "local-default"
+    assert rt._settings._get_model_override(cid) == "local-default"
 
 
 def test_create_conversation_no_pick_ever_uses_default(tmp_path, monkeypatch):
@@ -178,7 +178,7 @@ def test_create_conversation_no_pick_ever_uses_default(tmp_path, monkeypatch):
     cid = resp.json()["conversation_id"]
 
     # No override set (the default model governs)
-    assert rt._model_override.get(cid) is None
+    assert rt._settings._get_model_override(cid) is None
 
 
 async def test_create_conversation_stale_last_selected_falls_back_loudly(
@@ -203,7 +203,7 @@ async def test_create_conversation_stale_last_selected_falls_back_loudly(
     cid = resp.json()["conversation_id"]
 
     # Unknown key → no override (falls to default_model)
-    assert rt._model_override.get(cid) is None
+    assert rt._settings._get_model_override(cid) is None
     assert rt.get_last_selected_model() is None
 
     note = (

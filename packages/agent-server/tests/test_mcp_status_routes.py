@@ -32,12 +32,14 @@ def _runtime(
     pool = SimpleNamespace(server_status=lambda: statuses or {})
     runtime = SimpleNamespace(
         _config_store=SimpleNamespace(load=lambda: SimpleNamespace(mcp=mcp)),
-        _mcp_pool=pool,
-        _mcp_http_clients={name: object() for name in connected_http or set()},
-        _mcp_http_status={
-            **{name: {"status": "connected"} for name in connected_http or set()},
-            **(http_states or {}),
-        },
+        _mcp=SimpleNamespace(
+            _pool=pool,
+            _http_clients={name: object() for name in connected_http or set()},
+            _http_status={
+                **{name: {"status": "connected"} for name in connected_http or set()},
+                **(http_states or {}),
+            },
+        ),
         mcp_approval_state=lambda: {},
     )
     return runtime

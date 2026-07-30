@@ -38,7 +38,7 @@ def _runtime() -> ConversationRuntime:
 def _inject_executor(rt: ConversationRuntime, cid: str, fs: MemFS) -> None:
     fake_executor = MagicMock()
     fake_executor.sandbox = fs
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
 
 @pytest.mark.asyncio
@@ -57,7 +57,7 @@ async def test_authoritative_flag_stamps_unverifiable_manifest_without_canary(
         ArtifactRecord(path="report.txt", kind="files", shown=True)
     )
 
-    hook = rt._host_verify_canary_hook_for(cid)
+    hook = rt._contract._host_verify_canary_hook_for(cid, rt._contract.note_build_verify_result)
     assert hook is not None
 
     await hook(

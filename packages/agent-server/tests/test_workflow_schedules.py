@@ -10,7 +10,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 from urllib.parse import urlsplit
 
-import disco.agent_server.runtime as runtime_mod
+import disco.agent_server.build_loop_factory as build_loop_factory_mod
 import httpx
 import pytest
 from disco.agent_server import ConversationRuntime
@@ -299,6 +299,10 @@ def _workflow_runs(runtime: ConversationRuntime) -> WorkflowRunService:
     return cast(WorkflowRunService, runtime._schedule._workflow_runs)
 
 
+def _workflow_run_control(runtime: ConversationRuntime) -> Any:
+    return _workflow_runs(runtime)._execution._run_control
+
+
 def _workflow_manager(runtime: ConversationRuntime) -> WorkflowScheduleManager:
     manager_runtime = cast(ConversationRuntime, runtime._schedule._runtime_port)
     return WorkflowScheduleManager(manager_runtime)
@@ -362,7 +366,7 @@ def _save_instance(
 
 
 def _sandbox_spec_for_run(runtime: ConversationRuntime, run_cid: str) -> SandboxSpec:
-    service = cast(_MemorySandboxService, runtime._injected_sandbox)
+    service = cast(_MemorySandboxService, runtime._sandbox._injected_service)
     specs = [
         instance.spec
         for instance in service.instances.values()
@@ -445,7 +449,8 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         assert resolved.context_window > 0
         assert runtime._driver_contexts.compose_snapshot(record.run_cid) is None
 
-        executor = runtime._executors[record.run_cid]
+        executor = runtime._run_resources.executor(record.run_cid)
+        assert executor is not None
         callable_names = executor.callable_tool_names()
         assert {"file_write", "skip", "needs_input"} <= callable_names
         assert callable_names.isdisjoint(
@@ -561,7 +566,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
     run_started = asyncio.Event()
     conversation: list[str] = []
     original_append = runtime._workspace.append_run_ingress_locked
-    original_run = runtime._run_with_persistence
+    original_run = runtime._run_execution.run
 
     async def blocked_append(
         conversation_id: str,
@@ -588,11 +593,11 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
             for event in events
             if isinstance(event, MessageEvent) and event.source is EventSource.USER
         )
-        assert runtime._run_claimed_user_seq[conversation_id] == user.seq
+        assert runtime._run_ingress.claimed_user_seq(conversation_id) == user.seq
         return await original_run(conversation_id, loop)
 
     monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", blocked_append)
-    monkeypatch.setattr(runtime, "_run_with_persistence", traced_run)
+    monkeypatch.setattr(runtime._run_execution, "run", traced_run)
     fire: asyncio.Task[Any] | None = None
     try:
         instance = _save_instance(runtime, instance_id="wf_atomic_ingress", tools=("file_write",))
@@ -602,14 +607,15 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
         fire = asyncio.create_task(manager.fire_now(row.schedule_id))
         await asyncio.wait_for(append_started.wait(), timeout=10)
         cid = conversation[0]
-        exact_task = runtime._tasks[cid]
+        exact_task = runtime._run_registry.task(cid)
+        assert exact_task is not None
         assert runtime._workspace.has_run_claim(cid)
         assert not run_started.is_set()
 
         # An ordinary kick during the blocked atomic append must observe the
         # registered claim/task and leave the sealed task intact.
         runtime.kick(cid)
-        assert runtime._tasks[cid] is exact_task
+        assert runtime._run_registry.task(cid) is exact_task
         assert not run_started.is_set()
 
         release_append.set()
@@ -646,13 +652,13 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
         assert setup.failure is None
 
         incumbent = asyncio.create_task(release_incumbent.wait())
-        runtime._tasks[cid] = incumbent
+        runtime._run_registry.register_task(cid, cast(Any, incumbent))
         prior_loop = cast(Any, object())
-        runtime._loops[cid] = prior_loop
+        runtime._loop_registry.bind(cid, prior_loop)
 
         with pytest.raises(RuntimeError, match="already has a live run task"):
-            runtime._create_run_task(cid, cast(Any, object()))
-        assert runtime._tasks[cid] is incumbent
+            _workflow_run_control(runtime)._create_run_task(cid, cast(Any, object()))
+        assert runtime._run_registry.task(cid) is incumbent
 
         result = await workflow_service._execution.execute(
             schedule_id="sched_incumbent",
@@ -666,14 +672,14 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
         )
         assert isinstance(result, WorkflowScheduleRunRecord)
         assert result.terminal_state == ConversationStatus.ERROR.value
-        assert runtime._tasks[cid] is incumbent
-        assert runtime._loops[cid] is prior_loop
+        assert runtime._run_registry.task(cid) is incumbent
+        assert runtime._loop_registry.loop(cid) is prior_loop
         assert await runtime._store.get_events(cid) == []
     finally:
         release_incumbent.set()
         if incumbent is not None:
             await asyncio.gather(incumbent, return_exceptions=True)
-        runtime._tasks.clear()
+            runtime._run_registry.detach_task_if_owned(cid, cast(Any, incumbent))
         await runtime.aclose()
 
 
@@ -709,8 +715,12 @@ async def test_sealed_schedule_refuses_a_newer_durable_head(
         await runtime._store.append(cid, ahead)
         run = AsyncMock()
         handoff = AsyncMock()
-        monkeypatch.setattr(runtime, "_run_with_persistence", run)
-        monkeypatch.setattr(runtime, "_rekick_unadmitted_superseding_intent", handoff)
+        monkeypatch.setattr(runtime._run_execution, "run", run)
+        monkeypatch.setattr(
+            _workflow_run_control(runtime),
+            "_rekick_unadmitted_superseding_intent",
+            handoff,
+        )
 
         result = await workflow_service._execution.execute(
             schedule_id="sched_ahead",
@@ -726,8 +736,8 @@ async def test_sealed_schedule_refuses_a_newer_durable_head(
         assert isinstance(result, WorkflowScheduleRunRecord)
         assert "lost pristine ingress authority" in (result.error or "")
         run.assert_not_awaited()
-        assert cid not in runtime._tasks
-        assert cid not in runtime._loops
+        assert runtime._run_registry.task(cid) is None
+        assert runtime._loop_registry.loop(cid) is None
         events = await runtime._store.get_events(cid)
         assert events == [ahead.model_copy(update={"seq": 1})]
         # The recovery helper itself decides whether the durable head contains
@@ -760,9 +770,9 @@ async def test_sealed_schedule_append_failure_cleans_exact_registration(
         assert record.terminal_state == ConversationStatus.ERROR.value
         assert record.error == "injected schedule append failure"
         assert claim_was_visible
-        assert record.run_cid not in runtime._tasks
-        assert record.run_cid not in runtime._loops
-        assert record.run_cid not in runtime._executors
+        assert runtime._run_registry.task(record.run_cid) is None
+        assert runtime._loop_registry.loop(record.run_cid) is None
+        assert not runtime._run_resources.has_executor(record.run_cid)
         assert not runtime._workspace.has_run_claim(record.run_cid)
         state = await runtime._store.get_state(record.run_cid)
         assert state.execution_status == ConversationStatus.ERROR
@@ -796,11 +806,15 @@ async def test_post_ingress_schedule_failure_is_owned_by_exact_authority(
             )
             task = asyncio.current_task()
             assert task is not None
-            runtime._run_task_authorities[task] = (view_id, intent.id)
+            runtime._run_authorities.bind(
+                cast(Any, task),
+                agent_view_id=view_id,
+                run_intent_id=intent.id,
+            )
             admitted_view.append(view_id)
         raise RuntimeError("injected post-ingress failure")
 
-    monkeypatch.setattr(runtime, "_run_with_persistence", fail_run)
+    monkeypatch.setattr(runtime._run_execution, "run", fail_run)
     try:
         instance = _save_instance(runtime, instance_id="wf_typed_failure", tools=())
         record = await _workflow_runs(runtime).run(
@@ -845,8 +859,12 @@ async def test_stale_post_ingress_failure_cannot_poison_newer_intent(
         raise RuntimeError("stale schedule task failed")
 
     handoff = AsyncMock()
-    monkeypatch.setattr(runtime, "_run_with_persistence", fail_late)
-    monkeypatch.setattr(runtime, "_rekick_unadmitted_superseding_intent", handoff)
+    monkeypatch.setattr(runtime._run_execution, "run", fail_late)
+    monkeypatch.setattr(
+        _workflow_run_control(runtime),
+        "_rekick_unadmitted_superseding_intent",
+        handoff,
+    )
     fire: asyncio.Task[Any] | None = None
     try:
         instance = _save_instance(runtime, instance_id="wf_stale_failure", tools=())
@@ -939,7 +957,11 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
             self.destroy_calls += 1
             await super().destroy()
 
-    monkeypatch.setattr(runtime_mod, "SandboxSession", RecordingSandboxSession)
+    monkeypatch.setattr(
+        build_loop_factory_mod,
+        "SandboxSession",
+        RecordingSandboxSession,
+    )
     monkeypatch.setenv("DISCO_IDLE_SUSPEND_S", "0")
     fire_task: asyncio.Task[object] | None = None
     try:

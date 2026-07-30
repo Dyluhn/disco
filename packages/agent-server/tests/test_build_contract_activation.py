@@ -24,20 +24,20 @@ def _runtime() -> ConversationRuntime:
 
 def test_default_conversation_uses_custom_contract() -> None:
     rt = _runtime()
-    guard, on_success = rt._build_scope_guard("c1")
+    guard, on_success = rt._contract._build_scope_guard("c1")
     assert guard is not None and on_success is not None
     # CUSTOM bootstrap permits raw file_write/shell; edit does NOT (no clobber-rewrite)
     assert guard.check("file_write", is_mutating=True).allowed is True  # BOOTSTRAP
-    contract, tracker = rt._build_trackers["c1"]
+    contract, tracker = rt._contract._build_trackers["c1"]
     assert contract.kind is ContractKind.CUSTOM
 
 
 def test_declared_kind_governs_with_its_contract() -> None:
     rt = _runtime()
     rt.set_build_kind("c2", "appkit.leadgen")
-    guard, on_success = rt._build_scope_guard("c2")
+    guard, on_success = rt._contract._build_scope_guard("c2")
     assert guard is not None and on_success is not None
-    contract, tracker = rt._build_trackers["c2"]
+    contract, tracker = rt._contract._build_trackers["c2"]
     assert contract.kind is ContractKind.APPKIT_LEADGEN
     # appkit bootstrap = app_create only → raw file_write denied even at bootstrap
     assert guard.check("file_write", is_mutating=True).allowed is False
@@ -47,9 +47,9 @@ def test_declared_kind_governs_with_its_contract() -> None:
 def test_guard_advances_with_phase_via_on_success() -> None:
     rt = _runtime()
     rt.set_build_kind("c3", "appkit.leadgen")
-    guard, on_success = rt._build_scope_guard("c3")
+    guard, on_success = rt._contract._build_scope_guard("c3")
     assert on_success is not None
-    _contract, tracker = rt._build_trackers["c3"]
+    _contract, tracker = rt._contract._build_trackers["c3"]
     assert tracker.current() is Phase.BOOTSTRAP
     on_success("app_create")  # the runtime calls this when a bootstrap tool succeeds
     assert tracker.current() is Phase.EDIT
@@ -61,45 +61,45 @@ def test_guard_advances_with_phase_via_on_success() -> None:
 def test_set_build_kind_none_resets_to_custom() -> None:
     rt = _runtime()
     rt.set_build_kind("c4", "appkit.leadgen")
-    rt._build_scope_guard("c4")
+    rt._contract._build_scope_guard("c4")
     rt.set_build_kind("c4", None)  # clears the declared kind + the tracker
-    _guard, _ = rt._build_scope_guard("c4")
-    assert rt._build_trackers["c4"][0].kind is ContractKind.CUSTOM
+    _guard, _ = rt._contract._build_scope_guard("c4")
+    assert rt._contract._build_trackers["c4"][0].kind is ContractKind.CUSTOM
 
 
 def test_starter_kit_for_resolves_the_contract_starter() -> None:
     rt = _runtime()
-    assert rt._starter_kit_for("none") is None  # no declared build → no starter
+    assert rt._contract._starter_kit_for("none") is None  # no declared build → no starter
     rt.set_build_kind("site", "static.site")
-    assert rt._starter_kit_for("site") == "app_shell"
+    assert rt._contract._starter_kit_for("site") == "app_shell"
     rt.set_build_kind("app", "appkit.leadgen")
-    assert rt._starter_kit_for("app") == "lead_form"
+    assert rt._contract._starter_kit_for("app") == "lead_form"
     rt.set_build_kind("deck", "deck")
-    assert rt._starter_kit_for("deck") is None  # deck has no file-map starter
+    assert rt._contract._starter_kit_for("deck") is None  # deck has no file-map starter
 
 
 def test_finalizer_alias_only_for_non_custom_declared_kind() -> None:
     rt = _runtime()
     # no declared kind → no alias (a plain build)
-    assert rt._finalizer_alias_for("none") is None
+    assert rt._contract._finalizer_alias_for("none") is None
     # a declared "custom" kind → no alias (never fabricate ready_for_artifact_verification)
     rt.set_build_kind("cust", "custom")
-    assert rt._finalizer_alias_for("cust") is None
+    assert rt._contract._finalizer_alias_for("cust") is None
     # an unknown kind falls back to CUSTOM → still no alias
     rt.set_build_kind("unk", "totally.unknown.kind")
-    assert rt._finalizer_alias_for("unk") is None
+    assert rt._contract._finalizer_alias_for("unk") is None
     # a real declared kind → its finalizer
     rt.set_build_kind("app", "appkit.leadgen")
-    assert rt._finalizer_alias_for("app") == "ready_for_app_verification"
+    assert rt._contract._finalizer_alias_for("app") == "ready_for_app_verification"
     rt.set_build_kind("doc", "document")
-    assert rt._finalizer_alias_for("doc") == "ready_for_document_verification"
+    assert rt._contract._finalizer_alias_for("doc") == "ready_for_document_verification"
 
 
 def test_note_verify_result_advances_export_and_repair() -> None:
     rt = _runtime()
     rt.set_build_kind("c5", "appkit.leadgen")
-    guard, _ = rt._build_scope_guard("c5")
-    _c, tracker = rt._build_trackers["c5"]
+    guard, _ = rt._contract._build_scope_guard("c5")
+    _c, tracker = rt._contract._build_trackers["c5"]
     rt.note_build_verify_result("c5", passed=False)
     assert tracker.current() is Phase.REPAIR
     assert (
@@ -127,10 +127,10 @@ def test_expected_delivery_mode_reflects_contract() -> None:
 async def test_forget_conversation_evicts_build_state() -> None:
     rt = _runtime()
     rt.set_build_kind("c6", "appkit.leadgen")
-    rt._build_scope_guard("c6")
-    assert "c6" in rt._build_trackers and "c6" in rt._build_kind
+    rt._contract._build_scope_guard("c6")
+    assert "c6" in rt._contract._build_trackers and "c6" in rt._contract._build_kind
     await rt.forget_conversation("c6")
-    assert "c6" not in rt._build_trackers and "c6" not in rt._build_kind
+    assert "c6" not in rt._contract._build_trackers and "c6" not in rt._contract._build_kind
 
 
 # ---------------------------------------------------------------------------
@@ -169,13 +169,13 @@ def test_set_build_kind_evicts_cached_loop_and_executor() -> None:
     loop/executor must be evicted when the kind changes. Reuses the guarded
     settings-eviction path (never evicts under a live run)."""
     rt = _runtime()
-    rt._loops["c-act"] = MagicMock()
-    rt._executors["c-act"] = MagicMock(_sandbox=None)
+    rt._loop_registry.bind("c-act", MagicMock())
+    rt._run_resources.set_executor("c-act", MagicMock(_sandbox=None))
     rt.set_build_kind("c-act", "static.site")
-    assert "c-act" not in rt._loops
-    assert "c-act" not in rt._executors
+    assert rt._loop_registry.loop("c-act") is None
+    assert not rt._run_resources.has_executor("c-act")
     # ...and the newly-resolved contract now recommends its starter kit.
-    assert rt._starter_kit_for("c-act") == "app_shell"
+    assert rt._contract._starter_kit_for("c-act") == "app_shell"
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +189,9 @@ def test_brief_activation_maps_and_declares() -> None:
 
     rt = _runtime()
     rt.activate_contract_for_brief("c-map", BuildBrief(app_kind="web_app"))
-    assert rt._build_kind.get("c-map") == "interactive.prototype"
+    assert rt._contract._build_kind.get("c-map") == "interactive.prototype"
     # and the contract's affordances resolve for THIS run:
-    assert rt._starter_kit_for("c-map") == "app_shell"
+    assert rt._contract._starter_kit_for("c-map") == "app_shell"
 
 
 def test_brief_activation_first_declaration_wins() -> None:
@@ -201,11 +201,11 @@ def test_brief_activation_first_declaration_wins() -> None:
 
     rt = _runtime()
     rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="landing_page"))
-    assert rt._build_kind.get("c-first") == "static.site"
-    tracker_before = rt._build_trackers.get("c-first")
+    assert rt._contract._build_kind.get("c-first") == "static.site"
+    tracker_before = rt._contract._build_trackers.get("c-first")
     rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="web_app"))
-    assert rt._build_kind.get("c-first") == "static.site"  # unchanged
-    assert rt._build_trackers.get("c-first") is tracker_before  # no reset
+    assert rt._contract._build_kind.get("c-first") == "static.site"  # unchanged
+    assert rt._contract._build_trackers.get("c-first") is tracker_before  # no reset
 
 
 def test_brief_activation_custom_sentinel_also_wins_first() -> None:
@@ -216,9 +216,9 @@ def test_brief_activation_custom_sentinel_also_wins_first() -> None:
 
     rt = _runtime()
     rt.activate_contract_for_brief("c-cust", BuildBrief(app_kind="api"))
-    assert rt._build_kind.get("c-cust") == "custom"
+    assert rt._contract._build_kind.get("c-cust") == "custom"
     rt.activate_contract_for_brief("c-cust", BuildBrief(app_kind="landing_page"))
-    assert rt._build_kind.get("c-cust") == "custom"  # first (unmapped) won
+    assert rt._contract._build_kind.get("c-cust") == "custom"  # first (unmapped) won
 
 
 def test_brief_activation_unmapped_kinds_resolve_custom() -> None:
@@ -243,15 +243,15 @@ def test_brief_activation_unmapped_kinds_resolve_custom() -> None:
     ):
         cid = f"c-{kind or 'blank'}"
         rt.activate_contract_for_brief(cid, BuildBrief(app_kind=kind))
-        assert rt._build_kind.get(cid) == "custom", kind
-        guard, _ = rt._build_scope_guard(cid)
-        assert rt._build_trackers[cid][0].kind is ContractKind.CUSTOM
+        assert rt._contract._build_kind.get(cid) == "custom", kind
+        guard, _ = rt._contract._build_scope_guard(cid)
+        assert rt._contract._build_trackers[cid][0].kind is ContractKind.CUSTOM
 
 
 def test_brief_activation_none_brief_is_noop() -> None:
     rt = _runtime()
     rt.activate_contract_for_brief("c-none", None)
-    assert "c-none" not in rt._build_kind
+    assert "c-none" not in rt._contract._build_kind
 
 
 # ---- CONTRACT-DURABILITY: fold-on-load restores kind + phase across restart ----
@@ -304,13 +304,13 @@ async def test_fold_restores_kind_and_phase_after_restart() -> None:
     # success into the authoritative tracker, so the fold replays phase ONLY for
     # artifact runs (codex finding #2).
     rt2.set_artifact_mode("cd1", True)
-    assert "cd1" not in rt2._build_kind
-    await rt2._fold_contract_from_history("cd1")
+    assert "cd1" not in rt2._contract._build_kind
+    await rt2._contract._fold_contract_from_history("cd1")
 
     # web_app maps to interactive.prototype (the activation mapping), and the
     # successful bootstrap tool replays the tracker into EDIT.
-    assert rt2._build_kind["cd1"] == ContractKind.INTERACTIVE_PROTOTYPE.value
-    _contract, tracker = rt2._build_trackers["cd1"]
+    assert rt2._contract._build_kind["cd1"] == ContractKind.INTERACTIVE_PROTOTYPE.value
+    _contract, tracker = rt2._contract._build_trackers["cd1"]
     assert tracker.current() is Phase.EDIT
 
 
@@ -323,9 +323,9 @@ async def test_fold_unmapped_brief_records_custom_sentinel() -> None:
 
     rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd2", "build")
-    await rt2._fold_contract_from_history("cd2")
+    await rt2._contract._fold_contract_from_history("cd2")
     # Unmapped kind → CUSTOM sentinel, same as live activation (first-wins real).
-    assert rt2._build_kind["cd2"] == ContractKind.CUSTOM.value
+    assert rt2._contract._build_kind["cd2"] == ContractKind.CUSTOM.value
 
 
 @pytest.mark.asyncio
@@ -333,10 +333,10 @@ async def test_fold_no_brief_is_a_noop_and_runs_once() -> None:
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt.set_surface("cd3", "build")
-    await rt._fold_contract_from_history("cd3")
-    assert "cd3" not in rt._build_kind
+    await rt._contract._fold_contract_from_history("cd3")
+    assert "cd3" not in rt._contract._build_kind
     # attempted-marker set → second call must not re-read events
-    assert "cd3" in rt._contract_fold_attempted
+    assert "cd3" in rt._contract._contract_fold_attempted
 
 
 @pytest.mark.asyncio
@@ -349,9 +349,9 @@ async def test_fold_normal_build_restores_kind_only() -> None:
     await store.append_many("cd4", [_brief_event("web_app"), *_success_pair("scaffold_starter")])
     rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd4", "build")
-    await rt2._fold_contract_from_history("cd4")
-    assert rt2._build_kind["cd4"] == ContractKind.INTERACTIVE_PROTOTYPE.value
-    assert "cd4" not in rt2._build_trackers  # no phase fabricated for a normal run
+    await rt2._contract._fold_contract_from_history("cd4")
+    assert rt2._contract._build_kind["cd4"] == ContractKind.INTERACTIVE_PROTOTYPE.value
+    assert "cd4" not in rt2._contract._build_trackers  # no phase fabricated for a normal run
 
 
 @pytest.mark.asyncio
@@ -377,10 +377,10 @@ async def test_fold_ignores_pre_brief_work_and_forged_context() -> None:
     rt2 = ConversationRuntime(store, router=MagicMock(), sandbox_service=ProcessSandboxService())
     rt2.set_surface("cd5", "build")
     rt2.set_artifact_mode("cd5", True)
-    await rt2._fold_contract_from_history("cd5")
+    await rt2._contract._fold_contract_from_history("cd5")
     # The forged context (wrong shape, no meta marker) is skipped; the REAL brief
     # declares the kind, and the pre-brief scaffold success replays into NOTHING —
     # the tracker stays at BOOTSTRAP.
-    assert rt2._build_kind["cd5"] == ContractKind.INTERACTIVE_PROTOTYPE.value
-    _contract, tracker = rt2._build_trackers["cd5"]
+    assert rt2._contract._build_kind["cd5"] == ContractKind.INTERACTIVE_PROTOTYPE.value
+    _contract, tracker = rt2._contract._build_trackers["cd5"]
     assert tracker.current() is Phase.BOOTSTRAP
