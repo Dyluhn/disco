@@ -3,12 +3,16 @@
 The helpers here are deliberately pure over the append-only event log.  They
 provide one exact execution-contract identity, one monotonic predicate diff,
 and one causal-input boundary shared by both revision entry paths.
+
+Repair-detection collaborators (failed-verifier and demonstrated-command
+replacement) live in :mod:`plan_repair_detection` and are re-exported here as
+the compatibility surface.  One implementation owner; no duplicated policy.
 """
 
 from __future__ import annotations
 
 import json
-from collections import Counter
+from collections import Counter  # noqa: F401 — compatibility facade binding
 from typing import TYPE_CHECKING, Any
 
 from ..dod import (
@@ -18,25 +22,37 @@ from ..dod import (
     HTTPOkPredicate,
     PlanPredicateDiff,
     idempotence_fingerprint,
-    plan_predicate_diff,
-    predicate_fingerprint,
-    predicate_fingerprints,
+    plan_predicate_diff,  # noqa: F401 — compatibility facade binding
+    predicate_fingerprint,  # noqa: F401 — compatibility facade binding
+    predicate_fingerprints,  # noqa: F401 — compatibility facade binding
 )
 from ..events import (
-    ActionEvent,
-    AgentErrorEvent,
+    ActionEvent,  # noqa: F401 — compatibility facade binding
+    AgentErrorEvent,  # noqa: F401 — compatibility facade binding
     ConversationStatus,
     Event,
     EventSource,
     LLMMessage,
     MessageEvent,
-    ObservationEvent,
+    ObservationEvent,  # noqa: F401 — compatibility facade binding
     PlanEvent,
     StatusEvent,
     WorkspaceRestoredEvent,
 )
 from . import signals
 from .control import Disp
+from .plan_repair_detection import (  # noqa: F401 — re-exported for back-compat
+    _agent_demonstrated_command_failure,
+    _latest_repairable_failure,
+    _persisted_candidate_seq,
+    _repair_has_prior_productive_action,
+    _same_width_typed_replacement,
+    demonstrated_command_replacement_allowed,
+    failed_verifier_replacement_allowed,
+    plan_predicates,
+    predicate_diff_for_revision,
+    verifier_repair_replacement_allowed,
+)
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -53,12 +69,6 @@ class PlanRevisionWeakeningError(ValueError):
     def __init__(self, diff: PlanPredicateDiff) -> None:
         self.diff = diff
         super().__init__(weakening_guidance(diff))
-
-
-def plan_predicates(plan: PlanEvent | None) -> list[DoDPredicate]:
-    if plan is None:
-        return []
-    return [step.done_condition for step in plan.steps if step.done_condition is not None]
 
 
 def _dependency_identity(step: object) -> str | None:
@@ -128,262 +138,6 @@ def is_idempotent_plan_revision(events: list[Event], candidate: PlanEvent) -> bo
         approved is not None
         and normalized_execution_contract(approved) == normalized_execution_contract(candidate)
         and not has_new_plan_cause_since_approval(events)
-    )
-
-
-def predicate_diff_for_revision(
-    events: list[Event], candidate: PlanEvent
-) -> PlanPredicateDiff | None:
-    approved = signals.latest_approved_plan(events)
-    if approved is None:
-        return None
-    return plan_predicate_diff(plan_predicates(approved), plan_predicates(candidate))
-
-
-def _same_width_typed_replacement(events: list[Event], candidate: PlanEvent) -> bool:
-    """A verifier repair may replace, but never drain, a failed typed set.
-
-    File moves should normally use ``renamed_from`` and remain monotonic.  This
-    narrow escape preserves the existing twice-failed command/http repair path:
-    every old and new predicate remains visible in the typed approval
-    transition, the causal repair classifier audits why replacement is allowed,
-    and an 8→0 (or any cardinality-reducing) weakening remains impossible.
-    """
-    approved = signals.latest_approved_plan(events)
-    old = plan_predicates(approved)
-    new = plan_predicates(candidate)
-    return bool(old) and len(old) == len(new)
-
-
-def _repair_has_prior_productive_action(
-    events: list[Event],
-    failure_event: StatusEvent | None = None,
-) -> bool:
-    """Mirror the persisted repair classifier's productive-work prerequisite."""
-    approved = signals.latest_approved_plan(events)
-    if approved is None:
-        return False
-    failure_seq = (failure_event.seq or 0) if failure_event is not None else 0
-    if failure_event is None:
-        failure_seq = max(
-            (
-                event.seq or 0
-                for event in events
-                if isinstance(event, StatusEvent)
-                and event.plan_verifier_failure is not None
-                and event.plan_verifier_failure.plan_event_id == approved.id
-                and event.plan_verifier_failure.plan_revision == approved.revision
-                and event.plan_verifier_failure.attempt_for_approved_plan >= 2
-            ),
-            default=0,
-        )
-    approval_seq = max(
-        (
-            event.seq or 0
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.detail == "plan_approved"
-            and (event.seq or 0) < failure_seq
-        ),
-        default=0,
-    )
-    successful = signals.successful_action_ids(events)
-    return bool(approval_seq and failure_seq) and any(
-        approval_seq < (event.seq or 0) < failure_seq
-        and signals.is_successful_productive_action(event, successful)
-        for event in events
-    )
-
-
-def _persisted_candidate_seq(events: list[Event], candidate: PlanEvent) -> int:
-    persisted = next(
-        (
-            event
-            for event in reversed(events)
-            if isinstance(event, PlanEvent)
-            and event.id == candidate.id
-            and event.revision == candidate.revision
-        ),
-        None,
-    )
-    if persisted is not None:
-        return persisted.seq or 0
-    return max((event.seq or 0 for event in events), default=0) + 1
-
-
-def _latest_repairable_failure(events: list[Event], candidate: PlanEvent) -> StatusEvent | None:
-    """Return the causal plan-owned failure immediately authorizing a correction.
-
-    A single real verifier failure may justify proposing a changed typed verifier
-    for approval.  That proposal authority is intentionally weaker than the
-    twice-failed execution-bypass receipt in :func:`signals.plan_is_verifier_repair`.
-    """
-    approved = signals.latest_approved_plan(events)
-    if approved is None:
-        return None
-    candidate_seq = _persisted_candidate_seq(events, candidate)
-    approved_fingerprints = predicate_fingerprints(plan_predicates(approved))
-    failure_event = max(
-        (
-            event
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.plan_verifier_failure is not None
-            and (event.seq or 0) < candidate_seq
-            and event.plan_verifier_failure.plan_event_id == approved.id
-            and event.plan_verifier_failure.plan_revision == approved.revision
-            and event.plan_verifier_failure.predicate_fingerprints == approved_fingerprints
-            and event.plan_verifier_failure.replan_allowed
-        ),
-        key=lambda event: event.seq or 0,
-        default=None,
-    )
-    if failure_event is None:
-        return None
-    failure_seq = failure_event.seq or 0
-    if any(
-        isinstance(event, MessageEvent)
-        and event.source == EventSource.USER
-        and failure_seq < (event.seq or 0) < candidate_seq
-        for event in events
-    ):
-        return None
-    return failure_event
-
-
-def failed_verifier_replacement_allowed(events: list[Event], candidate: PlanEvent) -> bool:
-    """Allow one exact, failure-scoped typed replacement through approval.
-
-    Every unaffected predicate must remain byte-identical (or be an ordinary
-    audited file rename).  Each non-monotonic drop must be one of the exact
-    failed predicate fingerprints, and it must be replaced one-for-one by the
-    same predicate kind.  This lets a host-specific command or URL verifier be
-    corrected after its first durable failure without granting the stricter
-    twice-failed execution bypass or allowing an unrelated acceptance bar to
-    disappear.
-    """
-    failure_event = _latest_repairable_failure(events, candidate)
-    if failure_event is None or failure_event.plan_verifier_failure is None:
-        return False
-    diff = predicate_diff_for_revision(events, candidate)
-    if diff is None or not diff.dropped or diff.invalid_renames:
-        return False
-    failed = Counter(failure_event.plan_verifier_failure.failed_predicate_fingerprints)
-    dropped = Counter(predicate_fingerprint(predicate) for predicate in diff.dropped)
-    if dropped - failed:
-        return False
-    if len(diff.added) != len(diff.dropped):
-        return False
-    if Counter(predicate.kind for predicate in diff.added) != Counter(
-        predicate.kind for predicate in diff.dropped
-    ):
-        return False
-    return _repair_has_prior_productive_action(events, failure_event)
-
-
-def _agent_demonstrated_command_failure(events: list[Event], cmd: str) -> int | None:
-    """Did the agent itself RUN this exact predicate command and see it fail?
-
-    A command acceptance condition is authored by the agent, so it can be wrong —
-    and the agent usually discovers that by executing it, not by waiting for the
-    plan verifier. Both existing replacement escapes key on a
-    `plan_verifier_failure`, so a predicate the verifier never ran had NO legal
-    repair path: the agent held a condition it had proven impossible and every
-    revision to correct it was refused as weakening.
-
-    That is a deadlock, not a safeguard. Counted seed 440028 authored
-    `python3 -c "…async def main(): async with …"` as a done-condition — invalid
-    Python that cannot parse — ran it, got a SyntaxError, wrote a working
-    `verify_app.py`, proved both required strings were in the rendered DOM, and
-    was then refused SIXTEEN times when it tried to swap the broken condition for
-    the working one. It re-ran its passing verification to demonstrate doneness
-    until the thrash detector stopped the run.
-
-    Direct execution is at least as strong as verifier evidence — it is the same
-    command, run for real. Recognising it unlocks nothing else: the replacement
-    must still be same-width, same-kind, one-for-one, and preceded by productive
-    work. Only the source of the failure evidence widens.
-    """
-
-    normalized = " ".join(cmd.split())
-    if not normalized:
-        return None
-    failed_action_ids: set[str] = set()
-    for event in events:
-        if isinstance(event, AgentErrorEvent):
-            if isinstance(event.action_id, str):
-                failed_action_ids.add(event.action_id)
-        elif isinstance(event, ObservationEvent):
-            result = event.tool_result
-            if getattr(result, "success", True) is False and isinstance(event.action_id, str):
-                failed_action_ids.add(event.action_id)
-    latest: int | None = None
-    for event in events:
-        if not isinstance(event, ActionEvent) or event.id not in failed_action_ids:
-            continue
-        arguments = getattr(event.tool_call, "arguments", None)
-        if not isinstance(arguments, dict):
-            continue
-        for value in arguments.values():
-            if isinstance(value, str) and " ".join(value.split()) == normalized:
-                latest = max(latest or 0, event.seq or 0)
-    return latest
-
-
-def demonstrated_command_replacement_allowed(events: list[Event], candidate: PlanEvent) -> bool:
-    """Same-width, same-kind replacement of a command predicate the agent PROVED
-    is broken by running it. See `_agent_demonstrated_command_failure`."""
-
-    diff = predicate_diff_for_revision(events, candidate)
-    if diff is None or not diff.dropped or diff.invalid_renames:
-        return False
-    if len(diff.added) != len(diff.dropped):
-        return False
-    if Counter(predicate.kind for predicate in diff.added) != Counter(
-        predicate.kind for predicate in diff.dropped
-    ):
-        return False
-    # EVERY dropped predicate must be a command the agent demonstrably ran and
-    # saw fail — one unproven drop and the whole revision is still weakening.
-    proof_seqs: list[int] = []
-    for predicate in diff.dropped:
-        if not isinstance(predicate, CommandExitPredicate):
-            return False
-        seq = _agent_demonstrated_command_failure(events, predicate.cmd)
-        if seq is None:
-            return False
-        proof_seqs.append(seq)
-    approved = signals.latest_approved_plan(events)
-    if approved is None:
-        return False
-    approval_seq = max(
-        (
-            event.seq or 0
-            for event in events
-            if isinstance(event, StatusEvent) and event.detail == "plan_approved"
-        ),
-        default=0,
-    )
-    earliest_proof = min(proof_seqs)
-    if not approval_seq or earliest_proof <= approval_seq:
-        return False
-    # The repair must be EARNED: real work after proving the condition broken,
-    # not an immediate swap. Mirrors the verifier path's productive-work fence,
-    # fenced on the demonstrated failure instead of a verifier failure.
-    successful = signals.successful_action_ids(events)
-    return any(
-        (event.seq or 0) > earliest_proof
-        and signals.is_successful_productive_action(event, successful)
-        for event in events
-    )
-
-
-def verifier_repair_replacement_allowed(events: list[Event], candidate: PlanEvent) -> bool:
-    """Proposal-time form of the narrow, causal typed-repair escape."""
-    return failed_verifier_replacement_allowed(events, candidate) or (
-        signals.verifier_repair_planning_active(events)
-        and _repair_has_prior_productive_action(events)
-        and _same_width_typed_replacement(events, candidate)
     )
 
 

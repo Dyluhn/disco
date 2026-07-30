@@ -5,15 +5,18 @@ a back-ref to its `AgentLoop`, reads the loop's per-(revision, index) predicate
 map, and emits advisory notes through the loop's primitives. Sibling calls stay
 inside the collaborator; loop state/primitives go through `self._loop`. Bodies
 byte-identical to the former AgentLoop methods.
+
+Dictated-content condition extraction lives in :mod:`dictated_content_conditions`
+and is re-exported here as the compatibility surface.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import re
+import re  # noqa: F401 — compatibility facade binding
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: F401 — compatibility facade binding
 from typing import TYPE_CHECKING, Any
 
 from ..context import ArtifactMemoryStore, context_mark_resolved, context_write_summary
@@ -34,12 +37,41 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
-    StatusEvent,
+    StatusEvent,  # noqa: F401 — compatibility facade binding
 )
-from ..selection_edit import is_scoped_edit_directive
+from ..selection_edit import is_scoped_edit_directive  # noqa: F401
 from ..view import effective_plan_progress
 from ..workspace_paths import strip_redundant_workspace_prefix
 from .context_live import context_pack_enabled, unresolved_failure_seqs
+from .dictated_content_conditions import (  # noqa: F401 — re-exported for back-compat
+    _APPLICATION_TITLE_DECLARATION_RE,
+    _APPLICATION_TITLE_REPLACEMENT_RE,
+    _BUILT_TARGET_TITLE_DECLARATION_RE,
+    _DIAGNOSTIC_PROTOCOL_HEADER_RE,
+    _DIAGNOSTIC_PROTOCOL_LITERAL_RE,
+    _DIAGNOSTIC_PROTOCOL_TASK_RE,
+    _DOCUMENT_ARTIFACT_RE,
+    _FILE_LIKE_LITERAL_RE,
+    _QUOTED_LITERAL_RE,
+    _SERVE_METADATA_PREFIX_RE,
+    _SHELL_COMMAND_WORDS,
+    _SHELL_OPERATOR_RE,
+    DictatedContentCondition,
+    _dictated_content_literal_document,
+    _dictated_content_literal_slot,
+    _dictated_content_literals,
+    _DictatedContentLiteral,
+    _drop_scoped_edit_superseded_conditions,
+    _has_unspaced_slash,
+    _is_diagnostic_protocol_metadata_literal,
+    _is_serve_metadata_literal,
+    _looks_like_shell_command,
+    _scoped_edit_user_messages,
+    _skip_dictated_literal,
+    _superseded_by_scoped_edit,
+    dictated_content_conditions_from_events,
+    extract_dictated_content_literals,
+)
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -48,452 +80,64 @@ _LOG = logging.getLogger("disco.loop")
 _PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})
 
 
-@dataclass(frozen=True)
-class DictatedContentCondition:
-    """A quoted user literal that must survive into the final deliverable.
-
-    This is intentionally derived from the event log instead of persisted as a
-    separate mutable store row: replaying USER MessageEvents + PlanEvents
-    reconstructs the same requirements after resume/condensation.
-    """
-
-    revision: int
-    literal: str
-    source_event_id: str
-    source_seq: int | None = None
-    requirement_slot: str | None = None
-    supersedes_source_event_id: str | None = None
-    # The non-served document the user assigned this literal to (e.g. "REPORT.md"),
-    # or None when it belongs to the served deliverable. Consumers that verify the
-    # RENDERED page must not demand a literal that was scoped to a written file.
-    document_artifact: str | None = None
+def _latest_plan_from_events(events: list[Event]) -> PlanEvent | None:
+    """Find the latest (highest revision) PlanEvent in events."""
+    latest_plan: PlanEvent | None = None
+    for e in events:
+        if isinstance(e, PlanEvent):
+            if latest_plan is None or e.revision >= latest_plan.revision:
+                latest_plan = e
+    return latest_plan
 
 
-@dataclass(frozen=True)
-class _DictatedContentLiteral:
-    literal: str
-    quote_start: int
-    requirement_slot: str | None
-    replaces_slot: bool
-    document_artifact: str | None = None
+def _newly_done_steps(action: ActionEvent, events: list[Event]) -> list[int] | None:
+    """Return the step indices this action newly marks done, or None if N/A."""
+    tc = action.tool_call
+    if tc is None:
+        return None
+    args = tc.arguments or {}
+    if tc.tool_name == "plan_step":
+        if str(args.get("state") or "") != "done":
+            return None
+        try:
+            raw_index: Any = args.get("index")
+            return [int(raw_index)]
+        except (TypeError, ValueError):
+            return None
+    # update_plan_progress — only steps that transitioned to done now
+    _, cur = effective_plan_progress(events)
+    _, prev = effective_plan_progress([e for e in events if e.id != action.id])
+    return [i for i, st in cur.items() if st == "done" and prev.get(i) != "done"]
 
 
-# (?<!\w) blocks apostrophe-contractions from OPENING a match ("don't ... 'X'"
-# must not capture "t ... " between don't and the real quote); (?!\w) blocks the
-# symmetric close-side bridge ("...' s" possessives).
-_QUOTED_LITERAL_RE = re.compile(r"(?<!\w)'([^'\n]{2,80})'(?!\w)|(?<!\w)\"([^\"\n]{2,80})\"(?!\w)")
-_FILE_LIKE_LITERAL_RE = re.compile(
-    r"^(?:[\w.-]+\.(?:html?|css|mjs|cjs|jsx?|tsx?|py|md|json|ya?ml|txt|csv|"
-    r"png|jpe?g|gif|webp|svg|pdf|docx?|xlsx?|pptx?)|\.env(?:\.[\w.-]+)?)$",
-    re.IGNORECASE,
-)
-_SHELL_COMMAND_WORDS = frozenset(
-    {
-        "ag",
-        "bun",
-        "cat",
-        "cd",
-        "chmod",
-        "chown",
-        "cp",
-        "curl",
-        "deno",
-        "docker",
-        "echo",
-        "git",
-        "grep",
-        "head",
-        "ls",
-        "make",
-        "mkdir",
-        "mv",
-        "node",
-        "npm",
-        "npx",
-        "pnpm",
-        "pytest",
-        "python",
-        "python3",
-        "rm",
-        "ruff",
-        "sed",
-        "sh",
-        "tail",
-        "tox",
-        "uv",
-        "vite",
-        "yarn",
-    }
-)
-_SHELL_OPERATOR_RE = re.compile(r"(?:^|\s)(?:&&|\|\||[|;<>])(?:\s|$)|`|\$\(")
-_SERVE_METADATA_PREFIX_RE = re.compile(
-    r"\b(?:call|invoke|use)\b[^.!?]{0,240}\bserve\b[^.!?]{0,160}"
-    r"\b(?:path|title)\s*$",
-    re.IGNORECASE,
-)
-_DIAGNOSTIC_PROTOCOL_HEADER_RE = re.compile(r"(?im)^\s*DIAGNOSTIC\s+PROTOCOL\b")
-_DIAGNOSTIC_PROTOCOL_TASK_RE = re.compile(r"(?im)^\s*TASK\s*:")
-_DIAGNOSTIC_PROTOCOL_LITERAL_RE = re.compile(r"^(?:PREDICT|OBSERVED)\s*:", re.IGNORECASE)
-# Exact application-title wording is a stable requirement identity across web,
-# native, desktop, and future target shapes. Keep this deliberately narrow:
-# arbitrary headings/labels may be repeated, while one explicit application
-# title/name replacement can causally retire the prior value for that same slot.
-_APPLICATION_TITLE_DECLARATION_RE = re.compile(
-    r"\b(?:app(?:lication)?|site)\s+"
-    r"(?:(?:is|should\s+be|must\s+be)\s+)?"
-    r"(?:titled|named|called)\s+(?:exactly\s+)?$",
-    re.IGNORECASE,
-)
-_BUILT_TARGET_TITLE_DECLARATION_RE = re.compile(
-    r"\b(?:build|create|make)\s+"
-    # Keep this direct-object syntax exact. A relationship clause means the
-    # title belongs to a nested component, not to the application target.
-    r"(?!(?:[^.!?]{0,160})\b(?:with|containing|including|having|whose|where)\b)"
-    r"[^.!?]{1,160}\b(?:titled|named|called)\s+(?:exactly\s+)?$",
-    re.IGNORECASE,
-)
-_APPLICATION_TITLE_REPLACEMENT_RE = re.compile(
-    r"(?:"
-    r"\b(?:change|set|update)\s+(?:the\s+)?"
-    r"(?:(?:app(?:lication)?|site)\s+)?(?:title|name)\s+(?:to|as)"
-    # `retitle` is the exact synonym of `rename` for this slot, and both are
-    # natural without a `to`/`as` ("retitle the app exactly 'X'"). Without this
-    # the new title got NO slot while the superseded one kept its own, so the
-    # old title stayed a required identity claim that the retitled app could
-    # never satisfy — an unfinishable build (Build-soak p4_appkit_restart).
-    r"|\b(?:rename|retitle)\s+(?:the\s+)?(?:app(?:lication)?|site)(?:\s+(?:to|as))?"
-    r")\s+(?:exactly\s+)?$",
-    re.IGNORECASE,
-)
-
-
-def _has_unspaced_slash(text: str) -> bool:
-    for idx, ch in enumerate(text):
-        if ch != "/":
-            continue
-        before = text[idx - 1] if idx > 0 else ""
-        after = text[idx + 1] if idx + 1 < len(text) else ""
-        if not (before.isspace() and after.isspace()):
-            return True
-    return False
-
-
-def _looks_like_shell_command(text: str) -> bool:
-    s = text.strip()
-    if not s:
-        return False
-    if s.startswith("$ "):
-        return True
-    if _SHELL_OPERATOR_RE.search(s):
-        return True
-    try:
-        parts = shlex.split(s)
-    except ValueError:
-        parts = s.split()
-    if not parts:
-        return False
-    first = parts[0].rsplit("/", 1)[-1].lower()
-    return first in _SHELL_COMMAND_WORDS
-
-
-def _skip_dictated_literal(text: str) -> bool:
-    s = text.strip()
-    if len(s) != len(text) or not (2 <= len(s) <= 80):
-        return True
-    if _has_unspaced_slash(s):
-        return True
-    if _FILE_LIKE_LITERAL_RE.match(s):
-        return True
-    return _looks_like_shell_command(s)
-
-
-def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
-    """True when a quote is the value of an explicitly requested serve argument.
-
-    Dictated-content conditions protect user-visible copy, not tool metadata. A
-    prompt such as ``call serve ..., title 'Release'`` previously turned the
-    handoff title into a content floor and drove models to inject it into every
-    declared artifact, including binary files. Keep the context rule narrow: a
-    nearby call/use/invoke + serve + path/title shape is required, so ordinary
-    requests such as ``page title 'Release'`` remain protected content.
-    """
-
-    prefix = instruction[max(0, quote_start - 480) : quote_start]
-    # Sentence punctuation delimits the serve instruction, but punctuation
-    # inside an earlier quoted tool argument does not. In particular, live-8's
-    # path 'release/index.html' put a dot between ``serve`` and its following
-    # ``title`` argument and escaped the original boundary-aware regex. Preserve
-    # string length while masking only complete quoted spans, so dots after the
-    # path (real sentence boundaries) continue to terminate metadata scope.
-    boundary_view = re.sub(
-        r"'[^'\n]*'|\"[^\"\n]*\"",
-        lambda match: " " * len(match.group(0)),
-        prefix,
-    )
-    return _SERVE_METADATA_PREFIX_RE.search(boundary_view) is not None
-
-
-def _is_diagnostic_protocol_metadata_literal(
-    instruction: str,
-    quote_start: int,
-    literal: str,
-) -> bool:
-    """Exclude quoted tool-observation format examples from app copy floors.
-
-    Diagnostic build scenarios ask the agent to print quoted PREDICT/OBSERVED
-    lines around every tool call. Those strings describe the response protocol,
-    not user-visible deliverable content. Keep the exception section-bound: an
-    ordinary TASK request to render the same text remains a dictated-content
-    condition, and both line-anchored section markers are required.
-    """
-
-    if _DIAGNOSTIC_PROTOCOL_LITERAL_RE.match(literal) is None:
-        return False
-    headers = list(_DIAGNOSTIC_PROTOCOL_HEADER_RE.finditer(instruction, 0, quote_start))
-    if not headers:
-        return False
-    section_start = headers[-1].start()
-    task = _DIAGNOSTIC_PROTOCOL_TASK_RE.search(instruction, section_start)
-    return task is not None and quote_start < task.start()
-
-
-def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | None, bool]:
-    """Return one exact requirement slot plus whether this syntax replaces it.
-
-    This is syntactic, not fuzzy semantic matching. Only a high-confidence
-    application/site title declaration gets a stable slot, and only explicit
-    change/set/update/rename syntax gets replacement authority.
-    """
-
-    prefix = text[max(0, quote_start - 320) : quote_start]
-    # A prior sentence cannot supply the field identity for this literal.
-    sentence = re.split(r"[.!?]", prefix)[-1]
-    if _APPLICATION_TITLE_REPLACEMENT_RE.search(sentence):
-        return "application.title", True
-    if _APPLICATION_TITLE_DECLARATION_RE.search(
-        sentence
-    ) or _BUILT_TARGET_TITLE_DECLARATION_RE.search(sentence):
-        return "application.title", False
-    return None, False
-
-
-# Documents that are WRITTEN but not SERVED. A literal the user assigns to one of
-# these belongs in that file, not in the rendered DOM of the web deliverable.
-# `.html`/`.htm` are deliberately absent: those ARE the served page.
-_DOCUMENT_ARTIFACT_RE = re.compile(
-    r"\b([\w./-]+\.(?:md|markdown|txt|rst|csv|tsv|json|ya?ml|log|ini|toml))\b",
-    re.IGNORECASE,
-)
-
-
-def _dictated_content_literal_document(text: str, quote_start: int) -> str | None:
-    """The non-served document this literal was assigned to, if the user named one.
-
-    Syntactic and sentence-bound, exactly like ``_dictated_content_literal_slot``:
-    only an explicit filename in the SAME sentence as the quote binds it, because a
-    prior sentence cannot supply this literal's destination.
-
-    Why this exists. Quoted user literals were collected without any notion of WHICH
-    artifact each was assigned to, and every one of them was minted into a
-    ``web.visible_text`` claim -- so a heading the user put in a markdown file was
-    demanded in the browser DOM of the served page. A build that obeys the
-    instruction literally then cannot finish, and one that satisfies the verifier has
-    disobeyed the instruction.
-
-    Live at Epic-4 seed 460009: "Create REPORT.md headed exactly 'Ledger Audit
-    460009' ... Update index.html to show 'Ledger Audited 460009', serve it, and
-    browser-verify it." The verifier required BOTH strings in the page, the agent
-    oscillated (fix one, break the other, flip back), and the no-progress detector
-    correctly gave up. The runs that passed passed only because the agent happened to
-    ALSO put the report heading on the page -- luck, not correctness.
-
-    This is the same failure the ``application.title`` slot already guards against:
-    "two mutually exclusive identity claims ... the build could never finish however
-    correctly the model behaved" (seed 406431). Same shape, different slot.
-
-    Deliberately conservative: it only suppresses the WEB claim when the user named a
-    non-served document in the literal's own sentence. Naming nothing, or naming the
-    page itself, keeps the existing accumulating behaviour untouched.
-    """
-
-    prefix = text[max(0, quote_start - 320) : quote_start]
-    # CLAUSE-bound, not sentence-bound. One sentence routinely assigns literals to
-    # two different places -- "Write notes.txt containing 'internal only' and show
-    # 'Public View' on the page" -- and a sentence-wide scan bound BOTH literals to
-    # notes.txt, silently dropping a legitimate page requirement. Splitting on
-    # coordinators keeps each literal with the artifact its own clause names.
-    #
-    # Every ambiguity resolves toward NOT scoping: an unrecognised phrasing simply
-    # yields None and the literal stays a web claim, which is the pre-existing
-    # behaviour. A false scope would DELETE a real verification requirement; a false
-    # miss only leaves one demanding what it always demanded.
-    clause = re.split(r"[.!?]\s|;\s*|\s+and\s+|\s+then\s+|\s+but\s+", prefix)[-1]
-    matches = _DOCUMENT_ARTIFACT_RE.findall(clause)
-    return matches[-1] if matches else None
-
-
-def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
-    """Extract bounded literal records with exact replacement metadata."""
-
-    out: list[_DictatedContentLiteral] = []
-    seen: set[str] = set()
-    for mt in _QUOTED_LITERAL_RE.finditer(text or ""):
-        literal = mt.group(1) if mt.group(1) is not None else mt.group(2)
-        if (
-            literal is None
-            or _skip_dictated_literal(literal)
-            or _is_serve_metadata_literal(text, mt.start())
-            or _is_diagnostic_protocol_metadata_literal(text, mt.start(), literal)
-        ):
-            continue
-        if literal in seen:
-            continue
-        seen.add(literal)
-        slot, replaces = _dictated_content_literal_slot(text, mt.start())
-        out.append(
-            _DictatedContentLiteral(
-                literal=literal,
-                quote_start=mt.start(),
-                requirement_slot=slot,
-                replaces_slot=replaces,
-                document_artifact=_dictated_content_literal_document(text, mt.start()),
-            )
-        )
-    return out
-
-
-def extract_dictated_content_literals(text: str) -> list[str]:
-    """Extract quoted user-authored content literals from a build instruction.
-
-    Only single/double quoted strings 2..80 chars are considered. Shell-looking
-    snippets and path-looking strings are skipped so quoted commands like
-    "npm run build" or paths like "src/app.js" do not become content floors.
-    De-duplicates per message while preserving first occurrence order.
-    """
-
-    return [candidate.literal for candidate in _dictated_content_literals(text)]
-
-
-def _scoped_edit_user_messages(events: list[Event]) -> list[MessageEvent]:
-    return [
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.USER
-        and is_scoped_edit_directive(e.message.content or "")
-    ]
-
-
-def _superseded_by_scoped_edit(
-    condition: DictatedContentCondition,
-    scoped_edits: list[MessageEvent],
-) -> bool:
-    if condition.source_seq is None:
-        return False
-    for edit in scoped_edits:
-        if edit.seq is None or edit.seq <= condition.source_seq:
-            continue
-        if condition.literal in (edit.message.content or ""):
-            return True
-    return False
-
-
-def _drop_scoped_edit_superseded_conditions(
-    conditions: list[DictatedContentCondition],
-    events: list[Event],
-) -> list[DictatedContentCondition]:
-    scoped_edits = _scoped_edit_user_messages(events)
-    if not scoped_edits:
-        return conditions
-    # A label-less directive only supersedes when it still contains the old literal.
-    # Otherwise the prior dictated condition remains, by design.
-    return [c for c in conditions if not _superseded_by_scoped_edit(c, scoped_edits)]
-
-
-def dictated_content_conditions_from_events(
-    events: list[Event],
-) -> list[DictatedContentCondition]:
-    """Bind quoted USER literals to the PlanEvent revision that serves them.
-
-    For the initial plan, every USER instruction before the first plan can
-    contribute literals. For later revisions, only mutating/revision-intent USER
-    messages in the revision window contribute, which avoids turning a quoted
-    Q&A phrase into a deliverable requirement for a later change.
-    """
-
-    indexed = list(enumerate(events))
-    plans = [(idx, e) for idx, e in indexed if isinstance(e, PlanEvent)]
-    out: list[DictatedContentCondition] = []
-    seen: set[tuple[int, str]] = set()
-    prev_plan_idx = -1
-
-    for plan_idx, plan in plans:
-        planning_idx: int | None = None
-        for idx, e in indexed:
-            if idx <= prev_plan_idx or idx > plan_idx:
-                continue
-            if isinstance(e, StatusEvent) and e.detail == "planning":
-                planning_idx = idx
-        upper_idx = planning_idx if planning_idx is not None else plan_idx
-        users = [
+def _resolve_persisted_action(events: list[Event], action: ActionEvent) -> ActionEvent | None:
+    """Return the persisted copy of action (with seq), or None."""
+    if action.seq is not None:
+        return action
+    return next(
+        (
             e
-            for idx, e in indexed
-            if prev_plan_idx < idx <= upper_idx
-            and isinstance(e, MessageEvent)
-            and e.source == EventSource.USER
-        ]
-        if plan.revision > 1:
-            from . import signals
+            for e in events
+            if isinstance(e, ActionEvent) and e.id == action.id and e.seq is not None
+        ),
+        None,
+    )
 
-            users = [e for e in users if signals.is_revision_intent(e.message.content or "")]
-        for user in users:
-            content = user.message.content or ""
-            if is_scoped_edit_directive(content):
-                continue
-            candidates = _dictated_content_literals(content)
-            replacement_counts: dict[str, int] = {}
-            for candidate in candidates:
-                if candidate.replaces_slot and candidate.requirement_slot is not None:
-                    replacement_counts[candidate.requirement_slot] = (
-                        replacement_counts.get(candidate.requirement_slot, 0) + 1
-                    )
-            for candidate in candidates:
-                literal = candidate.literal
-                key = (plan.revision, literal)
-                if key in seen:
-                    continue
-                seen.add(key)
-                supersedes_source_event_id: str | None = None
-                if (
-                    candidate.replaces_slot
-                    and candidate.requirement_slot is not None
-                    and replacement_counts.get(candidate.requirement_slot) == 1
-                ):
-                    prior = [
-                        (index, condition)
-                        for index, condition in enumerate(out)
-                        if condition.requirement_slot == candidate.requirement_slot
-                    ]
-                    # Ambiguous prior authority fails closed: retain every old
-                    # condition and add the new one rather than guessing which
-                    # requirement the user meant to replace.
-                    if len(prior) == 1:
-                        prior_index, prior_condition = prior[0]
-                        supersedes_source_event_id = prior_condition.source_event_id
-                        out.pop(prior_index)
-                out.append(
-                    DictatedContentCondition(
-                        revision=plan.revision,
-                        literal=literal,
-                        source_event_id=user.id,
-                        source_seq=user.seq,
-                        requirement_slot=candidate.requirement_slot,
-                        supersedes_source_event_id=supersedes_source_event_id,
-                        document_artifact=candidate.document_artifact,
-                    )
-                )
-        prev_plan_idx = plan_idx
-    return _drop_scoped_edit_superseded_conditions(out, events)
+
+def _emit_step_done_note(
+    loop: AgentLoop, idx: int, latest_plan: PlanEvent, passed: bool, reason: str
+) -> MessageEvent:
+    verdict_word = "met" if passed else "NOT met"
+    body = (
+        f"[advisory, C18] done-condition for plan step {idx} "
+        f'("{latest_plan.steps[idx - 1].title}"): {verdict_word}. '
+        f"{reason}"
+    )
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content=body),
+        meta={"advisory": "plan_step_done_condition", "passed": passed},
+    )
 
 
 class PlanStepConditions:
@@ -526,62 +170,23 @@ class PlanStepConditions:
         tc = action.tool_call
         if tc is None or tc.tool_name not in ("plan_step", "update_plan_progress"):
             return
-        args = tc.arguments or {}
         events = await self._loop._events()
-        # Find the latest plan (highest revision; a re-plan supersedes). The
-        # `_plan_step_predicates` map is revision-scoped so a stale (revision, idx)
-        # never matches a fresh plan.
-        latest_plan: PlanEvent | None = None
-        for e in events:
-            if isinstance(e, PlanEvent):
-                if latest_plan is None or e.revision >= latest_plan.revision:
-                    latest_plan = e
+        latest_plan = _latest_plan_from_events(events)
         if latest_plan is None:
-            return  # no plan in scope — the mark is unanchored
-
-        # The step indices THIS action newly marks done.
-        if tc.tool_name == "plan_step":
-            if str(args.get("state") or "") != "done":
-                return
-            try:
-                raw_index: Any = args.get("index")
-                newly_done = [int(raw_index)]
-            except (TypeError, ValueError):
-                return
-        else:  # update_plan_progress — only steps that transitioned to done now
-            _, cur = effective_plan_progress(events)
-            _, prev = effective_plan_progress([e for e in events if e.id != action.id])
-            newly_done = [i for i, st in cur.items() if st == "done" and prev.get(i) != "done"]
-
+            return
+        newly_done = _newly_done_steps(action, events)
+        if newly_done is None:
+            return
         await self._maybe_emit_context_step_done_marks(events, latest_plan, newly_done, action)
-
         for idx in newly_done:
-            # 1-based step index. Out-of-range = nothing to look up.
             if idx < 1 or idx > len(latest_plan.steps):
                 continue
             predicate = self._loop._plan_step_predicates.get((latest_plan.revision, idx))
             if predicate is None:
-                # Back-compat: a step with no predicate is the explicit design
-                # target (most steps) — silent, no note, no extra event.
                 continue
             passed, reason = await self.evaluate_plan_step_predicate(predicate)
-            # The note is a <system-reminder>-less MessageEvent from ENVIRONMENT: it is
-            # visible in the trace for the human and the LLM sees it next turn as a
-            # normal message (NOT a system-reminder, so it does NOT nudge — the model is
-            # free to ignore or act). The "advisory" framing makes the no-nudge contract
-            # explicit in the trace.
-            verdict_word = "met" if passed else "NOT met"
-            body = (
-                f"[advisory, C18] done-condition for plan step {idx} "
-                f'("{latest_plan.steps[idx - 1].title}"): {verdict_word}. '
-                f"{reason}"
-            )
             await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=body),
-                    meta={"advisory": "plan_step_done_condition", "passed": passed},
-                )
+                _emit_step_done_note(self._loop, idx, latest_plan, passed, reason)
             )
 
     async def _maybe_emit_context_step_done_marks(
@@ -596,69 +201,67 @@ class PlanStepConditions:
         sbx = getattr(self._loop.executor, "sandbox", None)
         if sbx is None:
             return
-        # The in-memory action predates store numbering (seq is assigned on
-        # append), so range math must use the PERSISTED copy — with seq=None,
-        # _step_start_seq bails and every mark is silently skipped
-        # (live-caught; the unit fake pre-seeded persisted events and hid it).
-        if action.seq is None:
-            stored = next(
-                (
-                    e
-                    for e in events
-                    if isinstance(e, ActionEvent) and e.id == action.id and e.seq is not None
-                ),
-                None,
-            )
-            if stored is None:
-                return
-            action = stored
+        stored = _resolve_persisted_action(events, action)
+        if stored is None:
+            return
+        action = stored
         store = ArtifactMemoryStore(sbx)
         failures = unresolved_failure_seqs(events)
         for idx in newly_done:
-            if idx < 1 or idx > len(latest_plan.steps):
-                continue
-            event_range = self._context_step_done_range(events, latest_plan, idx, action)
-            if event_range is None:
-                continue
-            start_seq, end_seq = event_range
-            if any(start_seq <= seq <= end_seq for seq in failures):
-                continue
-            range_id = f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
-            if any(isinstance(e, ContextResolvedEvent) and e.range_id == range_id for e in events):
-                continue
-            summary = self._context_step_summary(events, latest_plan, idx, start_seq, end_seq)
-            try:
-                ref = await store.write_summary(range_id, summary)
-            except Exception:  # noqa: BLE001 - context marks are best-effort
-                _LOG.warning(
-                    "CXT context summary write failed for %s",
-                    self._loop.conversation_id,
-                    exc_info=True,
-                )
-                continue
-            step_predicate = latest_plan.steps[idx - 1].done_condition
-            mark = context_mark_resolved(
-                start_seq,
-                end_seq,
-                reason="plan_step_done",
-                range_id=range_id,
-            ).model_copy(
-                update={
-                    "source": EventSource.SYSTEM,
-                    "summary_ref_path": ref.rel_path,
-                    "meta": {
-                        "plan_revision": latest_plan.revision,
-                        "step_index": idx,
-                        "predicate_fingerprint": (
-                            predicate_fingerprint(step_predicate)
-                            if step_predicate is not None
-                            else None
-                        ),
-                    },
-                }
+            await self._emit_one_context_step_mark(
+                events, latest_plan, idx, action, store, failures
             )
-            await self._loop._emit(mark)
-            await self._loop._emit(context_write_summary(range_id, ref.rel_path, summary))
+
+    async def _emit_one_context_step_mark(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        idx: int,
+        action: ActionEvent,
+        store: ArtifactMemoryStore,
+        failures: frozenset[int],
+    ) -> None:
+        if idx < 1 or idx > len(latest_plan.steps):
+            return
+        event_range = self._context_step_done_range(events, latest_plan, idx, action)
+        if event_range is None:
+            return
+        start_seq, end_seq = event_range
+        if any(start_seq <= seq <= end_seq for seq in failures):
+            return
+        range_id = f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
+        if any(isinstance(e, ContextResolvedEvent) and e.range_id == range_id for e in events):
+            return
+        summary = self._context_step_summary(events, latest_plan, idx, start_seq, end_seq)
+        try:
+            ref = await store.write_summary(range_id, summary)
+        except Exception:  # noqa: BLE001 - context marks are best-effort
+            _LOG.warning(
+                "CXT context summary write failed for %s",
+                self._loop.conversation_id,
+                exc_info=True,
+            )
+            return
+        step_predicate = latest_plan.steps[idx - 1].done_condition
+        mark = context_mark_resolved(
+            start_seq, end_seq, reason="plan_step_done", range_id=range_id,
+        ).model_copy(
+            update={
+                "source": EventSource.SYSTEM,
+                "summary_ref_path": ref.rel_path,
+                "meta": {
+                    "plan_revision": latest_plan.revision,
+                    "step_index": idx,
+                    "predicate_fingerprint": (
+                        predicate_fingerprint(step_predicate)
+                        if step_predicate is not None
+                        else None
+                    ),
+                },
+            }
+        )
+        await self._loop._emit(mark)
+        await self._loop._emit(context_write_summary(range_id, ref.rel_path, summary))
 
     def _context_step_done_range(
         self,
@@ -846,215 +449,146 @@ class PlanStepConditions:
     async def check_file_exists_for_plan_step(
         self, predicate: FileExistsPredicate
     ) -> tuple[bool, str]:
-        """Check whether `predicate.path` exists, resolved in the SANDBOX's own
-        namespace (not the agent-server host cwd).
-
-        B4 root-cause: the container sandbox backend reports `workspace_path is
-        None` (the host has NO view of the box FS), yet the agent's files are
-        real INSIDE the box. The old code fell through to a literal host
-        `Path(path_str).is_file()` check, which looked in the agent-server cwd,
-        found nothing, and emitted a FALSE "done-condition NOT met / file
-        missing" advisory for files the agent had just written.
-
-        The fix asks the sandbox itself (`await sbx.file_exists(...)`) via duck
-        typing — core never imports `tools`; the `executor.sandbox` object is
-        injected at runtime and we call a method on it. Each backend resolves in
-        its own namespace (host FS for process, inside-the-box for container).
-
-        The path-escape hard-FAIL is preserved whenever a real `workspace_path`
-        is known (process/session backend), mirroring the C1b evaluator's
-        discipline: a `path` resolving outside the workspace is a hard FAIL, not
-        a coincidental pass. For the container backend (`workspace_path is None`)
-        the jail is enforced by the backend's own `file_exists` (`_container_path`
-        rejects escapes → False).
-
-        The literal-`Path` branch survives ONLY for the sandbox-less /
-        fake-executor path (no `file_exists` capability) the tests rely on."""
-        from pathlib import Path
-
         sbx = getattr(self._loop.executor, "sandbox", None)
-        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-        path_str = predicate.path
-        # The model-facing namespace is /workspace on every backend.  A process
-        # backend exposes the corresponding host directory through workspace_path,
-        # so normalize the guest prefix before joining; pathlib discards ``root``
-        # entirely when the right operand is absolute.
-        normalized_path = strip_redundant_workspace_prefix(path_str)
-        # Path-escape hard-FAIL when a real host-side workspace root is known.
-        # (Container backends expose workspace_path=None and rely on their own
-        # in-box jail; this branch is the process/session backend's discipline.)
-        if workspace:
-            try:
-                root = Path(workspace).resolve()
-                candidate = (root / normalized_path).resolve()
-                root_str = str(root)
-                candidate_str = str(candidate)
-                # On Windows the resolved strings may differ in case;
-                # `Path.resolve()` is case-aware but the prefix check is
-                # not, so do a normalized comparison. The agent runs
-                # inside a Linux sandbox, so the suffix match is the
-                # load-bearing case in practice.
-                if not (
-                    candidate_str == root_str
-                    or candidate_str.startswith(root_str.rstrip("/") + "/")
-                ):
-                    return (
-                        False,
-                        f"file_exists: path escapes workspace ({path_str})",
-                    )
-            except (OSError, ValueError) as exc:
-                return (False, f"file_exists({path_str}): resolve error ({exc})")
-        # B4 — sandbox-aware existence check. ASK THE SANDBOX (duck-typed; no
-        # upward `tools` import) so the path resolves in the box's namespace.
-        # This is the load-bearing fix for the container backend's false
-        # "missing" advisory.
-        if sbx is not None and hasattr(sbx, "file_exists"):
-            try:
-                exists = await sbx.file_exists(normalized_path)
-            except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
-                return (False, f"file_exists({path_str}): check error ({exc})")
-            if exists:
-                return (True, f"file_exists({path_str}): found")
-            return (False, f"file_exists({path_str}): missing")
-        # No sandbox (or a sandbox without the file_exists capability): check the
-        # literal path. This is the sandbox-less / fake-executor path used in
-        # tests; the predicate names a literal path, we check the literal path.
-        p = Path(path_str)
-        if p.exists():
-            return (True, f"file_exists({path_str}): found")
-        return (False, f"file_exists({path_str}): missing")
+        return await _check_file_exists(predicate, sbx)
 
     async def check_command_for_plan_step(
         self, predicate: CommandExitPredicate
     ) -> tuple[bool, str]:
-        """Run `predicate.cmd` against `predicate.expect_exit` (default 0). Tight
-        timeout to keep the loop responsive. Failures (timeout, wrong exit) are
-        surfaced with the reason in the note. Advisory-only — never wedges the loop.
-
-        When a sandbox with `exec_shell` is available (container backends that
-        report `workspace_path is None`), the command runs INSIDE THE BOX via
-        `await sbx.exec_shell(...)`, resolving against the agent's own filesystem.
-        This is the load-bearing fix: the prior code used `cwd=None` on the host
-        when `workspace_path` was None, evaluating against the agent-server cwd
-        instead of the box — a false advisory.
-
-        Timeout caveat: if `ExecResult.timed_out` is True, the result is always
-        treated as a FAILURE even when `exit_code == expect_exit` (e.g. 124). A
-        host-subprocess timeout cannot pass today; a sandbox timeout must not
-        accidentally pass either. The reason is surfaced in the advisory note.
-
-        The host-`subprocess` branch is kept ONLY as the fallback for sandbox-less
-        / fake-executor paths (mirroring the `file_exists` fallback design). The
-        5 s timeout is preserved for both paths."""
-        timeout = 5.0
-        # W3 C-2/C-3: the predicate command is model-authored (copied from the
-        # plan's done_condition). Apply the destructive-command hard-deny FLOOR
-        # before EITHER branch (sandbox exec_shell OR the host subprocess fallback),
-        # so a done_condition like `rm -rf --no-preserve-root /` is refused, never
-        # run — matching the DoD command runner's floor.
-        from ..security.analyzers import hard_deny_reason
-
-        _deny = hard_deny_reason(predicate.cmd)
-        if _deny is not None:
-            return (False, f"command({predicate.cmd!r}): hard-denied ({_deny})")
         sbx = getattr(self._loop.executor, "sandbox", None)
-
-        # Sandbox-aware path: execute the predicate command INSIDE THE BOX so it
-        # resolves against the agent's filesystem, not the host's. Duck-typed; no
-        # upward `tools` import (core never imports tools).
-        if sbx is not None and hasattr(sbx, "exec_shell"):
-            try:
-                result = await sbx.exec_shell(predicate.cmd, timeout_s=int(timeout))
-            except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
-                return (
-                    False,
-                    f"command({predicate.cmd!r}): sandbox exec error ({type(exc).__name__}: {exc})",
-                )
-            # Timeout caveat: timed_out=True is always a non-pass, even when
-            # exit_code coincidentally matches expect_exit (e.g. 124 from SIGKILL).
-            # Surface the reason so the user can see what actually happened.
-            if getattr(result, "timed_out", False):
-                return (
-                    False,
-                    f"command({predicate.cmd!r}): timed out in sandbox after {timeout}s "
-                    f"(exit_code={result.exit_code}, expect={predicate.expect_exit})",
-                )
-            if result.exit_code == predicate.expect_exit:
-                return (
-                    True,
-                    f"command({predicate.cmd!r}): exited {result.exit_code} as expected (sandbox)",
-                )
-            return (
-                False,
-                f"command({predicate.cmd!r}): exited {result.exit_code}, "
-                f"expected {predicate.expect_exit} (sandbox)",
-            )
-
-        # Fallback: no sandbox (or a sandbox without exec_shell) — run on the host.
-        # This is the sandbox-less / fake-executor path the tests rely on.
-        import asyncio
-        import subprocess
-        from pathlib import Path
-
-        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-        cwd = str(Path(workspace).resolve()) if workspace else None
-        # 5s is plenty for a per-step done-condition probe — the C1c
-        # gate uses the same default. C18 is advisory so we DON'T hang
-        # the loop on a stuck command.
-
-        def _run() -> subprocess.CompletedProcess[str]:
-            return subprocess.run(
-                predicate.cmd,
-                shell=True,
-                # H342: the sandbox and DoD evaluator define non-interactive
-                # Bash semantics; keep this sandbox-less fallback identical.
-                executable="/bin/bash",
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-                env={"PATH": os.environ.get("PATH", "")},
-            )
-
-        started = asyncio.get_event_loop().time()
-        try:
-            completed = await asyncio.to_thread(_run)
-        except subprocess.TimeoutExpired:
-            return (False, f"command({predicate.cmd!r}): timeout after {timeout}s")
-        except Exception as exc:  # noqa: BLE001 — defensive
-            return (
-                False,
-                f"command({predicate.cmd!r}): executor error ({type(exc).__name__}: {exc})",
-            )
-        duration = asyncio.get_event_loop().time() - started
-        if completed.returncode == predicate.expect_exit:
-            return (
-                True,
-                f"command({predicate.cmd!r}): exited {completed.returncode} "
-                f"as expected (in {duration:.2f}s)",
-            )
-        return (
-            False,
-            f"command({predicate.cmd!r}): exited {completed.returncode}, "
-            f"expected {predicate.expect_exit}",
-        )
+        return await _check_command(predicate, sbx)
 
     async def check_http_for_plan_step(self, predicate: HTTPOkPredicate) -> tuple[bool, str]:
-        """GET `predicate.url` and compare to `predicate.expect_status`
-        (default 200). Tight timeout; failures surface the reason. Uses
-        the shared class-1 host egress guard so private ranges and redirects
-        are blocked before a socket is opened."""
-        try:
-            from disco.core.host_egress import guarded_get
+        return await _check_http(predicate)
 
-            resp = await guarded_get(predicate.url, timeout_s=2.0)
-            status = int(resp.status_code)
-        except Exception as exc:  # noqa: BLE001 — defensive
-            return (False, f"http_ok({predicate.url}): error ({exc})")
-        if status == predicate.expect_status:
-            return (True, f"http_ok({predicate.url}): status {status} as expected")
+
+async def _check_file_exists(
+    predicate: FileExistsPredicate, sbx: Any,
+) -> tuple[bool, str]:
+    """Check whether `predicate.path` exists, resolved in the SANDBOX's own namespace."""
+    from pathlib import Path
+
+    workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+    path_str = predicate.path
+    normalized_path = strip_redundant_workspace_prefix(path_str)
+    if workspace:
+        try:
+            root = Path(workspace).resolve()
+            candidate = (root / normalized_path).resolve()
+            root_str = str(root)
+            candidate_str = str(candidate)
+            if not (
+                candidate_str == root_str
+                or candidate_str.startswith(root_str.rstrip("/") + "/")
+            ):
+                return (False, f"file_exists: path escapes workspace ({path_str})")
+        except (OSError, ValueError) as exc:
+            return (False, f"file_exists({path_str}): resolve error ({exc})")
+    if sbx is not None and hasattr(sbx, "file_exists"):
+        try:
+            exists = await sbx.file_exists(normalized_path)
+        except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
+            return (False, f"file_exists({path_str}): check error ({exc})")
+        if exists:
+            return (True, f"file_exists({path_str}): found")
+        return (False, f"file_exists({path_str}): missing")
+    p = Path(path_str)
+    if p.exists():
+        return (True, f"file_exists({path_str}): found")
+    return (False, f"file_exists({path_str}): missing")
+
+
+async def _check_command(
+    predicate: CommandExitPredicate, sbx: Any,
+) -> tuple[bool, str]:
+    """Run `predicate.cmd` against `predicate.expect_exit` (default 0)."""
+    timeout = 5.0
+    from ..security.analyzers import hard_deny_reason
+
+    _deny = hard_deny_reason(predicate.cmd)
+    if _deny is not None:
+        return (False, f"command({predicate.cmd!r}): hard-denied ({_deny})")
+    if sbx is not None and hasattr(sbx, "exec_shell"):
+        try:
+            result = await sbx.exec_shell(predicate.cmd, timeout_s=int(timeout))
+        except Exception as exc:  # noqa: BLE001 — advisory; never wedge the loop
+            return (
+                False,
+                f"command({predicate.cmd!r}): sandbox exec error ({type(exc).__name__}: {exc})",
+            )
+        if getattr(result, "timed_out", False):
+            return (
+                False,
+                f"command({predicate.cmd!r}): timed out in sandbox after {timeout}s "
+                f"(exit_code={result.exit_code}, expect={predicate.expect_exit})",
+            )
+        if result.exit_code == predicate.expect_exit:
+            return (
+                True,
+                f"command({predicate.cmd!r}): exited {result.exit_code} as expected (sandbox)",
+            )
         return (
             False,
-            f"http_ok({predicate.url}): status {status}, expected {predicate.expect_status}",
+            f"command({predicate.cmd!r}): exited {result.exit_code}, "
+            f"expected {predicate.expect_exit} (sandbox)",
         )
+    return await _check_command_on_host(predicate, sbx, timeout)
+
+
+async def _check_command_on_host(
+    predicate: CommandExitPredicate, sbx: Any, timeout: float,
+) -> tuple[bool, str]:
+    """Fallback: run on the host (sandbox-less / fake-executor path)."""
+    import asyncio
+    import subprocess
+    from pathlib import Path
+
+    workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+    cwd = str(Path(workspace).resolve()) if workspace else None
+
+    def _run() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            predicate.cmd, shell=True, executable="/bin/bash",
+            cwd=cwd, capture_output=True, text=True, timeout=timeout,
+            check=False, env={"PATH": os.environ.get("PATH", "")},
+        )
+
+    started = asyncio.get_event_loop().time()
+    try:
+        completed = await asyncio.to_thread(_run)
+    except subprocess.TimeoutExpired:
+        return (False, f"command({predicate.cmd!r}): timeout after {timeout}s")
+    except Exception as exc:  # noqa: BLE001 — defensive
+        return (
+            False,
+            f"command({predicate.cmd!r}): executor error ({type(exc).__name__}: {exc})",
+        )
+    duration = asyncio.get_event_loop().time() - started
+    if completed.returncode == predicate.expect_exit:
+        return (
+            True,
+            f"command({predicate.cmd!r}): exited {completed.returncode} "
+            f"as expected (in {duration:.2f}s)",
+        )
+    return (
+        False,
+        f"command({predicate.cmd!r}): exited {completed.returncode}, "
+        f"expected {predicate.expect_exit}",
+    )
+
+
+async def _check_http(predicate: HTTPOkPredicate) -> tuple[bool, str]:
+    """GET `predicate.url` and compare to `predicate.expect_status`."""
+    try:
+        from disco.core.host_egress import guarded_get
+
+        resp = await guarded_get(predicate.url, timeout_s=2.0)
+        status = int(resp.status_code)
+    except Exception as exc:  # noqa: BLE001 — defensive
+        return (False, f"http_ok({predicate.url}): error ({exc})")
+    if status == predicate.expect_status:
+        return (True, f"http_ok({predicate.url}): status {status} as expected")
+    return (
+        False,
+        f"http_ok({predicate.url}): status {status}, expected {predicate.expect_status}",
+    )

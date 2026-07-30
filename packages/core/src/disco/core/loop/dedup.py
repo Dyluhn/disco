@@ -31,9 +31,9 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
-    WorkspaceMutationEvent,
+    WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
-from .resource_context import (
+from .resource_context import (  # noqa: F401 — compatibility facade bindings
     canonical_workspace_identifier,
     latest_read_revision_by_resource,
     read_receipt_records,
@@ -121,6 +121,28 @@ _F8_TRUNCATION_MARKER_TEMPLATE = (
 )
 
 
+def _f8_scan_events(
+    events: list[Event],
+) -> tuple[dict[str, ActionEvent], set[str], set[str]]:
+    """Scan events for file_write actions, confirmed call ids, and failed call ids."""
+    actions_by_call: dict[str, ActionEvent] = {}
+    failed_call_ids: set[str] = set()
+    confirmed_call_ids: set[str] = set()
+    for e in events:
+        if isinstance(e, ActionEvent) and e.tool_call is not None:
+            if e.tool_call.tool_name == "file_write":
+                actions_by_call[e.tool_call.call_id] = e
+        elif isinstance(e, ObservationEvent):
+            cid = e.tool_result.call_id
+            if e.tool_result.success:
+                confirmed_call_ids.add(cid)
+            else:
+                failed_call_ids.add(cid)
+        elif isinstance(e, AgentErrorEvent) and e.tool_call_id:
+            failed_call_ids.add(e.tool_call_id)
+    return actions_by_call, confirmed_call_ids, failed_call_ids
+
+
 def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]:
     """For every file_write whose execution has been CONFIRMED successful,
     return ``{call_id: (path, full_content)}``.
@@ -150,21 +172,7 @@ def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]
     correlate each assistant message's ``tool_calls[i]["id"]`` to the
     transform output in O(1).
     """
-    actions_by_call: dict[str, ActionEvent] = {}
-    failed_call_ids: set[str] = set()
-    confirmed_call_ids: set[str] = set()
-    for e in events:
-        if isinstance(e, ActionEvent) and e.tool_call is not None:
-            if e.tool_call.tool_name == "file_write":
-                actions_by_call[e.tool_call.call_id] = e
-        elif isinstance(e, ObservationEvent):
-            cid = e.tool_result.call_id
-            if e.tool_result.success:
-                confirmed_call_ids.add(cid)
-            else:
-                failed_call_ids.add(cid)
-        elif isinstance(e, AgentErrorEvent) and e.tool_call_id:
-            failed_call_ids.add(e.tool_call_id)
+    actions_by_call, confirmed_call_ids, failed_call_ids = _f8_scan_events(events)
     # A failure un-confirms a prior success (defensive — a single
     # call_id should never have BOTH a success and a failure observation
     # under the engine's contract, but be explicit).
@@ -392,171 +400,43 @@ def collapse_superseded_reads(
 
     Returns a new list; input is not mutated.
     """
-    # Build call_id → path for file_read actions from the event log.
-    # _WORKSPACE_READ_TOOLS = frozenset({"file_read"}) — use the single
-    # source of truth from this module rather than a new frozenset.
-    file_read_calls: dict[str, str] = {}  # call_id → path
-    for e in events:
-        if (
-            isinstance(e, ActionEvent)
-            and e.tool_call is not None
-            and e.tool_call.tool_name in _WORKSPACE_READ_TOOLS
-        ):
-            p = e.tool_call.arguments.get("path")
-            if isinstance(p, str) and p:
-                file_read_calls[e.tool_call.call_id] = canonical_workspace_identifier(p)
+    from .dedup_projection import _ReadProjection, collapse_one_message
 
-    if not file_read_calls:
+    projection = _ReadProjection(events, messages, tuple(prompt_receipts))
+    if not projection.file_read_calls:
         return messages
+    _ = pinned_full_paths  # compatibility seam; deliberately inert
+    return [collapse_one_message(msg, projection) for msg in messages]
 
-    records = read_receipt_records(events)
-    record_by_call = {record.call_id: record for record in records}
-    latest_revisions = latest_read_revision_by_resource(records)
-    prompt_receipt_tuple = tuple(prompt_receipts)
-    # A host-rebuilt CURRENT WORKSPACE body is newer authority than every
-    # historical read in the append-only log, even when the bounded body covers
-    # only a head/tail window.
-    for receipt in prompt_receipt_tuple:
-        latest_revisions[receipt.revision.resource] = receipt.revision
-    selected_calls = {record.call_id for record in select_prompt_read_records(records)}
-    latest_run_intent_seq = max(
-        (
-            event.seq
-            for event in events
-            if isinstance(event, WorkspaceMutationEvent)
-            and event.operation.startswith("agent.run-intent.")
-            and type(event.seq) is int
-        ),
-        default=None,
-    )
-    # A model-requested read in the active run is high-attention evidence: keep
-    # its selected exact body in the recent tool-result position even when the
-    # cacheable CURRENT WORKSPACE prefix contains the same revision. Replacing
-    # that just-requested result with a pointer back to the prefix makes a
-    # successful read look unanswered and caused a real read/read/read loop in
-    # revision planning. The selected set is already resource/byte bounded, and
-    # a newer run intent naturally makes prior-run reads compactable again.
-    active_run_records = [
-        record
-        for record in records
-        if latest_run_intent_seq is not None
-        and record.observation_seq is not None
-        and record.observation_seq > latest_run_intent_seq
-    ]
-    active_run_visible_calls = {
-        record.call_id for record in active_run_records if record.call_id in selected_calls
-    }
-    # A targeted partial read may be set-theoretically redundant with an older
-    # complete read, but its immediate answer still belongs in the next request.
-    # Preserve at most that one extra result beyond the bounded selected set.
-    if active_run_records:
-        latest_active_record = max(
-            active_run_records,
-            key=lambda record: (
-                record.observation_seq if record.observation_seq is not None else -1,
-                record.action_seq if record.action_seq is not None else -1,
-                record.call_id,
-            ),
-        )
-        active_run_visible_calls.add(latest_active_record.call_id)
-    messages_by_call: dict[str, list[LLMMessage]] = {}
-    for message in messages:
-        if message.role == "tool" and message.tool_call_id is not None:
-            messages_by_call.setdefault(message.tool_call_id, []).append(message)
 
-    def _exact_body_is_present(record_call_id: str) -> bool:
-        record = record_by_call.get(record_call_id)
-        candidates = messages_by_call.get(record_call_id, [])
-        if record is None or len(candidates) != 1:
+def _f9_is_readonly(tool_name: str, readonly_names: frozenset[str] | None) -> bool:
+    if readonly_names is not None:
+        return tool_name in readonly_names
+    return tool_name in _WORKSPACE_READ_TOOLS
+
+
+def _f9_candidate_is_valid(
+    e: ActionEvent,
+    events: list[Event],
+    current_tool: str,
+    current_args: dict,
+) -> bool:
+    """True when a prior action is a valid dedup candidate.
+
+    Same tool/args, successful observation, no path mutation since.
+    """
+    if e.tool_call.tool_name != current_tool:
+        return False
+    prior_args = e.tool_call.arguments or {}
+    if prior_args != current_args:
+        return False
+    if not _f9_has_successful_observation(events, e.id):
+        return False
+    prior_path = prior_args.get("path")
+    if isinstance(prior_path, str) and prior_path:
+        if _f9_path_was_mutated_after(events, prior_path, e.seq or 0):
             return False
-        content = candidates[0].content
-        receipt = record.receipt
-
-        if rendered_content_matches_receipt(receipt, content):
-            return True
-        # View.of adds one deterministic presentation prefix after the exact
-        # tool body has been rendered. The prefix is not resource content; strip
-        # only the seq-selected form, then authenticate the remaining bytes.
-        seq = record.observation_seq
-        prefix = ("", "Observation: ", "Output: ")[seq % 3] if seq is not None else ""
-        return bool(
-            prefix
-            and content.startswith(prefix)
-            and rendered_content_matches_receipt(receipt, content[len(prefix) :])
-        )
-
-    physically_present_calls = {
-        call_id for call_id in selected_calls if _exact_body_is_present(call_id)
-    }
-    retained_read_receipts = (
-        *prompt_receipt_tuple,
-        *(
-            record.receipt
-            for record in records
-            if record.call_id in selected_calls and record.call_id in physically_present_calls
-        ),
-    )
-
-    # Keep the compatibility parameter deliberately inert until all callers have
-    # migrated to exact prompt receipts.
-    _ = pinned_full_paths
-
-    # Build the output list: replace only receipt-proven redundant reads.
-    out: list[LLMMessage] = []
-    for msg in messages:
-        if msg.role == "tool" and msg.tool_call_id in file_read_calls:
-            path = file_read_calls[msg.tool_call_id]
-            record = record_by_call.get(msg.tool_call_id or "")
-            if record is None:
-                # No revision/range receipt (an old persisted event or a fake
-                # executor). Keep its bytes; latest-path guessing is the context
-                # loss this transform exists to remove.
-                out.append(msg)
-                continue
-            current_revision = latest_revisions.get(record.receipt.revision.resource)
-            if (
-                record.call_id in active_run_visible_calls
-                and _exact_body_is_present(record.call_id)
-                and current_revision == record.receipt.revision
-            ):
-                out.append(msg)
-                continue
-            if receipt_covered_in_current_prompt(record.receipt, prompt_receipt_tuple):
-                out.append(
-                    msg.model_copy(update={"content": _SUPERSEDED_READ_NOTICE.format(path=path)})
-                )
-                continue
-            latest = latest_revisions.get(record.receipt.revision.resource)
-            if latest is not None and latest != record.receipt.revision:
-                if any(retained.revision == latest for retained in retained_read_receipts):
-                    out.append(
-                        msg.model_copy(
-                            update={
-                                "content": _STALE_READ_NOTICE.format(
-                                    path=path,
-                                    digest=record.receipt.revision.digest[:12],
-                                )
-                            }
-                        )
-                    )
-                    continue
-                out.append(msg)
-                continue
-            if record.call_id in selected_calls:
-                out.append(msg)
-                continue
-            if receipt_covered_in_current_prompt(
-                record.receipt,
-                retained_read_receipts,
-            ):
-                out.append(
-                    msg.model_copy(update={"content": _REDUNDANT_READ_NOTICE.format(path=path)})
-                )
-                continue
-            out.append(msg)
-            continue
-        out.append(msg)
-    return out
+    return True
 
 
 def _f9_dedupable_read(
@@ -604,50 +484,21 @@ def _f9_dedupable_read(
     """
     if not current_tool or not isinstance(current_args, dict):
         return (False, "", "")
-    # Read-only check: ground on the executor's reported set when
-    # available. Falling back to the engine's narrow
-    # _WORKSPACE_READ_TOOLS frozenset (file_read) when the executor
-    # can't report — the same signal the planner backstop uses.
-    if readonly_names is not None:
-        if current_tool not in readonly_names:
-            return (False, "", "")
-    elif current_tool not in _WORKSPACE_READ_TOOLS:
+    if not _f9_is_readonly(current_tool, readonly_names):
         return (False, "", "")
 
-    # Walk back through PRIOR events. The current action is excluded
-    # by indexing events[:-1] (the caller emitted it before invoking
-    # us; the dedup is over PAST reads).
     prior_events = events[:-1] if events else []
     ro_calls_seen = 0
     for e in reversed(prior_events):
         if not isinstance(e, ActionEvent) or e.tool_call is None:
             continue
         tool_name = e.tool_call.tool_name
-        is_ro = (
-            tool_name in readonly_names
-            if readonly_names is not None
-            else tool_name in _WORKSPACE_READ_TOOLS
-        )
-        if is_ro:
+        if _f9_is_readonly(tool_name, readonly_names):
             ro_calls_seen += 1
             if ro_calls_seen > window:
                 break  # window exhausted — give up (F9 eviction)
-        # Not a candidate? Skip — keep walking back to find a match.
-        if tool_name != current_tool:
+        if not _f9_candidate_is_valid(e, events, current_tool, current_args):
             continue
-        prior_args = e.tool_call.arguments or {}
-        if prior_args != current_args:
-            continue
-        # Same tool + same args. Validate:
-        # 1. Prior action has a successful observation.
-        if not _f9_has_successful_observation(events, e.id):
-            continue  # failed read; keep looking for an earlier success
-        # 2. If the args name a path, no mutation to that path has
-        #    occurred between the prior action and now.
-        prior_path = prior_args.get("path")
-        if isinstance(prior_path, str) and prior_path:
-            if _f9_path_was_mutated_after(events, prior_path, e.seq or 0):
-                continue  # stale — keep looking for an older clean match
         # Dedupable. Render the pointer.
         pointer = _F9_POINTER_TEMPLATE.format(
             tool_name=current_tool,
@@ -774,6 +625,29 @@ def _w39_reminder_emitted_after(events: list[Event], short_command: str, after_s
     return False
 
 
+def _w39_validate_candidate(
+    e: ActionEvent,
+    events: list[Event],
+    current_tool: str,
+    current_args: dict,
+    streak_start_seq: int,
+    short_command: str,
+) -> tuple[bool, int]:
+    """Validate a prior shell call; return (valid, prior_seq)."""
+    if e.tool_call.tool_name != current_tool:
+        return (False, 0)
+    if (e.tool_call.arguments or {}) != current_args:
+        return (False, 0)
+    if not _f9_has_successful_observation(events, e.id):
+        return (False, 0)
+    prior_seq = e.seq or 0
+    if streak_start_seq >= prior_seq:
+        return (False, 0)
+    if _w39_reminder_emitted_after(events, short_command, streak_start_seq):
+        return (False, 0)
+    return (True, prior_seq)
+
+
 def _w39_shell_verify_reminder(
     current_tool: str | None,
     current_args: dict | None,
@@ -800,11 +674,7 @@ def _w39_shell_verify_reminder(
         return (False, 0, "")
 
     prior_events = events[:-1] if events else []
-    # Streak boundary: the most recent workspace mutation resets the
-    # "already passed" streak (0 = no mutation this run). Reused for BOTH the
-    # mutation gate and the anti-spam window so they stay consistent.
     streak_start_seq = _w39_latest_mutation_seq(prior_events)
-
     short_command = _w39_short_command(command)
     shell_calls_seen = 0
     for e in reversed(prior_events):
@@ -815,25 +685,11 @@ def _w39_shell_verify_reminder(
             shell_calls_seen += 1
             if shell_calls_seen > window:
                 break  # window exhausted — give up (mirrors F9 eviction)
-        if tool_name != current_tool:
+        valid, prior_seq = _w39_validate_candidate(
+            e, events, current_tool, current_args, streak_start_seq, short_command
+        )
+        if not valid:
             continue
-        if (e.tool_call.arguments or {}) != current_args:
-            continue  # not byte-identical args — keep walking back
-        # Same shell tool + identical args. Validate it SUCCEEDED earlier.
-        if not _f9_has_successful_observation(events, e.id):
-            # Failed / no-observation earlier run — re-running is legit
-            # (the bug is re-running PASSED verifies). Keep looking for an
-            # earlier identical SUCCESS.
-            continue
-        prior_seq = e.seq or 0
-        # No workspace mutation since the prior successful run? If a write
-        # landed after it, re-running the verify is legitimate (test b) —
-        # do NOT remind, and an older run would be even more stale.
-        if streak_start_seq >= prior_seq:
-            return (False, 0, "")
-        # Anti-spam: one reminder per passed-and-unmutated streak.
-        if _w39_reminder_emitted_after(events, short_command, streak_start_seq):
-            return (False, 0, "")
         reminder = _W39_REMINDER_TEMPLATE.format(
             sentinel=_W39_REMINDER_SENTINEL,
             command=short_command,
