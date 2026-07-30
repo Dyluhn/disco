@@ -42,9 +42,7 @@ from .bootstrap import _detect_project_bootstrap as _detect_project_bootstrap
 from .boundaries import AgentStep as AgentStep
 from .control import Disp as Disp
 from .messages import _stuck_escape_reminder as _stuck_escape_reminder
-from .meta_tool_common import MetaToolCommonMixin as _MetaToolCommonMixin
-from .meta_tool_planning import MetaToolPlanningMixin as _MetaToolPlanningMixin
-from .meta_tool_questions import MetaToolQuestionMixin as _MetaToolQuestionMixin
+from .meta_tool_handlers import MetaToolHandlerMixin as _MetaToolHandlerMixin
 from .observe import _DELEGATE_ACTION_PROFILE as _DELEGATE_ACTION_PROFILE
 from .observe import _FANOUT_INPUT_MAX_CHARS as _FANOUT_INPUT_MAX_CHARS
 from .phase_gates import PhaseGateMixin as _PhaseGateMixin
@@ -214,12 +212,12 @@ class Valve(
         self._loop = loop
         self._post_noop_active = False
 
+    async def gate_f4_bootstrap(self, events: list[Event]) -> list[Event]:
+        """Compatibility wrapper for the non-disposition event refresh."""
+        return await self.refresh_f4_bootstrap(events)
 
-class MetaToolHandlers(
-    _MetaToolCommonMixin,
-    _MetaToolPlanningMixin,
-    _MetaToolQuestionMixin,
-):
+
+class MetaToolHandlers(_MetaToolHandlerMixin):
     """Compatibility owner for the Loop virtual-tool handler surface."""
 
     def __init__(self, loop: AgentLoop) -> None:

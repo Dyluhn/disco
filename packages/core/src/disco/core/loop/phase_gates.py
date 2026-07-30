@@ -71,7 +71,7 @@ class PhaseGateMixin(_ValveHost):
         )
         return await self.post_noop_valve()
 
-    async def gate_f4_bootstrap(self, events: list[Event]) -> list[Event]:
+    async def refresh_f4_bootstrap(self, events: list[Event]) -> list[Event]:
         # F4 — gated bootstrap observation. On the first model turn
         # of a session (no real actions yet, in execution mode) and
         # with assist=ON, emit a one-shot <system-reminder> listing
