@@ -10,7 +10,7 @@ from ..workflow import WorkflowRun
 from . import signals
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 
 def _workflow_plan_title(workflow_run: WorkflowRun) -> str:

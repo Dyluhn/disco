@@ -78,7 +78,7 @@ from .view_snapshot import (
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 

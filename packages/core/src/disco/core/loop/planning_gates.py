@@ -32,7 +32,7 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 from .plan_submission import _handle_submitted_plan
 

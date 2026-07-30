@@ -33,7 +33,7 @@ from .observation_dedup import (
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 _ERROR_DETAIL_CAP = 600

@@ -26,7 +26,7 @@ from .turn_control_support import (
 
 if TYPE_CHECKING:
     from ..events import ClarifyQuestionItem, QuestionsV2Item
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 

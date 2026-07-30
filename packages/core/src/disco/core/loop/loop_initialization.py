@@ -51,7 +51,7 @@ from .transition import TransitionCoordinator as _TransitionCoordinator
 from .turn_control import MetaToolHandlers, Valve
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 
 def _initialize_core(

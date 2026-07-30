@@ -41,7 +41,7 @@ from .observation_execution import (
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _DELEGATE_ACTION_PROFILE = ActionProfile(
     capabilities=frozenset(

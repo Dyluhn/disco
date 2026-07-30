@@ -74,7 +74,7 @@ from .dictated_content_conditions import (  # noqa: F401 — re-exported for bac
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 _PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})

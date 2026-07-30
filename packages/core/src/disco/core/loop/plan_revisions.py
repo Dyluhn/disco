@@ -55,7 +55,7 @@ from .plan_repair_detection import (  # noqa: F401 — re-exported for back-comp
 )
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 IDEMPOTENT_PLAN_DETAIL = "plan_revision_idempotent"
 IDEMPOTENT_PLAN_DIAGNOSTIC = "identical_plan_redirect"

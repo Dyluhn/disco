@@ -24,7 +24,7 @@ from .messages import _hs03_reground_message, _latest_user_instruction
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 # The view.py tag for the tail recitation. We look at the last rendered
 # message to decide whether to keep it — if it starts with this sentinel it

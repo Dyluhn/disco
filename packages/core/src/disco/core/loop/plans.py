@@ -133,7 +133,7 @@ from .planner_arguments import (  # noqa: F401 — re-exported for back-compat
 from .turn_control import _CONTINUE_OPTION_ID
 
 if TYPE_CHECKING:
-    from .engine import AgentLoop
+    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _LOG = logging.getLogger("disco.loop")
 
