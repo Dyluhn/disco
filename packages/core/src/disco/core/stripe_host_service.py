@@ -514,12 +514,10 @@ class _StripeRuntimeInputs:
     binding_secret: str
 
 
-def _runtime_inputs(
+def _configured_stripe_app(
     ctx: HostServiceContext,
     plan_selector: str,
-    binding_proof: str,
-    webhook_proof: str,
-) -> tuple[_StripeRuntimeInputs | None, str]:
+) -> tuple[StripeAppConfig | None, str]:
     config_store = ctx.stripe_config_store
     if config_store is None or ctx.secret_store is None or ctx.approvals is None:
         return None, "stripe_not_configured"
@@ -528,11 +526,15 @@ def _runtime_inputs(
         return None, "stripe_not_configured"
     if plan_selector != config.plan_selector:
         return None, "unknown_plan"
-    origin = _return_origin(ctx, config)
-    if origin is None:
-        return None, "return_origin_not_allowed"
+    return config, ""
+
+
+def _resolved_stripe_secrets(
+    ctx: HostServiceContext,
+) -> tuple[tuple[str, str, str] | None, str]:
+    assert ctx.secret_store is not None
     try:
-        secret = resolve_provider_secret(
+        restricted_key = resolve_provider_secret(
             STRIPE_SECRET_REF,
             ctx.secret_store,
             strong_required=True,
@@ -549,12 +551,50 @@ def _runtime_inputs(
         )
     except RuntimeError:
         return None, "stripe_credential_refused"
-    if secret is None or binding_secret is None or webhook_secret is None:
+    if restricted_key is None or binding_secret is None or webhook_secret is None:
         return None, "stripe_not_configured"
+    return (restricted_key, binding_secret, webhook_secret), ""
+
+
+def _stripe_runtime_proofs_match(
+    ctx: HostServiceContext,
+    plan_selector: str,
+    binding_secret: str,
+    webhook_secret: str,
+    binding_proof: str,
+    webhook_proof: str,
+) -> bool:
     expected_binding = stripe_runtime_proof(binding_secret, ctx.app_id, plan_selector)
     expected_webhook = stripe_runtime_proof(webhook_secret, ctx.app_id, plan_selector)
-    if not hmac.compare_digest(binding_proof, expected_binding) or not hmac.compare_digest(
-        webhook_proof, expected_webhook
+    return hmac.compare_digest(binding_proof, expected_binding) and hmac.compare_digest(
+        webhook_proof,
+        expected_webhook,
+    )
+
+
+def _runtime_inputs(
+    ctx: HostServiceContext,
+    plan_selector: str,
+    binding_proof: str,
+    webhook_proof: str,
+) -> tuple[_StripeRuntimeInputs | None, str]:
+    config, error = _configured_stripe_app(ctx, plan_selector)
+    if config is None:
+        return None, error
+    origin = _return_origin(ctx, config)
+    if origin is None:
+        return None, "return_origin_not_allowed"
+    resolved, error = _resolved_stripe_secrets(ctx)
+    if resolved is None:
+        return None, error
+    secret, binding_secret, webhook_secret = resolved
+    if not _stripe_runtime_proofs_match(
+        ctx,
+        plan_selector,
+        binding_secret,
+        webhook_secret,
+        binding_proof,
+        webhook_proof,
     ):
         return None, "stripe_runtime_stale"
     try:
@@ -563,6 +603,7 @@ def _runtime_inputs(
         return None, "stripe_credential_refused"
     if not secret_ref_allowed_for_origin(STRIPE_SECRET_REF, STRIPE_API_URL):
         return None, "stripe_origin_refused"
+    assert ctx.approvals is not None
     if not ctx.approvals.is_approved(
         STRIPE_API_URL,
         PAYMENTS_CHECKOUT_SERVICE_NAME,
@@ -572,50 +613,60 @@ def _runtime_inputs(
     return _StripeRuntimeInputs(config, secret, origin, binding_secret), ""
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate Stripe response key")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json(_value: str) -> Any:
+    raise ValueError("non-finite JSON")
+
+
+def _strict_json_object(content: bytes) -> dict[str, Any] | None:
+    try:
+        body = json.loads(
+            content.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_nonfinite_json,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _stripe_checkout_url_allowed(checkout_url: str) -> bool:
+    if any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in checkout_url):
+        return False
+    try:
+        parsed = urlsplit(checkout_url)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "checkout.stripe.com"
+        and port in {None, 443}
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path.startswith("/")
+    )
+
+
 def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
     if not 200 <= response.status_code < 300:
         return None
     media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if media_type != "application/json":
         return None
-
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError("duplicate Stripe response key")
-            result[key] = value
-        return result
-
-    def reject_constant(_value: str) -> Any:
-        raise ValueError("non-finite JSON")
-
-    try:
-        body = json.loads(
-            response.content.decode("utf-8"),
-            object_pairs_hook=reject_duplicates,
-            parse_constant=reject_constant,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
-        return None
-    if not isinstance(body, dict) or not isinstance(body.get("url"), str):
+    body = _strict_json_object(response.content)
+    if body is None or not isinstance(body.get("url"), str):
         return None
     checkout_url = body["url"]
-    if any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in checkout_url):
-        return None
-    try:
-        parsed = urlsplit(checkout_url)
-        port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme != "https"
-        or parsed.hostname != "checkout.stripe.com"
-        or port not in {None, 443}
-        or parsed.username is not None
-        or parsed.password is not None
-        or not parsed.path.startswith("/")
-    ):
+    if not _stripe_checkout_url_allowed(checkout_url):
         return None
     return checkout_url
 

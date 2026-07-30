@@ -52,9 +52,7 @@ def _store_unavailable(exc: RuntimeError) -> HTTPException:
     return HTTPException(status_code=503, detail={"reason": "quota_store_unavailable"})
 
 
-def make_quota_router(state: ConfigState) -> APIRouter:
-    router = APIRouter()
-
+def _register_quota_config_routes(router: APIRouter, state: ConfigState) -> None:
     @router.put("/api/quota/config/{audience}")
     async def configure_quota(
         audience: str,
@@ -123,6 +121,8 @@ def make_quota_router(state: ConfigState) -> APIRouter:
             raise HTTPException(status_code=404, detail={"reason": "quota_config_not_found"})
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
+def _register_quota_status_route(router: APIRouter, state: ConfigState) -> None:
     @router.get("/api/quota/status/{audience}")
     async def quota_status(
         audience: str,
@@ -172,6 +172,11 @@ def make_quota_router(state: ConfigState) -> APIRouter:
             ),
         )
 
+
+def make_quota_router(state: ConfigState) -> APIRouter:
+    router = APIRouter()
+    _register_quota_config_routes(router, state)
+    _register_quota_status_route(router, state)
     return router
 
 

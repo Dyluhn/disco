@@ -1865,7 +1865,7 @@
   {
     "id": "PY-0186",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/agent-server/src/disco/agent_server/auth.py:dispatch:222-311",
@@ -3539,7 +3539,7 @@
   {
     "id": "PY-0372",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/app-server/src/disco/app_server/routes/quota.py:make_quota_router:55-175",
@@ -3980,7 +3980,7 @@
   {
     "id": "PY-0421",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:validated_canonical_preview_url:264-325",
@@ -3989,7 +3989,7 @@
   {
     "id": "PY-0422",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:_is_generated_preview_label:400-424",
@@ -3998,7 +3998,7 @@
   {
     "id": "PY-0423",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:mint_intent:775-829",
@@ -4007,7 +4007,7 @@
   {
     "id": "PY-0424",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:redeem_intent:831-895",
@@ -4016,7 +4016,7 @@
   {
     "id": "PY-0425",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:_cap_from_payload:1044-1100",
@@ -4025,7 +4025,7 @@
   {
     "id": "PY-0426",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/auth.py:<module>:1-1100",
@@ -5879,7 +5879,7 @@
   {
     "id": "PY-0632",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/quota.py:SqliteQuotaStore:295-851",
@@ -5888,7 +5888,7 @@
   {
     "id": "PY-0633",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/quota.py:<module>:1-851",
@@ -6221,7 +6221,7 @@
   {
     "id": "PY-0670",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/stripe_host_service.py:_runtime_inputs:517-572",
@@ -6230,7 +6230,7 @@
   {
     "id": "PY-0671",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/stripe_host_service.py:_parse_stripe_checkout_url:575-620",

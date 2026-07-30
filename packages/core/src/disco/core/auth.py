@@ -10,60 +10,112 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import ipaddress
 import json
 import secrets
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
+from ._auth_origin_policy import _PREVIEW_HTTP_METHODS
+from ._auth_origin_policy import (
+    DEFAULT_LOCAL_PREVIEW_PORT_COUNT as DEFAULT_LOCAL_PREVIEW_PORT_COUNT,
+)
+from ._auth_origin_policy import (
+    DEFAULT_LOCAL_PREVIEW_PORT_START as DEFAULT_LOCAL_PREVIEW_PORT_START,
+)
+from ._auth_origin_policy import (
+    ISOLATED_PATH_PREVIEW_PREFIX as ISOLATED_PATH_PREVIEW_PREFIX,
+)
+from ._auth_origin_policy import (
+    LOCAL_PREVIEW_COOKIE_PREFIX as LOCAL_PREVIEW_COOKIE_PREFIX,
+)
+from ._auth_origin_policy import (
+    MAX_PREVIEW_TARGET_PATH_CHARS as MAX_PREVIEW_TARGET_PATH_CHARS,
+)
+from ._auth_origin_policy import (
+    PATH_PREVIEW_BOOTSTRAP_PATH as PATH_PREVIEW_BOOTSTRAP_PATH,
+)
+from ._auth_origin_policy import (
+    PATH_PREVIEW_HOST_PREFIX as PATH_PREVIEW_HOST_PREFIX,
+)
+from ._auth_origin_policy import (
+    PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS as PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS,
+)
+from ._auth_origin_policy import PREVIEW_APP_HTTP_METHODS as PREVIEW_APP_HTTP_METHODS
+from ._auth_origin_policy import PREVIEW_BOOTSTRAP_PATH as PREVIEW_BOOTSTRAP_PATH
+from ._auth_origin_policy import PREVIEW_COOKIE as PREVIEW_COOKIE
+from ._auth_origin_policy import allowed_frontend_origins as allowed_frontend_origins
+from ._auth_origin_policy import cookie_header_from_headers as cookie_header_from_headers
+from ._auth_origin_policy import cookie_header_values as cookie_header_values
+from ._auth_origin_policy import (
+    generated_preview_request_host as generated_preview_request_host,
+)
+from ._auth_origin_policy import (
+    local_preview_cookie_name as local_preview_cookie_name,
+)
+from ._auth_origin_policy import (
+    local_preview_gateway_host as local_preview_gateway_host,
+)
+from ._auth_origin_policy import (
+    local_preview_gateway_ports as local_preview_gateway_ports,
+)
+from ._auth_origin_policy import (
+    local_preview_origin_crosses_host as local_preview_origin_crosses_host,
+)
+from ._auth_origin_policy import (
+    localhost_auto_pair_allowed as localhost_auto_pair_allowed,
+)
+from ._auth_origin_policy import origin_allowed as origin_allowed
+from ._auth_origin_policy import (
+    origin_matches_request_host as origin_matches_request_host,
+)
+from ._auth_origin_policy import origin_permitted as origin_permitted
+from ._auth_origin_policy import (
+    path_preview_cookie_name as path_preview_cookie_name,
+)
+from ._auth_origin_policy import path_preview_host_label as path_preview_host_label
+from ._auth_origin_policy import request_traversed_proxy as request_traversed_proxy
+from ._auth_origin_policy import (
+    validated_canonical_preview_url as validated_canonical_preview_url,
+)
+from ._auth_origin_policy import (
+    validated_isolated_path_preview_url as validated_isolated_path_preview_url,
+)
 from .env import disco_env
 from .store.sqlite import DEFAULT_OWNER_ID
 
+# Preserve the historical public function identity across the private extraction.
+for _public_origin_policy in (
+    allowed_frontend_origins,
+    cookie_header_from_headers,
+    cookie_header_values,
+    generated_preview_request_host,
+    local_preview_cookie_name,
+    local_preview_gateway_host,
+    local_preview_gateway_ports,
+    local_preview_origin_crosses_host,
+    localhost_auto_pair_allowed,
+    origin_allowed,
+    origin_matches_request_host,
+    origin_permitted,
+    path_preview_cookie_name,
+    path_preview_host_label,
+    request_traversed_proxy,
+    validated_canonical_preview_url,
+    validated_isolated_path_preview_url,
+):
+    _public_origin_policy.__module__ = __name__
+del _public_origin_policy
+
 SESSION_COOKIE = "disco_session"
 CSRF_HEADER = "X-Disco-CSRF"
-PREVIEW_COOKIE = "disco_preview_cap"
-PREVIEW_BOOTSTRAP_PATH = "/__disco/preview-auth"
-PATH_PREVIEW_BOOTSTRAP_PATH = "/__disco/path-preview-auth"
-ISOLATED_PATH_PREVIEW_PREFIX = "/__disco/isolated-preview"
-PATH_PREVIEW_HOST_PREFIX = "p3s"
-PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS = 40
-LOCAL_PREVIEW_COOKIE_PREFIX = "disco_local_preview_"
-
-# DNS-free canonical Preview origins use a small, explicitly published loopback
-# listener pool. A durable lease gives one conversation one browser origin while
-# it is active. Each slot uses a distinct literal host in 127.0.0.0/8 as well as a
-# distinct port: browser cookies ignore ports, so 127.0.0.1 on many ports would
-# leak generated-app cookies between conversations. Literal loopback hosts need
-# no Firefox DNS preference. The gateway itself strips Disco cookies and exposes
-# no authenticated application routes.
-DEFAULT_LOCAL_PREVIEW_PORT_START = 19120
-DEFAULT_LOCAL_PREVIEW_PORT_COUNT = 32
 
 _DEFAULT_SESSION_TTL_S = 12 * 60 * 60
 _DEFAULT_PREVIEW_TTL_S = 15 * 60
 _DEFAULT_INTENT_TTL_S = 30
-MAX_PREVIEW_TARGET_PATH_CHARS = 4096
-PREVIEW_APP_HTTP_METHODS = ("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")
-_PREVIEW_HTTP_METHODS = frozenset(PREVIEW_APP_HTTP_METHODS)
 _DEV_SECRET = secrets.token_urlsafe(48)
-_DEFAULT_ALLOWED_ORIGINS = (
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://localhost:8800",
-    "http://127.0.0.1:8800",
-    # The compose self-host frontend (nginx :8088). Missing from this list, even
-    # the documented localhost quickstart had its API responses CORS-blocked —
-    # found live 2026-07-09 on the first browser test of a fresh compose deploy.
-    "http://localhost:8088",
-    "http://127.0.0.1:8088",
-)
 
 
 @dataclass(frozen=True)
@@ -94,480 +146,6 @@ class PreviewIntentRedemptionStore(Protocol):
     def register_preview_intent(self, jti: str, expires_at: int) -> None: ...
 
     def consume_preview_intent(self, jti: str, *, now: int) -> bool: ...
-
-
-def path_preview_cookie_name(cid8: str) -> str:
-    """Per-conversation name so concurrent isolated previews cannot clobber each other."""
-    normalized = "".join(ch for ch in cid8.lower() if ch in "0123456789abcdef")[:8]
-    if len(normalized) != 8:
-        raise ValueError("path preview cookie requires an eight-character hex id")
-    return f"disco_path_preview_{normalized}"
-
-
-def local_preview_cookie_name(listener_port: int) -> str:
-    """Cookie name scoped to one leased DNS-free Preview listener.
-
-    Cookies are not port-scoped. Encoding the listener in the name prevents two
-    concurrent per-conversation Preview origins on 127.0.0.1 from overwriting one
-    another's capability cookie.
-    """
-
-    if not 1 <= listener_port <= 65535:
-        raise ValueError("local preview listener port is invalid")
-    return f"{LOCAL_PREVIEW_COOKIE_PREFIX}{listener_port}"
-
-
-def local_preview_gateway_ports() -> tuple[int, ...]:
-    """Configured bounded listener pool for DNS-free local Preview origins."""
-
-    raw_start = disco_env("LOCAL_PREVIEW_PORT_START", str(DEFAULT_LOCAL_PREVIEW_PORT_START))
-    raw_count = disco_env("LOCAL_PREVIEW_PORT_COUNT", str(DEFAULT_LOCAL_PREVIEW_PORT_COUNT))
-    try:
-        start = int(raw_start or "")
-        count = int(raw_count or "")
-    except ValueError as exc:
-        raise ValueError("local preview port range must be numeric") from exc
-    # Rotation needs a second origin so generation N's capability cannot be
-    # silently reused for generation N+1 on the same browser origin.
-    if start < 1024 or count < 2 or count > 253 or start + count - 1 > 65535:
-        raise ValueError("local preview port range is outside the bounded user-port range")
-    return tuple(range(start, start + count))
-
-
-def local_preview_gateway_host(listener_port: int) -> str:
-    """Return the DNS-free, cookie-isolated loopback host for one listener slot."""
-
-    ports = local_preview_gateway_ports()
-    try:
-        slot = ports.index(listener_port)
-    except ValueError as exc:
-        raise ValueError("local preview listener is outside the configured pool") from exc
-    # .1 remains the ordinary UI/API loopback identity. Slots begin at .2 and
-    # the bounded pool cannot reach the broadcast-like .255 address.
-    return f"127.0.0.{slot + 2}"
-
-
-def cookie_header_values(cookie_header: str | None, name: str) -> tuple[str, ...]:
-    """Return every raw Cookie value for ``name`` without collapsing duplicates.
-
-    Generated child domains can set a Domain cookie whose name matches a
-    HostOnly signed cookie on the parent. Framework cookie mappings retain only
-    one duplicate, so authentication must validate every raw candidate.
-    Disco's signed values use an unquoted URL-safe alphabet.
-    """
-
-    if not cookie_header or not name:
-        return ()
-    values: list[str] = []
-    for part in cookie_header.split(";"):
-        raw_name, separator, value = part.strip().partition("=")
-        if separator and raw_name == name:
-            values.append(value)
-    return tuple(values)
-
-
-def cookie_header_from_headers(headers: Any) -> str | None:
-    """Preserve every ASGI Cookie field for duplicate-candidate validation.
-
-    HTTP/2 permits a user agent or intermediary to split Cookie across repeated
-    fields. Starlette's mapping-style ``get`` returns only one field, which can
-    hide a valid HostOnly signed value behind an attacker-controlled duplicate.
-    ``getlist`` is intentionally duck-typed so core remains framework-free.
-    """
-
-    getlist = getattr(headers, "getlist", None)
-    if callable(getlist):
-        listed: Any = getlist("cookie")
-        if isinstance(listed, (str, bytes)):
-            listed = (listed,)
-        values = [str(value) for value in listed if value]
-        if values:
-            return "; ".join(values)
-    get = getattr(headers, "get", None)
-    if callable(get):
-        value = get("cookie")
-        return str(value) if value else None
-    return None
-
-
-def path_preview_host_label(conversation_id: str, port: int) -> str:
-    """Return a DNS-safe path-preview label bound to the full conversation ID.
-
-    The first eight hex characters remain visible for the existing live-runtime
-    resolver. A 160-bit digest supplies the browser-origin identity; using only
-    the routing prefix would let distinct conversations share cookies/storage.
-    The longest valid port still leaves this label below DNS's 63-byte limit.
-    """
-
-    cid = conversation_id.removeprefix("conv_")
-    cid8 = cid[:8].lower()
-    if len(cid8) != 8 or any(ch not in "0123456789abcdef" for ch in cid8):
-        raise ValueError("path preview host requires an eight-character hex id")
-    if not 1 <= port <= 65535:
-        raise ValueError("path preview host requires a valid TCP port")
-    digest = hashlib.sha256(conversation_id.encode("utf-8")).hexdigest()[
-        :PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS
-    ]
-    return f"{PATH_PREVIEW_HOST_PREFIX}-{cid8}-{digest}-{port}"
-
-
-def validated_isolated_path_preview_url(
-    base_url: str,
-    conversation_id: str,
-    port: int,
-    bootstrap_url: str,
-) -> str | None:
-    """Validate a server-minted path-preview bootstrap and derive its content URL.
-
-    Capability consumers must never follow an arbitrary server response while holding
-    a one-time preview intent.  The bootstrap has to stay on the exact scheme/port and
-    full-conversation-bound p3s host derived from the trusted agent-server base URL.
-    Userinfo, query, and fragment data are forbidden so the intent remains body-only.
-    """
-
-    try:
-        base = urlsplit(base_url)
-        bootstrap = urlsplit(bootstrap_url)
-        cid8 = conversation_id.removeprefix("conv_")[:8]
-        label = path_preview_host_label(conversation_id, port)
-        base_hostname = (base.hostname or "").lower()
-        preview_base_hostname = (
-            "localhost" if base_hostname in {"127.0.0.1", "::1", "localhost"} else base_hostname
-        )
-        expected_hostname = f"{label}.{preview_base_hostname}"
-        if (
-            not cid8
-            or not base_hostname
-            or bootstrap.scheme != base.scheme
-            or (bootstrap.hostname or "").lower() != expected_hostname
-            or bootstrap.port != base.port
-            or bootstrap.path != f"{PATH_PREVIEW_BOOTSTRAP_PATH}/{cid8}"
-            or bootstrap.query
-            or bootstrap.fragment
-            or bootstrap.username is not None
-            or bootstrap.password is not None
-        ):
-            return None
-    except (ValueError, UnicodeError):
-        return None
-    return urlunsplit(
-        (
-            bootstrap.scheme,
-            bootstrap.netloc,
-            f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/",
-            "",
-            "",
-        )
-    )
-
-
-def validated_canonical_preview_url(
-    base_url: str,
-    conversation_id: str,
-    port: int,
-    bootstrap_url: str,
-) -> str | None:
-    """Validate a canonical Preview bootstrap and derive its bearer-free root URL.
-
-    Local deployments use one of the configured literal-loopback gateway listeners.
-    Remote deployments retain the exact configured isolated preview base (or the
-    trusted API host when no separate base is configured). The one-use intent is
-    always delivered in the POST body, never copied into the resulting URL.
-    """
-
-    try:
-        base = urlsplit(base_url)
-        bootstrap = urlsplit(bootstrap_url)
-        base_hostname = (base.hostname or "").lower().rstrip(".")
-        cid8 = conversation_id.removeprefix("conv_")[:8].lower()
-        if (
-            len(cid8) != 8
-            or any(ch not in "0123456789abcdef" for ch in cid8)
-            or not 1 <= port <= 65535
-            or not base_hostname
-            or bootstrap.path != PREVIEW_BOOTSTRAP_PATH
-            or bootstrap.query
-            or bootstrap.fragment
-            or bootstrap.username is not None
-            or bootstrap.password is not None
-        ):
-            return None
-
-        try:
-            local_base = (
-                base_hostname == "localhost" or ipaddress.ip_address(base_hostname).is_loopback
-            )
-        except ValueError:
-            local_base = False
-        bootstrap_hostname = (bootstrap.hostname or "").lower().rstrip(".")
-        configured = (disco_env("PREVIEW_ORIGIN_BASE", "") or "").strip()
-        if local_base and not configured:
-            listener_port = bootstrap.port
-            if (
-                bootstrap.scheme != "http"
-                or listener_port not in local_preview_gateway_ports()
-                or bootstrap_hostname != local_preview_gateway_host(listener_port)
-            ):
-                return None
-        else:
-            origin_base = urlsplit(configured) if configured else base
-            origin_hostname = (origin_base.hostname or "").lower().rstrip(".")
-            expected_hostname = f"p2-{cid8}-{port}.{origin_hostname}"
-            if (
-                not origin_hostname
-                or bootstrap.scheme != origin_base.scheme
-                or bootstrap_hostname != expected_hostname
-                or bootstrap.port != origin_base.port
-            ):
-                return None
-    except (ValueError, UnicodeError):
-        return None
-    return urlunsplit((bootstrap.scheme, bootstrap.netloc, "/", "", ""))
-
-
-def allowed_frontend_origins() -> tuple[str, ...]:
-    raw = disco_env("FRONTEND_ORIGINS", "")
-    if raw:
-        origins = [part.strip().rstrip("/") for part in raw.replace(",", " ").split()]
-        return tuple(origin for origin in origins if origin)
-    # Zero-config remote access: when the deployment declares its public UI URL
-    # (DISCO_PUBLIC_UI_URL — the same value the boot banner prints), that origin
-    # is allowed alongside the localhost defaults. Without this, a LAN/tailnet
-    # browser passes the env.js host derivation but then has every API response
-    # CORS-blocked — the second layer of the 2026-07-09 remote fresh-install bug.
-    public_ui = (disco_env("PUBLIC_UI_URL", "") or "").strip().rstrip("/")
-    if public_ui:
-        return (*_DEFAULT_ALLOWED_ORIGINS, public_ui)
-    return _DEFAULT_ALLOWED_ORIGINS
-
-
-def origin_allowed(origin: str | None) -> bool:
-    return bool(origin and origin.rstrip("/") in allowed_frontend_origins())
-
-
-def origin_matches_request_host(origin: str | None, request_host: str | None) -> bool:
-    """Same-origin check for the single-front-door deploy: nginx proxies BOTH
-    servers under the page's own origin and forwards the browser's Host header
-    untouched, so a legitimate request's Origin netloc EQUALS the request Host.
-    This is what makes any hostname (localhost, LAN IP, tailnet name, domain)
-    work with zero origin config. A cross-site page can't match: the browser
-    stamps ITS origin (attacker.example), which never equals the Host it posted
-    to. Non-browser clients can forge both headers, but they always could —
-    the session cookie remains the actual authentication; origin checks are the
-    CSRF layer. Netloc comparison is case-insensitive, scheme-agnostic."""
-    if not origin or not request_host:
-        return False
-    from urllib.parse import urlsplit
-
-    try:
-        netloc = urlsplit(origin.strip().rstrip("/")).netloc
-    except ValueError:
-        return False
-    return bool(netloc) and netloc.lower() == request_host.strip().lower()
-
-
-def origin_permitted(origin: str | None, request_host: str | None = None) -> bool:
-    """The general request-gating check: the static allowlist (split-origin dev
-    layout) OR the same-host front-door rule. NOT for the tokenless auto-pair /
-    pairing-token-fetch conveniences — those keep the STRICT allowlist so a DNS-
-    rebound page (whose Origin would match the rebound Host) can never reach the
-    credential-granting shortcuts."""
-    return origin_allowed(origin) or origin_matches_request_host(origin, request_host)
-
-
-def _origin_hostname(origin: str | None) -> str:
-    if not origin:
-        return ""
-    from urllib.parse import urlsplit
-
-    try:
-        return (urlsplit(origin.strip().rstrip("/")).hostname or "").lower()
-    except ValueError:
-        return ""
-
-
-def _request_hostname(request_host: str | None) -> str:
-    if not request_host:
-        return ""
-    from urllib.parse import urlsplit
-
-    try:
-        return (urlsplit(f"//{request_host.strip()}").hostname or "").lower()
-    except ValueError:
-        return ""
-
-
-def _is_generated_preview_label(label: str) -> bool:
-    """Recognize only hostname labels the live/path preview transports minted."""
-
-    def valid_port(value: str) -> bool:
-        return 2 <= len(value) <= 5 and value.isdigit() and 1 <= int(value) <= 65535
-
-    parts = label.split("-")
-    # Pre-p2 hosts are no longer served, but already-open generated pages must
-    # remain quarantined until they are closed or reloaded onto p2.
-    if len(parts) == 2:
-        cid8, port = parts
-        return len(cid8) == 8 and all(ch in "0123456789abcdef" for ch in cid8) and valid_port(port)
-    if len(parts) == 3 and parts[0] == "p2":
-        _family, cid8, port = parts
-        return len(cid8) == 8 and all(ch in "0123456789abcdef" for ch in cid8) and valid_port(port)
-    if len(parts) == 4 and parts[0] == PATH_PREVIEW_HOST_PREFIX:
-        _family, cid8, digest, port = parts
-        return (
-            len(cid8) == 8
-            and all(ch in "0123456789abcdef" for ch in cid8)
-            and len(digest) == PATH_PREVIEW_ORIGIN_DIGEST_HEX_CHARS
-            and all(ch in "0123456789abcdef" for ch in digest)
-            and valid_port(port)
-        )
-    return False
-
-
-def generated_preview_request_host(request_host: str | None) -> bool:
-    """True when a request Host starts with an exact generated preview label."""
-
-    hostname = _request_hostname(request_host).rstrip(".")
-    label, separator, _suffix = hostname.partition(".")
-    return bool(separator and _is_generated_preview_label(label))
-
-
-def _is_local_preview_hostname(hostname: str) -> bool:
-    """Whether a hostname can be used by the local path-preview transport.
-
-    Browsers accept the complete IPv4 loopback block, not only 127.0.0.1.  Keep
-    this predicate deliberately broader than the two aliases generated today so
-    a preview cannot escape its HostOnly quarantine cookie through another 127/8
-    spelling or a DNS name aimed at the privileged service.
-    """
-
-    normalized = hostname.rstrip(".")
-    if (
-        normalized == "localhost"
-        or normalized == "::1"
-        or normalized == "127"
-        or normalized.startswith("127.")
-    ):
-        return True
-    label, separator, suffix = normalized.partition(".")
-    if not separator or not (suffix == "localhost" or suffix.endswith(".localhost")):
-        return False
-    return _is_generated_preview_label(label)
-
-
-def local_preview_origin_crosses_host(origin: str | None, request_host: str | None) -> bool:
-    """Reject a local-preview browser origin targeting another hostname.
-
-    Local path previews use a full-conversation-bound ``p3s.*.localhost`` origin;
-    live previews use ``p2.*.localhost``. Cookies are HostOnly, while CORS
-    historically permits local aliases. Without this pre-auth check, generated
-    JavaScript can target the operator's original alias, regain its full session
-    cookie, and reach public credential grants or owner/admin APIs.
-
-    Different ports on the *same* hostname remain valid for the normal split
-    frontend/server development layout. A local preview origin targeting any
-    different hostname (including a DNS name resolving to loopback) is denied.
-    """
-
-    origin_hostname = _origin_hostname(origin)
-    if not _is_local_preview_hostname(origin_hostname):
-        return False
-    return origin_hostname != _request_hostname(request_host)
-
-
-_LOCALHOST_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"})
-
-
-def _is_localhost_origin(origin: str | None) -> bool:
-    return _origin_hostname(origin).rstrip(".") in _LOCALHOST_HOSTNAMES
-
-
-_LOOPBACK_BINDS = ("", "127.0.0.1", "localhost", "::1")
-
-
-def _local_bind_declared() -> bool:
-    """True when the deployment publishes its ports on loopback ONLY. The kernel
-    then guarantees no other machine can reach the ports at all, which is what
-    makes the localhost auto-pair below sound; anything else (0.0.0.0, a LAN IP)
-    is a DELIBERATE exposure and flips the token requirement back on.
-
-    Two layers of truth: `DISCO_BIND` is the compose HOST-port publish address —
-    when set (compose always passes it; default 127.0.0.1) it decides, because
-    the container-internal `DISCO_HOST` must be 0.0.0.0 for nginx to reach the
-    backend and says nothing about exposure. Without `DISCO_BIND` (a plain
-    host-process run) the server's own bind address `DISCO_HOST` (default
-    127.0.0.1) IS the exposure."""
-    bind = (disco_env("BIND", "") or "").strip()
-    if bind:
-        return bind in _LOOPBACK_BINDS
-    return (disco_env("HOST", "") or "").strip() in _LOOPBACK_BINDS
-
-
-# Headers that betray a reverse proxy / tunnel in front (ngrok, cloudflared,
-# CF Access, a hand-rolled nginx-with-XFF). The front-door nginx deliberately
-# forwards ONLY X-Forwarded-Proto — never these — so a genuinely-local browser
-# load carries none of them. Their PRESENCE means the request is exposed.
-_PROXY_HEADERS = (
-    "x-forwarded-for",
-    "x-forwarded-host",
-    "forwarded",
-    "cf-connecting-ip",
-    "x-real-ip",
-)
-
-
-def request_traversed_proxy(headers: Any) -> bool:
-    """True when a hop-revealing forwarding header is present — the signal that a
-    reverse proxy / tunnel sits in front of the front-door nginx (i.e. the deploy
-    is exposed, whatever its bind posture claims). Used to REFUSE the localhost
-    auto-pair on any proxied request. `headers` is any case-insensitive mapping
-    (Starlette Request/WebSocket .headers). A client that forges one of these
-    only causes a REFUSAL — fail-safe."""
-    get = getattr(headers, "get", None)
-    if get is None:
-        return False
-    return any(get(h) for h in _PROXY_HEADERS)
-
-
-def localhost_auto_pair_allowed(
-    origin: str | None, request_host: str | None, *, via_proxy: bool = False
-) -> bool:
-    """Zero-friction first run on the operator's own machine: allow a TOKENLESS
-    admin mint when ALL THREE hold —
-
-      1. The deployment is loopback-bound (`_local_bind_declared`): the ports
-         are kernel-unreachable from any other machine, so whoever reached them
-         is on this host (or came through a tunnel the operator opened).
-      2. The page is a localhost-family origin: the browser itself asserts it
-         loaded the app from this machine. A cross-site page (or a DNS-rebound
-         one) carries ITS OWN origin, never localhost.
-      3. Origin == request Host: it is THIS app's own front-door page pairing,
-         not some other local app on a different port riding the allowlist.
-
-    The containerized deploy can never use the TCP-peer loopback check (the
-    server sees the Docker gateway for everyone), so the bind posture stands in
-    as the unforgeable signal: a non-browser client that forges a localhost
-    Origin could only do so while already ON the machine — i.e. the operator.
-    `DISCO_AUTH_LOCAL_AUTO_PAIR` overrides explicitly (1 forces on, 0 off).
-
-    `via_proxy` (a forwarding header was present) hard-disables this: a tunnel /
-    reverse proxy in front means the loopback-bind premise no longer holds, so a
-    remote client forging a localhost Host must NOT slip through — require the
-    token instead. Residual footgun: a RAW TCP port-forward (`ssh -R`) of a
-    loopback-bound instance adds no headers and cannot be distinguished from a
-    local browser; that is a deliberate exposure — set DISCO_BIND or
-    DISCO_AUTH_LOCAL_AUTO_PAIR=0. (codex 2026-07-09)"""
-    override = (disco_env("AUTH_LOCAL_AUTO_PAIR", "") or "").strip().lower()
-    if override in {"0", "false", "no", "off"}:
-        return False
-    forced_on = override in {"1", "true", "yes", "on"}
-    # The proxy guard applies EVEN to the explicit force-on: if you front it with
-    # a proxy you are exposed, and the localhost shortcut has no meaning there.
-    if via_proxy:
-        return False
-    if not forced_on and not _local_bind_declared():
-        return False
-    return _is_localhost_origin(origin) and origin_matches_request_host(origin, request_host)
 
 
 def session_secret() -> str:
@@ -763,6 +341,119 @@ class SessionSigner:
         return bool(presented and hmac.compare_digest(session.csrf_token, presented.strip()))
 
 
+def _validated_preview_target(target_path: str, path_prefix: str) -> tuple[str, str]:
+    target = target_path if target_path.startswith("/") else f"/{target_path}"
+    prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+    if len(target) > MAX_PREVIEW_TARGET_PATH_CHARS:
+        raise ValueError("preview target path is too long")
+    if not urlsplit(target).path.startswith(prefix):
+        raise ValueError("preview target must be inside its capability prefix")
+    return target, prefix
+
+
+def _validated_preview_methods(http_methods: tuple[str, ...]) -> tuple[str, ...]:
+    methods = tuple(dict.fromkeys(method.upper() for method in http_methods))
+    if not methods or any(method not in _PREVIEW_HTTP_METHODS for method in methods):
+        raise ValueError("invalid preview HTTP method scope")
+    return methods
+
+
+def _validate_preview_identity(
+    authority_id: str | None,
+    immutable_version: int | None,
+) -> None:
+    if authority_id is not None and (not authority_id or len(authority_id) > 256):
+        raise ValueError("invalid preview authority")
+    if immutable_version is not None and (
+        not isinstance(immutable_version, int)
+        or isinstance(immutable_version, bool)
+        or immutable_version < 1
+    ):
+        raise ValueError("invalid immutable preview version")
+
+
+def _intent_target_path(target: str) -> str:
+    try:
+        return urlsplit(target).path
+    except ValueError:
+        return ""
+
+
+def _intent_scope_matches(
+    cap: PreviewCapability,
+    target: str,
+    *,
+    cid8: str,
+    port: int,
+    expected_prefix: str,
+) -> bool:
+    return (
+        cap.conversation_id.removeprefix("conv_")[:8] == cid8
+        and cap.port == int(port)
+        and target.startswith("/")
+        and cap.path_prefix == expected_prefix
+        and _intent_target_path(target).startswith(expected_prefix)
+    )
+
+
+def _intent_static_host_matches(
+    cap: PreviewCapability,
+    *,
+    path_scope: Literal["host", "static"],
+    request_host_label: str | None,
+) -> bool:
+    if path_scope != "static":
+        return True
+    try:
+        expected_label = path_preview_host_label(cap.conversation_id, cap.port)
+    except ValueError:
+        return False
+    return bool(
+        request_host_label
+        and hmac.compare_digest(expected_label, request_host_label.strip().lower())
+    )
+
+
+def _intent_identity_matches(
+    cap: PreviewCapability,
+    *,
+    expected_conversation_id: str | None,
+    expected_owner_id: str | None,
+    expected_authority_id: str | None,
+) -> bool:
+    if expected_conversation_id is not None and cap.conversation_id != expected_conversation_id:
+        return False
+    if expected_owner_id is not None and cap.owner_id != expected_owner_id:
+        return False
+    return expected_authority_id is None or cap.authority_id == expected_authority_id
+
+
+def _valid_preview_authority(value: Any) -> bool:
+    return value is None or isinstance(value, str) and bool(value) and len(value) <= 256
+
+
+def _valid_immutable_version(value: Any) -> bool:
+    return value is None or isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _normalized_capability_methods(payload: dict[str, Any]) -> tuple[str, ...] | None:
+    methods = payload.get("methods")
+    if methods is None and isinstance(payload.get("method"), str):
+        methods = [payload["method"]]
+    if (
+        not isinstance(methods, list)
+        or not methods
+        or not all(isinstance(method, str) for method in methods)
+    ):
+        return None
+    normalized = tuple(dict.fromkeys(method.upper() for method in methods))
+    if len(normalized) != len(methods):
+        return None
+    if any(method not in _PREVIEW_HTTP_METHODS for method in normalized):
+        return None
+    return normalized
+
+
 class PreviewCapabilitySigner:
     def __init__(
         self,
@@ -785,23 +476,9 @@ class PreviewCapabilitySigner:
         authority_id: str | None = None,
         immutable_version: int | None = None,
     ) -> str:
-        target = target_path if target_path.startswith("/") else f"/{target_path}"
-        prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
-        if len(target) > MAX_PREVIEW_TARGET_PATH_CHARS:
-            raise ValueError("preview target path is too long")
-        if not urlsplit(target).path.startswith(prefix):
-            raise ValueError("preview target must be inside its capability prefix")
-        methods = tuple(dict.fromkeys(method.upper() for method in http_methods))
-        if not methods or any(method not in _PREVIEW_HTTP_METHODS for method in methods):
-            raise ValueError("invalid preview HTTP method scope")
-        if authority_id is not None and (not authority_id or len(authority_id) > 256):
-            raise ValueError("invalid preview authority")
-        if immutable_version is not None and (
-            not isinstance(immutable_version, int)
-            or isinstance(immutable_version, bool)
-            or immutable_version < 1
-        ):
-            raise ValueError("invalid immutable preview version")
+        target, prefix = _validated_preview_target(target_path, path_prefix)
+        methods = _validated_preview_methods(http_methods)
+        _validate_preview_identity(authority_id, immutable_version)
         now = int(time.time())
         store = self._redemption_store
         if store is None:
@@ -850,44 +527,34 @@ class PreviewCapabilitySigner:
         intent_payload = self._codec.unsign(intent)
         if intent_payload is None or intent_payload.get("kind") != "preview_intent":
             return None
-        cap = self._cap_from_payload(intent_payload, kind="preview_intent")
         target = intent_payload.get("target")
+        cap = self._cap_from_payload(intent_payload, kind="preview_intent")
+        if cap is None or not isinstance(target, str):
+            return None
         expected_prefix = (
             "/"
             if path_scope == "host"
             else f"{ISOLATED_PATH_PREVIEW_PREFIX}/{cap.conversation_id}/"
-            if cap is not None
-            else ""
         )
-        try:
-            target_path = urlsplit(target).path if isinstance(target, str) else ""
-        except ValueError:
-            target_path = ""
-        static_host_matches = path_scope != "static"
-        if cap is not None and path_scope == "static":
-            try:
-                expected_label = path_preview_host_label(cap.conversation_id, cap.port)
-            except ValueError:
-                expected_label = ""
-            static_host_matches = bool(
-                request_host_label
-                and hmac.compare_digest(expected_label, request_host_label.strip().lower())
-            )
-        if (
-            cap is None
-            or cap.conversation_id.removeprefix("conv_")[:8] != cid8
-            or cap.port != int(port)
-            or not isinstance(target, str)
-            or not target.startswith("/")
-            or cap.path_prefix != expected_prefix
-            or not target_path.startswith(expected_prefix)
-            or not static_host_matches
-            or (
-                expected_conversation_id is not None
-                and cap.conversation_id != expected_conversation_id
-            )
-            or (expected_owner_id is not None and cap.owner_id != expected_owner_id)
-            or (expected_authority_id is not None and cap.authority_id != expected_authority_id)
+        if not _intent_scope_matches(
+            cap,
+            target,
+            cid8=cid8,
+            port=port,
+            expected_prefix=expected_prefix,
+        ):
+            return None
+        if not _intent_static_host_matches(
+            cap,
+            path_scope=path_scope,
+            request_host_label=request_host_label,
+        ):
+            return None
+        if not _intent_identity_matches(
+            cap,
+            expected_conversation_id=expected_conversation_id,
+            expected_owner_id=expected_owner_id,
+            expected_authority_id=expected_authority_id,
         ):
             return None
         if not self._consume_intent(intent_payload):
@@ -1047,7 +714,6 @@ class PreviewCapabilitySigner:
         owner = payload.get("owner")
         cid = payload.get("cid")
         port = payload.get("port")
-        methods = payload.get("methods")
         prefix = payload.get("prefix")
         exp = payload.get("exp")
         allow_websocket = payload.get("ws", False)
@@ -1055,38 +721,20 @@ class PreviewCapabilitySigner:
         immutable_version = payload.get("version")
         if not isinstance(owner, str) or not isinstance(cid, str):
             return None
-        if not isinstance(prefix, str):
-            return None
-        if not isinstance(port, int) or not isinstance(exp, int):
+        if not isinstance(prefix, str) or not isinstance(port, int) or not isinstance(exp, int):
             return None
         if not isinstance(allow_websocket, bool):
             return None
-        if authority_id is not None and (
-            not isinstance(authority_id, str) or not authority_id or len(authority_id) > 256
-        ):
+        if not _valid_preview_authority(authority_id):
             return None
-        if immutable_version is not None and (
-            not isinstance(immutable_version, int)
-            or isinstance(immutable_version, bool)
-            or immutable_version < 1
-        ):
+        if not _valid_immutable_version(immutable_version):
+            return None
+        normalized_methods = _normalized_capability_methods(payload)
+        if normalized_methods is None:
             return None
         # Short-lived pre-upgrade GET-only cookies remain readable during a
         # rolling deploy, but newly minted tokens always carry the explicit,
         # bounded method list. No legacy token can gain mutation authority.
-        if methods is None and isinstance(payload.get("method"), str):
-            methods = [payload["method"]]
-        if (
-            not isinstance(methods, list)
-            or not methods
-            or not all(isinstance(method, str) for method in methods)
-        ):
-            return None
-        normalized_methods = tuple(dict.fromkeys(method.upper() for method in methods))
-        if len(normalized_methods) != len(methods) or any(
-            method not in _PREVIEW_HTTP_METHODS for method in normalized_methods
-        ):
-            return None
         return PreviewCapability(
             owner,
             cid,
