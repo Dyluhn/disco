@@ -6,16 +6,33 @@ ports, and graceful URL degradation.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import inspect
-import re
 import socket
-import time
-from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
+from _preview_manager_fakes import (  # noqa: E402
+    _DependencySession,
+    _FakeSandbox,
+    _FakeSessions,
+    _ForeignNamespaceOwnerSandbox,
+    _ForeignOwnerSandbox,
+    _HostExecSandbox,
+    _LifecycleMutationSession,
+    _manager_fixture,
+    _manufacture_server_side_time_wait,
+    _mgr,
+    _NeverReadSession,
+    _OurOwnerSandbox,
+    _sealed_contract_with_cwd,
+    _SocketOccupiedSandbox,
+    _StalePreviewSandbox,
+    _StaticServingSandbox,
+    _TrackedSandbox,
+    _UnattributedSharedSandbox,
+    _UnlockedSession,
+    _ViteSessions,
+)
 from disco.agent_server.preview_manager import (
     NoPreviewPortAvailableError,
     PreviewManager,
@@ -25,104 +42,8 @@ from disco.agent_server.preview_manager import (
 )
 from disco.agent_server.preview_projection import (
     ActiveLivePreviewProjection,
-    SealedPreviewRuntimeContract,
 )
 from disco.agent_server.preview_service import PreviewService
-
-_PORT_RE = re.compile(r"(?:http\.server\s+|--port[= ]|-p[= ]|PORT=)(\d+)")
-
-
-@dataclass
-class _View:
-    running: bool
-    output: str
-
-
-class _FakeSessions:
-    """Minimal ShellSessionManager stand-in: tracks which named sessions are 'running'
-    and which ports are 'serving'. `exec` simulates a server binding the platform port."""
-
-    def __init__(self, serving: set[int]) -> None:
-        self.namespace = ""
-        self._serving = serving
-        self._running: dict[str, bool] = {}
-        self._name_port: dict[str, int] = {}
-        self._logs: dict[str, str] = {}
-        self.exec_calls: list[tuple[str, str, str | None]] = []
-        self.stop_server_calls: list[tuple[str, str, int]] = []
-
-    @staticmethod
-    def _port_of(command: str) -> int | None:
-        m = _PORT_RE.search(command)
-        return int(m.group(1)) if m else None
-
-    async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
-        self.exec_calls.append((name, command, exec_dir))
-        port = self._port_of(command)
-        if port is not None:
-            self._name_port[name] = port
-            self._serving.add(port)  # server bound the platform port
-        self._running[name] = True
-        self._logs[name] = f"$ {command}\nServing on port {port}\n"
-
-    async def view(self, name: str, tail_chars: int = 2000) -> _View:
-        return _View(running=self._running.get(name, False), output=self._logs.get(name, ""))
-
-    async def kill_foreground(self, name: str) -> str:
-        self._running[name] = False
-        port = self._name_port.get(name)
-        if port is not None:
-            self._serving.discard(port)
-        return f"killed {name}"
-
-    async def stop_foreground_server(
-        self, name: str, *, expected_command: str, expected_port: int
-    ) -> str:
-        self.stop_server_calls.append((name, expected_command, expected_port))
-        return await self.kill_foreground(name)
-
-    # test-only crash injector
-    def crash(self, name: str) -> None:
-        self._running[name] = False
-        port = self._name_port.get(name)
-        if port is not None:
-            self._serving.discard(port)
-
-
-class _FakeSandbox:
-    """SandboxSession-shaped fake exposing exactly the surface PreviewManager uses."""
-
-    def __init__(self, *, backend_name: str = "gvisor", can_expose: bool = True) -> None:
-        self.backend_name = backend_name
-        self.id = "sbx_preview_manager_test"
-        self.generation = 1
-        self.workspace_path = "/workspace"
-        self._serving: set[int] = set()
-        self.sessions = _FakeSessions(self._serving)
-        self._can_expose = can_expose
-
-    def expose_port(self, port: int) -> str | None:
-        # Routing is independent of health; a backend that can't route returns None.
-        if not self._can_expose:
-            return None
-        return f"http://preview.test/{port}/"
-
-    async def fetch_inside(self, port: int, path: str, *, timeout_s: int = 5):
-        if port in self._serving:
-            return (200, b"<html></html>", "text/html")
-        return None
-
-    async def exec_shell(self, command: str, *, timeout_s: int = 5):
-        assert command == "pwd"
-        return SimpleNamespace(exit_code=0, stdout="/workspace\n", stderr="")
-
-
-def _mgr(sandbox: _FakeSandbox, **kw) -> PreviewManager:
-    # interval 0 / a single health attempt → deterministic + instant
-    kw.setdefault("health_attempts", 1)
-    kw.setdefault("health_interval_s", 0.0)
-    return PreviewManager(sandbox, **kw)
-
 
 # --------------------------------------------------------------------------- north star
 
@@ -154,24 +75,6 @@ def test_node_dependency_lifecycle_comes_from_typed_preview_intent(
 
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_uses_the_single_immutable_lockfile() -> None:
-    class _DependencySession:
-        def __init__(self) -> None:
-            self.files = {
-                "package.json": b'{"dependencies":{"vite":"1.0.0"}}',
-                "package-lock.json": b"{}",
-            }
-            self.commands: list[str] = []
-
-        async def read_file(self, path: str) -> bytes:
-            return self.files[path]
-
-        async def file_exists(self, path: str) -> bool:
-            return path in self.files
-
-        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
-            self.commands.append(command)
-            self.files["node_modules"] = b"directory-marker"
-            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
 
     session = _DependencySession()
     contract = SimpleNamespace(command=None, framework="vite", cwd=None)
@@ -184,13 +87,6 @@ async def test_sealed_node_dependency_restore_uses_the_single_immutable_lockfile
 
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_refuses_unlocked_graph() -> None:
-    class _UnlockedSession:
-        async def read_file(self, path: str) -> bytes:
-            assert path == "package.json"
-            return b'{"devDependencies":{"vite":"latest"}}'
-
-        async def file_exists(self, path: str) -> bool:
-            return False
 
     with pytest.raises(RuntimeError, match="exactly one supported immutable lockfile"):
         await PreviewService._prepare_sealed_node_dependencies(
@@ -201,26 +97,8 @@ async def test_sealed_node_dependency_restore_refuses_unlocked_graph() -> None:
 
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_honors_workspace_relative_cwd() -> None:
-    class _DependencySession:
-        def __init__(self) -> None:
-            self.files = {
-                "web/package.json": b'{"devDependencies":{"vite":"1.0.0"}}',
-                "web/package-lock.json": b"{}",
-            }
-            self.commands: list[str] = []
 
-        async def read_file(self, path: str) -> bytes:
-            return self.files[path]
-
-        async def file_exists(self, path: str) -> bool:
-            return path in self.files
-
-        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
-            self.commands.append(command)
-            self.files["web/node_modules"] = b"directory-marker"
-            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
-
-    session = _DependencySession()
+    session = _DependencySession("web/")
     dependency_dir = await PreviewService._prepare_sealed_node_dependencies(
         session,
         SimpleNamespace(command=None, framework="vite", cwd="/workspace/web"),
@@ -228,36 +106,6 @@ async def test_sealed_node_dependency_restore_honors_workspace_relative_cwd() ->
 
     assert dependency_dir == "web/node_modules"
     assert session.commands == ["npm --prefix ./web ci --no-audit --no-fund"]
-
-
-def _sealed_contract_with_cwd(cwd: str | None) -> SealedPreviewRuntimeContract:
-    projection = ActiveLivePreviewProjection(
-        projection_id="pv_" + "a" * 32,
-        session_name="sealed-web",
-        port=3000,
-        launch_kind="custom",
-        intent_digest="b" * 64,
-        sandbox_instance_id="sbx-recorded",
-        sandbox_generation=1,
-        source_action_id="evt-action",
-        source_action_seq=1,
-        source_observation_id="evt-observation",
-        source_observation_seq=2,
-    )
-    return SealedPreviewRuntimeContract(
-        contract_id="sealed-preview:" + "c" * 64,
-        conversation_id="conv-sealed",
-        version_seq=3,
-        tree_digest="d" * 64,
-        terminal_seq=4,
-        app_entry="index.html",
-        projection=projection,
-        session_name="sealed-web",
-        serve_dir=None,
-        command="python3 server.py",
-        framework=None,
-        cwd=cwd,
-    )
 
 
 def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
@@ -274,9 +122,6 @@ def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
 @pytest.mark.parametrize("cwd", ("/etc", "../web", "web/../../escape", " web"))
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_rejects_cwd_outside_workspace(cwd: str) -> None:
-    class _NeverReadSession:
-        async def read_file(self, path: str) -> bytes:
-            raise AssertionError(f"unsafe cwd reached workspace read: {path}")
 
     with pytest.raises(RuntimeError, match="workspace|POSIX"):
         await PreviewService._prepare_sealed_node_dependencies(
@@ -292,41 +137,6 @@ async def test_post_install_restore_removes_script_mutations_but_keeps_dependenc
         ("web/package-lock.json", b"sealed-lock"),
         ("web/src/main.ts", b"sealed-source"),
     )
-
-    class _LifecycleMutationSession:
-        def __init__(self) -> None:
-            self.files = {
-                "web/package.json": b"mutated-by-lifecycle-script",
-                "web/package-lock.json": b"sealed-lock",
-                "web/src/main.ts": b"mutated-by-lifecycle-script",
-                "web/generated-foreign.js": b"foreign",
-                "web/node_modules/vite/package.json": b"installed",
-                "root-foreign.txt": b"foreign",
-            }
-            self.staged: dict[str, bytes] = {}
-
-        async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
-            if "mv -- web/node_modules .disco-preview-dependencies-" in command:
-                self.staged = {
-                    path.removeprefix("web/node_modules/"): data
-                    for path, data in self.files.items()
-                    if path.startswith("web/node_modules/")
-                }
-                self.files.clear()
-            elif command.startswith("mkdir -p -- web"):
-                self.files.update(
-                    {f"web/node_modules/{path}": data for path, data in self.staged.items()}
-                )
-                self.staged.clear()
-            else:  # pragma: no cover - command drift should fail loudly
-                raise AssertionError(command)
-            return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
-
-        async def write_file(self, path: str, data: bytes) -> None:
-            self.files[path] = data
-
-        async def read_file(self, path: str) -> bytes:
-            return self.files[path]
 
     session = _LifecycleMutationSession()
     await PreviewService._replace_with_sealed_workspace(
@@ -348,15 +158,13 @@ async def test_post_install_restore_removes_script_mutations_but_keeps_dependenc
 async def test_port_is_platform_allocated_not_model_supplied() -> None:
     """_allocate_port is THE single place a port is chosen — verify it draws from the
     curated pool and the model never feeds in."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173, 8080])
     assert await mgr._allocate_port() == 3000  # first of the platform pool
 
 
 @pytest.mark.asyncio
 async def test_start_allocates_url_from_platform() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(serve_dir="dist", supervise=False)
     assert session.status is PreviewStatus.RUNNING
     assert session.port == 3000  # platform chose it
@@ -373,8 +181,7 @@ async def test_start_allocates_url_from_platform() -> None:
 async def test_model_cannot_override_port_via_command() -> None:
     """Even if a model jams a port into a raw command, the platform port wins and the
     model's port is scrubbed out."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command="npm run dev --port 9999", supervise=False)
     assert session.port == 3000  # platform pool, NOT 9999
     assert "9999" not in session.command  # the model's port was scrubbed
@@ -390,16 +197,6 @@ async def test_framework_adapter_binds_explicit_vite_script_to_platform_port() -
     adapter must therefore add Vite's own CLI binding and retain framework/HMR
     authority; otherwise the process serves 5173 while canonical Preview owns 3000.
     """
-
-    class _ViteSessions(_FakeSessions):
-        async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
-            self.exec_calls.append((name, command, exec_dir))
-            match = re.search(r"--port[= ](\d+)", command)
-            port = int(match.group(1)) if match else 5173
-            self._name_port[name] = port
-            self._serving.add(port)
-            self._running[name] = True
-            self._logs[name] = f"$ {command}\nVite serving on port {port}\n"
 
     sandbox = _FakeSandbox()
     sandbox.sessions = _ViteSessions(sandbox._serving)
@@ -433,8 +230,7 @@ async def test_configured_runtime_adapts_project_script(
     framework: str,
     binding: str,
 ) -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
 
     session = await mgr.start(
         command="npm run develop",
@@ -448,8 +244,7 @@ async def test_configured_runtime_adapts_project_script(
 
 @pytest.mark.asyncio
 async def test_custom_and_unknown_runtime_commands_remain_flexible() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
 
     custom = await mgr.start(
         command="python3 server.py",
@@ -472,8 +267,7 @@ async def test_custom_and_unknown_runtime_commands_remain_flexible() -> None:
 
 @pytest.mark.asyncio
 async def test_explicit_framework_port_placeholder_is_not_duplicated() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
 
     session = await mgr.start(
         command="npm run dev -- --port {port}",
@@ -488,8 +282,7 @@ async def test_explicit_framework_port_placeholder_is_not_duplicated() -> None:
 
 @pytest.mark.asyncio
 async def test_two_previews_get_distinct_ports_without_model_choosing() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173, 8080])
     a = await mgr.start(serve_dir="api", name="api", supervise=False)
     b = await mgr.start(serve_dir="web", name="web", supervise=False)
     assert a.port != b.port
@@ -500,8 +293,7 @@ async def test_two_previews_get_distinct_ports_without_model_choosing() -> None:
 
 @pytest.mark.asyncio
 async def test_restart_canonical_reuses_exact_stored_intent() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     original = await mgr.start(command="node server.js", name="preview", supervise=False)
     original_intent = dict(original.intent)
     original_projection = original.projection_id
@@ -526,8 +318,7 @@ async def test_restart_canonical_reuses_exact_stored_intent() -> None:
 async def test_restart_canonical_recovers_dead_transitional_process(
     state: PreviewStatus,
 ) -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(command="node server.js", name="preview", supervise=False)
     sandbox.sessions.crash(session.name)
     session.status = state
@@ -548,8 +339,7 @@ async def test_restart_canonical_without_accepted_intent_fails_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_sealed_restore_revalidates_raw_intent_and_binds_fresh_generation() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     expected_intent = {
         "serve_dir": None,
         "command": "python3 server.py",
@@ -584,8 +374,7 @@ async def test_sealed_restore_revalidates_raw_intent_and_binds_fresh_generation(
 
 @pytest.mark.asyncio
 async def test_sealed_binding_fails_closed_after_intent_or_sandbox_identity_changes() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     expected_intent = {
         "serve_dir": None,
         "command": "python3 server.py",
@@ -619,8 +408,7 @@ async def test_sealed_binding_fails_closed_after_intent_or_sandbox_identity_chan
 
 @pytest.mark.asyncio
 async def test_start_is_idempotent() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     first = await mgr.start(serve_dir="dist", name="app", supervise=False)
     second = await mgr.start(serve_dir="dist", name="app", supervise=False)
     assert first is second
@@ -631,8 +419,7 @@ async def test_start_is_idempotent() -> None:
 
 @pytest.mark.asyncio
 async def test_active_projection_matches_only_the_original_live_generation() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(command="python3 server.py", supervise=False)
     data = session.to_dict()
     projection = ActiveLivePreviewProjection(
@@ -663,8 +450,7 @@ async def test_active_projection_matches_only_the_original_live_generation() -> 
 
 @pytest.mark.asyncio
 async def test_active_projection_is_revoked_by_automatic_process_restart() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(command="python3 server.py", supervise=True)
     data = session.to_dict()
     projection = ActiveLivePreviewProjection(
@@ -696,8 +482,7 @@ async def test_active_projection_is_revoked_by_automatic_process_restart() -> No
 @pytest.mark.asyncio
 async def test_canonical_selection_tracks_explicit_success_and_falls_back() -> None:
     """H333: canonical routing follows the newest successful explicit selection."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     api = await mgr.start(serve_dir="api", name="api", supervise=False)
     web = await mgr.start(serve_dir="web", name="web", supervise=False)
     assert mgr.canonical_port() == web.port == 5173
@@ -715,8 +500,7 @@ async def test_canonical_selection_tracks_explicit_success_and_falls_back() -> N
 
 @pytest.mark.asyncio
 async def test_crashed_newest_selection_never_substitutes_older_healthy_app() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     older = await mgr.start(serve_dir="older", name="older", supervise=False)
     newest = await mgr.start(serve_dir="newest", name="newest", supervise=False)
 
@@ -731,8 +515,7 @@ async def test_crashed_newest_selection_never_substitutes_older_healthy_app() ->
 
 @pytest.mark.asyncio
 async def test_reload_strategy_comes_from_authoritative_launch_intent() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173, 8080])
 
     vite = await mgr.start(framework="vite", name="vite", supervise=False)
     node = await mgr.start(framework="node", name="node", supervise=False)
@@ -749,8 +532,7 @@ async def test_reload_strategy_comes_from_authoritative_launch_intent() -> None:
 @pytest.mark.asyncio
 async def test_delayed_health_activates_newest_explicit_canonical_selection() -> None:
     """A STARTING explicit selection becomes canonical when supervision proves health."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     first = await mgr.start(serve_dir="first", name="first", supervise=False)
     assert mgr.canonical_port() == first.port == 3000
 
@@ -778,8 +560,7 @@ async def test_delayed_health_activates_newest_explicit_canonical_selection() ->
 
 @pytest.mark.asyncio
 async def test_status_logs_stop() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=False)
 
     status = await mgr.status("app")
@@ -798,8 +579,7 @@ async def test_status_logs_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_restart_on_crash() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app")  # supervised
     original_projection_id = session.projection_id
     assert session.status is PreviewStatus.RUNNING
@@ -821,8 +601,7 @@ async def test_restart_on_crash() -> None:
 
 @pytest.mark.asyncio
 async def test_restart_budget_exhausts_to_crashed() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=True)
 
     # Make every restart fail to bring the port back up (server is hard-broken).
@@ -844,8 +623,7 @@ async def test_restart_budget_exhausts_to_crashed() -> None:
 async def test_never_healthy_startup_failure_is_not_silently_retried() -> None:
     """H319: one broken start must not become four hidden process launches."""
 
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
 
     async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
         sandbox.sessions.exec_calls.append((name, command, exec_dir))
@@ -867,8 +645,7 @@ async def test_never_healthy_startup_failure_is_not_silently_retried() -> None:
 
 @pytest.mark.asyncio
 async def test_explicit_start_recovers_never_healthy_session_after_repair() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     working_exec = sandbox.sessions.exec
 
     async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
@@ -895,8 +672,7 @@ async def test_explicit_start_recovers_never_healthy_session_after_repair() -> N
 async def test_explicit_recovery_revalidates_and_replaces_failed_command() -> None:
     """H319: a same-name repair must execute current intent, not stale intent."""
 
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
 
     async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
         sandbox.sessions.exec_calls.append((name, command, exec_dir))
@@ -928,8 +704,7 @@ async def test_explicit_recovery_revalidates_and_replaces_failed_command() -> No
 
 @pytest.mark.asyncio
 async def test_explicit_start_recovers_exhausted_session_and_resets_budget_on_health() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=False)
     sandbox.sessions.crash("app")
     session.status = PreviewStatus.CRASHED
@@ -946,8 +721,7 @@ async def test_explicit_start_recovers_exhausted_session_and_resets_budget_on_he
 
 @pytest.mark.asyncio
 async def test_failed_explicit_exhausted_recovery_does_not_rearm_supervisor() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=True)
 
     async def _exec_exits(name, command, exec_dir):  # noqa: ANN001
@@ -977,8 +751,7 @@ async def test_failed_explicit_exhausted_recovery_does_not_rearm_supervisor() ->
 async def test_live_crashed_recovery_does_not_stage_unlaunched_command() -> None:
     """A CRASHED label on a live process cannot mutate its launch generation."""
 
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(
         command="python3 -m http.server {port} -d original",
         name="app",
@@ -1019,8 +792,7 @@ async def test_live_but_unhealthy_session_is_not_restarted(state: PreviewStatus)
     or misclassified as CRASHED — for ANY non-terminal state, not just RUNNING. The
     previous guard only spared RUNNING, so STARTING/UNAVAILABLE/RESTARTING sessions got
     a spurious restart (re-exec into a busy shell → CRASHED → restart budget burned)."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=True)
     assert session.status is PreviewStatus.RUNNING
 
@@ -1044,8 +816,7 @@ async def test_live_but_unhealthy_session_is_not_restarted(state: PreviewStatus)
 async def test_restart_budget_decrements_only_on_genuine_process_exit() -> None:
     """The supervisor spends a restart ONLY when the process has actually exited. An
     alive-but-unhealthy pass leaves the budget intact; a genuine exit then restarts."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=True)
 
     # Alive but not answering → no restart, budget intact.
@@ -1076,8 +847,7 @@ async def test_start_refresh_does_not_restart_crashed_but_live_session() -> None
     Reproduces codex's exact scenario: status=CRASHED, restart_count=1, _session_alive
     True → after start(), exec_calls unchanged and restart_count unchanged.
     """
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     session = await mgr.start(serve_dir="dist", name="app", supervise=False)
     assert session.status is PreviewStatus.RUNNING
 
@@ -1116,8 +886,7 @@ async def test_graceful_url_degrade_when_backend_cannot_expose() -> None:
 
 @pytest.mark.asyncio
 async def test_port_pool_exhaustion_raises() -> None:
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000])
+    sandbox, mgr = _manager_fixture(port_pool=[3000])
     await mgr.start(serve_dir="a", name="a", supervise=False)
     with pytest.raises(NoPreviewPortAvailableError):
         await mgr.start(serve_dir="b", name="b", supervise=False)
@@ -1159,8 +928,7 @@ async def test_raw_command_binding_a_hardcoded_port_is_rejected(command: str) ->
     """P1 #1: a raw command that binds a MODEL-chosen port through a form the flag-scrub
     can't override is REJECTED — the platform must own the port, so the manager refuses to
     launch a server on a port it doesn't control (rather than believing it owns another)."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     with pytest.raises(PreviewCommandError):
         await mgr.start(command=command, supervise=False)
     assert mgr.list() == []  # nothing registered; no port leaked
@@ -1171,8 +939,7 @@ async def test_raw_command_port_placeholder_is_filled_with_platform_port() -> No
     """P1 #1 escape hatch: a raw command may declare WHERE the port goes with the literal
     `{port}` placeholder — the platform fills it with ITS allocated port (never the
     model's), so positional-port servers stay platform-owned."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command="python3 -m http.server {port} -d dist", supervise=False)
     assert session.port == 3000
     assert "http.server 3000" in session.command
@@ -1194,8 +961,7 @@ async def test_placeholder_with_extra_hardcoded_port_is_rejected(command: str) -
     but a SECOND, hardcoded/positional port alongside it would still bind a model-chosen
     port the platform doesn't own. The hardcoded-port rejection runs even on the placeholder
     path, so such a command is REFUSED (it can no longer slip past by also carrying `{port}`)."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     with pytest.raises(PreviewCommandError):
         await mgr.start(command=command, supervise=False)
     assert mgr.list() == []  # nothing registered; no port leaked, port 9999 never bound
@@ -1232,8 +998,7 @@ async def test_raw_command_with_shell_operator_is_rejected(command: str) -> None
     """Grammar restriction: any shell control / chaining / background / pipe / substitution
     operator (or newline) refuses the command at the root — killing the chained/backgrounded
     second-listener smuggle vector before any detection regex has to win."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     with pytest.raises(PreviewCommandError):
         await mgr.start(command=command, supervise=False)
     assert mgr.list() == []  # nothing registered; no port leaked, 4321 never bound
@@ -1244,8 +1009,7 @@ async def test_positional_port_after_flags_is_rejected() -> None:
     """The half of the smuggle the flag-scrub regex missed on its own: a port sitting
     positionally AFTER flags (`http.server --bind 0.0.0.0 4321 -d dist`). shlex tokenizing
     sees 4321 as a bare positional port (not a flag value) and rejects it."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     cmd = "python3 -m http.server --bind 0.0.0.0 4321 -d dist"
     with pytest.raises(PreviewCommandError):
         await mgr.start(command=cmd, supervise=False)
@@ -1255,8 +1019,7 @@ async def test_positional_port_after_flags_is_rejected() -> None:
 @pytest.mark.asyncio
 async def test_clean_single_foreground_placeholder_command_works() -> None:
     """The sanctioned form passes untouched: one foreground command with `{port}`."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command="python3 -m http.server {port} -d dist", supervise=False)
     assert session.status is PreviewStatus.RUNNING
     assert session.port == 3000
@@ -1268,8 +1031,7 @@ async def test_numeric_flag_value_is_not_misread_as_port() -> None:
     """A numeric token following a flag is that flag's VALUE, not a port: a legit
     `uvicorn app:app --port {port} --workers 4` is accepted (4 is `--workers`'s value),
     and the platform port is placed via the placeholder."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command="uvicorn app:app --port {port} --workers 4", supervise=False)
     assert session.status is PreviewStatus.RUNNING
     assert session.port == 3000
@@ -1300,8 +1062,7 @@ async def test_quoted_or_joined_concrete_port_flag_is_scrubbed_to_platform_port(
     past it — AND past the positional-port rejection (after shlex the value is the flag's
     token, not a bare integer). Handling the scrub on the shlex'd ARGV TOKENS normalizes every
     form, so each model-chosen port is dropped and only the PLATFORM port is bound."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command=command, supervise=False)
     assert session.port == 3000  # platform pool, NOT 8000
     assert "8000" not in session.command  # the model's port was scrubbed in every form
@@ -1328,8 +1089,7 @@ async def test_port_placeholder_in_every_flag_form_is_filled_with_platform_port(
     in EVERY normalized form (space / `=`-joined / directly-joined, long or short flag): it
     is kept and filled with the PLATFORM port, never dropped — so a server that reads the
     port off argv (not env) still gets the platform's port."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command=command, supervise=False)
     assert session.port == 3000
     assert expect in session.command  # placeholder filled with the platform port
@@ -1341,8 +1101,7 @@ async def test_port_placeholder_in_every_flag_form_is_filled_with_platform_port(
 async def test_quoted_concrete_port_with_workers_keeps_workers_drops_port() -> None:
     """A real mixed command: a quoted concrete `--port` is dropped while a legit
     `--workers N` survives — proving the scrub is flag-specific, not a blanket digit purge."""
-    sandbox = _FakeSandbox()
-    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    sandbox, mgr = _manager_fixture(port_pool=[3000, 5173])
     session = await mgr.start(command='uvicorn app:app --port "8000" --workers 4', supervise=False)
     assert session.port == 3000
     assert "8000" not in session.command
@@ -1352,30 +1111,6 @@ async def test_quoted_concrete_port_with_workers_keeps_workers_drops_port() -> N
 
 
 # ---------------------------------------------- P1 #1/#2: post-launch port ownership
-
-
-class _Owner:
-    def __init__(self, pid: int | None, session: str | None) -> None:
-        self.pid = pid
-        self.session = session
-
-
-class _ForeignOwnerSandbox(_FakeSandbox):
-    """The allocated port is answered by the LEGACY auto-preview's session, never ours."""
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        if port in self._serving:
-            return _Owner(pid=4242, session="disco-preview")  # auto-preview, name 'preview'
-        return _Owner(pid=None, session=None)
-
-
-class _OurOwnerSandbox(_FakeSandbox):
-    """The allocated port is owned by THIS preview's shell session (`disco-<name>`)."""
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        if port in self._serving:
-            return _Owner(pid=10, session="disco-app")
-        return _Owner(pid=None, session=None)
 
 
 @pytest.mark.asyncio
@@ -1416,17 +1151,6 @@ async def test_owned_port_is_marked_running() -> None:
     assert session.url == "http://preview.test/3000/"
 
 
-class _ForeignNamespaceOwnerSandbox(_FakeSandbox):
-    """Another CONVERSATION's preview (different namespace, SAME common name `preview`)
-    answers on the allocated port — `disco-othercid-preview`, not this session's
-    `disco-preview`."""
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        if port in self._serving:
-            return _Owner(pid=4242, session="disco-othercid-preview")
-        return _Owner(pid=None, session=None)
-
-
 @pytest.mark.asyncio
 async def test_foreign_namespace_owner_with_same_name_is_not_misattributed() -> None:
     """P1 #2: a different conversation's `disco-othercid-preview` ends in `-preview`, so a
@@ -1454,17 +1178,6 @@ async def test_foreign_namespace_owner_with_same_name_is_not_misattributed() -> 
 @pytest.mark.asyncio
 async def test_shared_host_unattributed_listener_cannot_certify_preview() -> None:
     """A host PID with no conversation session is foreign until proven otherwise."""
-
-    class _UnattributedSharedSandbox(_FakeSandbox):
-        shares_host_network = True
-
-        def __init__(self) -> None:
-            super().__init__(backend_name="process")
-
-        async def port_owner(self, port: int):  # noqa: ANN201
-            if port in self._serving:
-                return _Owner(pid=7331, session=None)
-            return _Owner(pid=None, session=None)
 
     sandbox = _UnattributedSharedSandbox()
     sandbox._serving.add(39011)
@@ -1503,15 +1216,6 @@ def test_owner_match_requires_full_exact_session_identity() -> None:
 # ----------------------------------------- P1 #2: allocation skips already-claimed ports
 
 
-class _TrackedSandbox(_FakeSandbox):
-    def __init__(self, tracked: set[int], **kw) -> None:
-        super().__init__(**kw)
-        self._tracked = set(tracked)
-
-    def tracked_ports(self) -> list[int]:
-        return sorted(self._tracked)
-
-
 @pytest.mark.asyncio
 async def test_allocation_skips_port_tracked_by_sandbox() -> None:
     """P1 #2: a port the SANDBOX already tracks as a service (the legacy auto-preview on
@@ -1530,19 +1234,6 @@ async def test_allocation_skips_port_with_live_listener() -> None:
     sandbox._serving.add(3000)  # a real listener already owns 3000
     mgr = _mgr(sandbox, port_pool=[3000, 5173])
     assert await mgr._allocate_port() == 5173  # 3000 skipped (live listener)
-
-
-class _SocketOccupiedSandbox(_FakeSandbox):
-    """Ports can be occupied even when they do not answer HTTP health."""
-
-    def __init__(self, occupied: set[int]) -> None:
-        super().__init__()
-        self.occupied = set(occupied)
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        if port in self.occupied:
-            return _Owner(pid=9000 + port, session="foreign-daemon")
-        return _Owner(pid=None, session=None)
 
 
 @pytest.mark.asyncio
@@ -1591,64 +1282,6 @@ async def test_default_shared_host_pool_supports_more_than_four_concurrent_manag
     finally:
         for manager in managers:
             await manager.aclose()
-
-
-class _HostExecSandbox(_FakeSandbox):
-    """Process-backend-shaped fake that REALLY executes shell probes on the host
-    (the process backend's sandbox IS the host), so the bind test's kernel
-    semantics — TIME_WAIT ghosts vs live listeners — are exercised for real.
-    `port_owner` deliberately sees nothing either way: the kernel-level bind
-    test must be the deciding authority even in an attribution blind spot."""
-
-    def __init__(self) -> None:
-        super().__init__(backend_name="process")
-        self.shares_host_network = True
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        return _Owner(pid=None, session=None)
-
-    async def exec_shell(self, command: str, *, timeout_s: int = 5):
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return SimpleNamespace(
-            exit_code=proc.returncode, stdout=stdout.decode(), stderr=stderr.decode()
-        )
-
-
-def _manufacture_server_side_time_wait() -> int:
-    """Create the exact kernel state a torn-down sibling preview leaves behind:
-    the server side actively closes first (http.server per-request close; node
-    keepAliveTimeout), then the listener goes away. Only a TIME_WAIT ghost
-    remains on the port — no listener, no owner, no lease."""
-    for _ in range(10):
-        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
-        port = srv.getsockname()[1]
-        cli = socket.create_connection(("127.0.0.1", port), timeout=5)
-        conn, _ = srv.accept()
-        conn.close()  # server actively closes first → server-side TIME_WAIT
-        cli.settimeout(5)
-        with contextlib.suppress(OSError):
-            cli.recv(1)
-        cli.close()
-        srv.close()  # listener gone; only the ghost remains
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            try:
-                probe.bind(("0.0.0.0", port))
-            except OSError:
-                probe.close()
-                return port  # strict bind refuses ⇒ the ghost is present
-            probe.close()
-            time.sleep(0.02)
-    pytest.skip("kernel did not exhibit a TIME_WAIT ghost")
 
 
 @pytest.mark.asyncio
@@ -1720,35 +1353,6 @@ async def test_shared_host_port_lease_closes_cross_process_allocation_race() -> 
     await third.aclose()
 
 
-class _StalePreviewSessions(_FakeSessions):
-    def __init__(self, serving: set[int], stale: dict[int, str]) -> None:
-        super().__init__(serving)
-        self._stale = stale
-        self.kill_calls: list[str] = []
-
-    async def kill_foreground(self, name: str) -> str:
-        self.kill_calls.append(name)
-        full = f"disco-{name}"
-        for port, session in list(self._stale.items()):
-            if session == full:
-                del self._stale[port]
-                self._serving.discard(port)
-        return await super().kill_foreground(name)
-
-
-class _StalePreviewSandbox(_FakeSandbox):
-    def __init__(self) -> None:
-        super().__init__()
-        self._stale = {3000: "disco-old"}
-        self.sessions = _StalePreviewSessions(self._serving, self._stale)
-
-    async def port_owner(self, port: int):  # noqa: ANN201
-        session = self._stale.get(port)
-        if session is not None:
-            return _Owner(pid=4321, session=session)
-        return _Owner(pid=None, session=None)
-
-
 @pytest.mark.asyncio
 async def test_allocation_reclaims_stale_same_conversation_preview() -> None:
     """PORT-FIX: if a stopped preview from this manager leaked its server, reclaim it
@@ -1787,61 +1391,6 @@ async def test_start_coordinates_auto_preview_standdown() -> None:
 
 
 # ----------------------------------------------------- P1 #3: static serve_dir path
-
-
-class _StaticServingSessions:
-    """Simulates `python3 -m http.server <port> -d <dir>` launched from `exec_dir`,
-    resolving the served root the way a real shell would (so `-d dist` from a `dist`
-    cwd would serve `dist/dist` — the exact P1 #3 bug)."""
-
-    def __init__(self) -> None:
-        self.namespace = ""
-        self._running: dict[str, bool] = {}
-        self.port_root: dict[int, str] = {}
-
-    async def exec(self, name: str, command: str, exec_dir: str | None) -> None:
-        import posixpath
-
-        m = re.search(r"http\.server\s+(\d+)\s+-d\s+(\S+)", command)
-        assert m is not None
-        port, d = int(m.group(1)), m.group(2)
-        base = exec_dir or "/"
-        root = d if d.startswith("/") else posixpath.normpath(posixpath.join(base, d))
-        self.port_root[port] = root
-        self._running[name] = True
-
-    async def view(self, name: str, tail_chars: int = 2000) -> _View:
-        return _View(self._running.get(name, False), "")
-
-    async def kill_foreground(self, name: str) -> str:
-        self._running[name] = False
-        return "killed"
-
-
-class _StaticServingSandbox:
-    def __init__(self, files: set[str]) -> None:
-        self.backend_name = "gvisor"
-        self.workspace_path = "/workspace"
-        self.sessions = _StaticServingSessions()
-        self._files = files
-
-    def expose_port(self, port: int) -> str | None:
-        return f"http://preview.test/{port}/"
-
-    async def fetch_inside(self, port: int, path: str, *, timeout_s: int = 5):  # noqa: ANN201
-        import posixpath
-
-        root = self.sessions.port_root.get(port)
-        if root is None:
-            return None
-        target = (
-            posixpath.join(root, "index.html")
-            if path in ("", "/")
-            else (posixpath.normpath(posixpath.join(root, path.lstrip("/"))))
-        )
-        if target in self._files:
-            return (200, b"<h1>hi</h1>", "text/html")
-        return (404, b"Not Found", "text/plain")  # http.server answers, but wrong tree
 
 
 @pytest.mark.asyncio

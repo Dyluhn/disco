@@ -816,12 +816,10 @@ class SandboxSession:
             except Exception:  # noqa: BLE001 — teardown remains best-effort
                 _LOG.debug("kernel shutdown on session destroy failed", exc_info=True)
         # Close a cached PreviewManager so its supervisor task can't outlive the sandbox.
-        mgr, self._preview_manager = getattr(self, "_preview_manager", None), None
+        mgr = self._preview_manager
         if mgr is not None:
-            try:
-                await mgr.aclose()
-            except Exception:  # noqa: BLE001 — teardown is best-effort; never raise
-                _LOG.debug("preview manager aclose on destroy failed", exc_info=True)
+            await mgr.aclose()
+            self._preview_manager = None
         # Cancel the auto-preview task first so it can't race the instance teardown.
         task, self._preview_task = self._preview_task, None
         if task is not None and not task.done():
@@ -830,9 +828,11 @@ class SandboxSession:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
                 pass
-        inst, self._instance = self._instance, None
+        # Retain the instance owner until backend destruction is confirmed.
+        inst = self._instance
         if inst is not None:
             await inst.destroy()
+            self._instance = None
 
 
 # Structural conformance: a SandboxSession IS a SandboxInstance (drop-in for the
