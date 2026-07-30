@@ -7,6 +7,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import httpx
+import pytest
 from disco.agent_server.routes.conversations import make_conversations_router
 from disco.agent_server.routes.preview import make_preview_router
 from disco.agent_server.runtime import ConversationRuntime
@@ -25,6 +26,17 @@ from disco.tools.sandbox.base import ExecResult
 from fastapi import FastAPI
 
 CID = "conv_versions"
+
+
+@pytest.fixture(autouse=True)
+def _deploy_lock_dir(tmp_path, monkeypatch):
+    """The host default deploy-lock path lives under /home, which is a symlink on
+    this host. The process fence correctly rejects symlinked ancestors; point it
+    at a fresh directory under the tmp_path so the interprocess mutation fence
+    used by workspace restore can acquire its lock."""
+    lock_dir = tmp_path / "deploy-locks"
+    lock_dir.mkdir(mode=0o700, exist_ok=True)
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(lock_dir))
 
 
 class _MemorySession:
@@ -140,7 +152,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert current is not None
 
     session = _MemorySession({"index.html": b"new", "stale.txt": b"delete me"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
     app = _conversation_app(store, rt)
 
     transport = httpx.ASGITransport(app=app)
@@ -202,9 +214,9 @@ async def test_restore_preserves_current_host_owned_deployment_record(tmp_path: 
     )
     assert ps.cut_verified_version(CID, trigger="turn") is not None
     session = _MemorySession({"index.html": b"current"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
 
-    result = await rt.restore_workspace_version(CID, old.seq)
+    result = await rt._workspace.restore_version(CID, old.seq)
 
     assert session.files == {"index.html": b"old"}
     assert (ps.path_for(CID) / record_path).read_bytes() == b"host-signed-record"
@@ -224,7 +236,7 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
     assert old is not None
 
     session = _MemorySession({"index.html": b"new"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
     await rt._lifecycle.commit_finished_workspace(
         CID,
@@ -260,18 +272,31 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
         assert verified.read_bytes("index.html") == b"old"
 
 
-class _PreviewRuntime:
+class _PreviewProjects:
+    """Expose the same _projects.current_project_store() seam the product
+    preview route reads via runtime._projects.current_project_store()."""
+
     def __init__(self, ps: ProjectStore) -> None:
         self._ps = ps
+
+    def current_project_store(self) -> ProjectStore:
+        return self._ps
+
+
+class _PreviewRuntime:
+    """Minimal runtime stub for preview-route tests: exposes the concrete owner
+    seams (``_projects``, ``_preview``) the product route reads, preserving the
+    same access path as ``ConversationRuntime``."""
+
+    def __init__(self, ps: ProjectStore) -> None:
+        self._projects = _PreviewProjects(ps)
+        self._preview = self
 
     async def wake_for_preview(self, cid8: str, port: int) -> str | None:
         return None
 
     def live_session(self, conversation_id: str):
         return None
-
-    def project_store(self) -> ProjectStore:
-        return self._ps
 
 
 async def test_preview_version_query_serves_version_bytes(tmp_path: Path) -> None:

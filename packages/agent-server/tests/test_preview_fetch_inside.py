@@ -39,6 +39,7 @@ class _FakeRuntime:
 
     def __init__(self, session: _FakeSession | None, *, target_port: int = 8000) -> None:
         self._session = session
+        self._preview = self
         self._target_port = target_port
         self.wake_calls: list[tuple[str, int]] = []
 

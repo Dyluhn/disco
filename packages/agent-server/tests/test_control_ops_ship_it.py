@@ -13,25 +13,23 @@ the old execution state or the complete planning ingress, never the new
 instruction under the old tool scope. The guard is a no-op when the conversation
 is NOT FINISHED.
 
-Exercised against the real ControlOps + WorkspaceCoordinator + event store (the
-``test_run_status_authority.py::_Runtime`` faithful-double pattern), asserting
-the observable event log rather than superseded mock bookkeeping. The old
-two-step replan (``_loop_for(cid).enter_planning`` + ``record_run_intent_locked``)
-was folded into the atomic ingress and is proven dead here.
+Exercised against the production ConversationRuntime owner graph, real
+ControlOps, WorkspaceCoordinator, and event store. Only the run-controller
+methods are spied.
+
+Assertions stay on observable effects and calls. This proves the superseded
+two-step replan path is dead.
 """
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server.control_ops import ControlOps, _is_ship_it_intent
-from disco.agent_server.lifecycle_command_service import LifecycleCommandService
-from disco.agent_server.run_registry import CancellationRegistry, LoopRegistry
-from disco.agent_server.workspace_service import WorkspaceCoordinator
+from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -57,64 +55,25 @@ def _deploy_lock_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
 
 
-class _Runtime:
-    """Faithful runtime double for ControlOps.request_plan: a REAL
-    WorkspaceCoordinator over a real event store, plus trackable kick/_loop_for
-    spies. Mirrors test_run_status_authority.py::_Runtime and the real
-    ConversationRuntime wiring — workspace_lock -> coordinator.lock, and
-    _BUILD_LIKE_SURFACES == {"build", "agent"} (runtime.py:1142). Because the
-    ingress runs the production coordinator, assertions read the real event log,
-    not mock bookkeeping."""
-
-    _BUILD_LIKE_SURFACES = frozenset({"build", "agent"})
-
-    def __init__(self, store: SqliteEventStore, project_store: ProjectStore) -> None:
-        self._store = store
-        self._project_store = project_store
-        self._tasks: dict[str, Any] = {}
-        self._settings = MagicMock()
-        self._settings._surface_of.return_value = "build"
-        self._workspace = WorkspaceCoordinator(self)
-        self._lifecycle_commands = LifecycleCommandService(
-            store=store,
-            fence=self._workspace,
-            terminal_effects=MagicMock(),
-        )
-        self.kick = MagicMock()
-        self._loop_for = MagicMock()
-        self._loop_for.return_value.enter_planning = AsyncMock()
-
-    def _surface_of(self, conversation_id: str) -> str:
-        return "build"
-
-    def _project_store_now(self) -> ProjectStore:
-        return self._project_store
-
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._workspace.lock(conversation_id)
-
-
 # ---- helpers -----------------------------------------------------------------
 
 
-def _make_rt(store: SqliteEventStore, tmp_path: Path) -> _Runtime:
-    """Faithful runtime: real store + real WorkspaceCoordinator, trackable
-    kick/_loop_for spies. A replan lands observable events in `store`."""
-    return _Runtime(store, ProjectStore(str(tmp_path / "projects")))
+def _make_rt(store: SqliteEventStore, tmp_path: Path) -> ConversationRuntime:
+    """Use the production owner graph with observable run-controller seams."""
 
-
-def _make_ops(runtime: _Runtime) -> ControlOps:
-    controller = MagicMock()
-    controller.kick = runtime.kick
-    controller.loop_for = runtime._loop_for
-    return ControlOps(
-        runtime._store,
-        runtime._workspace,
-        LoopRegistry(),
-        CancellationRegistry(),
-        controller,
-        MagicMock(),
+    runtime = ConversationRuntime(store)
+    runtime._settings._set_surface(CID, "build")
+    runtime._projects.current_project_store = MagicMock(
+        return_value=ProjectStore(str(tmp_path / "projects"))
     )
+    runtime._run_controller.kick = MagicMock()
+    runtime._run_controller.loop_for = MagicMock()
+    runtime._run_controller.loop_for.return_value.enter_planning = AsyncMock()
+    return runtime
+
+
+def _make_ops(runtime: ConversationRuntime) -> ControlOps:
+    return runtime._control
 
 
 async def _finished_conversation(store: SqliteEventStore) -> None:
@@ -149,7 +108,7 @@ def _planning_statuses(events: list[Any]) -> list[StatusEvent]:
 
 
 async def _assert_replan_landed(
-    rt: _Runtime,
+    rt: ConversationRuntime,
     store: SqliteEventStore,
     *,
     text: str,
@@ -169,7 +128,9 @@ async def _assert_replan_landed(
     state = await store.get_state(CID)
 
     # Exactly one kick, carrying the new user turn's seq.
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=claimed_user_seq)
+    rt._run_controller.kick.assert_called_once_with(
+        CID, claimed_user_seq=claimed_user_seq
+    )
 
     # The conversation is now RUNNING (planning), not its prior state.
     assert state.execution_status == ConversationStatus.RUNNING
@@ -197,8 +158,8 @@ async def _assert_replan_landed(
     assert echoes[0].seq > max((e.seq or 0 for e in events_before), default=0)
 
     # The superseded two-step replan (_loop_for(...).enter_planning) is dead.
-    rt._loop_for.assert_not_called()
-    rt._loop_for.return_value.enter_planning.assert_not_awaited()
+    rt._run_controller.loop_for.assert_not_called()
+    rt._run_controller.loop_for.return_value.enter_planning.assert_not_awaited()
 
 
 # ---- _is_ship_it_intent unit tests ------------------------------------------
@@ -290,9 +251,9 @@ async def test_ship_it_post_finish_appends_message_no_planning_status(tmp_path: 
     assert not plan_events, "no PlanEvent on ship-it path"
 
     # The replan machinery must NOT have been engaged.
-    rt._loop_for.assert_not_called()
-    rt._loop_for.return_value.enter_planning.assert_not_awaited()
-    rt.kick.assert_not_called()
+    rt._run_controller.loop_for.assert_not_called()
+    rt._run_controller.loop_for.return_value.enter_planning.assert_not_awaited()
+    rt._run_controller.kick.assert_not_called()
 
 
 async def test_ship_it_case_insensitive(tmp_path: Path) -> None:
@@ -307,7 +268,7 @@ async def test_ship_it_case_insensitive(tmp_path: Path) -> None:
     state = await store.get_state(CID)
     assert state.execution_status == ConversationStatus.FINISHED
     assert not _run_intents(await store.get_events(CID))
-    rt.kick.assert_not_called()
+    rt._run_controller.kick.assert_not_called()
 
 
 async def test_ship_it_all_stop_phrases_skip_replan(tmp_path: Path) -> None:
@@ -332,11 +293,11 @@ async def test_ship_it_all_stop_phrases_skip_replan(tmp_path: Path) -> None:
 
         await ops.request_plan(CID, phrase)
 
-        rt.kick.assert_not_called()
+        rt._run_controller.kick.assert_not_called()
         assert not _run_intents(await store.get_events(CID)), (
             f"no run-intent marker may land for phrase {phrase!r}"
         )
-        rt._loop_for.return_value.enter_planning.assert_not_awaited()
+        rt._run_controller.loop_for.return_value.enter_planning.assert_not_awaited()
 
 
 async def test_mid_sentence_stop_phrase_still_replans(tmp_path: Path) -> None:
@@ -427,7 +388,7 @@ async def test_replan_ingress_is_atomic_no_orphan_kick(
 
     after = await store.get_events(CID)
     state = await store.get_state(CID)
-    rt.kick.assert_not_called()
+    rt._run_controller.kick.assert_not_called()
     assert [e.id for e in after] == [e.id for e in before], "nothing partial may land"
     assert state.execution_status == ConversationStatus.FINISHED
     assert not _planning_statuses(after)

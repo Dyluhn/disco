@@ -64,7 +64,7 @@ class RunController:
 
         self._supervisor.create_task(
             conversation_id,
-            resolve_loop(),
+            resolve_loop,
             claimed_user_seq=claimed_user_seq,
         )
 
@@ -85,12 +85,12 @@ class RunController:
     ) -> tuple[RunTask, int]:
         if (loop is None) == (loop_factory is None):
             raise ValueError("provide exactly one of loop or loop_factory")
-        selected: AgentLoop | Awaitable[AgentLoop]
+        selected: AgentLoop | Callable[[], Awaitable[AgentLoop]]
         if loop is not None:
             selected = loop
         else:
             assert loop_factory is not None
-            selected = loop_factory()
+            selected = loop_factory
         return self._supervisor.create_task(
             conversation_id,
             selected,

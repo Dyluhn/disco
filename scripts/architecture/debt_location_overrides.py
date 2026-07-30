@@ -61,26 +61,26 @@ CURRENT_LOCATION_OVERRIDES = {
     ),
     "PY-0233": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "PreviewService:48-816"
+        "PreviewService:64-762"
     ),
     "PY-0234": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "_prepare_sealed_node_dependencies:313-380"
+        "_prepare_sealed_node_dependencies:264-331"
     ),
     "PY-0235": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "_replace_with_sealed_workspace:383-483"
+        "_replace_with_sealed_workspace:334-434"
     ),
     "PY-0236": (
-        "packages/agent-server/src/disco/agent_server/preview_service.py:preview:556-661"
+        "packages/agent-server/src/disco/agent_server/preview_service.py:preview:506-610"
     ),
     "PY-0237": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "ensure_preview:663-816"
+        "ensure_preview:612-762"
     ),
     "PY-0238": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "ensure_preview:663-816"
+        "ensure_preview:612-762"
     ),
     "PY-0251": (
         "packages/agent-server/src/disco/agent_server/routes/deck_editor.py:"
@@ -196,43 +196,43 @@ CURRENT_LOCATION_OVERRIDES = {
     ),
     "PY-0347": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "WorkspacePersistence:291-1256"
+        "WorkspacePersistence:267-1155"
     ),
     "PY-0348": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_commit_finished_workspace_locked:521-711"
+        "_commit_finished_workspace_locked:420-610"
     ),
     "PY-0349": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_commit_finished_workspace_locked:521-711"
+        "_commit_finished_workspace_locked:420-610"
     ),
     "PY-0350": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_do_recover_finalization_journals:724-867"
+        "_do_recover_finalization_journals:623-766"
     ),
     "PY-0351": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_do_recover_finalization_journals:724-867"
+        "_do_recover_finalization_journals:623-766"
     ),
     "PY-0352": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_do_capture_workspace:888-1045"
+        "_do_capture_workspace:787-944"
     ),
     "PY-0353": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_do_capture_workspace:888-1045"
+        "_do_capture_workspace:787-944"
     ),
     "PY-0354": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_do_maybe_synthesize_app_deliverable:1114-1179"
+        "_do_maybe_synthesize_app_deliverable:1013-1078"
     ),
     "PY-0355": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "_trusted_verified_app_entry:1182-1237"
+        "_trusted_verified_app_entry:1081-1136"
     ),
     "PY-0356": (
         "packages/agent-server/src/disco/agent_server/workspace_persistence.py:"
-        "<module>:1-1256"
+        "<module>:1-1155"
     ),
     "PY-0357": (
         "packages/agent-server/src/disco/agent_server/workspace_service.py:"

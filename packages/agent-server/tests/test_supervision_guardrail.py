@@ -9,6 +9,7 @@ prove it WORKS; this proves it can't be quietly deleted.)
 from __future__ import annotations
 
 import inspect
+from unittest.mock import MagicMock
 
 import pytest
 from disco.agent_server.run_controller import RunController
@@ -22,6 +23,27 @@ def test_kick_wires_the_supervision_callback():
     assert "add_done_callback" in src, "kick() must register a done-callback on the loop task"
     assert "on_task_done" in src, "kick() must route task completion through the supervisor"
     assert "_supervisor.create_task" in inspect.getsource(RunController.kick)
+
+
+def test_kick_defers_resolver_creation_to_the_supervised_task():
+    registry = MagicMock()
+    registry.active_task.return_value = None
+    supervisor = MagicMock()
+    controller = RunController(
+        registry,
+        supervisor,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
+
+    controller.kick("conv_deferred")
+
+    resolver = supervisor.create_task.call_args.args[1]
+    assert callable(resolver)
+    assert not inspect.isawaitable(resolver)
 
 
 def test_supervisor_terminalizes_to_error():

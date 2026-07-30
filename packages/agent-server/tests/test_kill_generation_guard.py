@@ -289,7 +289,8 @@ async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
     assert _killed_detail_present(await store.get_events(CID))
 
 
-async def test_kill_accepts_current_durable_target_despite_stale_local_generation() -> None:
+async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> None:
+    """A generation recheck cannot veto an otherwise-current durable target."""
     store = SqliteEventStore(":memory:")
     await _seed(store)
     rt = _runtime(store)

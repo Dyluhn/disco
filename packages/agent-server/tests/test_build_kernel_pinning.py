@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from disco.agent_server.build_kernel import BuildKernel
+from disco.agent_server.build_kernel import BuildKernel, select_kernel
 from disco.agent_server.run_registry import KernelPinRegistry
 from disco.agent_server.run_supervisor import (
     _KERNEL_UNPIN_STATUSES,
@@ -27,7 +27,6 @@ from disco.core import (
 )
 
 CID = "conv-pin-test"
-
 
 @pytest.fixture
 def store() -> SqliteEventStore:
@@ -94,6 +93,18 @@ def test_start_routes_to_kick_and_pins(store: SqliteEventStore) -> None:
     runtime.start(CID)
     runtime._run_controller.kick.assert_called_once_with(CID)
     assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
+
+
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+def test_legacy_kernel_values_pin_disco(
+    legacy: str,
+    store: SqliteEventStore,
+) -> None:
+    runtime = _runtime(store)
+    selected = select_kernel(disco=runtime._disco_kernel, selected=legacy)
+
+    assert selected is runtime._disco_kernel
+    assert runtime._kernel_pins.ensure(CID) is runtime._disco_kernel
 
 
 async def test_pin_survives_later_controls(store: SqliteEventStore) -> None:
@@ -172,7 +183,7 @@ async def test_control_op_raise_preserves_a_preexisting_pin(
     assert runtime._kernel_pins.current(CID) is pinned
 
 
-def test_selector_change_does_not_replace_pin_until_clear() -> None:
+def test_pin_survives_midrun_config_change() -> None:
     first = MagicMock(spec=BuildKernel)
     second = MagicMock(spec=BuildKernel)
 
@@ -189,6 +200,21 @@ def test_selector_change_does_not_replace_pin_until_clear() -> None:
     selector.selected = second
     assert pins.ensure(CID) is first
 
+
+def test_clear_pin_lets_next_run_reresolve_to_disco() -> None:
+    first = MagicMock(spec=BuildKernel)
+    second = MagicMock(spec=BuildKernel)
+
+    class MutableSelector:
+        selected: BuildKernel = first
+
+        def select_kernel(self, _conversation_id: str) -> BuildKernel:
+            return self.selected
+
+    selector = MutableSelector()
+    pins = KernelPinRegistry(selector)
+    assert pins.ensure(CID) is first
+    selector.selected = second
     pins.clear(CID)
     assert pins.ensure(CID) is second
 
