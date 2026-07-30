@@ -9,7 +9,8 @@ the projection as long as it equals a full reconstruct().
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,99 @@ from .events import (
     current_workspace_agent_view_seq,
     workspace_run_intent_admission_required,
 )
+
+
+@dataclass
+class _ReplayCursor:
+    run_iteration: int = 0
+    last_action_id: str | None = None
+    last_plan_id: str | None = None
+    last_alternatives_id: str | None = None
+    last_agent_message_id: str | None = None
+    last_clarify_id: str | None = None
+    last_questions_v2_id: str | None = None
+
+
+def _clear_pending_gates(state: ConversationState) -> None:
+    state.pending_action_id = None
+    state.pending_plan_id = None
+    state.pending_alternatives_id = None
+    state.pending_question_id = None
+    state.pending_clarify_id = None
+    state.pending_questions_v2_id = None
+
+
+def _workspace_transition_reopens(event: Event) -> bool:
+    if not isinstance(event, WorkspaceMutationEvent):
+        return False
+    if event.run_protocol_version != 1:
+        return False
+    return event.operation.startswith("agent.run-intent.") or (
+        event.operation == "agent.view-admitted"
+    )
+
+
+def _apply_status(
+    state: ConversationState,
+    event: StatusEvent,
+    cursor: _ReplayCursor,
+) -> None:
+    state.execution_status = event.status
+    state.pending_action_id = (
+        cursor.last_action_id
+        if event.status == ConversationStatus.WAITING_FOR_CONFIRMATION
+        else None
+    )
+    state.pending_plan_id = (
+        cursor.last_plan_id if event.status == ConversationStatus.AWAITING_PLAN_APPROVAL else None
+    )
+    state.pending_alternatives_id = (
+        cursor.last_alternatives_id
+        if event.status == ConversationStatus.AWAITING_USER_DECISION
+        else None
+    )
+    if event.status != ConversationStatus.AWAITING_USER_QUESTION:
+        state.pending_question_id = None
+        state.pending_clarify_id = None
+        state.pending_questions_v2_id = None
+        return
+    state.pending_question_id = event.detail or cursor.last_agent_message_id
+    state.pending_clarify_id = (
+        cursor.last_clarify_id if event.detail == cursor.last_clarify_id else None
+    )
+    state.pending_questions_v2_id = (
+        cursor.last_questions_v2_id if event.detail == cursor.last_questions_v2_id else None
+    )
+
+
+def _apply_replay_event(
+    state: ConversationState,
+    event: Event,
+    cursor: _ReplayCursor,
+) -> None:
+    if _workspace_transition_reopens(event):
+        state.execution_status = ConversationStatus.RUNNING
+        _clear_pending_gates(state)
+    elif isinstance(event, StatusEvent):
+        _apply_status(state, event, cursor)
+    elif isinstance(event, ActionEvent):
+        cursor.run_iteration += 1
+        cursor.last_action_id = event.id
+    elif isinstance(event, PlanEvent):
+        cursor.last_plan_id = event.id
+    elif isinstance(event, AlternativesEvent):
+        cursor.last_alternatives_id = event.id
+    elif isinstance(event, MessageEvent):
+        if event.source == EventSource.USER:
+            cursor.run_iteration = 0
+        elif event.source == EventSource.AGENT:
+            cursor.last_agent_message_id = event.id
+    elif isinstance(event, ClarifyEvent):
+        cursor.last_clarify_id = event.id
+    elif isinstance(event, QuestionsV2Event):
+        cursor.last_questions_v2_id = event.id
+    elif isinstance(event, ErrorEvent):
+        state.execution_status = ConversationStatus.ERROR
 
 
 class ConversationState(BaseModel):
@@ -90,109 +184,9 @@ class ConversationState(BaseModel):
         st.active_agent_view_id = current_workspace_agent_view_id(events)
         st.active_agent_view_seq = current_workspace_agent_view_seq(events)
         st.agent_view_pending = workspace_run_intent_admission_required(events)
-        events = agent_view_consistent_events(events)
-        run_iteration = 0
-        # The most recent action's id — the candidate awaiting confirmation when
-        # the loop transitions to WAITING_FOR_CONFIRMATION (two-phase confirm).
-        last_action_id: str | None = None
-        # The most recent plan's id — the candidate awaiting approval when the
-        # loop transitions to AWAITING_PLAN_APPROVAL (the plan-mode gate).
-        last_plan_id: str | None = None
-        # Likewise for the alternatives gate (AWAITING_USER_DECISION).
-        last_alternatives_id: str | None = None
-        # The most recent agent message id — the candidate question when the loop
-        # transitions to AWAITING_USER_QUESTION (the free-form Ask-gate).
-        last_agent_message_id: str | None = None
-        # The most recent ClarifyEvent id — the candidate when the loop
-        # transitions to AWAITING_USER_QUESTION via the clarify gate.
-        last_clarify_id: str | None = None
-        # The most recent QuestionsV2Event id — the candidate when the loop
-        # transitions to AWAITING_USER_QUESTION via the questions_v2 gate.
-        last_questions_v2_id: str | None = None
-
-        for e in events:
-            if (
-                isinstance(e, WorkspaceMutationEvent)
-                and e.operation.startswith("agent.run-intent.")
-                and e.run_protocol_version == 1
-            ):
-                # A durable new instruction supersedes an earlier parked gate.
-                # The proposal remains auditable, but no extra click is needed
-                # before a fresh model view can consume the new instruction.
-                st.execution_status = ConversationStatus.RUNNING
-                st.pending_action_id = None
-                st.pending_plan_id = None
-                st.pending_alternatives_id = None
-                st.pending_question_id = None
-                st.pending_clarify_id = None
-                st.pending_questions_v2_id = None
-            elif (
-                isinstance(e, WorkspaceMutationEvent)
-                and e.operation == "agent.view-admitted"
-                and e.run_protocol_version == 1
-            ):
-                # The winning view supersedes gates proposed by an older
-                # generation. It starts from the latest instruction instead of
-                # remaining parked on a quarantined action, plan, or question.
-                st.execution_status = ConversationStatus.RUNNING
-                st.pending_action_id = None
-                st.pending_plan_id = None
-                st.pending_alternatives_id = None
-                st.pending_question_id = None
-                st.pending_clarify_id = None
-                st.pending_questions_v2_id = None
-            elif isinstance(e, StatusEvent):
-                st.execution_status = e.status
-                if e.status == ConversationStatus.WAITING_FOR_CONFIRMATION:
-                    # The pending action is the latest one the agent proposed.
-                    st.pending_action_id = last_action_id
-                else:
-                    st.pending_action_id = None
-                if e.status == ConversationStatus.AWAITING_PLAN_APPROVAL:
-                    st.pending_plan_id = last_plan_id
-                else:
-                    st.pending_plan_id = None
-                if e.status == ConversationStatus.AWAITING_USER_DECISION:
-                    st.pending_alternatives_id = last_alternatives_id
-                else:
-                    st.pending_alternatives_id = None
-                if e.status == ConversationStatus.AWAITING_USER_QUESTION:
-                    # Prefer the explicit id the engine stamped on the status
-                    # event; fall back to the last agent message.
-                    st.pending_question_id = e.detail or last_agent_message_id
-                    # This gate is a clarify card ONLY when the engine stamped THIS
-                    # status with the clarify event's id. A free-form ask_user gate
-                    # stamps the agent message id instead — so gating on the detail
-                    # (not just "the last clarify seen") stops a stale clarify card
-                    # from shadowing a later ask_user question on reload/reconnect.
-                    st.pending_clarify_id = last_clarify_id if e.detail == last_clarify_id else None
-                    st.pending_questions_v2_id = (
-                        last_questions_v2_id if e.detail == last_questions_v2_id else None
-                    )
-                else:
-                    st.pending_question_id = None
-                    st.pending_clarify_id = None
-                    st.pending_questions_v2_id = None
-            elif isinstance(e, ActionEvent):
-                run_iteration += 1
-                last_action_id = e.id
-            elif isinstance(e, PlanEvent):
-                last_plan_id = e.id
-            elif isinstance(e, AlternativesEvent):
-                last_alternatives_id = e.id
-            elif isinstance(e, MessageEvent) and e.source == EventSource.USER:
-                # A fresh user instruction starts a new run (ceiling + stuck).
-                run_iteration = 0
-            elif isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
-                # Track the latest agent message — the free-form Ask-gate's
-                # question is the agent message just before the status flip.
-                last_agent_message_id = e.id
-            elif isinstance(e, ClarifyEvent):
-                last_clarify_id = e.id
-            elif isinstance(e, QuestionsV2Event):
-                last_questions_v2_id = e.id
-            elif isinstance(e, ErrorEvent):
-                st.execution_status = ConversationStatus.ERROR
-
-        st.iteration = run_iteration
+        events = cast(list[Event], agent_view_consistent_events(events))
+        cursor = _ReplayCursor()
+        for event in events:
+            _apply_replay_event(st, event, cursor)
+        st.iteration = cursor.run_iteration
         return st

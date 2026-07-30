@@ -53,20 +53,42 @@ PKG03_HARNESS_ORACLES_RESOLVED_IDS = frozenset(
     }
 )
 PKG03_HARNESS_TESTS_RESOLVED_IDS = frozenset({"PY-0115", "PY-0116"})
+PKG04_EVENTS_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(444, 455)),
+        "PY-0663",
+    }
+)
+PKG04_STORES_RESOLVED_IDS = frozenset(
+    {
+        "DM-014",
+        "DM-020",
+        *(f"PY-{number:04d}" for number in range(664, 670)),
+    }
+)
+PKG04_IDENTITY_RESOLVED_IDS = frozenset({"PY-0661"})
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
     | PKG03_HARNESS_ORACLES_RESOLVED_IDS
     | PKG03_HARNESS_TESTS_RESOLVED_IDS
+    | PKG04_EVENTS_RESOLVED_IDS
+    | PKG04_STORES_RESOLVED_IDS
+    | PKG04_IDENTITY_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 802
-EXPECTED_OBSERVATIONS = 22
+EXPECTED_ACTIVE_DEBT_ROWS = 784
+EXPECTED_OBSERVATIONS = 19
 LOCATION_OVERRIDES = {
     "DM-012": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
         "_sealed_runtime_contract:234-253 + "
         "harness/build_soak/adapters/_client_collection.py:"
         "_CollectionMixin.collect_browser_evidence:409-491"
+    ),
+    "DM-017": (
+        "packages/core/src/disco/core/events.py:Event:187-217 + "
+        "packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + "
+        "frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425"
     ),
 }
 

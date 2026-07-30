@@ -65,7 +65,7 @@ class LocalPreviewLeaseStore:
         ).fetchone()
         return str(row[0]) if row is not None and isinstance(row[0], str) else None
 
-    def acquire(
+    def _validate_acquire_request(
         self,
         *,
         conversation_id: str,
@@ -75,7 +75,7 @@ class LocalPreviewLeaseStore:
         now: int,
         expires_at: int,
         listener_ports: tuple[int, ...],
-    ) -> LocalPreviewLease | None:
+    ) -> None:
         if (
             not conversation_id
             or not owner_id
@@ -88,96 +88,179 @@ class LocalPreviewLeaseStore:
         ):
             raise ValueError("invalid local preview lease request")
 
+    def _read_existing_lease(self, conversation_id: str) -> LocalPreviewLease | None:
+        return self._row(
+            self._connection.execute(
+                "SELECT conversation_id, owner_id, listener_port, target_port, "
+                "authority_id, expires_at "
+                "FROM local_preview_leases WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        )
+
+    def _refresh_same_authority_lease(
+        self,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        target_port: int,
+        authority_id: str,
+        expires_at: int,
+        existing: LocalPreviewLease,
+    ) -> LocalPreviewLease:
+        self._connection.execute(
+            "UPDATE local_preview_leases SET target_port = ?, expires_at = ? "
+            "WHERE conversation_id = ?",
+            (int(target_port), int(expires_at), conversation_id),
+        )
+        return LocalPreviewLease(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            listener_port=existing.listener_port,
+            target_port=target_port,
+            authority_id=authority_id,
+            expires_at=expires_at,
+            storage_reset_required=(
+                self._storage_authority(existing.listener_port) != authority_id
+            ),
+        )
+
+    def _select_listener_port(
+        self,
+        *,
+        conversation_id: str,
+        now: int,
+        listener_ports: tuple[int, ...],
+        excluded: int | None,
+    ) -> int | None:
+        """Deterministic port selection over the occupied set."""
+        occupied = {
+            int(row[0])
+            for row in self._connection.execute(
+                "SELECT listener_port FROM local_preview_leases WHERE expires_at >= ?",
+                (int(now),),
+            ).fetchall()
+        }
+        digest = hashlib.sha256(conversation_id.encode()).digest()
+        offset = int.from_bytes(digest[:4], "big") % len(listener_ports)
+        for index in range(len(listener_ports)):
+            listener_port = listener_ports[(offset + index) % len(listener_ports)]
+            if listener_port in occupied or listener_port == excluded:
+                continue
+            return listener_port
+        return None
+
+    def _allocate_new_lease(
+        self,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        target_port: int,
+        authority_id: str,
+        expires_at: int,
+        listener_port: int,
+        existing: LocalPreviewLease | None,
+    ) -> LocalPreviewLease:
+        if existing is None:
+            self._connection.execute(
+                "INSERT INTO local_preview_leases "
+                "(conversation_id, owner_id, listener_port, target_port, "
+                "authority_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    conversation_id,
+                    owner_id,
+                    int(listener_port),
+                    int(target_port),
+                    authority_id,
+                    int(expires_at),
+                ),
+            )
+        else:
+            self._connection.execute(
+                "UPDATE local_preview_leases SET listener_port = ?, target_port = ?, "
+                "authority_id = ?, expires_at = ? WHERE conversation_id = ?",
+                (
+                    int(listener_port),
+                    int(target_port),
+                    authority_id,
+                    int(expires_at),
+                    conversation_id,
+                ),
+            )
+        return LocalPreviewLease(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            listener_port=listener_port,
+            target_port=target_port,
+            authority_id=authority_id,
+            expires_at=expires_at,
+            storage_reset_required=(self._storage_authority(listener_port) != authority_id),
+        )
+
+    def acquire(
+        self,
+        *,
+        conversation_id: str,
+        owner_id: str,
+        target_port: int,
+        authority_id: str,
+        now: int,
+        expires_at: int,
+        listener_ports: tuple[int, ...],
+    ) -> LocalPreviewLease | None:
+        self._validate_acquire_request(
+            conversation_id=conversation_id,
+            owner_id=owner_id,
+            target_port=target_port,
+            authority_id=authority_id,
+            now=now,
+            expires_at=expires_at,
+            listener_ports=listener_ports,
+        )
+
         with self._lock, self._connection:
             self._connection.execute(
                 "DELETE FROM local_preview_leases WHERE expires_at < ?",
                 (int(now),),
             )
-            existing = self._row(
-                self._connection.execute(
-                    "SELECT conversation_id, owner_id, listener_port, target_port, "
-                    "authority_id, expires_at "
-                    "FROM local_preview_leases WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()
-            )
+            existing = self._read_existing_lease(conversation_id)
             if existing is not None:
                 # Ownership is immutable. A mismatched caller cannot retarget an
                 # origin that was leased by another owner.
                 if existing.owner_id != owner_id:
                     return None
                 if existing.authority_id == authority_id:
-                    self._connection.execute(
-                        "UPDATE local_preview_leases SET target_port = ?, expires_at = ? "
-                        "WHERE conversation_id = ?",
-                        (int(target_port), int(expires_at), conversation_id),
-                    )
-                    return LocalPreviewLease(
+                    return self._refresh_same_authority_lease(
                         conversation_id=conversation_id,
                         owner_id=owner_id,
-                        listener_port=existing.listener_port,
                         target_port=target_port,
                         authority_id=authority_id,
                         expires_at=expires_at,
-                        storage_reset_required=(
-                            self._storage_authority(existing.listener_port) != authority_id
-                        ),
+                        existing=existing,
                     )
 
-            occupied = {
-                int(row[0])
-                for row in self._connection.execute(
-                    "SELECT listener_port FROM local_preview_leases WHERE expires_at >= ?",
-                    (int(now),),
-                ).fetchall()
-            }
             # A new runtime/immutable authority gets a new browser origin. The
             # old listener is deliberately excluded even though its row will be
             # updated below: a capability for generation N must not become a
             # capability for generation N+1 on the same 127.0.0.1 origin.
             excluded = existing.listener_port if existing is not None else None
-            digest = hashlib.sha256(conversation_id.encode()).digest()
-            offset = int.from_bytes(digest[:4], "big") % len(listener_ports)
-            for index in range(len(listener_ports)):
-                listener_port = listener_ports[(offset + index) % len(listener_ports)]
-                if listener_port in occupied or listener_port == excluded:
-                    continue
-                if existing is None:
-                    self._connection.execute(
-                        "INSERT INTO local_preview_leases "
-                        "(conversation_id, owner_id, listener_port, target_port, "
-                        "authority_id, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            conversation_id,
-                            owner_id,
-                            int(listener_port),
-                            int(target_port),
-                            authority_id,
-                            int(expires_at),
-                        ),
-                    )
-                else:
-                    self._connection.execute(
-                        "UPDATE local_preview_leases SET listener_port = ?, target_port = ?, "
-                        "authority_id = ?, expires_at = ? WHERE conversation_id = ?",
-                        (
-                            int(listener_port),
-                            int(target_port),
-                            authority_id,
-                            int(expires_at),
-                            conversation_id,
-                        ),
-                    )
-                return LocalPreviewLease(
-                    conversation_id=conversation_id,
-                    owner_id=owner_id,
-                    listener_port=listener_port,
-                    target_port=target_port,
-                    authority_id=authority_id,
-                    expires_at=expires_at,
-                    storage_reset_required=(self._storage_authority(listener_port) != authority_id),
-                )
-        return None
+            listener_port = self._select_listener_port(
+                conversation_id=conversation_id,
+                now=now,
+                listener_ports=listener_ports,
+                excluded=excluded,
+            )
+            if listener_port is None:
+                return None
+            return self._allocate_new_lease(
+                conversation_id=conversation_id,
+                owner_id=owner_id,
+                target_port=target_port,
+                authority_id=authority_id,
+                expires_at=expires_at,
+                listener_port=listener_port,
+                existing=existing,
+            )
 
     def resolve(self, listener_port: int, *, now: int) -> LocalPreviewLease | None:
         if not 1 <= listener_port <= 65535:
