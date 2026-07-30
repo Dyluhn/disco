@@ -684,9 +684,10 @@ class TestBaselineValidation:
         static_additions.sort()
 
         same_identity = copy.deepcopy(baseline)
-        _transition_for(same_identity, "PKG-03-HARNESS-TRANSPORT")["source_identity_before"] = (
-            baseline["source_identity"]
-        )
+        same_identity_transition = _transition_for(same_identity, "PKG-03-HARNESS-TRANSPORT")
+        same_identity_transition["source_identity_before"] = same_identity_transition[
+            "source_identity_after"
+        ]
 
         unrepresented_identity = copy.deepcopy(baseline)
         unrepresented_identity["source_identity"] = latest_identity
