@@ -65,13 +65,28 @@ class BuildRouteRollback(Protocol):
     def discard_composed_executor(self, conversation_id: str) -> None: ...
 
 
+class AppKitEjectionLedger:
+    """Live process cache reconstructed from durable ejection events."""
+
+    def __init__(self) -> None:
+        self._ejected: set[str] = set()
+
+    def is_appkit_ejected(self, conversation_id: str) -> bool:
+        return conversation_id in self._ejected
+
+    def record(self, conversation_id: str, *, ejected: bool) -> None:
+        if ejected:
+            self._ejected.add(conversation_id)
+        else:
+            self._ejected.discard(conversation_id)
+
+
 @dataclass(frozen=True, slots=True)
 class _RouteState:
     record: BuildPlatformRouteRecord | None = None
     pin: BuildRoute | None = None
     selected_route: BuildRoute | None = None
     selected_profile: ComponentId | None = None
-    appkit_ejected: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,11 +265,13 @@ class BuildPlatformRuntime:
         workspace: WorkspaceCoordinator,
         surfaces: BuildSurfaceClassifier,
         rollback: BuildRouteRollback,
+        ejections: AppKitEjectionLedger,
     ) -> None:
         self._store = store
         self._workspace = workspace
         self._surfaces = surfaces
         self._rollback = rollback
+        self._ejections = ejections
         self._states: dict[str, _RouteState] = {}
 
     def _state(self, conversation_id: str) -> _RouteState:
@@ -298,14 +315,6 @@ class BuildPlatformRuntime:
             if state.selected_profile is not None
         }
 
-    @property
-    def appkit_ejected(self) -> dict[str, bool]:
-        return {
-            conversation_id: state.appkit_ejected
-            for conversation_id, state in self._states.items()
-            if state.appkit_ejected is not None
-        }
-
     async def prepare_route_pin(self, conversation_id: str) -> None:
         state = self._state(conversation_id)
         if not self._surfaces.is_build_like(conversation_id):
@@ -313,11 +322,14 @@ class BuildPlatformRuntime:
             return
         events = await self._store.get_events(conversation_id)
         admission = current_build_platform_admission(events)
+        self._ejections.record(
+            conversation_id,
+            ejected=current_appkit_ejection(events) is not None,
+        )
         self._save(
             conversation_id,
             replace(
                 state,
-                appkit_ejected=current_appkit_ejection(events) is not None,
                 pin=admission.route if admission is not None else None,
             ),
         )
@@ -574,6 +586,7 @@ class BuildPlatformRuntime:
         stored_ejection = stored[0]
         if not isinstance(stored_ejection, AppKitEjectionEvent):
             raise RuntimeError("event store returned a malformed AppKit ejection")
+        self._ejections.record(conversation_id, ejected=True)
         self._save(
             conversation_id,
             _RouteState(
@@ -581,7 +594,6 @@ class BuildPlatformRuntime:
                 pin=existing.route,
                 selected_route=existing.route,
                 selected_profile=FREEFORM_PROFILE_ID,
-                appkit_ejected=True,
             ),
         )
         return stored_ejection

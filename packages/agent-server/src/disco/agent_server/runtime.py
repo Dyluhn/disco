@@ -161,8 +161,15 @@ from disco.tools.sandbox import (
 )
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+from .appkit_ejection import AppKitEjectionService
+from .build_composition_ports import (
+    BuildExecutorAccess,
+    BuildSurfacePolicy,
+    CurrentProjectStore,
+    WorkspaceRevisionCapture,
+)
 from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
-from .build_platform_runtime import BuildPlatformRuntime
+from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
 from .build_platform_shadow import (
     build_platform_shadow_enabled,
     observe_legacy_build,
@@ -480,7 +487,7 @@ def _bind_ejection(
         max_active_schemas=max_active_schemas,
     )
     executor.set_ejection_callback(
-        lambda call: runtime._build_platform.ejection.eject(
+        lambda call: runtime._appkit_ejection.eject(
             conversation_id,
             call,
             tool_specs=specs,
@@ -768,7 +775,6 @@ class ConversationRuntime:
         # Phase-3 Build Platform Core observer. Records are diagnostics only:
         # legacy loop/executor/preview/verifier/export/finish authority never reads them.
         self._build_platform_shadow_records: dict[str, Any] = {}
-        self._build_platform = BuildPlatformRuntime(self)
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -850,6 +856,7 @@ class ConversationRuntime:
             install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._appkit_ejections = AppKitEjectionLedger()
         # Persisted settings own their collections and sidecar paths. Named,
         # cohesive ports expose only routing metadata and model-binding cache
         # operations; RuntimeSettings never receives this runtime or callables.
@@ -872,7 +879,7 @@ class ConversationRuntime:
             config_store=self._config_store,
             routing=settings_routing,
             model_bindings=model_bindings,
-            appkit_ejections=self._build_platform.appkit_ejected,
+            appkit_ejections=self._appkit_ejections,
         )
         # Durable authority captured by each registered Build task.  The
         # in-memory generation remains useful for local lifecycle cleanup, but
@@ -965,7 +972,23 @@ class ConversationRuntime:
         self._resume = ResumeService(self)
         # Permanent workspace locks shared by lifecycle delegates.
         self._workspace = WorkspaceCoordinator(self)
+        build_executors = BuildExecutorAccess(self._executors)
+        self._build_platform = BuildPlatformRuntime(
+            store=self._store,
+            workspace=self._workspace,
+            surfaces=BuildSurfacePolicy(self._settings),
+            rollback=build_executors,
+            ejections=self._appkit_ejections,
+        )
         self._lifecycle, self._lifecycle_commands = compose_lifecycle_service(self)
+        self._appkit_ejection = AppKitEjectionService(
+            event_store=self._store,
+            workspace=self._workspace,
+            revision_capture=WorkspaceRevisionCapture(self._lifecycle),
+            project_stores=CurrentProjectStore(self._config_store),
+            sandboxes=build_executors,
+            transitions=self._build_platform,
+        )
         # Deep Research surface (plan→iterate→report) + live research stream.
         # _depth / _research_* cache / _cancel_flags stay on the runtime
         # (_cancel_flags is shared with kill/cancel/resume); the service reaches

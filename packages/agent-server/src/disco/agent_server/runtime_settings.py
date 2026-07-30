@@ -10,8 +10,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from disco.core import (
     ActionEvent,
@@ -51,6 +50,10 @@ logger = logging.getLogger(__name__)
 _VALID_SURFACES = frozenset({"research", "build", "agent", "deep_research"})
 _BUILD_LIKE_SURFACES = frozenset({"build", "agent"})
 _AUTONOMOUS_SURFACES = frozenset({"build", "agent", "deep_research"})
+
+
+class _AppKitEjectionLookup(Protocol):
+    def is_appkit_ejected(self, conversation_id: str) -> bool: ...
 
 
 class _RuntimeSettingsRouting:
@@ -234,7 +237,7 @@ class _RuntimeModeSettings:
     def __init__(
         self,
         store: SqliteEventStore,
-        appkit_ejections: Mapping[str, bool],
+        appkit_ejections: _AppKitEjectionLookup,
     ) -> None:
         self._store = store
         self._appkit_ejections = appkit_ejections
@@ -267,7 +270,7 @@ class _RuntimeModeSettings:
         from disco.core.flags import appkit_enabled
 
         stored = self._store.conversation_appkit_mode_sync(conversation_id)
-        if stored is True and self._appkit_ejections.get(conversation_id, False):
+        if stored is True and self._appkit_ejections.is_appkit_ejected(conversation_id):
             return False
         if stored is True and not appkit_enabled():
             raise RuntimeError(
@@ -302,7 +305,7 @@ class RuntimeSettings:
         config_store: ConfigStore,
         routing: _RuntimeSettingsRouting,
         model_bindings: _RuntimeModelBindings,
-        appkit_ejections: Mapping[str, bool],
+        appkit_ejections: _AppKitEjectionLookup,
     ) -> None:
         self._store = store
         self._config_store = config_store

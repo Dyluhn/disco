@@ -396,6 +396,14 @@ def test_set_appkit_mode_and_effective() -> None:
     assert rt._effective_appkit_mode("c_off") is False
 
 
+def test_effective_appkit_mode_reads_live_ejection_state() -> None:
+    rt = _rt()
+    rt.set_appkit_mode("c_ejected", True)
+
+    with mock.patch.object(rt._appkit_ejections, "is_appkit_ejected", return_value=True):
+        assert rt._effective_appkit_mode("c_ejected") is False
+
+
 def test_appkit_mode_flag_round_trips_from_body() -> None:
     import asyncio
 
