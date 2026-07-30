@@ -2459,7 +2459,7 @@
   {
     "id": "PY-0252",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/files.py:_register_upload_routes:88-219",
@@ -2468,7 +2468,7 @@
   {
     "id": "PY-0253",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
@@ -2477,7 +2477,7 @@
   {
     "id": "PY-0254",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
@@ -2486,7 +2486,7 @@
   {
     "id": "PY-0255",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/files.py:upload_files:94-219",
@@ -2495,7 +2495,7 @@
   {
     "id": "PY-0256",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/files.py:artifact_file:228-307",
@@ -2720,7 +2720,7 @@
   {
     "id": "PY-0281",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:_parse_import_source:285-341",
@@ -2729,7 +2729,7 @@
   {
     "id": "PY-0282",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:_handle_list_projects:385-425",
@@ -2738,7 +2738,7 @@
   {
     "id": "PY-0283",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:_handle_download_project:544-637",
@@ -2747,7 +2747,7 @@
   {
     "id": "PY-0284",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:_handle_project_manifest:640-726",
@@ -2756,7 +2756,7 @@
   {
     "id": "PY-0285",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:_zip_workspace_with_overlay:811-875",
@@ -2765,7 +2765,7 @@
   {
     "id": "PY-0286",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/projects.py:<module>:1-1199",
@@ -2837,7 +2837,7 @@
   {
     "id": "PY-0294",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/storage.py:make_storage_router:92-229",
@@ -2846,7 +2846,7 @@
   {
     "id": "PY-0295",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/storage.py:browse_storage:96-227",
@@ -2855,7 +2855,7 @@
   {
     "id": "PY-0296",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/storage.py:browse_storage:96-227",
@@ -2864,7 +2864,7 @@
   {
     "id": "PY-0297",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/routes/storage.py:browse_storage:96-227",
@@ -3305,7 +3305,7 @@
   {
     "id": "PY-0346",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_commit.py:resolve_committed_workspace:31-100",
@@ -3314,7 +3314,7 @@
   {
     "id": "PY-0347",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:WorkspacePersistence:267-1155",
@@ -3323,7 +3323,7 @@
   {
     "id": "PY-0348",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:420-610",
@@ -3332,7 +3332,7 @@
   {
     "id": "PY-0349",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_commit_finished_workspace_locked:420-610",
@@ -3341,7 +3341,7 @@
   {
     "id": "PY-0350",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:623-766",
@@ -3350,7 +3350,7 @@
   {
     "id": "PY-0351",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_recover_finalization_journals:623-766",
@@ -3359,7 +3359,7 @@
   {
     "id": "PY-0352",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:787-944",
@@ -3368,7 +3368,7 @@
   {
     "id": "PY-0353",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_capture_workspace:787-944",
@@ -3377,7 +3377,7 @@
   {
     "id": "PY-0354",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_do_maybe_synthesize_app_deliverable:1013-1078",
@@ -3386,7 +3386,7 @@
   {
     "id": "PY-0355",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:_trusted_verified_app_entry:1081-1136",
@@ -3395,7 +3395,7 @@
   {
     "id": "PY-0356",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_persistence.py:<module>:1-1155",
@@ -3404,7 +3404,7 @@
   {
     "id": "PY-0357",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:125-815",
@@ -3413,7 +3413,7 @@
   {
     "id": "PY-0358",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:125-815",
@@ -3422,7 +3422,7 @@
   {
     "id": "PY-0359",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-815",
@@ -3440,7 +3440,7 @@
   {
     "id": "PY-0361",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-07-WORKSPACE",
     "location": "packages/agent-server/tests/test_final_workspace_commit.py:<module>:1-1976",
