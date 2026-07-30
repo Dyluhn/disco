@@ -7,6 +7,11 @@ preview integration with the agent loop.
 
 from __future__ import annotations
 
+# The accepted pytest identities remain in test_request_budget.py.  This module
+# holds the extracted implementations and is exercised through compatibility
+# subclasses there; collecting it directly would duplicate the same cases.
+__test__ = False
+
 import httpx
 import pytest
 from disco.core import CondensationEvent, CondensationRequest, ErrorEvent, LLMMessage, View
