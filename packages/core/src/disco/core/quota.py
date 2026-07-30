@@ -15,243 +15,79 @@ from __future__ import annotations
 
 import contextlib
 import math
-import re
 import sqlite3
 import threading
 from collections.abc import Iterator
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
 
-MAX_WINDOW_SECONDS = 86_400
-MAX_REQUEST_LIMIT = 1_000_000
-MAX_TOKEN_LIMIT = 1_000_000_000_000
-MAX_RESERVATION_TTL_SECONDS = 3_600
-DEFAULT_RESERVATION_TTL_SECONDS = 300
-
-_IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_SERVICE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
-
-
-class QuotaError(Exception):
-    """Base class for quota configuration and accounting errors."""
-
-
-class QuotaConfigurationError(QuotaError, ValueError):
-    """A quota or identity is unsafe or cannot be represented."""
-
-
-class ReservationNotFound(QuotaError, LookupError):
-    """Completion or release referenced no reservation in this app."""
-
-
-class ReservationConflict(QuotaError):
-    """An idempotency key was reused for different reservation data."""
-
-
-class ReservationStateError(QuotaError):
-    """The requested transition would erase or rewrite accounted usage."""
-
-
-def _bounded_integer(label: str, value: int | None, maximum: int) -> None:
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= maximum:
-        raise QuotaConfigurationError(f"{label} must be an integer from 1 to {maximum}")
-
-
-def _token_count(label: str, value: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_TOKEN_LIMIT:
-        raise QuotaConfigurationError(f"{label} must be an integer from 0 to {MAX_TOKEN_LIMIT}")
-    return value
-
-
-def _identity(label: str, value: str) -> str:
-    if not isinstance(value, str) or _IDENTITY_RE.fullmatch(value) is None:
-        raise QuotaConfigurationError(f"invalid {label}")
-    return value
-
-
-def _service(value: str) -> str:
-    if not isinstance(value, str) or len(value.encode("utf-8")) > 128:
-        raise QuotaConfigurationError("invalid exact service name")
-    if _SERVICE_RE.fullmatch(value) is None:
-        raise QuotaConfigurationError("invalid exact service name")
-    return value
-
-
-def _instant(value: datetime | None) -> datetime:
-    result = datetime.now(UTC) if value is None else value
-    if result.tzinfo is None or result.utcoffset() is None:
-        raise QuotaConfigurationError("quota timestamps must be timezone-aware")
-    return result.astimezone(UTC)
-
-
-def _epoch_us(value: datetime) -> int:
-    return int(value.timestamp() * 1_000_000)
-
-
-def _from_epoch_us(value: int) -> datetime:
-    return datetime.fromtimestamp(value / 1_000_000, UTC)
-
-
-@dataclass(frozen=True)
-class QuotaConfig:
-    """Limits for one fixed window; ``None`` disables only that dimension."""
-
-    window_seconds: int = 60
-    max_requests: int | None = None
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    max_total_tokens: int | None = None
-
-    def __post_init__(self) -> None:
-        _bounded_integer("window_seconds", self.window_seconds, MAX_WINDOW_SECONDS)
-        _bounded_integer("max_requests", self.max_requests, MAX_REQUEST_LIMIT)
-        _bounded_integer("max_input_tokens", self.max_input_tokens, MAX_TOKEN_LIMIT)
-        _bounded_integer("max_output_tokens", self.max_output_tokens, MAX_TOKEN_LIMIT)
-        _bounded_integer("max_total_tokens", self.max_total_tokens, MAX_TOKEN_LIMIT)
-        if all(
-            value is None
-            for value in (
-                self.max_requests,
-                self.max_input_tokens,
-                self.max_output_tokens,
-                self.max_total_tokens,
-            )
-        ):
-            raise QuotaConfigurationError("at least one quota limit is required")
-
-
-DEFAULT_QUOTA_CONFIG = QuotaConfig(
-    window_seconds=60,
-    max_requests=100,
-    max_input_tokens=1_000_000,
-    max_output_tokens=250_000,
-    max_total_tokens=1_250_000,
+from ._quota_contracts import DEFAULT_QUOTA_CONFIG as DEFAULT_QUOTA_CONFIG
+from ._quota_contracts import (
+    DEFAULT_RESERVATION_TTL_SECONDS as DEFAULT_RESERVATION_TTL_SECONDS,
+)
+from ._quota_contracts import MAX_REQUEST_LIMIT as MAX_REQUEST_LIMIT
+from ._quota_contracts import (
+    MAX_RESERVATION_TTL_SECONDS as MAX_RESERVATION_TTL_SECONDS,
+)
+from ._quota_contracts import MAX_TOKEN_LIMIT as MAX_TOKEN_LIMIT
+from ._quota_contracts import MAX_WINDOW_SECONDS as MAX_WINDOW_SECONDS
+from ._quota_contracts import QuotaAdmission as QuotaAdmission
+from ._quota_contracts import QuotaConfig as QuotaConfig
+from ._quota_contracts import QuotaConfigurationError as QuotaConfigurationError
+from ._quota_contracts import QuotaError as QuotaError
+from ._quota_contracts import QuotaReservation as QuotaReservation
+from ._quota_contracts import QuotaStore as QuotaStore
+from ._quota_contracts import QuotaUsage as QuotaUsage
+from ._quota_contracts import ReservationConflict as ReservationConflict
+from ._quota_contracts import ReservationNotFound as ReservationNotFound
+from ._quota_contracts import ReservationStateError as ReservationStateError
+from ._quota_contracts import StoredQuotaConfig as StoredQuotaConfig
+from ._quota_contracts import (
+    _bounded_integer,
+    _epoch_us,
+    _identity,
+    _instant,
+    _service,
+    _token_count,
+)
+from ._quota_sql import (
+    config_from_row as _config_from_row,
+)
+from ._quota_sql import (
+    exceeded_reason as _exceeded_reason,
+)
+from ._quota_sql import (
+    find_limits as _find_limits,
+)
+from ._quota_sql import (
+    find_reservation as _find_reservation,
+)
+from ._quota_sql import (
+    idempotent_admission as _idempotent_admission,
+)
+from ._quota_sql import (
+    sweep_stale as _sweep_stale,
+)
+from ._quota_sql import (
+    usage as _usage,
 )
 
-
-@dataclass(frozen=True)
-class StoredQuotaConfig:
-    owner_id: str
-    audience: str
-    service: str | None
-    limits: QuotaConfig
-    updated_at: datetime
-
-
-@dataclass(frozen=True)
-class QuotaUsage:
-    request_count: int
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    window_start: datetime
-    window_end: datetime
-
-
-@dataclass(frozen=True)
-class QuotaReservation:
-    owner_id: str
-    audience: str
-    service: str
-    reservation_id: str
-    state: str
-    estimated_input_tokens: int
-    estimated_output_tokens: int
-    actual_input_tokens: int | None
-    actual_output_tokens: int | None
-    created_at: datetime
-    completed_at: datetime | None
-    released_at: datetime | None
-
-    @property
-    def accounted_input_tokens(self) -> int:
-        if self.state in {"completed", "abandoned"} and self.actual_input_tokens is not None:
-            return self.actual_input_tokens
-        return self.estimated_input_tokens
-
-    @property
-    def accounted_output_tokens(self) -> int:
-        if self.state in {"completed", "abandoned"} and self.actual_output_tokens is not None:
-            return self.actual_output_tokens
-        return self.estimated_output_tokens
-
-
-@dataclass(frozen=True)
-class QuotaAdmission:
-    """Admission result.  A denial never creates a reservation."""
-
-    allowed: bool
-    reservation: QuotaReservation | None = None
-    reason: str | None = None
-    retry_after_seconds: int | None = None
-    limiting_service: str | None = None
-    usage: QuotaUsage | None = None
-    limits: QuotaConfig | None = None
-
-
-class QuotaStore(Protocol):
-    """Backend seam shared by app-server and agent-server callers."""
-
-    def configure(
-        self,
-        *,
-        owner_id: str,
-        audience: str,
-        limits: QuotaConfig,
-        service: str | None = None,
-        now: datetime | None = None,
-    ) -> StoredQuotaConfig: ...
-
-    def get_config(
-        self, owner_id: str, audience: str, *, service: str | None = None
-    ) -> StoredQuotaConfig | None: ...
-
-    def delete_config(
-        self, owner_id: str, audience: str, *, service: str | None = None
-    ) -> bool: ...
-
-    def reserve(
-        self,
-        *,
-        owner_id: str,
-        audience: str,
-        service: str,
-        reservation_id: str,
-        estimated_input_tokens: int = 0,
-        estimated_output_tokens: int = 0,
-        now: datetime | None = None,
-    ) -> QuotaAdmission: ...
-
-    def complete(
-        self,
-        *,
-        owner_id: str,
-        audience: str,
-        reservation_id: str,
-        actual_input_tokens: int,
-        actual_output_tokens: int,
-        now: datetime | None = None,
-    ) -> QuotaReservation: ...
-
-    def mark_dispatched(
-        self, *, owner_id: str, audience: str, reservation_id: str
-    ) -> QuotaReservation: ...
-
-    def release(self, *, owner_id: str, audience: str, reservation_id: str) -> bool: ...
-
-    def get_usage(
-        self,
-        *,
-        owner_id: str,
-        audience: str,
-        service: str | None = None,
-        now: datetime | None = None,
-    ) -> QuotaUsage: ...
-
+# Preserve the historical public type identity for introspection and pickling.
+for _public_contract in (
+    QuotaError,
+    QuotaConfigurationError,
+    ReservationNotFound,
+    ReservationConflict,
+    ReservationStateError,
+    QuotaConfig,
+    StoredQuotaConfig,
+    QuotaUsage,
+    QuotaReservation,
+    QuotaAdmission,
+    QuotaStore,
+):
+    _public_contract.__module__ = __name__
+del _public_contract
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS quota_configs (
@@ -393,7 +229,7 @@ class SqliteQuotaStore:
                 )
                 .fetchone()
             )
-        return None if row is None else self._config_from_row(row)
+        return None if row is None else _config_from_row(row)
 
     def effective_app_config(self, owner_id: str, audience: str) -> QuotaConfig:
         """Return the explicit aggregate config or the bounded safe default."""
@@ -431,24 +267,30 @@ class SqliteQuotaStore:
         now_us = _epoch_us(instant)
 
         with self._write_transaction() as conn:
-            self._sweep_stale(conn, owner, app, now_us)
-            existing = self._find_reservation(conn, owner, app, key)
+            _sweep_stale(
+                conn,
+                owner,
+                app,
+                now_us,
+                reservation_ttl_seconds=self.reservation_ttl_seconds,
+            )
+            existing = _find_reservation(conn, owner, app, key)
             if existing is not None:
-                return self._idempotent_admission(
+                return _idempotent_admission(
                     existing,
                     service=exact,
                     estimated_input_tokens=input_tokens,
                     estimated_output_tokens=output_tokens,
                 )
 
-            app_limits = self._find_limits(conn, owner, app, "") or self.default_config
+            app_limits = _find_limits(conn, owner, app, "") or self.default_config
             scopes: list[tuple[str | None, QuotaConfig]] = [(None, app_limits)]
-            service_limits = self._find_limits(conn, owner, app, exact)
+            service_limits = _find_limits(conn, owner, app, exact)
             if service_limits is not None:
                 scopes.append((exact, service_limits))
 
             for limiting_service, limits in scopes:
-                usage = self._usage(
+                current_usage = _usage(
                     conn,
                     owner,
                     app,
@@ -456,15 +298,15 @@ class SqliteQuotaStore:
                     limits.window_seconds,
                     now_us,
                 )
-                reason = self._exceeded_reason(usage, limits, input_tokens, output_tokens)
+                reason = _exceeded_reason(current_usage, limits, input_tokens, output_tokens)
                 if reason is not None:
-                    remaining_us = _epoch_us(usage.window_end) - now_us
+                    remaining_us = _epoch_us(current_usage.window_end) - now_us
                     return QuotaAdmission(
                         allowed=False,
                         reason=reason,
                         retry_after_seconds=max(1, math.ceil(remaining_us / 1_000_000)),
                         limiting_service=limiting_service,
-                        usage=usage,
+                        usage=current_usage,
                         limits=limits,
                     )
 
@@ -477,7 +319,7 @@ class SqliteQuotaStore:
                 """,
                 (owner, app, exact, key, input_tokens, output_tokens, now_us),
             )
-            reservation = self._find_reservation(conn, owner, app, key)
+            reservation = _find_reservation(conn, owner, app, key)
             if reservation is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("reservation insert was not readable")
             return QuotaAdmission(allowed=True, reservation=reservation)
@@ -499,7 +341,7 @@ class SqliteQuotaStore:
         output_tokens = _token_count("actual_output_tokens", actual_output_tokens)
         completed_us = _epoch_us(_instant(now))
         with self._write_transaction() as conn:
-            existing = self._find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state == "released":
@@ -522,7 +364,7 @@ class SqliteQuotaStore:
                 """,
                 (input_tokens, output_tokens, completed_us, owner, app, key),
             )
-            result = self._find_reservation(conn, owner, app, key)
+            result = _find_reservation(conn, owner, app, key)
             if result is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("completed reservation was not readable")
             return result
@@ -534,7 +376,7 @@ class SqliteQuotaStore:
         owner, app = self._validate_app(owner_id, audience)
         key = _identity("reservation id", reservation_id)
         with self._write_transaction() as conn:
-            existing = self._find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state == "dispatched":
@@ -549,7 +391,7 @@ class SqliteQuotaStore:
                 """,
                 (owner, app, key),
             )
-            result = self._find_reservation(conn, owner, app, key)
+            result = _find_reservation(conn, owner, app, key)
             if result is None:  # pragma: no cover - SQLite contract guard
                 raise QuotaError("dispatched reservation was not readable")
             return result
@@ -560,7 +402,7 @@ class SqliteQuotaStore:
         key = _identity("reservation id", reservation_id)
         released_us = _epoch_us(datetime.now(UTC))
         with self._write_transaction() as conn:
-            existing = self._find_reservation(conn, owner, app, key)
+            existing = _find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
             if existing.state in {"dispatched", "completed", "abandoned"}:
@@ -583,7 +425,7 @@ class SqliteQuotaStore:
         owner, app = self._validate_app(owner_id, audience)
         key = _identity("reservation id", reservation_id)
         with self._lock:
-            return self._find_reservation(self._check_open(), owner, app, key)
+            return _find_reservation(self._check_open(), owner, app, key)
 
     def get_usage(
         self,
@@ -598,16 +440,22 @@ class SqliteQuotaStore:
         exact = None if service is None else _service(service)
         now_us = _epoch_us(_instant(now))
         with self._write_transaction() as conn:
-            self._sweep_stale(conn, owner, app, now_us)
+            _sweep_stale(
+                conn,
+                owner,
+                app,
+                now_us,
+                reservation_ttl_seconds=self.reservation_ttl_seconds,
+            )
             if exact is None:
-                limits = self._find_limits(conn, owner, app, "") or self.default_config
+                limits = _find_limits(conn, owner, app, "") or self.default_config
             else:
                 limits = (
-                    self._find_limits(conn, owner, app, exact)
-                    or self._find_limits(conn, owner, app, "")
+                    _find_limits(conn, owner, app, exact)
+                    or _find_limits(conn, owner, app, "")
                     or self.default_config
                 )
-            return self._usage(conn, owner, app, exact, limits.window_seconds, now_us)
+            return _usage(conn, owner, app, exact, limits.window_seconds, now_us)
 
     def close(self) -> None:
         with self._lock:
@@ -630,45 +478,6 @@ class SqliteQuotaStore:
             raise RuntimeError("quota store is closed")
         return self._conn
 
-    def _sweep_stale(self, conn: sqlite3.Connection, owner: str, app: str, now_us: int) -> None:
-        """Settle expired leases without erasing their admitted request count."""
-        cutoff_us = now_us - self.reservation_ttl_seconds * 1_000_000
-        conn.execute(
-            """
-            UPDATE quota_reservations
-            SET state = 'abandoned', actual_input_tokens = 0, actual_output_tokens = 0,
-                completed_at_us = ?
-            WHERE owner_id = ? AND audience = ? AND state = 'reserved'
-              AND created_at_us <= ?
-            """,
-            (now_us, owner, app, cutoff_us),
-        )
-        conn.execute(
-            """
-            UPDATE quota_reservations
-            SET state = 'abandoned',
-                actual_input_tokens = estimated_input_tokens,
-                actual_output_tokens = estimated_output_tokens,
-                completed_at_us = ?
-            WHERE owner_id = ? AND audience = ? AND state = 'dispatched'
-              AND created_at_us <= ?
-            """,
-            (now_us, owner, app, cutoff_us),
-        )
-        retention_cutoff = now_us - MAX_WINDOW_SECONDS * 1_000_000
-        conn.execute(
-            """
-            DELETE FROM quota_reservations WHERE rowid IN (
-                SELECT rowid FROM quota_reservations
-                WHERE owner_id = ? AND audience = ?
-                  AND state IN ('completed', 'abandoned', 'released')
-                  AND created_at_us < ?
-                ORDER BY created_at_us LIMIT 1000
-            )
-            """,
-            (owner, app, retention_cutoff),
-        )
-
     @contextlib.contextmanager
     def _write_transaction(self) -> Iterator[sqlite3.Connection]:
         with self._lock:
@@ -681,171 +490,3 @@ class SqliteQuotaStore:
                 raise
             else:
                 conn.commit()
-
-    @staticmethod
-    def _find_limits(
-        conn: sqlite3.Connection, owner: str, app: str, service: str
-    ) -> QuotaConfig | None:
-        row = conn.execute(
-            """
-            SELECT window_seconds, max_requests, max_input_tokens,
-                   max_output_tokens, max_total_tokens
-            FROM quota_configs WHERE owner_id = ? AND audience = ? AND service = ?
-            """,
-            (owner, app, service),
-        ).fetchone()
-        if row is None:
-            return None
-        return QuotaConfig(
-            window_seconds=int(row["window_seconds"]),
-            max_requests=row["max_requests"],
-            max_input_tokens=row["max_input_tokens"],
-            max_output_tokens=row["max_output_tokens"],
-            max_total_tokens=row["max_total_tokens"],
-        )
-
-    @classmethod
-    def _config_from_row(cls, row: sqlite3.Row) -> StoredQuotaConfig:
-        limits = QuotaConfig(
-            window_seconds=int(row["window_seconds"]),
-            max_requests=row["max_requests"],
-            max_input_tokens=row["max_input_tokens"],
-            max_output_tokens=row["max_output_tokens"],
-            max_total_tokens=row["max_total_tokens"],
-        )
-        service = str(row["service"])
-        return StoredQuotaConfig(
-            owner_id=str(row["owner_id"]),
-            audience=str(row["audience"]),
-            service=service or None,
-            limits=limits,
-            updated_at=_from_epoch_us(int(row["updated_at_us"])),
-        )
-
-    @staticmethod
-    def _find_reservation(
-        conn: sqlite3.Connection, owner: str, app: str, reservation_id: str
-    ) -> QuotaReservation | None:
-        row = conn.execute(
-            """
-            SELECT * FROM quota_reservations
-            WHERE owner_id = ? AND audience = ? AND reservation_id = ?
-            """,
-            (owner, app, reservation_id),
-        ).fetchone()
-        if row is None:
-            return None
-        return QuotaReservation(
-            owner_id=str(row["owner_id"]),
-            audience=str(row["audience"]),
-            service=str(row["service"]),
-            reservation_id=str(row["reservation_id"]),
-            state=str(row["state"]),
-            estimated_input_tokens=int(row["estimated_input_tokens"]),
-            estimated_output_tokens=int(row["estimated_output_tokens"]),
-            actual_input_tokens=(
-                None if row["actual_input_tokens"] is None else int(row["actual_input_tokens"])
-            ),
-            actual_output_tokens=(
-                None if row["actual_output_tokens"] is None else int(row["actual_output_tokens"])
-            ),
-            created_at=_from_epoch_us(int(row["created_at_us"])),
-            completed_at=(
-                None if row["completed_at_us"] is None else _from_epoch_us(row["completed_at_us"])
-            ),
-            released_at=(
-                None if row["released_at_us"] is None else _from_epoch_us(row["released_at_us"])
-            ),
-        )
-
-    @staticmethod
-    def _usage(
-        conn: sqlite3.Connection,
-        owner: str,
-        app: str,
-        service: str | None,
-        window_seconds: int,
-        now_us: int,
-    ) -> QuotaUsage:
-        window_us = window_seconds * 1_000_000
-        start_us = (now_us // window_us) * window_us
-        end_us = start_us + window_us
-        service_sql = "" if service is None else " AND service = ?"
-        params: tuple[object, ...] = (owner, app, start_us, end_us)
-        if service is not None:
-            params += (service,)
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(CASE WHEN state NOT IN ('reserved', 'dispatched')
-                       THEN actual_input_tokens ELSE estimated_input_tokens END), 0)
-                       AS input_tokens,
-                   COALESCE(SUM(CASE WHEN state NOT IN ('reserved', 'dispatched')
-                       THEN actual_output_tokens ELSE estimated_output_tokens END), 0)
-                       AS output_tokens
-            FROM quota_reservations
-            WHERE owner_id = ? AND audience = ?
-              AND created_at_us >= ? AND created_at_us < ?
-              AND state != 'released'
-            """
-            + service_sql,
-            params,
-        ).fetchone()
-        requests = int(row["request_count"])
-        input_tokens = int(row["input_tokens"])
-        output_tokens = int(row["output_tokens"])
-        return QuotaUsage(
-            request_count=requests,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=input_tokens + output_tokens,
-            window_start=_from_epoch_us(start_us),
-            window_end=_from_epoch_us(end_us),
-        )
-
-    @staticmethod
-    def _exceeded_reason(
-        usage: QuotaUsage, limits: QuotaConfig, input_tokens: int, output_tokens: int
-    ) -> str | None:
-        checks = (
-            ("requests", usage.request_count + 1, limits.max_requests),
-            ("input_tokens", usage.input_tokens + input_tokens, limits.max_input_tokens),
-            ("output_tokens", usage.output_tokens + output_tokens, limits.max_output_tokens),
-            (
-                "total_tokens",
-                usage.total_tokens + input_tokens + output_tokens,
-                limits.max_total_tokens,
-            ),
-        )
-        for label, projected, limit in checks:
-            if limit is not None and projected > limit:
-                return label
-        return None
-
-    @staticmethod
-    def _idempotent_admission(
-        existing: QuotaReservation,
-        *,
-        service: str,
-        estimated_input_tokens: int,
-        estimated_output_tokens: int,
-    ) -> QuotaAdmission:
-        if (
-            existing.service != service
-            or existing.estimated_input_tokens != estimated_input_tokens
-            or existing.estimated_output_tokens != estimated_output_tokens
-        ):
-            raise ReservationConflict("reservation idempotency key changed request data")
-        if existing.state == "released":
-            return QuotaAdmission(
-                allowed=False,
-                reservation=existing,
-                reason="reservation_released",
-            )
-        if existing.state == "abandoned":
-            return QuotaAdmission(
-                allowed=False,
-                reservation=existing,
-                reason="reservation_abandoned",
-            )
-        return QuotaAdmission(allowed=True, reservation=existing)

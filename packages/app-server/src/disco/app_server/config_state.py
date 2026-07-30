@@ -12,11 +12,11 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
-from disco.core.llm.config import McpSettings, ProviderSettings
+from disco.core.llm.config import McpSettings
 from disco.core.quota import SqliteQuotaStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
@@ -53,24 +53,11 @@ from .config.dtos import (
     McpServerApproveDTO,
     McpServerConfigDTO,
     McpServerPatchDTO,
-    ModelDTO,
-    ModelUpsert,
-    OpenRouterKeyStatus,
     ProbeResult,
     ProjectStorageConfigDTO,
-    ProviderCatalogueModelDTO,
-    ProviderCreate,
-    ProviderDTO,
-    ProviderEnableBody,
-    ProviderPatch,
     RoleFallbackConfigDTO,
     SandboxConfigDTO,
     SandboxHealthDTO,
-    SecretsListDTO,
-    SecretStatus,
-    SkillCreate,
-    SkillDTO,
-    SkillPatch,
     TtsConfigDTO,
 )
 from .config.mappers import (
@@ -78,14 +65,18 @@ from .config.mappers import (
     _build_kernel_from,
     _data_sources_from,
     _encoders_from,
-    _entry_from,
     _image_gen_from,
     _live_browser_from,
-    _models_from,
     _projects_from,
     _role_fallback_from,
     _sandbox_from,
     _tts_from,
+)
+from .general_config_service import (
+    ModelConfigStateAdapter,
+    ProviderConfigStateAdapter,
+    SecretConfigStateAdapter,
+    SkillConfigStateAdapter,
 )
 from .mcp_config_service import McpConfigService
 from .provider_config_service import (
@@ -110,7 +101,7 @@ class ConfigValidationError(Exception):
 
 
 class _McpConfigStateMixin:
-    """MCP configuration facade kept separate from the settings coordinator."""
+    """Unchanged MCP compatibility delegate retained for PKG-11-MCP."""
 
     _mcp_service: McpConfigService
 
@@ -132,7 +123,11 @@ class _McpConfigStateMixin:
     def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
         return self._mcp_service.create_mcp_server(body)
 
-    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
+    def update_mcp_server(
+        self,
+        name: str,
+        patch: McpServerPatchDTO,
+    ) -> McpConnectionDTO | None:
         return self._mcp_service.update_mcp_server(name, patch)
 
     def delete_mcp_server(self, name: str) -> bool:
@@ -141,17 +136,27 @@ class _McpConfigStateMixin:
     def revoke_mcp_server(self, name: str) -> McpConnectionDTO | None:
         return self._mcp_service.revoke_mcp_server(name)
 
-    def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
+    def approve_mcp_server(
+        self,
+        name: str,
+        body: McpServerApproveDTO,
+    ) -> McpConnectionDTO:
         return self._mcp_service.approve_mcp_server(name, body)
 
-    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]:
-        return self._mcp_service._mcp_secret_refs(srv)
+    def _mcp_secret_refs(self, server: dict) -> tuple[str, ...]:
+        return self._mcp_service._mcp_secret_refs(server)
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         return self._mcp_service.mcp_approval_diff(name, new_hash)
 
 
-class ConfigState(_McpConfigStateMixin):
+class _ConfigStateComposition(
+    _McpConfigStateMixin,
+    ModelConfigStateAdapter,
+    ProviderConfigStateAdapter,
+    SecretConfigStateAdapter,
+    SkillConfigStateAdapter,
+):
     """Holds the live config the settings surface reads/writes. The catalogue
     (add/edit/remove a model) AND the per-role assignments are mutable and PERSISTED
     via a shared ConfigStore so the agent-server runtime actually honors them.
@@ -196,186 +201,8 @@ class ConfigState(_McpConfigStateMixin):
         )
         self._mcp_service = McpConfigService(self._store, self._secrets, db_conn)
 
-    def _approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None:
-        _origin_wiring.sign_origin(self._store, self._secrets, url, purpose, secret_ref)
 
-    def approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None:
-        _origin_wiring.approve_origin(self._store, self._secrets, url, purpose, secret_ref)
-
-    def _approve_model_origin(self, entry: Any, model_id: str | None = None) -> None:
-        _origin_wiring.approve_model_origin(self._store, self._secrets, entry, model_id=model_id)
-
-    # models + assignments (the absolute manual model story) ------------------
-
-    def models(self) -> list[ModelDTO]:
-        return _models_from(self._store.load())
-
-    def add_model(self, upsert: ModelUpsert) -> list[ModelDTO]:
-        """Add a model to the catalogue. New models are their own endpoint (the
-        endpoint key = the catalogue id). Raises ValueError on a duplicate id."""
-        entry = _entry_from(upsert, provider=upsert.id)
-        self._store.add_model(upsert.id, entry)
-        self._approve_model_origin(entry, model_id=upsert.id)
-        return _models_from(self._store.load())
-
-    def update_model(self, model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
-        """Edit an existing model. Preserves its endpoint key so a seeded model
-        sharing a backend isn't silently split off. Raises ValueError if missing."""
-        existing = self._store.load().models.get(model_id)
-        provider = existing.provider if existing is not None else model_id
-        entry = _entry_from(upsert, provider=provider)
-        self._store.update_model(model_id, entry)
-        self._approve_model_origin(entry, model_id=model_id)
-        return _models_from(self._store.load())
-
-    def remove_model(self, model_id: str) -> list[ModelDTO]:
-        """Remove a model. Raises ValueError if it's the default or assigned to a
-        role (the user must reassign first — we never silently break routing)."""
-        return _models_from(self._store.remove_model(model_id))
-
-    # openrouter key (encrypted at rest) -------------------------------------
-
-    def openrouter_key_status(self) -> OpenRouterKeyStatus:
-        # `locked` must reflect ACTUAL decryptability, not just "app secret missing".
-        # A key encrypted under a DIFFERENT app secret (rotated/wrong key) is present
-        # but undecryptable — SecretStore.locked misses that (it only checks box
-        # availability, and it gates the env-secret import so it must stay lenient).
-        # Compute the DISPLAY status here from a real decrypt attempt so the UI shows
-        # "re-enter the key" instead of a false green over an unusable key.
-        present = self._secrets.has_openrouter_key()
-        usable = present and bool(self._secrets.get_openrouter_key())
-        return OpenRouterKeyStatus(
-            configured=present,
-            locked=present and not usable,
-            can_store=self._secrets.can_store,
-        )
-
-    def set_openrouter_key(self, key: str) -> OpenRouterKeyStatus:
-        """Encrypt + persist. Raises ValueError if PMX_SECRET_KEY isn't set (no app
-        secret to encrypt with) or the key is blank — mapped to 400 by the wire."""
-        if not key.strip():
-            raise ValueError("key is empty")
-        try:
-            self._secrets.set_openrouter_key(key.strip())
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from exc
-        return self.openrouter_key_status()
-
-    def clear_openrouter_key(self) -> OpenRouterKeyStatus:
-        self._secrets.clear_openrouter_key()
-        return self.openrouter_key_status()
-
-    # provider objects (definition + encrypted key + catalogue model toggles) -
-
-    def _provider_dto(self, provider: ProviderSettings) -> ProviderDTO:
-        return self._provider_config._provider_dto(provider)
-
-    def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
-        self._provider_config._save_providers(providers)
-
-    def providers(self) -> list[ProviderDTO]:
-        return self._provider_config.providers()
-
-    def provider_settings(self, provider_id: str) -> ProviderSettings:
-        return self._provider_config.provider_settings(provider_id)
-
-    def provider_origin_approved(self, provider: ProviderDTO) -> bool:
-        return self._provider_config.provider_origin_approved(provider)
-
-    def _unique_provider_id(self, label: str) -> str:
-        return self._provider_config._unique_provider_id(label)
-
-    def create_provider(self, body: ProviderCreate) -> ProviderDTO:
-        return self._provider_config.create_provider(body)
-
-    def update_provider(self, provider_id: str, patch: ProviderPatch) -> ProviderDTO:
-        return self._provider_config.update_provider(provider_id, patch)
-
-    def delete_provider(self, provider_id: str) -> None:
-        self._provider_config.delete_provider(provider_id)
-
-    def _unique_provider_catalogue_id(
-        self, provider_id: str, model_id: str, label: str | None
-    ) -> str:
-        return self._provider_config._unique_provider_catalogue_id(provider_id, model_id, label)
-
-    def enable_provider_model(
-        self,
-        provider_id: str,
-        body: ProviderEnableBody,
-        catalogue_model: ProviderCatalogueModelDTO | None = None,
-    ) -> list[ModelDTO]:
-        return self._provider_config.enable_provider_model(provider_id, body, catalogue_model)
-
-    def disable_provider_model(self, provider_id: str, catalogue_id: str) -> list[ModelDTO]:
-        return self._provider_config.disable_provider_model(provider_id, catalogue_id)
-
-    # generic provider secrets (encrypted at rest, keyed by api_key_env name) ---
-    # "openrouter" is reserved for the dedicated route/UI above; the generic
-    # surface neither lists nor accepts it (avoids two UIs fighting over one slot).
-
-    _RESERVED_SECRETS = frozenset({"openrouter", STRIPE_SECRET_REF})
-
-    @classmethod
-    def _reserved_secret(cls, name: str) -> bool:
-        return name in cls._RESERVED_SECRETS or name.startswith(
-            ("stripe.binding.", "stripe.webhook.")
-        )
-
-    def list_secrets(self) -> SecretsListDTO:
-        names = [n for n in self._secrets.secret_names() if not self._reserved_secret(n)]
-        # The SPECIFIC stored keys that can't be decrypted (named, so the UI can
-        # say which to fix) — generic, not the OpenRouter-only `locked` property.
-        locked_names = [
-            n for n in self._secrets.undecryptable_names() if not self._reserved_secret(n)
-        ]
-        return SecretsListDTO(
-            names=sorted(names),
-            locked_names=sorted(locked_names),
-            locked=bool(locked_names),
-            can_store=self._secrets.can_store,
-        )
-
-    def secret_status(self, name: str) -> SecretStatus:
-        return SecretStatus(
-            name=name,
-            configured=self._secrets.has_secret(name),
-            locked=self._secrets.locked,
-            can_store=self._secrets.can_store,
-        )
-
-    def set_secret(self, name: str, value: str) -> SecretStatus:
-        """Encrypt + persist a provider key under its api_key_env NAME. Raises
-        ValueError (→ 400) on a reserved/invalid name, a blank value, or no app
-        secret to encrypt with."""
-        name = name.strip()
-        from disco.core.llm.secret_refs import is_control_secret_ref
-
-        if self._reserved_secret(name):
-            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
-            raise ValueError(f"use the dedicated {route} route for the {name} credential")
-        if is_control_secret_ref(name):
-            raise ValueError(f"{name} is an internal control secret and cannot be a provider ref")
-        if not value.strip():
-            raise ValueError("value is empty")
-        try:
-            self._secrets.set_secret(name, value.strip())
-        except RuntimeError as exc:  # no DISCO_SECRET_KEY → can't encrypt
-            raise ValueError(str(exc)) from exc
-        return self.secret_status(name)
-
-    def clear_secret(self, name: str) -> SecretStatus:
-        name = name.strip()
-        from disco.core.llm.secret_refs import is_control_secret_ref
-
-        if self._reserved_secret(name):
-            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
-            raise ValueError(f"use the dedicated {route} route for the {name} credential")
-        if is_control_secret_ref(name):
-            raise ValueError(f"{name} is an internal control secret and cannot be cleared")
-        self._secrets.clear_secret(name)
-        return self.secret_status(name)
-
+class _IntegrationConfigState(_ConfigStateComposition):
     def configure_stripe_app(
         self,
         *,
@@ -623,6 +450,8 @@ class ConfigState(_McpConfigStateMixin):
         ok, status, detail = await probe_reachable(host, api_key=key)
         return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
 
+
+class _ExecutionConfigState(_IntegrationConfigState):
     def assignments(self) -> AssignmentsDTO:
         return _assignments_from(self._store.load())
 
@@ -752,6 +581,8 @@ class ConfigState(_McpConfigStateMixin):
 
     # encoders: bundled-local vs remote (persisted; agent-server honors per request) -
 
+
+class _MediaConfigState(_ExecutionConfigState):
     def encoders_config(self) -> EncodersConfigDTO:
         return _encoders_from(self._store.load())
 
@@ -883,6 +714,8 @@ class ConfigState(_McpConfigStateMixin):
 
     # auxiliary-role local fallback (persisted; agent-server reads per request) ---
 
+
+class _SurfaceConfigState(_MediaConfigState):
     def role_fallback_config(self) -> RoleFallbackConfigDTO:
         return _role_fallback_from(self._store.load())
 
@@ -986,54 +819,9 @@ class ConfigState(_McpConfigStateMixin):
         self._store.save_projects(ProjectStorageSettings(projects_root=raw))
         return _projects_from(self._store.load())
 
-    # skills — real, persistent .md files (PMX_SKILLS_DIR) -------------------
 
-    @staticmethod
-    def _skill_dto(s) -> SkillDTO:
-        return SkillDTO(
-            id=s.id,
-            name=s.name,
-            description=s.description,
-            enabled=s.enabled,
-            body=s.body,
-            surfaces=s.surfaces,
-        )
-
-    def skills(self) -> list[SkillDTO]:
-        return [self._skill_dto(s) for s in self._skills_store.list()]
-
-    def create_skill(self, create: SkillCreate) -> SkillDTO:
-        s = self._skills_store.create(
-            name=create.name,
-            description=create.description,
-            body=create.body,
-            enabled=create.enabled,
-            surfaces=create.surfaces,
-        )
-        return self._skill_dto(s)
-
-    def update_skill(self, skill_id: str, patch: SkillPatch) -> SkillDTO | None:
-        existing = self._skills_store.get(skill_id)
-        if existing is None:
-            return None
-        updated = existing.model_copy(
-            update={
-                k: v
-                for k, v in {
-                    "name": patch.name,
-                    "description": patch.description,
-                    "enabled": patch.enabled,
-                    "body": patch.body,
-                    "surfaces": patch.surfaces,
-                }.items()
-                if v is not None
-            }
-        )
-        self._skills_store.save(updated)
-        return self._skill_dto(updated)
-
-    def delete_skill(self, skill_id: str) -> bool:
-        return self._skills_store.delete(skill_id)
+class ConfigState(_SurfaceConfigState):
+    """Source-compatible, state-free settings composition adapter."""
 
 
 def app_quota_store(state: ConfigState) -> SqliteQuotaStore:
