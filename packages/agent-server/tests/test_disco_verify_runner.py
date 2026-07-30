@@ -185,8 +185,8 @@ async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() 
         return httpx.Response(404)
 
     client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
-    client._csrf_token = "csrf-proof"
-    client._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
+    client.auth._csrf_token = "csrf-proof"
+    client.auth._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
     assert await client.fetch_preview(cid) is None
 
 

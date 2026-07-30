@@ -99,7 +99,7 @@ class OperatorClient:
         self._preview_client = _preview_client or self._auth_client
 
     async def _events(self, cid: str) -> list[dict[str, Any]]:
-        r = await self._auth_client.authenticated_request(
+        r = await self._auth_client.auth.authenticated_request(
             "GET", f"/conversations/{cid}/events", timeout=20.0
         )
         r.raise_for_status()
@@ -107,7 +107,7 @@ class OperatorClient:
         return d if isinstance(d, list) else d.get("events", [])
 
     async def _status(self, cid: str) -> str | None:
-        r = await self._auth_client.authenticated_request(
+        r = await self._auth_client.auth.authenticated_request(
             "GET", f"/conversations/{cid}/state", timeout=20.0
         )
         if r.status_code != 200:
@@ -137,7 +137,7 @@ class OperatorClient:
         GET /preview the UI polls (runtime.preview() → available/ports). Best-effort:
         any failure ⇒ False (the probe is additive, never a hard gate)."""
         try:
-            r = await self._auth_client.authenticated_request(
+            r = await self._auth_client.auth.authenticated_request(
                 "GET", f"/conversations/{cid}/preview", timeout=6.0
             )
             if r.status_code != 200:
@@ -206,14 +206,14 @@ class OperatorClient:
         }
 
     async def _conversation_ids(self) -> list[str]:
-        r = await self._auth_client.authenticated_request("GET", "/conversations", timeout=20.0)
+        r = await self._auth_client.auth.authenticated_request("GET", "/conversations", timeout=20.0)
         body = r.json() if r.status_code == 200 else {}
         return [str(cid) for cid in body.get("conversation_ids", []) if cid]
 
     async def start(self, surface: str, prompt: str, *, model: str | None = None) -> dict[str, Any]:
         """Create a conversation on `surface` and submit the opening prompt — the operator
         kicking off a run (e.g. a build) it will then drive via wait/view/respond."""
-        r = await self._auth_client.authenticated_request(
+        r = await self._auth_client.auth.authenticated_request(
             "POST",
             "/conversations",
             timeout=30.0,
@@ -221,7 +221,7 @@ class OperatorClient:
         )
         r.raise_for_status()
         cid = str(r.json()["conversation_id"])
-        origin, additional_headers = await self._auth_client.websocket_credentials()
+        origin, additional_headers = await self._auth_client.auth.websocket_credentials()
         async with _ws_connect(
             f"{self.ws_base}/ws/conversations/{cid}",
             origin=origin,
@@ -278,7 +278,7 @@ class OperatorClient:
         url = f"{self.ws_base}/ws/conversations/{cid}"
         moved = before
         try:
-            origin, additional_headers = await self._auth_client.websocket_credentials()
+            origin, additional_headers = await self._auth_client.auth.websocket_credentials()
             async with _ws_connect(
                 url,
                 origin=origin,
