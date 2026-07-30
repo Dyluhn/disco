@@ -185,13 +185,24 @@ from .preview_manager import PreviewManager
 from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import (
-    _LIVE_MODEL_PROBE_CACHE,
-    _MODELS_CTX_CACHE,
-    _PROBE_TTL_S,
+    _LIVE_MODEL_PROBE_CACHE as _LIVE_MODEL_PROBE_CACHE,
+)
+from .runtime_model_probe import (
+    _LIVE_MODEL_PROBE_INFLIGHT as _LIVE_MODEL_PROBE_INFLIGHT,
+)
+from .runtime_model_probe import (
+    _MODELS_CTX_CACHE as _MODELS_CTX_CACHE,
+)
+from .runtime_model_probe import (
+    _PROBE_TTL_S as _PROBE_TTL_S,
+)
+from .runtime_model_probe import (
     _do_live_model_probe,
     _model_label,
 )
-from .runtime_model_probe import _probe_live_model as _owned_probe_live_model
+from .runtime_model_probe import (
+    _probe_live_model as _owned_probe_live_model,
+)
 from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
 from .security_live_verifier import make_security_live_verifier
@@ -626,6 +637,7 @@ from .sandbox_runtime_service import (  # noqa: E402, F811
 from .sandbox_runtime_service import (  # noqa: E402
     effective_local_runtime as effective_local_runtime,
 )
+
 
 def _probe_live_model(
     base_url: str | None, api_key: str | None = None, model_id: str | None = None
