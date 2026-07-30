@@ -236,6 +236,7 @@ class PreviewService:
             port,
             owner_id=owner_id,
             ensure_preview=self.ensure_preview,
+            resolve_upstream=self.port_upstream,
         )
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
