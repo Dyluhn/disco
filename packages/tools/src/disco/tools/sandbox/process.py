@@ -689,7 +689,8 @@ class ProcessSandboxInstance:
         return f"http://127.0.0.1:{port}"
 
     async def destroy(self) -> None:
-        self._destroyed = True
+        if self._destroyed:
+            return
 
         if self._relay is not None:
             await asyncio.to_thread(self._relay.shutdown)
@@ -703,25 +704,14 @@ class ProcessSandboxInstance:
         await self._terminate_workspace_processes()
 
         shutil.rmtree(self._workspace, ignore_errors=True)
+        self._destroyed = True
 
     def _workspace_process_pids(self) -> set[int]:
-        """Best-effort descendants owned by this dev process sandbox.
-
-        Model code can detach/reparent a subprocess from its Jupyter kernel.  Its
-        scrubbed environment still carries the exact per-conversation
-        ``DISCO_WORKSPACE`` capability, and ordinary workspace servers retain a
-        cwd below that root.  Use both signals before deleting the workspace.
-
-        Never select tmux itself: the process backend intentionally shares one
-        host tmux server, whose original environment can predate this sandbox.
-        This cleanup is defense in depth, not production containment; the process
-        backend still has no PID namespace and remains invalid for production.
-        """
+        """Find descendants by workspace capability or cwd, excluding shared tmux."""
         proc_root = Path("/proc")
         if not proc_root.is_dir():
             return set()
-        marker = b"DISCO_WORKSPACE=" + str(self._workspace).encode()
-        selected: set[int] = set()
+        marker, selected = b"DISCO_WORKSPACE=" + str(self._workspace).encode(), set[int]()
         for entry in proc_root.iterdir():
             if not entry.name.isdigit():
                 continue
@@ -758,8 +748,7 @@ class ProcessSandboxInstance:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        deadline = asyncio.get_running_loop().time() + 2.0
-        survivors = pids
+        deadline, survivors = asyncio.get_running_loop().time() + 2.0, pids
         while survivors and asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.05)
             survivors &= self._workspace_process_pids()
@@ -772,6 +761,17 @@ class ProcessSandboxInstance:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        deadline = asyncio.get_running_loop().time() + 0.5
+        while survivors and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+            survivors &= self._workspace_process_pids()
+        # This retry proof remains with the existing sandbox owner.
+        # PKG-10-SANDBOX owns its later extraction with the class debt.
+        if survivors:
+            raise SandboxUnavailableError(
+                "process sandbox termination could not be confirmed for "
+                f"workspace-owned pid(s): {sorted(survivors)}"
+            )
 
 
 class ProcessSandboxService:
