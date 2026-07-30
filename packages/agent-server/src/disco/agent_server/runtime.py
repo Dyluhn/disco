@@ -185,7 +185,11 @@ from .preview_manager import PreviewManager
 from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
-from .runtime_settings import RuntimeSettings
+from .runtime_settings import (
+    RuntimeSettings,
+    _RuntimeModelBindings,
+    _RuntimeSettingsRouting,
+)
 from .schedule_service import ScheduleService
 from .security_live_verifier import make_security_live_verifier
 from .sessions_service import SessionsService
@@ -866,11 +870,6 @@ class ConversationRuntime:
                 "file path) — per-conversation override/surface/autonomous flags "
                 "will NOT survive a restart"
             )
-        # Persisted per-conversation settings (B0): override / surface / autonomous /
-        # assist / quiet accessors. The dicts + sidecar paths stay declared below on the
-        # runtime; the stateless service reaches them via a back-ref. Constructed
-        # FIRST because the _load_* calls in this __init__ route through it.
-        self._settings = RuntimeSettings(self)
         # Auto-titling: derive a short display title from the first user message so
         # History/Projects show real names, not a wall of "(untitled)". Fire-and-forget
         # from kick(); uses the cheap SUMMARIZER role; idempotent + non-blocking.
@@ -878,37 +877,6 @@ class ConversationRuntime:
         self._suggestion_service = SuggestionService(
             self._router_now, lambda: self._project_store_now().root or ""
         )
-        self._override_path = f"{db_path}.overrides.json" if db_path else ""
-        self._model_override: dict[str, str] = self._load_overrides()
-        # Per-conversation surface ("research" | "build" | "deep_research"); set at
-        # create time. PERSISTED to a JSON sidecar (B0 pattern, same as the model
-        # override above) — DC-05 re-run #7 (2026-06-11): after a server restart the
-        # in-memory dict was empty, _surface_of's recovery ladder needs a project
-        # manifest to derive "build" but the manifest is only written by
-        # _maybe_snapshot (which no-ops without a configured projects_root), so a
-        # resumed Build conversation silently composed on the research surface →
-        # _NoToolExecutor → the model's ONLY offered tool was `finish`. The whole
-        # post-resume "degeneration" was a toolless loop, not model failure. The
-        # _surface_of ladder stays as the fallback for pre-fix sidecar-less DBs.
-        self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
-        self._surface: dict[str, str] = self._load_surfaces()
-        # Per-conversation AUTONOMOUS flag (issue A), same B0 sidecar pattern as
-        # surface. True = headless/unattended: the loop withholds ask_user, auto-
-        # approves the plan, and forfeits cleanly instead of halting for a human.
-        self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
-        self._autonomous: dict[str, bool] = self._load_autonomous()
-        # Per-conversation ASSIST tier flag (T1), same B0 sidecar pattern.
-        self._assist_path = f"{db_path}.assist.json" if db_path else ""
-        self._assist: dict[str, bool] = self._load_assist()
-        # Per-conversation quiet mode flag, same B0 sidecar pattern. True means
-        # planning no-tool assistant prose is suppressed while plan/actions still render.
-        self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
-        self._quiet: dict[str, bool] = self._load_quiet()
-        # C6: per-conversation artifact_mode flag. In-memory only — set at create
-        # time from the body; artifact sessions are short-lived, no sidecar needed.
-        self._artifact_mode: dict[str, bool] = {}
-        # EPIC F: per-conversation AppKit mode flag. In-memory only, default OFF.
-        self._appkit_mode: dict[str, bool] = {}
         # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker
         # (decomposed into BuildContractService; mutable dicts stay here so tests read them).
         self._build_contract_registry = BuildContractRegistry.default()
@@ -922,10 +890,6 @@ class ConversationRuntime:
         # legacy loop/executor/preview/verifier/export/finish authority never reads them.
         self._build_platform_shadow_records: dict[str, Any] = {}
         self._build_platform = BuildPlatformRuntime(self)
-        # P3 — global last-selected driver model (single-value sidecar). Persisted
-        # so a new conversation seeds from whatever the user picked last; falls back
-        # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
-        self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
         # Per-conversation server-side uploads sidecar directory (B0 pattern).
         # DC-07 (2026-06-11): uploads survive sandbox recreation.
         self._uploads_base = f"{db_path}.uploads" if db_path else ""
@@ -1007,6 +971,30 @@ class ConversationRuntime:
             install_inspect()
         self._loops: dict[str, AgentLoop] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        # Persisted settings own their collections and sidecar paths. Named,
+        # cohesive ports expose only routing metadata and model-binding cache
+        # operations; RuntimeSettings never receives this runtime or callables.
+        settings_routing = _RuntimeSettingsRouting(
+            self._config_store,
+            self._secret_store,
+            router,
+        )
+        model_bindings = _RuntimeModelBindings(
+            loops=self._loops,
+            tasks=self._tasks,
+            compose_contexts=self._resolved_context_for_compose,
+            resolved_contexts=self._resolved_driver_contexts,
+            executors=self._executors,
+            pending_sessions=self._pending_sessions,
+        )
+        self._settings = RuntimeSettings(
+            db_path=db_path,
+            store=self._store,
+            config_store=self._config_store,
+            routing=settings_routing,
+            model_bindings=model_bindings,
+            appkit_ejections=self._build_platform.appkit_ejected,
+        )
         # Durable authority captured by each registered Build task.  The
         # in-memory generation remains useful for local lifecycle cleanup, but
         # it cannot arbitrate another Agent-server process.  These ids are
@@ -1307,86 +1295,10 @@ class ConversationRuntime:
     _AUTONOMOUS_SURFACES: frozenset[str] = frozenset({"build", "agent", "deep_research"})
 
     def set_surface(self, conversation_id: str, surface: str) -> None:
-        """Select a conversation's surface before it runs. Build composes tools +
-        sandbox + the BlastRadiusConfirm gate; Deep Research composes the plan-gate +
-        the long-horizon engine; Research stays read-only + ungated. Idempotent
-        until the loop is built. PERSISTED so a server restart cannot demote a
-        Build/DR conversation to the toolless research default (DC-05 re-run #7)."""
-        self._surface[conversation_id] = surface if surface in self._VALID_SURFACES else "research"
-        self._save_surfaces()
+        self._settings.set_surface(conversation_id, surface)
 
     def _surface_of(self, conversation_id: str) -> str:
-        """The conversation's surface, recovered durably across server restarts.
-        In-memory `_surface` is authoritative when set — at create time via
-        set_surface (which persists to the sidecar) or reloaded from the sidecar
-        at startup. When it's missing — a pre-sidecar DB, or a sidecar lost with
-        its DB — we recover from durable signals, MOST AUTHORITATIVE FIRST:
-        - the `conversations.surface` column (written at create, app.py) — the
-          real answer, durable in the same DB. This is the only rung that can tell
-          "agent" from "build" (the project manifest can't — they snapshot
-          identically) and it also fixes a pre-existing hole where a plan-gated
-          Build with no manifest yet mis-derived deep_research below.
-        - a project manifest on disk → a build-like surface (Research never snapshots).
-        - a ReportEvent on the conversation log → Deep Research.
-        Defaults to "research" when no durable signal exists. Recoveries are
-        written through to the sidecar so the ladder runs at most once per cid."""
-        cached = self._surface.get(conversation_id)
-        if cached is not None:
-            return cached
-        # Rung 0 — the authoritative DB column (set at create). Cheap sync SQL on
-        # the same connection the rungs below already use. This makes the
-        # heuristic rungs a fallback only for legacy rows with a NULL surface.
-        try:
-            conn0 = getattr(self._store, "_conn", None)
-            if conn0 is not None:
-                row = conn0.execute(
-                    "SELECT surface FROM conversations WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()
-                if row is not None and row["surface"] in self._VALID_SURFACES:
-                    self._surface[conversation_id] = row["surface"]
-                    self._save_surfaces()
-                    return row["surface"]
-        except Exception:  # noqa: BLE001 — best-effort recovery, fall through to heuristics
-            pass
-        store = self._project_store_now()
-        if store is not None and store.status() == StorageStatus.OK:
-            try:
-                if store.get(conversation_id) is not None:
-                    # cache + persist the recovery so subsequent lookups (and the
-                    # next restart) don't re-derive
-                    self._surface[conversation_id] = "build"
-                    self._save_surfaces()
-                    return "build"
-            except Exception:  # noqa: BLE001 — best-effort recovery
-                pass
-        # Deep Research recovery: a ReportEvent on the log is the durable marker
-        # (Research/Build never emit ReportEvent). Cheap SQL check — no need to
-        # deserialize the whole log just to read the discriminator column.
-        try:
-            conn = getattr(self._store, "_conn", None)
-            if conn is not None:
-                kinds = {
-                    row["kind"]
-                    for row in conn.execute(
-                        "SELECT DISTINCT kind FROM events WHERE conversation_id = ?",
-                        (conversation_id,),
-                    )
-                }
-                if "report" in kinds:
-                    self._surface[conversation_id] = "deep_research"
-                    self._save_surfaces()
-                    return "deep_research"
-                # plan-event without any action-event marks a deep-research paused
-                # at its plan gate (Build that survived a restart would also have
-                # an on-disk project manifest, caught above).
-                if "plan" in kinds and "action" not in kinds:
-                    self._surface[conversation_id] = "deep_research"
-                    self._save_surfaces()
-                    return "deep_research"
-        except Exception:  # noqa: BLE001 — best-effort recovery
-            pass
-        return "research"
+        return self._settings.surface_of(conversation_id)
 
     def _sandbox_service_now(self) -> SandboxService:
         return self._sandbox._sandbox_service_now()
@@ -1407,7 +1319,9 @@ class ConversationRuntime:
         try:
             cfg = self._routing_config_now()
             override = (
-                self._model_override.get(conversation_id) if conversation_id is not None else None
+                self._settings.get_model_override(conversation_id)
+                if conversation_id is not None
+                else None
             )
             key = cfg.model_for(ModelRole.AGENT_DRIVER, override=override)
             if key not in cfg.models and override is not None:
@@ -1439,7 +1353,7 @@ class ConversationRuntime:
         keyless local endpoints (no base_url) are probeable; an unavailable or
         invalid configured fallback raises before any provider or tool spend.
         """
-        override = self._model_override.get(conversation_id)
+        override = self._settings.get_model_override(conversation_id)
         unresolved_key = override or "<configured-default>"
         try:
             cfg = self._routing_config_now()
@@ -1555,6 +1469,62 @@ class ConversationRuntime:
             pass
 
     # ---- persisted settings (B0) — delegators to RuntimeSettings ------------
+
+    @property
+    def _model_override(self) -> dict[str, str]:
+        return self._settings._model_overrides_view
+
+    @_model_override.setter
+    def _model_override(self, value: dict[str, str]) -> None:
+        self._settings._model_overrides_view = value
+
+    @property
+    def _surface(self) -> dict[str, str]:
+        return self._settings._surfaces_view
+
+    @property
+    def _autonomous(self) -> dict[str, bool]:
+        return self._settings._autonomous_view
+
+    @property
+    def _assist(self) -> dict[str, bool]:
+        return self._settings._assist_view
+
+    @property
+    def _quiet(self) -> dict[str, bool]:
+        return self._settings._quiet_view
+
+    @property
+    def _artifact_mode(self) -> dict[str, bool]:
+        return self._settings._artifact_mode_view
+
+    @property
+    def _appkit_mode(self) -> dict[str, bool]:
+        return self._settings._appkit_mode_view
+
+    @property
+    def _override_path(self) -> str:
+        return self._settings._override_sidecar_path
+
+    @property
+    def _surface_path(self) -> str:
+        return self._settings._surface_sidecar_path
+
+    @property
+    def _autonomous_path(self) -> str:
+        return self._settings._autonomous_sidecar_path
+
+    @property
+    def _assist_path(self) -> str:
+        return self._settings._assist_sidecar_path
+
+    @property
+    def _quiet_path(self) -> str:
+        return self._settings._quiet_sidecar_path
+
+    @property
+    def _last_model_path(self) -> str:
+        return self._settings._last_model_sidecar_path
 
     def _load_overrides(self) -> dict[str, str]:
         return self._settings._load_overrides()
@@ -1855,7 +1825,7 @@ class ConversationRuntime:
         override = (
             compose_snapshot.model_key
             if compose_snapshot is not None
-            else self._model_override.get(conversation_id)
+            else self._settings.get_model_override(conversation_id)
         )
         # Surface FIRST: it scopes which skills the router injects (a build-only
         # skill shouldn't reach an agent conversation's prompt, and vice versa).
@@ -3469,7 +3439,9 @@ class ConversationRuntime:
             # Test/dev seam: a pinned router has no real endpoint to probe.
             return None
         cid = conversation_id or ""
-        override = override if override is not None else self._model_override.get(cid)
+        override = (
+            override if override is not None else self._settings.get_model_override(cid)
+        )
         cfg = self._config_store.load()
         if override and override in cfg.models:
             key = override
@@ -3816,33 +3788,7 @@ class ConversationRuntime:
             clear_conversation_read_state(conversation_id)
 
     def _evict_loop_for_model_change(self, conversation_id: str) -> None:
-        """A deliberate model/assist change on a TERMINAL conversation (ERROR / STUCK /
-        FINISHED / PAUSED / IDLE-with-unfinished-plan): drop the cached loop + executor
-        that were composed against the OLD model so the NEXT kick (resume / replan)
-        re-composes the driver, summarizer, ModelExecutionPolicy, capability scope, and
-        driver-LLM endpoint with the NEW model — the model-pill-silently-ignored fix (#24).
-
-        The live sandbox SESSION is preserved: it is re-parked as the pending session so
-        `_compose_build_loop` adopts the SAME workspace (object identity — no destroy, no
-        leak, no rehydrate round-trip). A later backend change is still caught at the next
-        kick by `_evict_stale_backend`, which reconciles a mismatched pending session.
-
-        No-op when a run is in flight (the settings gate already rejected that) — never
-        evict a live loop. Called under the per-cid settings lock from
-        `RuntimeSettings.apply_settings_change` AFTER the override is persisted."""
-        task = self._tasks.get(conversation_id)
-        if task is not None and not task.done():
-            return  # defensive: never evict under a live run (the gate already blocks it)
-        self._loops.pop(conversation_id, None)
-        self._resolved_driver_contexts.pop(conversation_id, None)
-        executor = self._executors.pop(conversation_id, None)
-        # Preserve the live sandbox so the rebuilt loop adopts the SAME box (workspace +
-        # shell sessions intact). Don't clobber an existing pending session (a pre-kick
-        # upload session) if one is already parked.
-        if conversation_id not in self._pending_sessions:
-            sess = getattr(executor, "_sandbox", None) if executor is not None else None
-            if sess is not None:
-                self._pending_sessions[conversation_id] = sess
+        self._settings.evict_model_binding(conversation_id)
 
     def _evict_stale_backend(self, conversation_id: str) -> None:
         """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
