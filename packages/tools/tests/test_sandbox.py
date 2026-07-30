@@ -735,3 +735,131 @@ async def test_process_shell_expansion_path_may_not_traverse_out_of_the_jail():
         await inst.exec_shell('cat "/workspace/../$f"', timeout_s=10)
     with pytest.raises(SandboxPermissionError):
         await inst.exec_shell("cat /workspace/../$f", timeout_s=10)
+
+
+async def test_session_destroy_retains_retryable_owners_until_teardown_succeeds():
+    from typing import Any, cast
+
+    class _Manager:
+        calls = 0
+        fail = True
+
+        async def aclose(self) -> None:
+            assert await session._ensure() is instance
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("manager teardown failed")
+
+    class _Instance:
+        calls = 0
+        fail = True
+
+        async def destroy(self) -> None:
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("instance teardown failed")
+
+    session = SandboxSession(
+        ProcessSandboxService(),
+        owner_id="local",
+        conversation_id="retryable-destroy",
+    )
+    manager = _Manager()
+    instance = _Instance()
+    session._preview_manager = manager
+    session._instance = cast(Any, instance)
+
+    with pytest.raises(RuntimeError, match="manager teardown failed"):
+        await session.destroy()
+    assert session._preview_manager is manager
+    assert session._instance is instance
+    assert instance.calls == 0
+
+    manager.fail = False
+    with pytest.raises(RuntimeError, match="instance teardown failed"):
+        await session.destroy()
+    assert session._preview_manager is None
+    assert session._instance is instance
+
+    instance.fail = False
+    await session.destroy()
+    assert session._instance is None
+    with pytest.raises(SandboxError, match="sandbox session is closed"):
+        await session._ensure()
+
+
+async def test_container_destroy_failure_remains_retryable():
+    from disco.tools.sandbox._container import ContainerInstance
+
+    class _Container:
+        fail_remove = True
+        remove_calls = 0
+
+        def stop(self, *, timeout: int) -> None:
+            del timeout
+
+        def remove(self, *, force: bool, v: bool) -> None:
+            del force, v
+            self.remove_calls += 1
+            if self.fail_remove:
+                raise RuntimeError("force removal failed")
+
+    container = _Container()
+    instance = ContainerInstance(
+        id="retryable-container",
+        owner_id="local",
+        conversation_id="retryable-container",
+        spec=SandboxSpec(),
+        container=container,
+        container_workspace="/workspace",
+        stop_timeout_s=5,
+    )
+
+    with pytest.raises(RuntimeError, match="force removal failed"):
+        await instance.destroy()
+    assert instance._destroyed is False
+
+    container.fail_remove = False
+    await instance.destroy()
+    assert instance._destroyed is True
+    assert container.remove_calls == 2
+
+
+async def test_process_termination_refuses_success_while_owned_pid_survives(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from disco.tools.sandbox import process as process_module
+    from disco.tools.sandbox.base import SandboxUnavailableError
+    from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    class _Clock:
+        tick = 0
+
+        def time(self) -> float:
+            self.tick += 1
+            return float(self.tick)
+
+    class _PersistentOwner:
+        def _workspace_process_pids(self) -> set[int]:
+            return {4242}
+
+    async def _advance(_delay: float) -> None:
+        return None
+
+    clock = _Clock()
+    monkeypatch.setattr(
+        process_module,
+        "asyncio",
+        SimpleNamespace(get_running_loop=lambda: clock, sleep=_advance),
+    )
+    monkeypatch.setattr(
+        process_module,
+        "os",
+        SimpleNamespace(kill=lambda _pid, _signal: None),
+    )
+
+    with pytest.raises(SandboxUnavailableError, match=r"4242"):
+        await ProcessSandboxInstance._terminate_workspace_processes(cast(Any, _PersistentOwner()))

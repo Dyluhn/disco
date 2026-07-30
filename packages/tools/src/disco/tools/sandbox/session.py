@@ -116,9 +116,9 @@ class SandboxSession:
         # slot explicit (and untyped across the package boundary) so lifecycle
         # teardown does not depend on a dynamically invented attribute.
         self._preview_manager: Any | None = None
-        self._closed = False
+        self._closed, self._destroy_task = False, cast(asyncio.Task[Any] | None, None)
         self._generation = 0  # bumped on every (re)create — telemetry + tests
-        self._lock = asyncio.Lock()
+        self._lock, self._destroy_lock = asyncio.Lock(), asyncio.Lock()
         self._preview_task: asyncio.Task[None] | None = None  # tracked so destroy() can cancel
         # EPIC F (P1 #2): owned Build runtimes set ``legacy_auto_preview=False`` so
         # PreviewManager is the only preview lifecycle authority from the first sandbox
@@ -206,7 +206,7 @@ class SandboxSession:
         return self._kernel
 
     async def _ensure(self) -> SandboxInstance:
-        if self._closed:
+        if self._closed and asyncio.current_task() is not self._destroy_task:
             raise SandboxError("sandbox session is closed")
         created = False
         async with self._lock:
@@ -803,36 +803,47 @@ class SandboxSession:
         by the preview_* tools) — its supervisor task sleeps forever otherwise, leaking
         past the sandbox it supervised.
         """
-        self._closed = True
-        # The process backend's managed Jupyter kernel owns a child process and
-        # multiple ZMQ channel sockets.  Tear it down while its sandbox still
-        # exists; simply dropping the reference leaves the kernel and sockets
-        # alive until interpreter shutdown (where ResourceWarning is too late to
-        # recover them).  Container-backed kernels use the same ownership path.
-        kernel, self._kernel = self._kernel, None
-        if kernel is not None:
+        async with self._destroy_lock:
+            self._closed, self._destroy_task = True, asyncio.current_task()
             try:
-                await kernel.shutdown()
-            except Exception:  # noqa: BLE001 — teardown remains best-effort
-                _LOG.debug("kernel shutdown on session destroy failed", exc_info=True)
-        # Close a cached PreviewManager so its supervisor task can't outlive the sandbox.
-        mgr, self._preview_manager = getattr(self, "_preview_manager", None), None
-        if mgr is not None:
-            try:
-                await mgr.aclose()
-            except Exception:  # noqa: BLE001 — teardown is best-effort; never raise
-                _LOG.debug("preview manager aclose on destroy failed", exc_info=True)
-        # Cancel the auto-preview task first so it can't race the instance teardown.
-        task, self._preview_task = self._preview_task, None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
-                pass
-        inst, self._instance = self._instance, None
-        if inst is not None:
-            await inst.destroy()
+                # The process backend's managed Jupyter kernel owns a child process
+                # and multiple ZMQ channel sockets. Tear it down while its sandbox
+                # still exists; simply dropping the reference leaves those resources
+                # alive until interpreter shutdown.
+                await _shutdown_session_kernel(self)
+                # PreviewManager stops foreground servers through this session. The
+                # scoped task owner can reach the live instance while unrelated calls
+                # continue to observe a closed session.
+                mgr = self._preview_manager
+                if mgr is not None:
+                    await mgr.aclose()
+                    self._preview_manager = None
+                task, self._preview_task = self._preview_task, None
+                if task is not None and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                        pass
+                # Retain the instance owner until backend destruction is confirmed.
+                inst = self._instance
+                if inst is not None:
+                    await inst.destroy()
+                    self._instance = None
+            finally:
+                self._destroy_task = None
+                self._closed = True
+
+
+async def _shutdown_session_kernel(session: SandboxSession) -> None:
+    """Release the managed kernel before sandbox-owned teardown."""
+
+    kernel, session._kernel = session._kernel, None
+    if kernel is not None:
+        try:
+            await kernel.shutdown()
+        except Exception:  # noqa: BLE001 — teardown remains best-effort
+            _LOG.debug("kernel shutdown on session destroy failed", exc_info=True)
 
 
 # Structural conformance: a SandboxSession IS a SandboxInstance (drop-in for the
