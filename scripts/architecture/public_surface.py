@@ -20,9 +20,7 @@ def tracked_initializers(root: Path) -> list[str]:
     return [
         rel
         for rel in _tracked(root)
-        if rel.startswith("packages/")
-        and "/src/" in rel
-        and rel.endswith("/__init__.py")
+        if rel.startswith("packages/") and "/src/" in rel and rel.endswith("/__init__.py")
     ]
 
 
@@ -35,9 +33,7 @@ def _module_index(root: Path) -> dict[str, Path]:
     return {
         _module_name(rel): root / rel
         for rel in _tracked(root)
-        if rel.startswith("packages/")
-        and "/src/" in rel
-        and rel.endswith(".py")
+        if rel.startswith("packages/") and "/src/" in rel and rel.endswith(".py")
     }
 
 
@@ -64,20 +60,39 @@ def _function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return f"{prefix} {node.name}({ast.unparse(node.args)}){returns}"
 
 
+def _is_type_checking_guard(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "TYPE_CHECKING"
+        or isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "typing"
+        and node.attr == "TYPE_CHECKING"
+    )
+
+
+def _static_class_items(node: ast.ClassDef) -> list[ast.stmt]:
+    """Return runtime declarations plus direct static compatibility declarations."""
+    items: list[ast.stmt] = []
+    for item in node.body:
+        items.append(item)
+        if isinstance(item, ast.If) and _is_type_checking_guard(item.test):
+            items.extend(item.body)
+    return items
+
+
 def _class_signature(node: ast.ClassDef) -> dict[str, Any]:
     bases = [ast.unparse(base) for base in node.bases]
     members: list[str] = []
     fields: list[str] = []
-    for item in node.body:
+    for item in _static_class_items(node):
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
             not item.name.startswith("_") or item.name == "__init__"
         ):
             members.append(_function_signature(item))
         elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             if not item.target.id.startswith("_"):
-                fields.append(
-                    f"{item.target.id}: {ast.unparse(item.annotation)}"
-                )
+                fields.append(f"{item.target.id}: {ast.unparse(item.annotation)}")
     return {
         "kind": "class",
         "signature": f"class {node.name}({', '.join(bases)})",
@@ -97,9 +112,7 @@ def _definition_surface(node: ast.stmt) -> dict[str, Any] | None:
             "signature": f"{node.target.id}: {ast.unparse(node.annotation)}",
         }
     if isinstance(node, ast.Assign):
-        names = [
-            target.id for target in node.targets if isinstance(target, ast.Name)
-        ]
+        names = [target.id for target in node.targets if isinstance(target, ast.Name)]
         if names:
             return {
                 "kind": "value",
@@ -108,9 +121,7 @@ def _definition_surface(node: ast.stmt) -> dict[str, Any] | None:
     return None
 
 
-def _local_definition(
-    tree: ast.Module, name: str
-) -> dict[str, Any] | None:
+def _local_definition(tree: ast.Module, name: str) -> dict[str, Any] | None:
     for node in tree.body:
         node_name = getattr(node, "name", None)
         if node_name == name:
@@ -119,8 +130,7 @@ def _local_definition(
             if node.target.id == name:
                 return _definition_surface(node)
         if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == name
-            for target in node.targets
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
         ):
             return _definition_surface(node)
     return None
@@ -178,8 +188,7 @@ def _literal_all(tree: ast.Module) -> tuple[bool, list[str] | None]:
         if not isinstance(node, ast.Assign):
             continue
         if not any(
-            isinstance(target, ast.Name) and target.id == "__all__"
-            for target in node.targets
+            isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
         ):
             continue
         if not isinstance(node.value, (ast.List, ast.Tuple)):
@@ -232,9 +241,7 @@ def _public_signatures(
         if local:
             signatures[name] = local
             continue
-        imported = next(
-            (row for row in origins if row["public_name"] == name), None
-        )
+        imported = next((row for row in origins if row["public_name"] == name), None)
         if imported is None:
             signatures[name] = {"kind": "unresolved", "signature": name}
             continue
@@ -250,9 +257,7 @@ def _public_signatures(
             imported["module"],
             source_is_package=True,
         )
-        signatures[name] = _resolve_symbol(
-            target, imported["name"], module_index, set()
-        )
+        signatures[name] = _resolve_symbol(target, imported["name"], module_index, set())
     return signatures
 
 
@@ -273,18 +278,12 @@ def extract_initializer(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
         and not node.name.startswith("_")
     )
-    default_names = sorted(
-        {row["public_name"] for row in imports} | set(definitions)
-    )
+    default_names = sorted({row["public_name"] for row in imports} | set(definitions))
     public_names = explicit_all if has_all else default_names
     if public_names is None:
         public_names = []
-    origins = [
-        row for row in imports if row["public_name"] in set(public_names)
-    ]
-    signatures = _public_signatures(
-        tree, module, module_index, public_names, origins
-    )
+    origins = [row for row in imports if row["public_name"] in set(public_names)]
+    signatures = _public_signatures(tree, module, module_index, public_names, origins)
     return {
         "path": rel,
         "has_all": has_all,
@@ -297,10 +296,7 @@ def extract_initializer(
 
 def scan_python_public_surface(root: Path) -> list[dict[str, Any]]:
     index = _module_index(root)
-    return [
-        extract_initializer(root, rel, index)
-        for rel in tracked_initializers(root)
-    ]
+    return [extract_initializer(root, rel, index) for rel in tracked_initializers(root)]
 
 
 def scan_frontend_public_surface(root: Path) -> list[dict[str, Any]]:
@@ -313,8 +309,7 @@ def scan_frontend_public_surface(root: Path) -> list[dict[str, Any]]:
     ]
     if problems or diagnostics:
         raise RuntimeError(
-            f"frontend public-surface scan failed: policy={problems}, "
-            f"diagnostics={diagnostics}"
+            f"frontend public-surface scan failed: policy={problems}, diagnostics={diagnostics}"
         )
     return [
         {

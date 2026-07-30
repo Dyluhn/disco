@@ -25,9 +25,7 @@ from architecture import public_api  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCHEMA = "disclaude-architecture-public-api-v1"
-_ACCEPTED_DIAGRAM_SHA256 = (
-    "759993f1a3104700efe8f48395923117546bd0fd1ca371681bc2a09fc95b9f26"
-)
+_ACCEPTED_DIAGRAM_SHA256 = "759993f1a3104700efe8f48395923117546bd0fd1ca371681bc2a09fc95b9f26"
 _ACCEPTED_PARENT = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
 _FIXTURE_SOURCE_IDENTITY = "f" * 40
 _INIT_REL = "packages/demo/src/disco/demo/__init__.py"
@@ -55,14 +53,20 @@ def _init_git(root: Path) -> None:
 def _checkpoint(root: Path) -> str:
     git_add(root, ".")
     command = [
-        "git", "-C", str(root), "-c", "user.name=Test",
-        "-c", "user.email=test@example.invalid", "commit",
-        "-qm", "source checkpoint", "--allow-empty",
+        "git",
+        "-C",
+        str(root),
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "source checkpoint",
+        "--allow-empty",
     ]
     subprocess.run(command, capture_output=True, check=True)
-    return subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-    ).strip()
+    return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
 
 
 def _write_python_fixture(root: Path, initializer: str | None = None) -> Path:
@@ -80,7 +84,9 @@ def _write_python_fixture(root: Path, initializer: str | None = None) -> Path:
         class Tool:
             pass
     """
-    initializer = initializer or """\
+    initializer = (
+        initializer
+        or """\
         from .models import PublicEvent as Event
         from ..core import Tool
 
@@ -89,6 +95,7 @@ def _write_python_fixture(root: Path, initializer: str | None = None) -> Path:
 
         __all__ = ["Event", "Tool", "create_app"]
     """
+    )
     write(
         root / "packages/demo/src/disco/demo/models.py",
         textwrap.dedent(models),
@@ -152,7 +159,7 @@ def _write_frontend_fixture(root: Path) -> None:
     )
     write(
         root / "frontend/src/shared/types.ts",
-        'export interface SharedValue { id: string; }\n',
+        "export interface SharedValue { id: string; }\n",
     )
     write(
         root / _FRONTEND_PUBLIC_REL,
@@ -198,11 +205,7 @@ def _transition(
         public_api.scan_python_public_surface(root),
         public_api.scan_frontend_public_surface(root),
     )
-    matches = [
-        key
-        for key in targets
-        if key[:3] == (surface, path, public_name)
-    ]
+    matches = [key for key in targets if key[:3] == (surface, path, public_name)]
     assert len(matches) == 1
     return {
         "surface": surface,
@@ -234,8 +237,7 @@ def _write_authority(
         "python_initializers": public_api.scan_python_public_surface(root),
         "frontend_modules": public_api.scan_frontend_public_surface(root),
         "contract_files": [
-            _contract_row(root, rel)
-            for rel in sorted([_CONTRACT_REL, _DIAGRAM_REL])
+            _contract_row(root, rel) for rel in sorted([_CONTRACT_REL, _DIAGRAM_REL])
         ],
         "diagram_transitions": [
             {
@@ -247,12 +249,8 @@ def _write_authority(
                 "path": _DIAGRAM_REL,
             }
         ],
-        "additive_transitions": sorted(
-            additive_transitions or [], key=public_api._canonical
-        ),
-        "compatibility_bridges": sorted(
-            compatibility_bridges or [], key=public_api._canonical
-        ),
+        "additive_transitions": sorted(additive_transitions or [], key=public_api._canonical),
+        "compatibility_bridges": sorted(compatibility_bridges or [], key=public_api._canonical),
         "compatibility_rule": (
             "Any deleted or renamed public name, origin, signature, frontend "
             "export/type/schema, or contract byte fails. Additions require an "
@@ -300,14 +298,23 @@ def _setup_repo(
     git_add(root, "architecture/public-api.json")
     tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
     final_identity = subprocess.check_output(
-        ["git", "-C", str(root), "-c", "user.name=Test",
-         "-c", "user.email=test@example.invalid", "commit-tree", tree,
-         "-p", authority_identity],
-        input="final candidate\n", text=True,
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            authority_identity,
+        ],
+        input="final candidate\n",
+        text=True,
     ).strip()
-    subprocess.run(
-        ["git", "-C", str(root), "update-ref", "HEAD", final_identity], check=True
-    )
+    subprocess.run(["git", "-C", str(root), "update-ref", "HEAD", final_identity], check=True)
     return public_api.load_public_api(root)
 
 
@@ -391,9 +398,7 @@ class TestExtractInitSurface:
                 "Event": {
                     "kind": "class",
                     "signature": "class PublicEvent()",
-                    "members": [
-                        "def label(self, prefix: str='event') -> str"
-                    ],
+                    "members": ["def label(self, prefix: str='event') -> str"],
                     "fields": ["code: str"],
                 },
                 "MyService": {
@@ -410,12 +415,45 @@ class TestExtractInitSurface:
                 },
                 "create_app": {
                     "kind": "function",
-                    "signature": (
-                        "async def create_app(name: str, *, "
-                        "debug: bool=False) -> str"
-                    ),
+                    "signature": ("async def create_app(name: str, *, debug: bool=False) -> str"),
                 },
             },
+        }
+
+    def test_type_checking_class_declarations_preserve_static_surface(self, tmp_path: Path) -> None:
+        _init_git(tmp_path)
+        path = _write_python_fixture(
+            tmp_path,
+            """\
+            from typing import TYPE_CHECKING
+
+            class Public:
+                if TYPE_CHECKING:
+                    inherited_field: str
+
+                    async def inherited(self, value: int = 1) -> str: ...
+
+                if False:
+                    def control_flow_only(self) -> None: ...
+
+                def direct(self) -> None:
+                    pass
+
+            __all__ = ["Public"]
+            """,
+        )
+        git_add(tmp_path, ".")
+
+        surface = public_api._extract_init_surface(path)
+
+        assert surface["public_signatures"]["Public"] == {
+            "kind": "class",
+            "signature": "class Public()",
+            "members": [
+                "async def inherited(self, value: int=1) -> str",
+                "def direct(self) -> None",
+            ],
+            "fields": ["inherited_field: str"],
         }
 
     def test_no_explicit_all_returns_none(self, tmp_path: Path) -> None:
@@ -543,9 +581,7 @@ class TestInitializerDeletion:
             _INIT_REL,
         )
 
-    def test_deleted_import_detected(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_deleted_import_detected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _setup_repo(tmp_path, monkeypatch)
         _replace_initializer(
             tmp_path,
@@ -566,9 +602,7 @@ class TestInitializerDeletion:
         surface = _initializer_surface(tmp_path)
         assert surface["public_names"] == ["Event", "Tool", "create_app"]
         event_origin = next(
-            row
-            for row in surface["import_origins"]
-            if row["public_name"] == "Event"
+            row for row in surface["import_origins"] if row["public_name"] == "Event"
         )
         assert event_origin == {
             "public_name": "Event",
@@ -596,9 +630,7 @@ class TestInitializerDeletion:
         result = public_api.check_public_api(tmp_path)
 
         _assert_python_changed(result)
-        assert "create_app" not in _initializer_surface(tmp_path)[
-            "public_signatures"
-        ]
+        assert "create_app" not in _initializer_surface(tmp_path)["public_signatures"]
 
         _replace_initializer(
             tmp_path,
@@ -619,14 +651,9 @@ class TestInitializerDeletion:
         )
         signature_result = public_api.check_public_api(tmp_path)
         _assert_python_changed(signature_result)
-        assert _initializer_surface(tmp_path)["public_signatures"][
-            "create_app"
-        ] == {
+        assert _initializer_surface(tmp_path)["public_signatures"]["create_app"] == {
             "kind": "function",
-            "signature": (
-                "def create_app(name: str, *, debug: bool=False, "
-                "retries: int=0) -> str"
-            ),
+            "signature": ("def create_app(name: str, *, debug: bool=False, retries: int=0) -> str"),
         }
 
     def test_removed_explicit_all_detected(
@@ -722,9 +749,7 @@ class TestCheckPublicApiBoundary:
     def test_check_public_api_with_empty_baseline_passes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        expected = _setup_repo(
-            tmp_path, monkeypatch, include_python=False
-        )
+        expected = _setup_repo(tmp_path, monkeypatch, include_python=False)
 
         loaded = public_api.load_public_api(tmp_path)
         result = public_api.check_public_api(tmp_path)
@@ -780,9 +805,7 @@ class TestCheckPublicApiBoundary:
             json.dumps(authority, indent=2) + "\n",
         )
         schema_result = public_api.check_public_api(tmp_path)
-        assert_problem_contains(
-            schema_result["problems"], "diagram transition schema mismatch"
-        )
+        assert_problem_contains(schema_result["problems"], "diagram transition schema mismatch")
 
         for field, bad_value in [
             ("owner", "PKG-03-HARNESS-ORACLES"),
@@ -796,31 +819,22 @@ class TestCheckPublicApiBoundary:
             public_api._check_diagram_transition(
                 mutated,
                 tmp_path,
-                {
-                    row["path"]: row
-                    for row in authority["contract_files"]
-                },
+                {row["path"]: row for row in authority["contract_files"]},
                 problems,
             )
-            assert_problem_contains(
-                problems, "diagram transition accepted authority drift"
-            )
+            assert_problem_contains(problems, "diagram transition accepted authority drift")
 
         write(authority_path, accepted_bytes.decode())
         write(tmp_path / _CONTRACT_REL, '{"event":"changed","version":2}\n')
         with pytest.raises(RuntimeError, match="cannot be rebaselined"):
-            public_api.regenerate_public_api(
-                tmp_path, _checkpoint(tmp_path)
-            )
+            public_api.regenerate_public_api(tmp_path, _checkpoint(tmp_path))
         assert authority_path.read_bytes() == accepted_bytes
         write(tmp_path / _CONTRACT_REL, '{"event":"message","version":1}\n')
         write(tmp_path / _DIAGRAM_REL, "# Drifted generated architecture\n")
         drift_result = public_api.check_public_api(tmp_path)
 
         assert drift_result["ok"] is False
-        assert_problem_contains(
-            drift_result["problems"], "contract file drift", _DIAGRAM_REL
-        )
+        assert_problem_contains(drift_result["problems"], "contract file drift", _DIAGRAM_REL)
         assert_problem_contains(
             drift_result["problems"],
             "diagram transition target/contract bytes do not agree",
@@ -828,33 +842,24 @@ class TestCheckPublicApiBoundary:
 
 
 class TestFrontendPublicApi:
-    def test_contract_file_count(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_contract_file_count(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         live = public_api.load_public_api(REPO_ROOT)
         authority = _setup_repo(tmp_path, monkeypatch)
         module = next(
-            row
-            for row in authority["frontend_modules"]
-            if row["path"] == _FRONTEND_PUBLIC_REL
+            row for row in authority["frontend_modules"] if row["path"] == _FRONTEND_PUBLIC_REL
         )
 
         assert len(live["contract_files"]) == 15
         assert len(live["frontend_modules"]) == 234
         assert len(authority["contract_files"]) == 2
-        assert all(
-            set(row) == {"path", "sha256", "bytes"}
-            for row in authority["contract_files"]
-        )
+        assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
             "path": _FRONTEND_PUBLIC_REL,
             "public_declarations": [
                 {
                     "kind": "function",
                     "name": "decode",
-                    "signature": (
-                        "export function decode(input: string): Envelope"
-                    ),
+                    "signature": ("export function decode(input: string): Envelope"),
                 },
                 {
                     "kind": "InterfaceDeclaration",
@@ -870,8 +875,7 @@ class TestFrontendPublicApi:
                     "kind": "variable",
                     "name": "schema",
                     "signature": (
-                        'export const schema = { type: "object", '
-                        'required: ["id"] } as const;'
+                        'export const schema = { type: "object", required: ["id"] } as const;'
                     ),
                 },
             ],
@@ -882,9 +886,7 @@ class TestFrontendPublicApi:
         initializers = baseline["python_initializers"]
 
         assert len(initializers) == 34
-        assert [row["path"] for row in initializers] == sorted(
-            row["path"] for row in initializers
-        )
+        assert [row["path"] for row in initializers] == sorted(row["path"] for row in initializers)
         for row in initializers:
             assert set(row) == {
                 "path",
@@ -984,9 +986,7 @@ class TestFrontendPublicApi:
                 tmp_path,
                 next_identity,
                 additive_transitions=[transition],
-                compatibility_bridges=[
-                    {**bridge, "old_origin": "forged.legacy.Event"}
-                ],
+                compatibility_bridges=[{**bridge, "old_origin": "forged.legacy.Event"}],
             )
         public_api.regenerate_public_api(
             tmp_path,
@@ -995,17 +995,13 @@ class TestFrontendPublicApi:
             compatibility_bridges=[bridge],
         )
         authority = public_api.load_public_api(tmp_path)
-        authority["compatibility_bridges"][0]["new_origin"] = (
-            "forged.attacker.Event"
-        )
+        authority["compatibility_bridges"][0]["new_origin"] = "forged.attacker.Event"
         write(
             tmp_path / "architecture/public-api.json",
             json.dumps(authority, indent=2) + "\n",
         )
         result = public_api.check_public_api(tmp_path)
-        assert_problem_contains(
-            result["problems"], "new_origin", "live origin"
-        )
+        assert_problem_contains(result["problems"], "new_origin", "live origin")
 
     def test_frontend_contract_file_drift_detected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1074,9 +1070,7 @@ class TestFrontendPublicApi:
 
 
 class TestPublicApiTransitions:
-    def test_additive_import_passes(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_additive_import_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _setup_repo(tmp_path, monkeypatch)
         _replace_initializer(
             tmp_path,
@@ -1135,9 +1129,7 @@ class TestPublicApiTransitions:
         )
         attack_identity = _checkpoint(tmp_path)
         forged = public_api.load_public_api(tmp_path)
-        forged["python_initializers"] = public_api.scan_python_public_surface(
-            tmp_path
-        )
+        forged["python_initializers"] = public_api.scan_python_public_surface(tmp_path)
         write(authority_path, json.dumps(forged, indent=2) + "\n")
         forged_bytes = authority_path.read_bytes()
 
@@ -1247,9 +1239,7 @@ class TestPublicApiTransitions:
         authority = public_api.load_public_api(tmp_path)
         accepted = public_api.check_public_api(tmp_path)
         public_module = next(
-            row
-            for row in authority["frontend_modules"]
-            if row["path"] == _FRONTEND_PUBLIC_REL
+            row for row in authority["frontend_modules"] if row["path"] == _FRONTEND_PUBLIC_REL
         )
 
         assert authority["additive_transitions"] == transitions
