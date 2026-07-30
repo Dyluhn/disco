@@ -61,7 +61,6 @@ from disco.core.context.ledger import ArtifactRecord
 from disco.core.context.store import ArtifactMemoryStore
 from disco.core.contract import (
     BuildContract,
-    BuildContractRegistry,
     BuildPhaseTracker,
     ContractScopeGuard,
     Phase,
@@ -763,15 +762,6 @@ class ConversationRuntime:
         self._suggestion_service = SuggestionService(
             self._router_now, lambda: self._project_store_now().root or ""
         )
-        # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker
-        # (decomposed into BuildContractService; mutable dicts stay here so tests read them).
-        self._build_contract_registry = BuildContractRegistry.default()
-        self._build_kind: dict[str, str] = {}
-        self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
-        self._contract_fold_attempted: set[str] = set()
-        self._build_audit_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
-        self._toolscope_audits: dict[str, _ToolScopeAuditRecorder] = {}
-        self._contract = BuildContractService(self)
         # Phase-3 Build Platform Core observer. Records are diagnostics only:
         # legacy loop/executor/preview/verifier/export/finish authority never reads them.
         self._build_platform_shadow_records: dict[str, Any] = {}
@@ -973,6 +963,11 @@ class ConversationRuntime:
         # Permanent workspace locks shared by lifecycle delegates.
         self._workspace = WorkspaceCoordinator(self)
         build_executors = BuildExecutorAccess(self._executors)
+        self._contract = BuildContractService(
+            self._store,
+            self._settings,
+            build_executors,
+        )
         self._build_platform = BuildPlatformRuntime(
             store=self._store,
             workspace=self._workspace,
@@ -1557,6 +1552,26 @@ class ConversationRuntime:
 
     # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
 
+    @property
+    def _build_kind(self) -> dict[str, str]:
+        return self._contract._build_kind
+
+    @property
+    def _build_trackers(self) -> dict[str, tuple[BuildContract, BuildPhaseTracker]]:
+        return self._contract._build_trackers
+
+    @property
+    def _contract_fold_attempted(self) -> set[str]:
+        return self._contract._contract_fold_attempted
+
+    @property
+    def _build_audit_trackers(self) -> dict[str, tuple[BuildContract, BuildPhaseTracker]]:
+        return self._contract._build_audit_trackers
+
+    @property
+    def _toolscope_audits(self) -> dict[str, _ToolScopeAuditRecorder]:
+        return self._contract._toolscope_audits
+
     def activate_contract_for_brief(
         self, conversation_id: str, build_brief: BuildBrief | None
     ) -> None:
@@ -1583,12 +1598,19 @@ class ConversationRuntime:
     def _host_verify_canary_hook_for(
         self, conversation_id: str
     ) -> Callable[[VerifierVerdictEvent], Awaitable[None]] | None:
-        return self._contract._host_verify_canary_hook_for(conversation_id)
+        return self._contract._host_verify_canary_hook_for(
+            conversation_id,
+            self.note_build_verify_result,
+        )
 
     async def _record_host_verify_canary(
         self, conversation_id: str, event: VerifierVerdictEvent
     ) -> None:
-        return await self._contract._record_host_verify_canary(conversation_id, event)
+        return await self._contract._record_host_verify_canary(
+            conversation_id,
+            event,
+            self.note_build_verify_result,
+        )
 
     def _conversation_user_text_sync(self, conversation_id: str) -> str:
         return self._contract._conversation_user_text_sync(conversation_id)
@@ -4375,7 +4397,9 @@ class ConversationRuntime:
         # (first-wins holds across restarts) and the phase tracker resumes where
         # the run left off instead of restarting at BOOTSTRAP.
         await self._fold_contract_from_history(conversation_id)
-        newly_declared = build_brief is not None and conversation_id not in self._build_kind
+        newly_declared = build_brief is not None and not self._contract.has_declared_contract(
+            conversation_id
+        )
         self.activate_contract_for_brief(conversation_id, build_brief)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
@@ -4396,7 +4420,7 @@ class ConversationRuntime:
                 # Finding #8: the kernel may have PERSISTED this turn's brief before
                 # raising — release the fold marker so a later fold can rediscover
                 # it instead of a later declaration silently winning.
-                self._contract_fold_attempted.discard(conversation_id)
+                self._contract.release_fold_attempt(conversation_id)
             raise
 
     async def _run_continuing_control(

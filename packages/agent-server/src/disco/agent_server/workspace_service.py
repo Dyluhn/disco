@@ -887,7 +887,7 @@ class WorkspaceCoordinator:
             await self._rt._sandbox_service_now().destroy_by_conversation(conversation_id)
         for cache in self._conversation_caches():
             cache.pop(conversation_id, None)
-        self._rt._contract_fold_attempted.discard(conversation_id)
+        self._rt._contract.forget(conversation_id)
         self._rt._driver_proven = {
             proven for proven in self._rt._driver_proven if proven[0] != conversation_id
         }
@@ -915,8 +915,4 @@ class WorkspaceCoordinator:
             self._rt._upload_passages,
             self._rt._last_sessions,
             self._rt._mcp_approval_pending,
-            self._rt._build_kind,
-            self._rt._build_trackers,
-            self._rt._build_audit_trackers,
-            self._rt._toolscope_audits,
         )
