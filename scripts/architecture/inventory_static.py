@@ -388,23 +388,32 @@ def _ids_owned_by_paths(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str) and item.partition("::")[0] in paths]
 
 
+def _later_ids(
+    transitions: list[dict[str, Any]],
+    path: tuple[str, ...],
+) -> set[str]:
+    result: set[str] = set()
+    for transition in transitions:
+        if transition.get("package") == _PKG02:
+            continue
+        value: Any = transition
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, list):
+            result.update(item for item in value if isinstance(item, str))
+    return result
+
+
 def _check_pkg02_exact_additions(
     row: dict[str, Any],
     transitions: list[dict[str, Any]],
     baseline: dict[str, Any],
     problems: list[str],
 ) -> None:
-    later_collected = {
-        node_id
-        for transition in transitions
-        if transition.get("package") != _PKG02
-        for collected in [transition.get("collected_roots")]
-        if isinstance(collected, dict)
-        for root_row in [collected.get("tests")]
-        if isinstance(root_row, dict)
-        for node_id in root_row.get("added_ids", [])
-        if isinstance(node_id, str)
-    }
+    later_collected = _later_ids(
+        transitions,
+        ("collected_roots", "tests", "added_ids"),
+    )
     collected = row.get("collected_roots")
     tests = collected.get("tests") if isinstance(collected, dict) else {}
     actual_collected = tests.get("added_ids") if isinstance(tests, dict) else None
@@ -426,15 +435,10 @@ def _check_pkg02_exact_additions(
     current_static = (
         current_mapping.get("python_static_test_ids") if isinstance(current_mapping, dict) else None
     )
-    later_static = {
-        node_id
-        for transition in transitions
-        if transition.get("package") != _PKG02
-        for mapping_additions in [transition.get("mapping_static_additions")]
-        if isinstance(mapping_additions, dict)
-        for node_id in mapping_additions.get("python_static_test_ids", [])
-        if isinstance(node_id, str)
-    }
+    later_static = _later_ids(
+        transitions,
+        ("mapping_static_additions", "python_static_test_ids"),
+    )
     frozen_static = [
         node_id for node_id in _ids_owned_by_paths(current_static) if node_id not in later_static
     ]
