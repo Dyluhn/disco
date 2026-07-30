@@ -1,4 +1,13 @@
-"""Conversation run launch and reentry."""
+"""Conversation run launch and reentry.
+
+``RunController`` owns loop launch and the synchronous ``kick`` reentry.  The
+``resume_conversation`` reentry delegate has been removed: it created a
+construction-order circularity with ``ResumeService`` (which triggers the
+pinned run start through the bounded ``RunStartPort`` boundary).  The
+integrator provides a ``RunReentryAdapter`` combining ``RunController.kick``
+and ``ResumeService.resume_conversation`` to ``RunFinalizer`` (which needs
+both through ``RunReentryPort``).
+"""
 
 from __future__ import annotations
 
@@ -10,7 +19,6 @@ from disco.core.loop import AgentLoop
 from .build_loop_factory import BuildLoopFactory
 from .build_platform_runtime import BuildPlatformRuntime
 from .driver_runtime import DriverRuntime
-from .resume_service import ResumeService
 from .run_registry import RunRegistry, RunTask
 from .run_supervisor import RunSupervisor
 from .sandbox_resource_reconciler import SandboxResourceReconciler
@@ -18,7 +26,7 @@ from .title_service import TitleService
 
 
 class RunController:
-    """Launch one resolved loop and expose the two reentry operations."""
+    """Launch one resolved loop and expose the synchronous kick reentry."""
 
     def __init__(
         self,
@@ -29,7 +37,6 @@ class RunController:
         build_platform: BuildPlatformRuntime,
         drivers: DriverRuntime,
         loops: BuildLoopFactory,
-        resume: ResumeService,
     ) -> None:
         self._registry = registry
         self._supervisor = supervisor
@@ -38,7 +45,6 @@ class RunController:
         self._build_platform = build_platform
         self._drivers = drivers
         self._loops = loops
-        self._resume = resume
 
     def kick(
         self,
@@ -92,6 +98,3 @@ class RunController:
             expected_run_intent_id=expected_run_intent_id,
             task_context=task_context,
         )
-
-    async def resume_conversation(self, conversation_id: str) -> dict[str, object]:
-        return dict(await self._resume.resume_conversation(conversation_id))
