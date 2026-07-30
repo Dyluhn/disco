@@ -45,8 +45,8 @@ _RESUME_DRAIN_TIMEOUT_S = 10.0
 _RESUME_CANCEL_GRACE_S = 0.25
 
 
-class ResumeService:
-    """Resume reconstruction logic; live runtime state via the back-ref."""
+class _ResumeTaskDrainer:
+    """Detach and boundedly drain the exact finishing runtime task."""
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
@@ -120,11 +120,9 @@ class ResumeService:
             return True
         return True
 
-    # ------------------------------------------------------------------
-    # Trailing-degeneracy condensation (DC-05c) — split into scan / count /
-    # pinning / tombstone helpers. The public entry point name is preserved
-    # for the ConversationRuntime compatibility delegate and the test suite.
-    # ------------------------------------------------------------------
+
+class _TrailingDegeneracyCondenser:
+    """Pure trailing-degeneracy condensation policy (DC-05c)."""
 
     def _scan_degenerate_segment(self, events: list) -> list:
         """Scan the tail backwards to the first real Action (non-bookkeeping)
@@ -278,12 +276,12 @@ class ResumeService:
         final_span = self._pin_first_knowledge_instances(events, segment_events)
         return self._build_degeneracy_tombstone(final_span)
 
-    # ------------------------------------------------------------------
-    # Resume-context reconstruction (DC-05b / DEFECT-4) — split into
-    # dangling-observation, environment-reality, and next-plan-step helpers.
-    # The public entry point name is preserved for the ConversationRuntime
-    # compatibility delegate and the test suite.
-    # ------------------------------------------------------------------
+
+class _ResumeContextReconstructor:
+    """Build synthetic observations and current-environment resume context."""
+
+    def __init__(self, rt: Any) -> None:
+        self._rt = rt
 
     def _synthesize_dangling_observations(self, events: list) -> list:
         """Synthesize terminal ObservationEvents for dangling (unresolved) actions.
@@ -447,22 +445,46 @@ class ResumeService:
         )
         return result
 
-    # ------------------------------------------------------------------
-    # resume_conversation orchestrator — split into detach/drain,
-    # re-entry/recheck, reconstruction, and ingress phases. The
-    # public entry point name is preserved for the ConversationRuntime
-    # compatibility delegate and the test suite.
-    #
-    # Fence discipline: Phase 1 (detach) and the drain-timeout recovery
-    # each acquire the fences themselves. Phase 2 (re-entry/recheck +
-    # reconstruction + identity recheck + flag clearing) and the ingress
-    # append share ONE continuous fence acquisition in resume_conversation
-    # so the tombstone, synthetic results, run intent, and RUNNING flip
-    # append atomically — no half-resumed log. The ``start()`` trigger runs
-    # AFTER the fence is released (a bare kick must not run inside the
-    # workspace fence). The ``_locked`` phase helpers below are plain
-    # coroutines called within that shared fence, not fence acquirers.
-    # ------------------------------------------------------------------
+
+class ResumeService:
+    """Orchestrate fenced resume phases through bounded collaborators.
+
+    Fence discipline: Phase 1 (detach) and drain-timeout recovery each acquire
+    their own fences. Phase 2 (re-entry/recheck + reconstruction + identity
+    recheck + flag clearing) and the ingress append share one continuous fence
+    acquisition so the tombstone, synthetic results, run intent, and RUNNING
+    flip append atomically. The pinned ``start()`` trigger runs after release.
+    """
+
+    def __init__(self, rt: Any) -> None:
+        self._rt = rt
+        self._task_drainer = _ResumeTaskDrainer(rt)
+        self._condenser = _TrailingDegeneracyCondenser()
+        self._context_reconstructor = _ResumeContextReconstructor(rt)
+
+    def _detach_finishing_task_locked(
+        self,
+        conversation_id: str,
+        observed_task: asyncio.Task[Any] | None,
+        observed_generation: int | None,
+    ) -> tuple[bool, asyncio.Task[Any] | None]:
+        return self._task_drainer._detach_finishing_task_locked(
+            conversation_id,
+            observed_task,
+            observed_generation,
+        )
+
+    async def _drain_finishing_task(self, task: asyncio.Task[Any] | None) -> bool:
+        return await self._task_drainer._drain_finishing_task(task)
+
+    def _condense_trailing_degeneracy(self, events: list) -> CondensationEvent | None:
+        return self._condenser._condense_trailing_degeneracy(events)
+
+    async def _reconstruct_resume_context(self, conversation_id: str, events: list) -> list:
+        return await self._context_reconstructor._reconstruct_resume_context(
+            conversation_id,
+            events,
+        )
 
     def _resume_rejection_reason(
         self,
