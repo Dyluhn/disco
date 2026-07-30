@@ -251,6 +251,71 @@ class PlanPredicateDiff:
         return not self.dropped and not self.invalid_renames
 
 
+def _predicate_retained_match(
+    old_predicate: DoDPredicate,
+    new: list[DoDPredicate],
+    used_new: set[int],
+) -> int | None:
+    """Index of the new predicate that retains ``old_predicate``, or None.
+
+    File predicates retain identity by their evaluated path; other kinds require
+    exact Pydantic equality.  Each new list item is matched at most once.
+    """
+
+    return next(
+        (
+            index
+            for index, new_predicate in enumerate(new)
+            if index not in used_new
+            and _predicates_retain_identity(old_predicate, new_predicate)
+        ),
+        None,
+    )
+
+
+def _predicates_retain_identity(old_predicate: DoDPredicate, new_predicate: DoDPredicate) -> bool:
+    if isinstance(old_predicate, FileExistsPredicate) and isinstance(
+        new_predicate, FileExistsPredicate
+    ):
+        return old_predicate.path == new_predicate.path
+    if not isinstance(old_predicate, FileExistsPredicate):
+        return old_predicate == new_predicate
+    return False
+
+
+def _predicate_renamed_match(
+    old_predicate: FileExistsPredicate,
+    new: list[DoDPredicate],
+    used_new: set[int],
+) -> int | None:
+    """Index of the new file predicate that renames ``old_predicate``, or None."""
+
+    return next(
+        (
+            index
+            for index, new_predicate in enumerate(new)
+            if index not in used_new
+            and isinstance(new_predicate, FileExistsPredicate)
+            and new_predicate.renamed_from == old_predicate.path
+        ),
+        None,
+    )
+
+
+def _invalid_renames(
+    new: list[DoDPredicate], old_file_paths: set[str]
+) -> tuple[FileExistsPredicate, ...]:
+    """File predicates whose ``renamed_from`` references no actual old path."""
+
+    return tuple(
+        predicate
+        for predicate in new
+        if isinstance(predicate, FileExistsPredicate)
+        and predicate.renamed_from is not None
+        and predicate.renamed_from not in old_file_paths
+    )
+
+
 def plan_predicate_diff(
     old: list[DoDPredicate],
     new: list[DoDPredicate],
@@ -269,36 +334,13 @@ def plan_predicate_diff(
     dropped: list[DoDPredicate] = []
 
     for old_predicate in old:
-        retained_index = next(
-            (
-                index
-                for index, new_predicate in enumerate(new)
-                if index not in used_new
-                and (
-                    isinstance(old_predicate, FileExistsPredicate)
-                    and isinstance(new_predicate, FileExistsPredicate)
-                    and old_predicate.path == new_predicate.path
-                    or not isinstance(old_predicate, FileExistsPredicate)
-                    and old_predicate == new_predicate
-                )
-            ),
-            None,
-        )
+        retained_index = _predicate_retained_match(old_predicate, new, used_new)
         if retained_index is not None:
             used_new.add(retained_index)
             retained.append(old_predicate)
             continue
         if isinstance(old_predicate, FileExistsPredicate):
-            renamed_index = next(
-                (
-                    index
-                    for index, new_predicate in enumerate(new)
-                    if index not in used_new
-                    and isinstance(new_predicate, FileExistsPredicate)
-                    and new_predicate.renamed_from == old_predicate.path
-                ),
-                None,
-            )
+            renamed_index = _predicate_renamed_match(old_predicate, new, used_new)
             if renamed_index is not None:
                 replacement = new[renamed_index]
                 assert isinstance(replacement, FileExistsPredicate)
@@ -310,21 +352,31 @@ def plan_predicate_diff(
     old_file_paths = {
         predicate.path for predicate in old if isinstance(predicate, FileExistsPredicate)
     }
-    invalid_renames = tuple(
-        predicate
-        for predicate in new
-        if isinstance(predicate, FileExistsPredicate)
-        and predicate.renamed_from is not None
-        and predicate.renamed_from not in old_file_paths
-    )
+    invalid = _invalid_renames(new, old_file_paths)
     added = tuple(predicate for index, predicate in enumerate(new) if index not in used_new)
     return PlanPredicateDiff(
         retained=tuple(retained),
         renamed=tuple(renamed),
         added=added,
         dropped=tuple(dropped),
-        invalid_renames=invalid_renames,
+        invalid_renames=invalid,
     )
+
+
+def _file_predicate_paths(spec: DoDSpec) -> set[str]:
+    return {p.path for p in spec.predicates if isinstance(p, FileExistsPredicate)}
+
+
+def _file_predicate_renames(spec: DoDSpec) -> set[str]:
+    return {
+        p.renamed_from
+        for p in spec.predicates
+        if isinstance(p, FileExistsPredicate) and p.renamed_from
+    }
+
+
+def _non_file_predicates(spec: DoDSpec) -> list[DoDPredicate]:
+    return [p for p in spec.predicates if not isinstance(p, FileExistsPredicate)]
 
 
 def is_monotonic_extension(old: DoDSpec, new: DoDSpec) -> bool:
@@ -346,24 +398,15 @@ def is_monotonic_extension(old: DoDSpec, new: DoDSpec) -> bool:
         a rename-from-nothing is a forged tie used to drop scope → rejected.
     Additions (new file_exists paths with no `old` counterpart) are always fine.
     """
-    old_fe = {p.path for p in old.predicates if isinstance(p, FileExistsPredicate)}
-    new_paths = {p.path for p in new.predicates if isinstance(p, FileExistsPredicate)}
-    new_renames = {
-        p.renamed_from
-        for p in new.predicates
-        if isinstance(p, FileExistsPredicate) and p.renamed_from
-    }
+    old_fe = _file_predicate_paths(old)
+    new_paths = _file_predicate_paths(new)
+    new_renames = _file_predicate_renames(new)
     # A claimed rename must reference an actual prior deliverable.
     if any(rf not in old_fe for rf in new_renames):
         return False
     # Every old deliverable must still be required, or explicitly renamed away.
-    for op in old_fe:
-        if op not in new_paths and op not in new_renames:
-            return False
+    if any(op not in new_paths and op not in new_renames for op in old_fe):
+        return False
     # Non-file_exists bars cannot be dropped.
-    old_other = [p for p in old.predicates if not isinstance(p, FileExistsPredicate)]
-    new_other = [p for p in new.predicates if not isinstance(p, FileExistsPredicate)]
-    for p in old_other:
-        if p not in new_other:
-            return False
-    return True
+    new_other = _non_file_predicates(new)
+    return all(p in new_other for p in _non_file_predicates(old))

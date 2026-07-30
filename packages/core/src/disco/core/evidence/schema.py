@@ -157,6 +157,23 @@ def _key_is_sensitive(key: str) -> bool:
     return any(pat.search(key) for pat in _COMPILED)
 
 
+def _redact_dict(obj: dict[Any, Any]) -> dict[Any, Any]:
+    """Redact sensitive-key values in a dict, recursing into non-sensitive ones."""
+
+    result: dict[Any, Any] = {}
+    for k, v in obj.items():
+        if isinstance(k, str) and _key_is_sensitive(k):
+            # Numeric token-count telemetry is not a secret — pass it through
+            # as a number so the debug trace can measure cache hits / cost.
+            if _is_token_count(k, v):
+                result[k] = v
+            else:
+                result[k] = _REDACTED
+        else:
+            result[k] = redact(v)
+    return result
+
+
 def redact(obj: Any) -> Any:
     """Deep-traverse *obj* and replace sensitive-key values with ``'***REDACTED***'``.
 
@@ -178,18 +195,7 @@ def redact(obj: Any) -> Any:
       - other objects with ``__dict__`` → ``dict`` via ``vars()``, then recursed
     """
     if isinstance(obj, dict):
-        result: dict[Any, Any] = {}
-        for k, v in obj.items():
-            if isinstance(k, str) and _key_is_sensitive(k):
-                # Numeric token-count telemetry is not a secret — pass it through
-                # as a number so the debug trace can measure cache hits / cost.
-                if _is_token_count(k, v):
-                    result[k] = v
-                else:
-                    result[k] = _REDACTED
-            else:
-                result[k] = redact(v)
-        return result
+        return _redact_dict(obj)
     if isinstance(obj, list):
         return [redact(item) for item in obj]
     if isinstance(obj, tuple):

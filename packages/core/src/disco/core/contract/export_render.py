@@ -304,6 +304,57 @@ def _pdf_facts(data: bytes, text: str | None = None) -> tuple[int, int, bool, bo
     return pages, text_proxy, valid_header, non_blank
 
 
+def _render_facts_for_format(
+    f: str,
+    data: bytes | None,
+    text: str | None,
+) -> tuple[int, int, int, bool, bool] | None:
+    """Dispatch on format and return ``(byte_len, units, visible_len, valid, non_blank)``.
+
+    Returns ``None`` for an unknown format so the caller can produce the honest
+    "no render validator" verdict without a nested branch.
+    """
+
+    if f in ("html", "htm", "deck_html"):
+        raw = text if text is not None else (data or b"").decode("utf-8", "replace")
+        byte_len = len(raw.encode("utf-8"))
+        units, visible_len, valid, non_blank = _html_facts(raw)
+        return byte_len, units, visible_len, valid, non_blank
+    if f in ("pptx", "deck", "deck_pptx"):
+        buf = data or b""
+        byte_len = len(buf)
+        units, visible_len, valid, non_blank = _pptx_facts(buf)
+        return byte_len, units, visible_len, valid, non_blank
+    if f in ("pdf", "document"):
+        buf = data or b""
+        byte_len = len(buf)
+        units, visible_len, valid, non_blank = _pdf_facts(buf, text)
+        return byte_len, units, visible_len, valid, non_blank
+    return None
+
+
+def _render_detail(
+    f: str,
+    valid: bool,
+    units: int,
+    visible_len: int,
+    non_blank: bool,
+    truncated: bool,
+    declared_units: int | None,
+) -> str:
+    """Build the human-readable detail string for the rendered facts."""
+
+    if not valid:
+        return f"{f} bytes are not a well-formed {f} file (invalid/corrupt/truncated)"
+    if units < 1:
+        return f"{f} rendered zero {'pages' if f in ('pdf', 'document') else 'slides'}"
+    if truncated:
+        return f"{f} rendered {units} of {declared_units} declared units (truncated)"
+    if not non_blank:
+        return f"{f} rendered but is content-empty ({visible_len} chars of real text)"
+    return f"{f} render ok: {units} unit(s), {visible_len} chars"
+
+
 def check_export_render(
     fmt: str,
     data: bytes | None = None,
@@ -327,20 +378,8 @@ def check_export_render(
     truncation; heuristic ⇒ tolerate a one-unit split miscount, flag only GROSS loss.
     """
     f = (fmt or "").strip().lower()
-    is_pdf = f in ("pdf", "document")
-    if f in ("html", "htm", "deck_html"):
-        raw = text if text is not None else (data or b"").decode("utf-8", "replace")
-        byte_len = len(raw.encode("utf-8"))
-        units, visible_len, valid, non_blank = _html_facts(raw)
-    elif f in ("pptx", "deck", "deck_pptx"):
-        buf = data or b""
-        byte_len = len(buf)
-        units, visible_len, valid, non_blank = _pptx_facts(buf)
-    elif is_pdf:
-        buf = data or b""
-        byte_len = len(buf)
-        units, visible_len, valid, non_blank = _pdf_facts(buf, text)
-    else:
+    facts = _render_facts_for_format(f, data, text)
+    if facts is None:
         # Unknown format → honestly unverifiable (never fabricate a pass/fail).
         return ExportRenderFacts(
             fmt=f,
@@ -352,22 +391,15 @@ def check_export_render(
             detail=f"no render validator for export format {f!r}",
         )
 
+    byte_len, units, visible_len, valid, non_blank = facts
+
     # Exact declared counts (C1/pptx) → any shortfall is truncation; heuristic
     # markdown counts → tolerate a one-unit split miscount (flag only GROSS loss).
     slack = 0 if declared_exact else 1
     truncated = declared_units is not None and declared_units > 0 and units < declared_units - slack
     ok = valid and units >= 1 and non_blank and not truncated
 
-    if not valid:
-        detail = f"{f} bytes are not a well-formed {f} file (invalid/corrupt/truncated)"
-    elif units < 1:
-        detail = f"{f} rendered zero {'pages' if f in ('pdf', 'document') else 'slides'}"
-    elif truncated:
-        detail = f"{f} rendered {units} of {declared_units} declared units (truncated)"
-    elif not non_blank:
-        detail = f"{f} rendered but is content-empty ({visible_len} chars of real text)"
-    else:
-        detail = f"{f} render ok: {units} unit(s), {visible_len} chars"
+    detail = _render_detail(f, valid, units, visible_len, non_blank, truncated, declared_units)
 
     return ExportRenderFacts(
         fmt=f,

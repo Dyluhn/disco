@@ -27,7 +27,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -100,6 +100,97 @@ class TrustedComponentsResult:
         return json.dumps([(c.name, c.status) for c in sorted(self.checks, key=lambda c: c.name)])
 
 
+def _integrity_check(
+    name: str,
+    comp: Any,
+    file_bytes: Mapping[str, bytes | None],
+) -> tuple[list[str], bool]:
+    """Return ``(diverged_files, passed)`` for the byte-exact integrity check."""
+
+    diverged: list[str] = []
+    for relpath, expected in sorted(comp.manifest.files.items()):
+        data = file_bytes.get(install_path(name, relpath))
+        if data is None or pin(data) != expected:
+            diverged.append(relpath)
+    return diverged, not diverged
+
+
+def _deps_check(
+    name: str,
+    comp: Any,
+    lock: ComponentsLock,
+) -> tuple[bool, str, bool]:
+    """Return ``(passed, evidence, has_missing)`` for the requires-graph check."""
+
+    missing_edges: list[str] = []
+    taints: list[str] = []
+    for entry_str in comp.manifest.requires:
+        req = parse_requirement(entry_str)
+        dep = lock.components.get(req.name)
+        if dep is None or not req.satisfied_by(req.name, dep.version):
+            have = f"{req.name} {dep.version}" if dep else "nothing installed"
+            missing_edges.append(f"{entry_str} (found: {have})")
+        elif dep.ejected:
+            taints.append(
+                f"{req.name} is ejected — {name}'s guarantees now rest on custom code"
+            )
+    if missing_edges:
+        return False, (
+            f"{name} is missing required components: {'; '.join(missing_edges)}. "
+            f"Install them with add_trusted_component."
+        ), True
+    if comp.manifest.requires:
+        evidence = f"all {len(comp.manifest.requires)} dependency edge(s) satisfied."
+        if taints:
+            evidence += " CAVEAT: " + "; ".join(taints) + "."
+        return True, evidence, False
+    return True, "", False
+
+
+def _probe_skip_check(name: str) -> ComponentCheck:
+    return ComponentCheck(
+        f"component_probe:{name}",
+        "skipped",
+        f"{name}'s seam probe needs the served app — start the preview "
+        "and re-run verification.",
+    )
+
+
+def _probe_result_check(name: str, probe: ProbeVerdict) -> ComponentCheck:
+    if probe.passed:
+        return ComponentCheck(
+            f"component_probe:{name}",
+            "pass",
+            probe.summary or f"{len(probe.checks)} probe check(s) passed.",
+        )
+    failing = [c for c in probe.checks if not c.passed]
+    detail = "; ".join(f"{c.name}: {c.detail}" for c in failing[:3])
+    return ComponentCheck(
+        f"component_probe:{name}",
+        "fail",
+        (probe.summary + " — " if probe.summary else "") + (detail or "probe failed"),
+    )
+
+
+async def _run_probe_check(
+    name: str,
+    run_probe: ProbeRunner,
+) -> ComponentCheck:
+    """Run the probe and return the resulting check, handling infra failures."""
+
+    try:
+        probe = await run_probe(name)
+    except Exception as exc:  # noqa: BLE001 — infra failure = honest FAIL, never a pass
+        return ComponentCheck(
+            f"component_probe:{name}",
+            "fail",
+            f"{name}'s probe could not run: {exc}",
+        )
+    if probe is None:
+        return _probe_skip_check(name)
+    return _probe_result_check(name, probe)
+
+
 async def verify_trusted_components(
     lock: ComponentsLock,
     registry: TrustedComponentRegistry,
@@ -147,12 +238,8 @@ async def verify_trusted_components(
             continue
 
         # ---- 4.1 integrity: byte-exact pins from the HOST manifest (D1) ------
-        diverged: list[str] = []
-        for relpath, expected in sorted(comp.manifest.files.items()):
-            data = file_bytes.get(install_path(name, relpath))
-            if data is None or pin(data) != expected:
-                diverged.append(relpath)
-        if diverged:
+        diverged, integrity_ok = _integrity_check(name, comp, file_bytes)
+        if not integrity_ok:
             record_eject(lock, name, "core-edit-detected", now_iso, diverged_files=diverged)
             result.newly_ejected.append(name)
             result.checks.append(
@@ -174,84 +261,21 @@ async def verify_trusted_components(
         )
 
         # ---- 4.2 requires-graph (D5/D6/D10) ----------------------------------
-        missing_edges: list[str] = []
-        taints: list[str] = []
-        for entry_str in comp.manifest.requires:
-            req = parse_requirement(entry_str)
-            dep = lock.components.get(req.name)
-            if dep is None or not req.satisfied_by(req.name, dep.version):
-                have = f"{req.name} {dep.version}" if dep else "nothing installed"
-                missing_edges.append(f"{entry_str} (found: {have})")
-            elif dep.ejected:
-                taints.append(
-                    f"{req.name} is ejected — {name}'s guarantees now rest on custom code"
-                )
-        if missing_edges:
+        deps_ok, deps_evidence, has_missing = _deps_check(name, comp, lock)
+        if has_missing:
             result.checks.append(
-                ComponentCheck(
-                    f"component_deps:{name}",
-                    "fail",
-                    f"{name} is missing required components: {'; '.join(missing_edges)}. "
-                    f"Install them with add_trusted_component.",
-                )
+                ComponentCheck(f"component_deps:{name}", "fail", deps_evidence)
             )
         elif comp.manifest.requires:
-            evidence = f"all {len(comp.manifest.requires)} dependency edge(s) satisfied."
-            if taints:
-                evidence += " CAVEAT: " + "; ".join(taints) + "."
-            result.checks.append(ComponentCheck(f"component_deps:{name}", "pass", evidence))
+            result.checks.append(ComponentCheck(f"component_deps:{name}", "pass", deps_evidence))
 
         # ---- 4.3 probe (host-authored, injected runner) -----------------------
         if comp.manifest.probe is None:
             continue
         if run_probe is None:
-            result.checks.append(
-                ComponentCheck(
-                    f"component_probe:{name}",
-                    "skipped",
-                    f"{name}'s seam probe needs the served app — start the preview "
-                    "and re-run verification.",
-                )
-            )
+            result.checks.append(_probe_skip_check(name))
             continue
-        try:
-            probe = await run_probe(name)
-        except Exception as exc:  # noqa: BLE001 — infra failure = honest FAIL, never a pass
-            result.checks.append(
-                ComponentCheck(
-                    f"component_probe:{name}",
-                    "fail",
-                    f"{name}'s probe could not run: {exc}",
-                )
-            )
-            continue
-        if probe is None:
-            result.checks.append(
-                ComponentCheck(
-                    f"component_probe:{name}",
-                    "skipped",
-                    f"{name}'s seam probe needs the served app — start the preview "
-                    "and re-run verification.",
-                )
-            )
-        elif probe.passed:
-            result.checks.append(
-                ComponentCheck(
-                    f"component_probe:{name}",
-                    "pass",
-                    probe.summary or f"{len(probe.checks)} probe check(s) passed.",
-                )
-            )
-        else:
-            failing = [c for c in probe.checks if not c.passed]
-            detail = "; ".join(f"{c.name}: {c.detail}" for c in failing[:3])
-            result.checks.append(
-                ComponentCheck(
-                    f"component_probe:{name}",
-                    "fail",
-                    (probe.summary + " — " if probe.summary else "") + (detail or "probe failed"),
-                )
-            )
+        result.checks.append(await _run_probe_check(name, run_probe))
 
     return result
 

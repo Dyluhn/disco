@@ -1,85 +1,24 @@
 """Definition-of-Done (DoD) evaluator — a fresh-context, read-only judge.
 
-# Why this module exists
-
 C1a stored the agent's acceptance criteria (the DoD spec) OUTSIDE the
 agent-editable event stream, write-once, so the model cannot rewrite what it
-is being judged against. C1b is the JUDGE. The whole point of separating
-storage from evaluation is so the agent's self-justifying working transcript
-cannot grade itself: the evaluator runs in a SEPARATE, FRESH context. It sees
-the spec and the deliverable evidence (the workspace), and nothing else.
+is being judged against.  C1b is the JUDGE: a SEPARATE, FRESH context that
+sees only the spec and the deliverable evidence (the workspace), never the
+agent's transcript, view, tool registry, or self-justify prose.
 
-Concretely, the evaluator receives ONLY:
+The three predicate kinds (file_exists / command / http_ok) are all
+DETERMINISTIC — the evaluator re-runs each check from scratch.  A future
+subjective kind would need an LLM judgment; the ``SubjectiveJudge`` seam is
+here but C1b does NOT add a new predicate kind.  An unwired subjective
+predicate is a HARD-FAIL (we never silently pass a check we did not run).
 
-  * the `DoDSpec` (the predicates, in their frozen form),
-  * a workspace root (so it can resolve `file_exists` paths and run command
-    predicates against the same files the agent worked on),
+Read-only contract: no ``disco.tools.*`` import, no ``EventStore`` write, no
+agent view mutation.  The command runner is a bounded subprocess; the HTTP
+probe is a read-only GET with loopback/RFC1918 egress by default.
 
-and it does NOT receive:
-
-  * the conversation's event log (the agent's transcript),
-  * the agent's `View` / state (the agent's working memory),
-  * the agent's tool registry (the agent's action surface),
-  * any LLM "self-justify" string the agent may have produced.
-
-To grade a predicate the evaluator re-runs the predicate's own check from
-scratch (`os.path.exists`, a fresh bounded subprocess, a fresh `urllib` GET).
-The verdict records WHAT was checked and the per-predicate result, so the
-audit trail can answer "did the judge actually look?" without trusting the
-agent's prose.
-
-# Deterministic vs LLM split
-
-The three predicate kinds C1a ships are all DETERMINISTIC (machine-checkable,
-the agent cannot fake the answer with prose). The evaluator runs each
-deterministic kind directly:
-
-    file_exists   → `Path.exists()` (read-only)
-    command       → bounded process-group subprocess with closed stdin
-                    (re-runs the acceptance check; gated through the engine's
-                    destructive-command deny-list)
-    http_ok       → `urllib.request.urlopen(url, timeout=…)`
-                    (loopback / private-RFC1918 by default; same egress
-                    discipline the live loop uses for its finish-probe)
-
-A future, subjective predicate kind (e.g. "is this design accessible?")
-would need an LLM judgment. The seam is here — `SubjectiveJudge` — but
-C1b does NOT add a new predicate kind. The default `DoDEvaluator` accepts
-an optional `subjective_judge` callable; if a subjective predicate is
-encountered and no judge is wired, the predicate is a HARD-FAIL (we never
-silently pass a check we did not run). The unit test uses a fake judge
-rather than a live LLM.
-
-# Read-only contract
-
-The evaluator is read-only with respect to the agent's state:
-
-  1. It does NOT import or call any of `disco.tools.*` (the agent's tool
-     surface). The test for that is in `test_dod_evaluator.py`
-     (`test_evaluator_does_not_import_agent_tool_surface`).
-  2. It does NOT touch the conversation's `EventStore` (its signature does
-     not accept a store at all — the spec is the only state it needs).
-  3. Its command runner runs in a subprocess with `cwd=workspace_root` and
-     a timeout. It does NOT write to the agent's view or emit any events.
-  4. Its HTTP probe is a read-only GET (no POST, no cookie persistence,
-     loopback by default).
-
-# Determinism of the verdict
-
-The verdict's `spec_fingerprint` is a SHA-256 over the spec's JSON form. The
-audit trail can answer "what was the evaluator actually asked to check?"
-without re-deriving the spec — the fingerprint is the same string for the
-same predicates and the same meta. A C1c caller (the engine's finish gate)
-will log this fingerprint alongside the finish attempt so the audit can pair
-"the agent tried to finish" with "the evaluator checked this".
-
-# Open source prior-art (per the task brief)
-
-The "fresh context" idea is the OpenHands `_check_iterative_refinement` /
-`critic_mixin` discipline: an external critic with its own context judges the
-deliverable against the spec, and the worker is never allowed to grade
-itself. C1b is the minimal form of that — a fresh-context judge, deterministic
-where possible, with the LLM seam wired in for the future subjective kind.
+The verdict's ``spec_fingerprint`` is a SHA-256 over the spec's JSON form so
+the audit trail can pair "agent tried to finish" with "evaluator checked this
+exact spec" without re-deriving it.
 """
 
 from __future__ import annotations
@@ -113,75 +52,43 @@ from .host_egress import EgressDenied, guarded_get
 
 
 class CommandResult(BaseModel):
-    """The outcome of running a `command` predicate's check.
-
-    `exit_code` is None when the subprocess did not produce one (e.g. the
-    runner was denied, the subprocess was hard-denied by the destructive-
-    command gate, or it timed out). `error_message` carries the human reason
-    — "hard-denied: rm -rf", "timeout after 30s", "executor raised
-    FileNotFoundError: '/bin/nosuch'". The verdict turns a non-passing
-    `CommandResult` into a `DoDPredicateResult(passed=False, ...)` with the
-    reason in `details.error_message`.
-    """
+    """Outcome of a ``command`` predicate (``exit_code`` None if denied/timeout)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
-    error_message: str = ""  # empty == no executor-level error
+    error_message: str = ""
     duration_seconds: float = 0.0
-    # True when the destructive-command deny-list refused to run the command.
-    # Distinct from a non-zero exit: a denied command is "not run", not
-    # "run and failed". The verdict names the predicate unmet with the deny
-    # reason; the audit can distinguish "the check failed" from "the check
-    # was unsafe to run".
-    denied: bool = False
+    denied: bool = False  # destructive-command deny-list refused to run
     deny_reason: str = ""
-    # Executor-owned deadline evidence, distinct from a command that happens
-    # to return a conventional timeout exit code itself.
-    timed_out: bool = False
+    timed_out: bool = False  # executor-owned deadline, not a command exit code
 
 
 class HttpProbeResult(BaseModel):
-    """The outcome of an `http_ok` predicate's check.
-
-    `status_code` is None when the probe did not reach the wire (DNS failure,
-    connection refused, timeout, URL rejected by the egress allow-list). The
-    verdict turns a non-passing result into a `DoDPredicateResult(passed=False,
-    ...)` with `error_message` carrying the reason.
-    """
+    """Outcome of an ``http_ok`` probe (``status_code`` None if no wire)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     status_code: int | None = None
     error_message: str = ""
     duration_seconds: float = 0.0
-    # True when the URL was rejected by the egress allow-list (private IP
-    # when not on the explicit list, scheme not http/https, etc.). Same
-    # discipline as `CommandResult.denied`.
     egress_denied: bool = False
     egress_reason: str = ""
 
 
 class DoDPredicateResult(BaseModel):
-    """The per-predicate outcome. `predicate` is the SPECIFIC `DoDPredicate`
-    instance the verdict is about — frozen, Pydantic-equal to the source
-    spec, and identical-by-`is` only when Pydantic preserves the reference
-    (it doesn't always). The consumer matches on the `predicate` field to
-    name the unmet item."""
+    """Per-predicate outcome (``predicate`` is the specific instance)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     predicate: DoDPredicate
     passed: bool
     reason: str
-    # INFRA-vs-TASK channel (DoD v2.1): True iff this predicate FAILED for a reason that is
-    # NOT a task verdict — the check could not be RUN (a hard-denied command, an
-    # unreachable/timed-out http probe, egress denied, a missing judge). The finish gate
-    # treats unverifiable-only failures as a RELEASE (don't trap a build on infra noise),
-    # while a real task failure (a command that ran and exited wrong; a server that served
-    # the wrong status) still blocks. Always False on a pass and on file_exists (deterministic).
+    # INFRA-vs-TASK (DoD v2.1): True iff FAILED because the check could not RUN
+    # (denied, timeout, egress denied, missing judge).  The finish gate treats
+    # unverifiable-only failures as a RELEASE; a real task failure still blocks.
     unverifiable: bool = False
     # Kind-specific structured evidence (exit_code, status_code, file size,
     # observed predicate field, ...). The verdict carries the FULL record so
@@ -190,25 +97,7 @@ class DoDPredicateResult(BaseModel):
 
 
 class DoDVerdict(BaseModel):
-    """The evaluator's structured judgment.
-
-    `passed` is the AND of all per-predicate results — ALL predicates must
-    pass for the spec to be satisfied. Partial pass is failure (the
-    "predicates are the bar, not a checklist of nice-to-haves" discipline).
-
-    `unmet` is the LIST of the specific `DoDPredicate` instances that did not
-    pass. The C1c wire step (engine finish gate) iterates `unmet` to name
-    the refusal reason to the agent — "the following acceptance checks did
-    not pass: …". The test (`test_dod_evaluator.py`) asserts `unmet` names
-    the right predicate.
-
-    `results` is the FULL per-predicate record (passed + failed). The audit
-    trail reads `results` so the "what was checked" answer is self-contained.
-
-    `spec_fingerprint` is a SHA-256 over the spec's JSON form (predicates +
-    meta). Stable across processes; pairs "finish attempt #N" with "evaluator
-    was asked to check this exact spec" in the audit log.
-    """
+    """Structured judgment: ``passed`` = AND of all predicates, ``unmet`` names failures."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -225,10 +114,7 @@ class DoDVerdict(BaseModel):
 
 
 class SubjectiveVerdict(BaseModel):
-    """A future subjective predicate's judgment. NOT in scope for C1a (the
-    three current kinds are deterministic), but the seam is here so a new
-    kind can be added without rewriting the evaluator. The default judge
-    is an LLM call; tests use a fake."""
+    """A future subjective predicate's judgment (seam for a non-deterministic kind)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     passed: bool
@@ -237,10 +123,7 @@ class SubjectiveVerdict(BaseModel):
 
 
 class SubjectiveJudgeRequest(BaseModel):
-    """What a future subjective judge would receive. The predicate itself
-    (in its frozen form), plus a tiny evidence packet: the spec's predicates
-    and a flag for the workspace root so the judge can read evidence files
-    if needed. NEVER the agent's transcript."""
+    """Predicate + spec + workspace root for a future judge (never transcript)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     predicate: DoDPredicate
@@ -251,10 +134,7 @@ class SubjectiveJudgeRequest(BaseModel):
 
 @runtime_checkable
 class SubjectiveJudge(Protocol):
-    """The LLM-judge seam. A fresh-context judgment is the whole point — the
-    judge sees ONLY the spec + the deliverable evidence, never the agent's
-    working memory. The default implementation uses the live loop's router
-    (separate from the agent's); tests inject a fake."""
+    """LLM-judge seam: fresh-context, spec + evidence only, never transcript."""
 
     async def judge(self, req: SubjectiveJudgeRequest) -> SubjectiveVerdict: ...
 
@@ -285,21 +165,139 @@ _DEFAULT_HTTP_ALLOW_HOSTS = frozenset(
 )
 
 
+class _BoundedCapture:
+    """Bounded head+tail capture of one subprocess stream."""
+
+    def __init__(self, stream: str) -> None:
+        self.stream = stream
+        self.total = 0
+        self.small = bytearray()
+        self.head = bytearray()
+        self.tail = bytearray()
+
+    def feed(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
+        if len(self.small) <= return_cap:
+            room = return_cap + 1 - len(self.small)
+            self.small.extend(chunk[:room])
+        if len(self.head) < _COMMAND_CAPTURE_HEAD_BYTES:
+            self.head.extend(chunk[: _COMMAND_CAPTURE_HEAD_BYTES - len(self.head)])
+        self.tail.extend(chunk)
+        if len(self.tail) > _COMMAND_CAPTURE_TAIL_BYTES:
+            del self.tail[:-_COMMAND_CAPTURE_TAIL_BYTES]
+
+    def render(self) -> str:
+        return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
+        if self.total <= return_cap:
+            data = bytes(self.small[: self.total])
+        else:
+            omitted = max(0, self.total - len(self.head) - len(self.tail))
+            marker = (
+                f"\n[disco: {self.stream} truncated; {self.total} bytes total, "
+                f"{omitted} omitted]\n"
+            ).encode()
+            data = bytes(self.head) + marker + bytes(self.tail)
+        return data.decode("utf-8", errors="replace")
+
+
+def _drain_streams(
+    proc: subprocess.Popen[bytes],
+    selector: selectors.DefaultSelector,
+    streams: dict[int, Any],
+    deadline: float,
+) -> bool:
+    """Drain stdout/stderr until the deadline or the process exits."""
+
+    while True:
+        if proc.poll() is not None and not selector.get_map():
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return proc.poll() is not None and not selector.get_map()
+        for key, _mask in selector.select(timeout=min(remaining, 0.1)):
+            fd = key.fd
+            try:
+                chunk = os.read(fd, 64 * 1024)
+            except BlockingIOError:
+                continue
+            if chunk:
+                key.data.feed(chunk)
+            else:
+                selector.unregister(fd)
+                streams.pop(fd).close()
+
+
+def _run_command(
+    command: str,
+    cwd: Path,
+    timeout_seconds: float,
+) -> tuple[int | None, str, str, bool]:
+    """Run ``command`` in a fresh subprocess with bounded capture and timeout."""
+
+    proc = subprocess.Popen(  # noqa: S602 - model command is deny-gated above
+        command,
+        shell=True,
+        executable="/bin/bash",  # H342: match sandbox exec_shell
+        cwd=str(cwd),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+        env={"PATH": os.environ.get("PATH", "")},  # no leaked agent secrets
+    )
+    stdout_capture = _BoundedCapture("stdout")
+    stderr_capture = _BoundedCapture("stderr")
+    selector = selectors.DefaultSelector()
+    assert proc.stdout is not None and proc.stderr is not None
+    streams = {proc.stdout.fileno(): proc.stdout, proc.stderr.fileno(): proc.stderr}
+    selector.register(proc.stdout.fileno(), selectors.EVENT_READ, stdout_capture)
+    selector.register(proc.stderr.fileno(), selectors.EVENT_READ, stderr_capture)
+
+    timed_out = not _drain_streams(proc, selector, streams, time.monotonic() + timeout_seconds)
+    if timed_out:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                pass
+            if _drain_streams(
+                proc, selector, streams,
+                time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS,
+            ):
+                break
+    for key in list(selector.get_map().values()):
+        selector.unregister(key.fd)
+        streams.pop(key.fd).close()
+    selector.close()
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+    return (
+        None if timed_out else int(proc.returncode),
+        stdout_capture.render(),
+        stderr_capture.render(),
+        timed_out,
+    )
+
+
 async def _default_command_runner(
     command: str,
     *,
     cwd: Path,
     timeout_seconds: float,
 ) -> CommandResult:
-    """The default `command_runner`. Runs `command` in a fresh subprocess
-    with `cwd=cwd` and a hard timeout. The subprocess is captured (stdout +
-    stderr); we never tee the output to the agent's trace — the evaluator's
-    verdict is the only output the agent sees.
+    """Default command runner: bounded subprocess with hard timeout.
 
-    A denied command is recorded as `CommandResult(denied=True,
-    deny_reason=…)` with `exit_code=None` — the predicate is "not run", not
-    "run and failed". This distinguishes a hard-deny from a real non-zero
-    exit in the audit trail."""
+    A denied command is ``denied=True`` with ``exit_code=None`` — "not run",
+    not "run and failed".
+    """
     deny = _hard_deny_reason(command)
     if deny is not None:
         return CommandResult(
@@ -313,121 +311,10 @@ async def _default_command_runner(
         )
     started = datetime.now(UTC).timestamp()
 
-    class _BoundedCapture:
-        def __init__(self, stream: str) -> None:
-            self.stream = stream
-            self.total = 0
-            self.small = bytearray()
-            self.head = bytearray()
-            self.tail = bytearray()
-
-        def feed(self, chunk: bytes) -> None:
-            self.total += len(chunk)
-            return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
-            if len(self.small) <= return_cap:
-                room = return_cap + 1 - len(self.small)
-                self.small.extend(chunk[:room])
-            if len(self.head) < _COMMAND_CAPTURE_HEAD_BYTES:
-                self.head.extend(chunk[: _COMMAND_CAPTURE_HEAD_BYTES - len(self.head)])
-            self.tail.extend(chunk)
-            if len(self.tail) > _COMMAND_CAPTURE_TAIL_BYTES:
-                del self.tail[:-_COMMAND_CAPTURE_TAIL_BYTES]
-
-        def render(self) -> str:
-            return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
-            if self.total <= return_cap:
-                data = bytes(self.small[: self.total])
-            else:
-                omitted = max(0, self.total - len(self.head) - len(self.tail))
-                marker = (
-                    f"\n[disco: {self.stream} truncated; {self.total} bytes total, "
-                    f"{omitted} omitted]\n"
-                ).encode()
-                data = bytes(self.head) + marker + bytes(self.tail)
-            return data.decode("utf-8", errors="replace")
-
-    def _run() -> tuple[int | None, str, str, bool]:
-        proc = subprocess.Popen(  # noqa: S602 - model command is deny-gated above
-            command,
-            shell=True,
-            # H342: match sandbox ``exec_shell`` and persistent sessions.  An
-            # ambient /bin/sh is backend-dependent (dash in the sandbox image),
-            # which made valid Bash predicates impossible only at finish.
-            executable="/bin/bash",
-            cwd=str(cwd),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            # Inherit a clean env (no leaked agent secrets). Neither an external
-            # spec nor a plan-owned predicate can inject ambient environment.
-            env={"PATH": os.environ.get("PATH", "")},
-        )
-        stdout_capture = _BoundedCapture("stdout")
-        stderr_capture = _BoundedCapture("stderr")
-        selector = selectors.DefaultSelector()
-        assert proc.stdout is not None and proc.stderr is not None
-        streams = {
-            proc.stdout.fileno(): proc.stdout,
-            proc.stderr.fileno(): proc.stderr,
-        }
-        selector.register(proc.stdout.fileno(), selectors.EVENT_READ, stdout_capture)
-        selector.register(proc.stderr.fileno(), selectors.EVENT_READ, stderr_capture)
-
-        def _drain_until(deadline: float) -> bool:
-            while True:
-                if proc.poll() is not None and not selector.get_map():
-                    return True
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return proc.poll() is not None and not selector.get_map()
-                for key, _mask in selector.select(timeout=min(remaining, 0.1)):
-                    fd = key.fd
-                    try:
-                        chunk = os.read(fd, 64 * 1024)
-                    except BlockingIOError:
-                        continue
-                    if chunk:
-                        key.data.feed(chunk)
-                    else:
-                        selector.unregister(fd)
-                        streams.pop(fd).close()
-
-        timed_out = not _drain_until(time.monotonic() + timeout_seconds)
-        if timed_out:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            terminated = _drain_until(time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
-            if not terminated:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                _drain_until(time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
-        for key in list(selector.get_map().values()):
-            selector.unregister(key.fd)
-            streams.pop(key.fd).close()
-        selector.close()
-        if proc.poll() is None:
-            try:
-                proc.wait(timeout=_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.wait()
-        return (
-            None if timed_out else int(proc.returncode),
-            stdout_capture.render(),
-            stderr_capture.render(),
-            timed_out,
-        )
-
     try:
-        exit_code, stdout, stderr, timed_out = await asyncio.to_thread(_run)
+        exit_code, stdout, stderr, timed_out = await asyncio.to_thread(
+            _run_command, command, cwd, timeout_seconds
+        )
     except Exception as exc:  # pragma: no cover - defensive executor surface
         duration = datetime.now(UTC).timestamp() - started
         return CommandResult(
@@ -458,12 +345,7 @@ async def _default_http_probe(
     timeout_seconds: float,
     allow_hosts: frozenset[str],
 ) -> HttpProbeResult:
-    """The default HTTP probe. GET only (read-only by construction). The
-    egress gate is checked BEFORE the wire call, so a denied URL never
-    touches the network.
-
-    The wire call uses the shared host-side guarded fetcher so redirects and
-    DNS resolution are revalidated before a socket is opened."""
+    """Default HTTP probe: read-only GET with egress gate checked before wire."""
     allowed, reason = _egress_allowed(url, allow_hosts)
     if not allowed:
         return HttpProbeResult(
@@ -518,27 +400,72 @@ HttpProbe = Callable[[str, int], Awaitable[HttpProbeResult]]
 FileChecker = Callable[[FileExistsPredicate], Awaitable[DoDPredicateResult]]
 
 
+def _file_exists_details(
+    predicate: FileExistsPredicate, resolved: Path, **extra: Any
+) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "kind": "file_exists",
+        "path": predicate.path,
+        "resolved": str(resolved),
+    }
+    details.update(extra)
+    return details
+
+
+def _command_details(predicate: CommandExitPredicate, result: CommandResult) -> dict[str, Any]:
+    return {
+        "kind": "command",
+        "cmd": predicate.cmd,
+        "expect_exit": predicate.expect_exit,
+        "exit_code": result.exit_code,
+        "stdout_tail": tail(result.stdout, 2000),
+        "stderr_tail": tail(result.stderr, 2000),
+        "error_message": result.error_message,
+        "denied": result.denied,
+        "deny_reason": result.deny_reason,
+        "timed_out": result.timed_out,
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+def _http_details(predicate: HTTPOkPredicate, result: HttpProbeResult) -> dict[str, Any]:
+    return {
+        "kind": "http_ok",
+        "url": predicate.url,
+        "expect_status": predicate.expect_status,
+        "status_code": result.status_code,
+        "error_message": result.error_message,
+        "egress_denied": result.egress_denied,
+        "egress_reason": result.egress_reason,
+        "duration_seconds": result.duration_seconds,
+    }
+
+
+def _command_reason(result: CommandResult, expect_exit: int) -> str:
+    if result.denied:
+        return f"command not run: hard-denied ({result.deny_reason})"
+    if result.error_message:
+        return f"command not run: {result.error_message}"
+    return f"command exited {result.exit_code}, expected {expect_exit}"
+
+
+def _http_reason(result: HttpProbeResult, expect_status: int) -> str:
+    if result.egress_denied:
+        return f"probe not run: egress denied ({result.egress_reason})"
+    if result.error_message:
+        return f"probe not run: {result.error_message}"
+    return f"HTTP {result.status_code}, expected {expect_status}"
+
+
 class DoDEvaluator:
-    """The fresh-context, read-only judge for a `DoDSpec`.
+    """The fresh-context, read-only judge for a ``DoDSpec``.
 
-    Construction is dependency-injected:
-
-      * `command_runner(cmd: str) -> CommandResult`: how a `command`
-        predicate is run. Default: bounded process-group execution with closed
-        stdin, gated through the engine's destructive-command deny-list.
-      * `http_probe(url: str, expected_status: int) -> HttpProbeResult`:
-        how an `http_ok` predicate is probed. Default: `urllib` GET with a
-        loopback + RFC1918 egress allow-list.
-      * `subjective_judge`: the future-LLM seam. None means "no subjective
-        judgment wired" — a subjective predicate encountered under that
-        condition is a HARD-FAIL (we never silently pass a check we did
-        not run).
-
-    The evaluator holds a `workspace_root: Path` and uses it to resolve
-    `file_exists` paths and as `cwd` for `command` predicates. Path-escape
-    attempts (a `file_exists` path that resolves outside `workspace_root`)
-    are a hard fail — same discipline the sandbox uses for the agent's
-    file tools.
+    Construction is dependency-injected: ``command_runner``, ``http_probe``,
+    ``file_checker``, and ``subjective_judge`` seams default to safe production
+    implementations (bounded subprocess, loopback GET, ``Path.exists``, and
+    HARD-FAIL respectively).  The evaluator holds a ``workspace_root`` for
+    resolving ``file_exists`` paths and as ``cwd`` for command predicates;
+    path-escape attempts are a hard fail.
     """
 
     def __init__(
@@ -554,15 +481,8 @@ class DoDEvaluator:
         http_allow_hosts: frozenset[str] = _DEFAULT_HTTP_ALLOW_HOSTS,
     ) -> None:
         self._workspace_root = Path(workspace_root).resolve()
-        if not self._workspace_root.exists():
-            # The evaluator's whole job is to grade evidence in a workspace;
-            # a missing workspace is a misconfiguration, not a predicate
-            # failure. We construct anyway — every `file_exists`/`command`
-            # check will then fail closed (the path doesn't resolve, the
-            # cwd is gone), and the verdict's `unmet` will name them. The
-            # C1c caller is expected to provide a real workspace path.
-            pass
-        # Set scalar config FIRST so the builder closures can read them.
+        # A missing workspace is a misconfiguration; construct anyway so every
+        # check fails closed rather than crashing at construction.
         self._subjective_judge = subjective_judge
         self._file_checker = file_checker
         self._command_timeout_seconds = float(command_timeout_seconds)
@@ -621,15 +541,9 @@ class DoDEvaluator:
     ) -> DoDVerdict:
         """Run every predicate's check and return the structured verdict.
 
-        Predicates are evaluated in spec order. ALL must pass; partial pass
-        is failure. The verdict's `unmet` lists the specific `DoDPredicate`
-        instances that did not pass — the C1c finish gate iterates `unmet`
-        to name the refusal reason to the agent.
-
-        The evaluator is `async` so the LLM-judge seam (when wired) can be
-        async; deterministic checks are themselves async (the subprocess /
-        HTTP calls are wrapped in `asyncio.to_thread`). The function never
-        raises — every failure mode is recorded as a `DoDPredicateResult`.
+        Predicates are evaluated in spec order; ALL must pass.  The verdict's
+        ``unmet`` lists the specific predicates that did not pass.  Never
+        raises — every failure mode is recorded as a ``DoDPredicateResult``.
         """
         results: list[DoDPredicateResult] = []
         for predicate in spec.predicates:
@@ -665,13 +579,8 @@ class DoDEvaluator:
 
     async def _check_file_exists(self, predicate: FileExistsPredicate) -> DoDPredicateResult:
         """Resolve the predicate's path against the workspace root and check
-        existence. A path-escape (resolved path outside `workspace_root`) is
-        a hard fail — same discipline the sandbox uses for the agent's file
-        tools, and important: a spec that says `file_exists path: ../../etc/
-        passwd` would otherwise let the agent pass by *seeing* (or claiming
-        to see) an arbitrary file's existence. The evaluator refuses to
-        grade it; the verdict names the predicate unmet with the escape
-        reason."""
+        existence. A path-escape is a hard fail; a directory or empty file is
+        unmet (anti-gaming: a declared deliverable must be a non-empty regular file)."""
         if self._file_checker is not None:
             return await self._file_checker(predicate)
         try:
@@ -691,24 +600,15 @@ class DoDEvaluator:
         exists = resolved.exists()
         if exists:
             stat = resolved.stat()
-            # ANTI-GAMING (codex P2): a DECLARED deliverable must be a REGULAR, NON-EMPTY
-            # file. Path.exists() alone is satisfied by a directory named like the file, or
-            # by an empty `touch`ed placeholder — both let a model pass a file_exists gate
-            # without producing real content (the exact form-without-substance reward-hack
-            # the gate exists to stop). A genuinely-empty marker (e.g. __init__.py) remains
-            # unmet and eventually pauses for user review; it is never silently released.
             is_file = resolved.is_file()
             if is_file and stat.st_size > 0:
                 return DoDPredicateResult(
                     predicate=predicate,
                     passed=True,
                     reason=f"file exists at {resolved} ({stat.st_size} bytes)",
-                    details={
-                        "kind": "file_exists",
-                        "path": predicate.path,
-                        "resolved": str(resolved),
-                        "size_bytes": stat.st_size,
-                    },
+                    details=_file_exists_details(
+                        predicate, resolved, size_bytes=stat.st_size
+                    ),
                 )
             why = "is a directory" if not is_file else "is empty (0 bytes)"
             return DoDPredicateResult(
@@ -718,33 +618,24 @@ class DoDEvaluator:
                     f"path exists but {why}: {predicate.path} — a declared deliverable "
                     f"must be a non-empty regular file (write its real content)"
                 ),
-                details={
-                    "kind": "file_exists",
-                    "path": predicate.path,
-                    "resolved": str(resolved),
-                    "size_bytes": stat.st_size,
-                    "is_file": is_file,
-                    "empty_or_dir": True,
-                },
+                details=_file_exists_details(
+                    predicate,
+                    resolved,
+                    size_bytes=stat.st_size,
+                    is_file=is_file,
+                    empty_or_dir=True,
+                ),
             )
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
             reason=f"file does not exist: {predicate.path} (resolved {resolved})",
-            details={
-                "kind": "file_exists",
-                "path": predicate.path,
-                "resolved": str(resolved),
-                "exists": False,
-            },
+            details=_file_exists_details(predicate, resolved, exists=False),
         )
 
     async def _check_command_exit(self, predicate: CommandExitPredicate) -> DoDPredicateResult:
-        """Re-run the predicate's own command in a fresh subprocess. The
-        verdict turns the `CommandResult` into a `DoDPredicateResult` based
-        on the predicate's `expect_exit` (default 0). A hard-denied command
-        is "not run", not "run and failed" — the predicate is unmet with the
-        deny reason in `details.deny_reason`."""
+        """Re-run the predicate's command in a fresh subprocess. A hard-denied
+        command is "not run", not "run and failed"."""
         result = await self._command_runner(predicate.cmd)
         passed = (
             not result.denied
@@ -765,47 +656,22 @@ class DoDEvaluator:
                     "duration_seconds": result.duration_seconds,
                 },
             )
-        # Build a precise reason. Three cases:
-        #   1. denied → "not run: hard-denied (…)"
-        #   2. executor error → "not run: …"
-        #   3. wrong exit → "exited N, expected M"
-        if result.denied:
-            reason = f"command not run: hard-denied ({result.deny_reason})"
-        elif result.error_message:
-            reason = f"command not run: {result.error_message}"
-        else:
-            reason = f"command exited {result.exit_code}, expected {predicate.expect_exit}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
-            # INFRA if the command could not RUN (denied / executor error / no exit code);
-            # a TASK failure only when it ran and exited with the wrong code.
             unverifiable=bool(
                 result.denied
                 or result.timed_out
                 or result.error_message
                 or result.exit_code is None
             ),
-            reason=reason,
-            details={
-                "kind": "command",
-                "cmd": predicate.cmd,
-                "expect_exit": predicate.expect_exit,
-                "exit_code": result.exit_code,
-                "stdout_tail": tail(result.stdout, 2000),
-                "stderr_tail": tail(result.stderr, 2000),
-                "error_message": result.error_message,
-                "denied": result.denied,
-                "deny_reason": result.deny_reason,
-                "timed_out": result.timed_out,
-                "duration_seconds": result.duration_seconds,
-            },
+            reason=_command_reason(result, predicate.expect_exit),
+            details=_command_details(predicate, result),
         )
 
     async def _check_http_ok(self, predicate: HTTPOkPredicate) -> DoDPredicateResult:
-        """Probe the URL and compare to `expect_status` (default 200). An
-        egress-denied URL is "not probed", not "probed and got a bad
-        status" — distinct in the audit trail."""
+        """Probe the URL and compare to `expect_status`. An egress-denied URL
+        is "not probed", not "probed and got a bad status"."""
         result = await self._http_probe(predicate.url, predicate.expect_status)
         passed = (
             not result.egress_denied
@@ -825,47 +691,24 @@ class DoDEvaluator:
                     "duration_seconds": result.duration_seconds,
                 },
             )
-        if result.egress_denied:
-            reason = f"probe not run: egress denied ({result.egress_reason})"
-        elif result.error_message:
-            reason = f"probe not run: {result.error_message}"
-        else:
-            reason = f"HTTP {result.status_code}, expected {predicate.expect_status}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
-            # INFRA if the URL could not be PROBED (egress denied / probe error / no status,
-            # e.g. the server isn't up at finish); a TASK failure only when it served the
-            # wrong status.
             unverifiable=bool(
                 result.egress_denied or result.error_message or result.status_code is None
             ),
-            reason=reason,
-            details={
-                "kind": "http_ok",
-                "url": predicate.url,
-                "expect_status": predicate.expect_status,
-                "status_code": result.status_code,
-                "error_message": result.error_message,
-                "egress_denied": result.egress_denied,
-                "egress_reason": result.egress_reason,
-                "duration_seconds": result.duration_seconds,
-            },
+            reason=_http_reason(result, predicate.expect_status),
+            details=_http_details(predicate, result),
         )
 
     # ---- subjective-judge seam (future) -----------------------------------
 
     async def _check_subjective(self, predicate: DoDPredicate, spec: DoDSpec) -> DoDPredicateResult:
-        """A predicate kind the evaluator does not handle directly. If a
-        `subjective_judge` is wired, delegate to it (fresh context: the
-        judge gets the spec + the workspace path, NOT the agent's
-        transcript). If not wired, this is a HARD-FAIL: we never silently
-        pass a check we did not run.
+        """Delegate to the subjective judge if wired, else HARD-FAIL.
 
-        The hard-fail default is the "no silent pass" discipline. A future
-        subjective kind (e.g. design quality) without a judge would let
-        the agent pass a check that was never run — the same failure mode
-        C1a exists to fix, just one layer down."""
+        We never silently pass a check we did not run — the same discipline
+        C1a exists to fix, one layer down.
+        """
         if self._subjective_judge is None:
             return DoDPredicateResult(
                 predicate=predicate,
@@ -909,10 +752,7 @@ class DoDEvaluator:
 
 
 class PathEscapeError(ValueError):
-    """A predicate's path resolved to a location outside the workspace root.
-    The evaluator refuses to grade such predicates — the verdict names the
-    predicate unmet with the escape reason, and the audit trail can see
-    "this spec tried to probe outside the workspace"."""
+    """A predicate path resolved outside the workspace root."""
 
     def __init__(self, message: str, *, resolved: Path, root: Path) -> None:
         super().__init__(message)
@@ -921,15 +761,11 @@ class PathEscapeError(ValueError):
 
 
 def resolve_under_workspace(root: Path, raw: str) -> Path:
-    """Resolve `raw` against `root` and assert the resolved path is under
-    `root`. Absolute paths are allowed (a spec can probe `/tmp/done.flag`)
-    only if they are themselves under `root`; this prevents a spec from
-    probing arbitrary system locations.
+    """Resolve ``raw`` against ``root`` and assert it stays under ``root``.
 
-    Symlinks are NOT followed here — `Path.resolve` follows them in
-    Python 3.6+. If the resolved symlink target is outside `root`, it's a
-    path-escape and is rejected. The agent cannot use a workspace-relative
-    symlink to escape the evaluator's reach."""
+    Symlinks are followed by ``Path.resolve``; a target outside ``root`` is
+    a path-escape and is rejected.
+    """
     if not raw:
         raise PathEscapeError("empty path", resolved=Path("."), root=root)
     candidate = (root / raw).resolve() if not Path(raw).is_absolute() else Path(raw).resolve()
@@ -958,12 +794,11 @@ def spec_fingerprint(spec: DoDSpec) -> str:
 
 
 class LLMSubjectiveJudge:
-    """The production `SubjectiveJudge` — a fresh-context LLM call. Built
-    on top of the live loop's `LLMRouter` (the same seam the agent uses
-    for its own completions). The judge sends a tiny prompt: "is this
-    predicate satisfied? answer PASS or FAIL with one reason". The router
-    resolves the role; the test substitutes a fake router so no live LLM
-    is ever called in unit tests."""
+    """The production ``SubjectiveJudge`` — a fresh-context LLM call.
+
+    Built on the live loop's ``LLMRouter``.  The judge sends a tiny prompt
+    asking PASS or FAIL with one reason; tests substitute a fake router.
+    """
 
     def __init__(self, router: Any, *, profile: Any) -> None:
         # The router seam (`LLMRouter` Protocol) is used instead of pinning
@@ -975,10 +810,7 @@ class LLMSubjectiveJudge:
         self._profile = profile
 
     async def judge(self, req: SubjectiveJudgeRequest) -> SubjectiveVerdict:
-
-        # Fresh-context prompt: just the predicate + the spec + the
-        # workspace path. NEVER the agent's transcript, the view, or the
-        # event log. The judge's output is the verdict — nothing else.
+        # Fresh-context prompt: predicate + spec + workspace path, NEVER the agent's transcript.
         prompt = (
             "You are an independent judge of one acceptance predicate. "
             "Read the predicate, the spec's full predicate list, and (if "
@@ -997,18 +829,12 @@ class LLMSubjectiveJudge:
     def _build_completion_request(self, prompt: str, *, profile: Any) -> Any:
         from .llm.types import CompletionRequest, LLMMessage
 
-        # The profile comes from the caller (typically `CapabilityProfile(
-        # role=ModelRole.NLI_VERIFIER, …)`). We re-construct a
-        # `CompletionRequest` from it so the test can vary role/cost.
         messages = [LLMMessage(role="user", content=prompt)]
         return CompletionRequest(profile=profile, messages=messages, response_format="text")
 
     @staticmethod
     def _parse_response(text: str) -> SubjectiveVerdict:
-        """The judge is asked to answer PASS/FAIL on the first line. The
-        reason is the remainder. This is intentionally a tiny parser —
-        the judge's prompt sets the contract; we don't need a full schema
-        to extract the verdict."""
+        """Tiny parser: PASS/FAIL on the first line, reason is the remainder."""
         first, _, rest = (text or "").strip().partition("\n")
         passed = first.strip().upper().startswith("PASS")
         return SubjectiveVerdict(
