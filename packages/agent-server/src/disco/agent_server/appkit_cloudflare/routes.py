@@ -505,7 +505,7 @@ class _CommittedWorkspaceGate:
 
     async def require_locked(self, conversation_id: str) -> CommittedWorkspaceView:
         try:
-            return await self.runtime_required()._workspace.require_committed_host_mirror_locked(
+            return await self.runtime_required().require_committed_host_mirror_locked(
                 conversation_id
             )
         except (WorkspaceCommitUnavailable, RuntimeError) as exc:

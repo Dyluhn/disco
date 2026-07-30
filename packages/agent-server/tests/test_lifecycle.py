@@ -118,8 +118,8 @@ async def test_maybe_snapshot_cuts_version_after_manifest(monkeypatch, tmp_path)
     rt = _runtime(store)
     cid = "conv-snapshot-version"
     project_store = _VersionCutStore(tmp_path)
-    rt._project_store_now = MagicMock(return_value=project_store)
-    rt._executors[cid] = MagicMock(_sandbox=object())
+    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
         assert dest == project_store.path_for(cid)
@@ -139,8 +139,8 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     cid = "conv-snapshot-commit"
     project_store = _VersionCutStore(tmp_path)
     project_store.next_version = SimpleNamespace(seq=2, tree_digest="tree-2")
-    rt._project_store_now = MagicMock(return_value=project_store)
-    rt._executors[cid] = MagicMock(_sandbox=object())
+    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
         dest.mkdir(parents=True, exist_ok=True)
@@ -167,8 +167,8 @@ async def test_maybe_snapshot_reemits_commit_for_unchanged_latest_version(monkey
     cid = "conv-snapshot-unchanged-commit"
     project_store = _VersionCutStore(tmp_path)
     project_store.versions = [SimpleNamespace(seq=4, tree_digest="same-tree")]
-    rt._project_store_now = MagicMock(return_value=project_store)
-    rt._executors[cid] = MagicMock(_sandbox=object())
+    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
         dest.mkdir(parents=True, exist_ok=True)
@@ -193,9 +193,10 @@ async def test_maybe_snapshot_survives_cut_version_failure(monkeypatch, tmp_path
     rt = _runtime(store)
     cid = "conv-snapshot-cut-fails"
     project_store = _VersionCutStore(tmp_path, fail_cut=True)
-    rt._project_store_now = MagicMock(return_value=project_store)
-    rt._emit_persistence_reminder = AsyncMock()
-    rt._executors[cid] = MagicMock(_sandbox=object())
+    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt._persistence_notifier = MagicMock()
+    rt._persistence_notifier.emit = AsyncMock()
+    rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
         return SnapshotResult(file_count=1, total_bytes=4, paths=["a.txt"])
@@ -207,7 +208,7 @@ async def test_maybe_snapshot_survives_cut_version_failure(monkeypatch, tmp_path
 
     assert project_store.manifest_writes == 1
     assert project_store.cut_triggers == ["turn"]
-    rt._emit_persistence_reminder.assert_not_awaited()
+    rt._persistence_notifier.emit.assert_not_awaited()
     assert "version cut failed" in caplog.text
 
 
@@ -233,14 +234,14 @@ async def test_idle_statuses_are_eligible(status, tmp_path):
     # Inject a fake executor so _suspend thinks there's a live sandbox to free.
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     # Force the event to appear old by patching the TTL to 0.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()
 
     assert count == 1
-    assert cid not in rt._executors  # executor was removed (suspended)
+    assert not rt._run_resources.has_executor(cid)  # executor was removed (suspended)
 
 
 async def test_running_never_swept():
@@ -251,13 +252,13 @@ async def test_running_never_swept():
 
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()
 
     assert count == 0
-    assert cid in rt._executors  # not touched
+    assert rt._run_resources.has_executor(cid)  # not touched
 
 
 async def test_connected_session_not_swept():
@@ -268,14 +269,14 @@ async def test_connected_session_not_swept():
 
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
     rt._connections.on_connect(cid)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()
 
     assert count == 0
-    assert cid in rt._executors
+    assert rt._run_resources.has_executor(cid)
 
 
 async def test_fresh_event_not_swept():
@@ -286,14 +287,14 @@ async def test_fresh_event_not_swept():
 
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     # TTL very large — the event just happened, so it's not idle.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "99999"}):
         count = await rt.sweep_idle_once()
 
     assert count == 0
-    assert cid in rt._executors
+    assert rt._run_resources.has_executor(cid)
 
 
 async def test_ttl_env_override(tmp_path):
@@ -304,7 +305,7 @@ async def test_ttl_env_override(tmp_path):
 
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     # With a huge TTL, NOT swept.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "99999"}):
@@ -335,7 +336,7 @@ async def test_sandbox_state_active_with_executor():
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = "conv-active"
-    rt._executors[cid] = MagicMock()
+    rt._run_resources.set_executor(cid, MagicMock())
     assert rt.sandbox_state(cid) == "active"
 
 
@@ -359,19 +360,17 @@ async def test_rehydrated_flag_cleared_after_teardown():
     cid = "conv-rehydrate-regression"
 
     # Simulate prior rehydration.
-    if not hasattr(rt, "_rehydrated"):
-        rt._rehydrated = set()
-    rt._rehydrated.add(cid)
+    rt._lifecycle._rehydration._rehydrated.add(cid)
 
     # Inject a fake executor so teardown has something to remove.
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     await rt._teardown_sandbox(cid)
 
     # The flag MUST be cleared so _maybe_rehydrate runs again after a recreate.
-    assert cid not in rt._rehydrated
+    assert cid not in rt._lifecycle._rehydration._rehydrated
 
 
 async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():
@@ -382,13 +381,17 @@ async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = "conv-midrun-recreate"
-    rt._rehydrated = {cid}  # the run already rehydrated once before the drop
+    rt._lifecycle._rehydration._rehydrated.add(
+        cid
+    )  # the run already rehydrated once before the drop
 
-    rt._maybe_rehydrate = AsyncMock()
-    await rt._rehydrate_after_recreate(cid)
+    rt._lifecycle._rehydration._maybe_rehydrate = AsyncMock()
+    await rt._lifecycle._rehydrate_after_recreate(cid)
 
-    assert cid not in rt._rehydrated  # flag cleared BEFORE the rehydrate call
-    rt._maybe_rehydrate.assert_awaited_once_with(cid)
+    assert (
+        cid not in rt._lifecycle._rehydration._rehydrated
+    )  # flag cleared BEFORE the rehydrate call
+    rt._lifecycle._rehydration._maybe_rehydrate.assert_awaited_once_with(cid)
 
 
 async def test_build_session_wires_recreate_hook():
@@ -416,7 +419,7 @@ async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=[idle_cid, "conv-ghost-no-row"])
     svc.destroy_by_conversation = AsyncMock()
-    rt._sandbox_service_now = MagicMock(return_value=svc)
+    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 
@@ -437,7 +440,7 @@ async def test_orphan_sweep_keeps_running(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=[cid])
     svc.destroy_by_conversation = AsyncMock()
-    rt._sandbox_service_now = MagicMock(return_value=svc)
+    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 
@@ -471,7 +474,7 @@ async def test_orphan_sweep_destroys_concurrently(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=list(cids))
     svc.destroy_by_conversation = AsyncMock(side_effect=_slow_destroy)
-    rt._sandbox_service_now = MagicMock(return_value=svc)
+    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     start = time.perf_counter()
     await rt.reconcile_orphaned_runs()
@@ -505,7 +508,7 @@ async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=list(cids))
     svc.destroy_by_conversation = AsyncMock(side_effect=_maybe_fail)
-    rt._sandbox_service_now = MagicMock(return_value=svc)
+    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 
@@ -530,9 +533,9 @@ async def test_http_state_route_overlays_sandbox_state():
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = await _make_conversation(store, ConversationStatus.FINISHED)
-    rt._executors[cid] = MagicMock()  # live executor → sandbox_state == "active"
-    rt._start_mcp_pool = AsyncMock()
-    rt._close_mcp_pool = AsyncMock()
+    rt._run_resources.set_executor(cid, MagicMock())  # live executor → sandbox_state == "active"
+    rt._mcp._start_mcp_pool = AsyncMock()
+    rt._mcp._close_mcp_pool = AsyncMock()
     rt.reconcile_orphaned_runs = AsyncMock()
     rt.prewarm_model_probe = AsyncMock()
     rt.prewarm_vision_probe = AsyncMock()
@@ -558,18 +561,18 @@ async def test_live_run_task_blocks_suspend(tmp_path):
     cid = await _make_conversation(store, ConversationStatus.PAUSED)
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     async def _never() -> None:
         await asyncio.Event().wait()
 
     task = asyncio.create_task(_never())
-    rt._tasks[cid] = task
+    rt._run_registry.register_task(cid, task)  # type: ignore[arg-type]
     try:
         with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
             count = await rt.sweep_idle_once()
         assert count == 0
-        assert cid in rt._executors  # NOT suspended — a live run task is active work
+        assert rt._run_resources.has_executor(cid)  # NOT suspended — a live run task is active work
     finally:
         task.cancel()
 
@@ -581,15 +584,15 @@ async def test_done_run_task_does_not_block_suspend(tmp_path):
     cid = await _make_conversation(store, ConversationStatus.PAUSED)
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
     async def _noop() -> None:
         return None
 
     t = asyncio.create_task(_noop())
     await t  # let it finish
-    rt._tasks[cid] = t
+    rt._run_registry.register_task(cid, t)  # type: ignore[arg-type]
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()
     assert count == 1
-    assert cid not in rt._executors  # a done task does not block suspend
+    assert not rt._run_resources.has_executor(cid)  # a done task does not block suspend

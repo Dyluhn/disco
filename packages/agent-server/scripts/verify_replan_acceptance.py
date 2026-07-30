@@ -74,7 +74,7 @@ async def _drive(runtime: ConversationRuntime, store, *, max_rounds: int, label:
     shown = len(await store.get_events(CID))
     for _r in range(max_rounds):
         runtime.kick(CID)
-        task = runtime._tasks.get(CID)
+        task = runtime._run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)

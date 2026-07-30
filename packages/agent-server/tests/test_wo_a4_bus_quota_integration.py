@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from disco.agent_server import create_app
 from disco.agent_server.ai_chat_host_service import estimate_ai_chat_usage
+from disco.agent_server.host_service_bus import make_host_service_bus_router
 from disco.agent_server.host_token_store import HostTokenStore
 from disco.core import SqliteEventStore
 from disco.core.llm import CompletionResponse, TokenUsage
@@ -81,15 +81,23 @@ def _principal(a4: Any, conversation: str, owner: str, app: str, services: set[s
     )
 
 
-def _client(a4: Any) -> TestClient:
-    return TestClient(
-        create_app(
+def _app(a4: Any) -> Any:
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(
+        make_host_service_bus_router(
             a4.events,
-            runtime=a4.runtime,
-            host_token_store=a4.tokens,
-            quota_store=a4.quotas,
+            a4.runtime,
+            a4.tokens,
+            a4.quotas,
         )
     )
+    return app
+
+
+def _client(a4: Any) -> TestClient:
+    return TestClient(_app(a4))
 
 
 def _call(client: TestClient, token: str, payload: dict[str, Any], service: str = "ai.chat"):
@@ -207,12 +215,7 @@ async def test_concurrent_calls_cannot_oversubscribe_request_limit(a4: Any) -> N
         limits=QuotaConfig(window_seconds=60, max_requests=1),
     )
     token = _principal(a4, "conv-a", "owner-a", "app-a", {"ai.chat"})
-    app = create_app(
-        a4.events,
-        runtime=a4.runtime,
-        host_token_store=a4.tokens,
-        quota_store=a4.quotas,
-    )
+    app = _app(a4)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -280,12 +283,7 @@ async def test_cancelled_request_settles_zero_tokens(
         return {"ok": True}
 
     monkeypatch.setattr("disco.agent_server.host_service_bus.call_host_service", blocked)
-    app = create_app(
-        a4.events,
-        runtime=a4.runtime,
-        host_token_store=a4.tokens,
-        quota_store=a4.quotas,
-    )
+    app = _app(a4)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:

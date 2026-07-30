@@ -34,7 +34,7 @@ def _rt(tmp_path, monkeypatch, db="events.db"):
 def test_set_surface_accepts_agent(tmp_path, monkeypatch):
     rt, _ = _rt(tmp_path, monkeypatch)
     rt.set_surface("c1", "agent")
-    assert rt._surface["c1"] == "agent"  # NOT coerced to research
+    assert rt._settings._surface_of("c1") == "agent"  # NOT coerced to research
 
 
 def test_surface_of_reads_db_column(tmp_path, monkeypatch):
@@ -42,7 +42,7 @@ def test_surface_of_reads_db_column(tmp_path, monkeypatch):
     the recovery answer — and it's the only signal that distinguishes agent from build."""
     rt, store = _rt(tmp_path, monkeypatch)
     store.create_conversation("c1", owner_id="local", surface="agent")
-    rt._surface.pop("c1", None)  # simulate a lost sidecar / pre-warmed cache
+    rt._settings._surface_settings.forget("c1")  # simulate a lost sidecar / pre-warmed cache
     assert rt._surface_of("c1") == "agent"
 
 
@@ -52,7 +52,7 @@ def test_surface_of_db_rung_beats_manifest_downgrade(tmp_path, monkeypatch):
     derive 'build'; the DB column rung must short-circuit before it ever runs."""
     rt, store = _rt(tmp_path, monkeypatch)
     store.create_conversation("c1", owner_id="local", surface="agent")
-    rt._surface.pop("c1", None)
+    rt._settings._surface_settings.forget("c1")
 
     # Force the manifest heuristic to be available + positive (it would say "build").
     class _FakeProjStore:

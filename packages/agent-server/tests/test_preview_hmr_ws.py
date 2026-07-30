@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import urllib.parse
 
@@ -19,6 +17,8 @@ class _FakeRuntime:
     async def wake_for_preview(self, cid8: str, port: int) -> str | None:
         self.wake_calls.append((cid8, port))
         return self.wake_result
+
+    preview_target_port = staticmethod(lambda _conversation_id: 8000)
 
     def project_store(self):
         self.project_store_called = True

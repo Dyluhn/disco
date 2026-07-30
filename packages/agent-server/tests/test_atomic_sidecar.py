@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+from operator import attrgetter
 from unittest.mock import MagicMock
 
 import pytest
@@ -74,7 +75,12 @@ def test_save_preserves_existing_file_on_failure(
     file empty. The post-fix atomic pattern leaves the target untouched and
     only ever swaps in a complete new file via os.replace."""
     rt = _new_runtime(tmp_path, monkeypatch)
-    path = getattr(rt, sidecar_attr)
+    owner_attr = {
+        "_autonomous_path": "_settings._autonomous_path",
+        "_override_path": "_settings._override_path",
+        "_surface_path": "_settings._surface_settings._path",
+    }[sidecar_attr]
+    path = attrgetter(owner_attr)(rt)
     assert path, f"runtime did not configure {sidecar_attr}"
 
     _seed(path, seed_payload)
@@ -106,7 +112,7 @@ def test_save_assist_is_already_atomic(tmp_path, monkeypatch):
     refactor of the sibling saves must not be allowed to quietly drop the
     temp+os.replace pattern; this test pins it for the assist sidecar."""
     rt = _new_runtime(tmp_path, monkeypatch)
-    path = rt._assist_path
+    path = rt._settings._assist_path
     assert path
 
     _seed(path, {"conv-A": True})
@@ -128,7 +134,7 @@ def test_save_autonomous_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
     rt.set_autonomous("conv-X", True)
     rt.set_autonomous("conv-Y", False)
-    with open(rt._autonomous_path) as f:
+    with open(rt._settings._autonomous_path) as f:
         data = json.load(f)
     assert data == {"conv-X": True, "conv-Y": False}
 
@@ -136,7 +142,7 @@ def test_save_autonomous_succeeds_on_happy_path(tmp_path, monkeypatch):
 def test_save_surfaces_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
     rt.set_surface("conv-X", "build")
-    with open(rt._surface_path) as f:
+    with open(rt._settings._surface_settings._path) as f:
         data = json.load(f)
     assert data == {"conv-X": "build"}
 
@@ -144,7 +150,7 @@ def test_save_surfaces_succeeds_on_happy_path(tmp_path, monkeypatch):
 def test_save_overrides_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
     rt.set_model_override("conv-X", "anthropic/claude-3-haiku")
-    with open(rt._override_path) as f:
+    with open(rt._settings._override_path) as f:
         data = json.load(f)
     assert data == {"conv-X": "anthropic/claude-3-haiku"}
 

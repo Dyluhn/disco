@@ -21,6 +21,12 @@ from __future__ import annotations
 
 import pytest
 from disco.agent_server.lifecycle import LifecycleManager
+from disco.agent_server.lifecycle_ports import (
+    LifecycleRunState,
+    LifecycleSandboxAccess,
+    LifecycleStoreAccess,
+)
+from disco.agent_server.run_registry import RunResourceRegistry
 
 
 class _Sandbox:
@@ -37,50 +43,77 @@ class _EmptyStore:
         return []
 
 
-class _Rt:
-    def __init__(self, executor: object | None) -> None:
-        self._executors = {"conv_621005": executor} if executor is not None else {}
-        # `_maybe_snapshot` declines when the terminal is already sealed (F-25).
-        # An empty event log has no canonical head, so `resolve_committed_workspace`
-        # raises `WorkspaceCommitUnavailable` and these tests exercise the
-        # UNSEALED path — which is where the F-21 pin matters.
-        self._store = _EmptyStore()
+class _ProjectStore:
+    """A stand-in project store; status() is OK so capture proceeds."""
 
-    def _project_store_now(self):
-        return None
+    def status(self):
+        from disco.tools.projects import StorageStatus
+
+        return StorageStatus.OK
 
 
 class _Persistence:
     """Records what capture was handed, and DROPS the executor first —
     reproducing teardown/rotation landing between the boundary and the capture."""
 
-    def __init__(self, rt: _Rt) -> None:
-        self._rt = rt
+    def __init__(self, run_resources: RunResourceRegistry) -> None:
+        self._run_resources = run_resources
         self.seen: dict[str, object] = {}
 
-    async def _do_capture_workspace(self, conversation_id: str, **kwargs: object):
-        self._rt._executors.pop(conversation_id, None)  # the race, made deterministic
-        self.seen = dict(kwargs)
+    async def capture_workspace(
+        self,
+        conversation_id: str,
+        *,
+        trigger: str,
+        version_label: str = "",
+        seal_fence: tuple[int, int | None] | None = None,
+        journal: dict | None = None,
+        pinned_session: object | None = None,
+        snapshot_fn: object | None = None,
+    ):
+        self._run_resources.pop_executor(conversation_id)  # the race, made deterministic
+        self.seen = {
+            "trigger": trigger,
+            "version_label": version_label,
+            "seal_fence": seal_fence,
+            "journal": journal,
+            "pinned_session": pinned_session,
+            "snapshot_fn": snapshot_fn,
+        }
         # What `_resolve_capture_session` would find, given what it was handed.
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._run_resources.executor(conversation_id)
         live = getattr(executor, "_sandbox", None) if executor is not None else None
-        self.seen["resolved_session"] = kwargs.get("pinned_session") or live
+        self.seen["resolved_session"] = pinned_session or live
         return None
 
 
-def _manager(executor: object | None) -> tuple[LifecycleManager, _Persistence]:
-    rt = _Rt(executor)
+def _manager(
+    executor: object | None,
+) -> tuple[LifecycleManager, _Persistence, RunResourceRegistry]:
+    run_resources = RunResourceRegistry()
+    if executor is not None:
+        run_resources.set_executor("conv_621005", executor)  # type: ignore[arg-type]
+    store = _EmptyStore()
+    persistence = _Persistence(run_resources)
+
     manager = LifecycleManager.__new__(LifecycleManager)
-    manager._rt = rt  # type: ignore[attr-defined]
-    persistence = _Persistence(rt)
+    manager._store = LifecycleStoreAccess(store)  # type: ignore[arg-type]
+    manager._sandbox = LifecycleSandboxAccess.__new__(LifecycleSandboxAccess)
+    manager._sandbox._projects = type(
+        "_Projects", (), {"current_project_store": lambda self: _ProjectStore()}
+    )()  # type: ignore[attr-defined]
+    manager._run_state = LifecycleRunState.__new__(LifecycleRunState)
+    manager._run_state._resources = run_resources
+    manager._run_state._runs = type("_Runs", (), {"generation": lambda self, cid: None})()
+    manager._run_state._loops = type("_Loops", (), {"forget": lambda self, cid: None})()
     manager._persistence = persistence  # type: ignore[attr-defined]
-    return manager, persistence
+    return manager, persistence, run_resources
 
 
 @pytest.mark.asyncio
 async def test_the_boundary_pins_the_sandbox_before_the_capture_await():
     sandbox = _Sandbox()
-    manager, persistence = _manager(_Executor(sandbox))
+    manager, persistence, _resources = _manager(_Executor(sandbox))
     await manager._maybe_snapshot("conv_621005", trigger="suspend")
     assert persistence.seen["pinned_session"] is sandbox
 
@@ -89,7 +122,7 @@ async def test_the_boundary_pins_the_sandbox_before_the_capture_await():
 async def test_capture_still_resolves_a_session_after_the_executor_is_dropped():
     """The regression itself: pre-fix this resolved to None and the workspace was lost."""
     sandbox = _Sandbox()
-    manager, persistence = _manager(_Executor(sandbox))
+    manager, persistence, _resources = _manager(_Executor(sandbox))
     await manager._maybe_snapshot("conv_621005", trigger="stuck")
     assert persistence.seen["resolved_session"] is sandbox, (
         "the executor was dropped between the boundary and the capture; without a pin "
@@ -100,7 +133,7 @@ async def test_capture_still_resolves_a_session_after_the_executor_is_dropped():
 @pytest.mark.asyncio
 async def test_no_executor_at_the_boundary_pins_nothing_and_still_fails_closed():
     # Negative control: a pin must not invent authority that was never there.
-    manager, persistence = _manager(None)
+    manager, persistence, _resources = _manager(None)
     await manager._maybe_snapshot("conv_621005", trigger="error")
     assert persistence.seen["pinned_session"] is None
     assert persistence.seen["resolved_session"] is None
@@ -108,7 +141,7 @@ async def test_no_executor_at_the_boundary_pins_nothing_and_still_fails_closed()
 
 @pytest.mark.asyncio
 async def test_the_trigger_label_is_preserved():
-    manager, persistence = _manager(_Executor(_Sandbox()))
+    manager, persistence, _resources = _manager(_Executor(_Sandbox()))
     await manager._maybe_snapshot("conv_621005", trigger="paused")
     assert persistence.seen["trigger"] == "paused"
 
@@ -126,7 +159,7 @@ async def test_an_executor_with_no_sandbox_pins_nothing():
     class _Killed:
         _sandbox = None
 
-    manager, persistence = _manager(_Killed())
+    manager, persistence, _resources = _manager(_Killed())
     await manager._maybe_snapshot("conv_621005", trigger="stuck")
     assert persistence.seen["pinned_session"] is None
     assert persistence.seen["resolved_session"] is None
@@ -141,14 +174,31 @@ async def test_the_pin_does_not_make_capture_happen_that_otherwise_would_not():
     """
     calls: list[str] = []
 
-    manager, persistence = _manager(_Executor(_Sandbox()))
-    original = persistence._do_capture_workspace
+    manager, persistence, _resources = _manager(_Executor(_Sandbox()))
+    original = persistence.capture_workspace
 
-    async def _counting(conversation_id: str, **kwargs: object):
+    async def _counting(
+        conversation_id: str,
+        *,
+        trigger: str,
+        version_label: str = "",
+        seal_fence: tuple[int, int | None] | None = None,
+        journal: dict | None = None,
+        pinned_session: object | None = None,
+        snapshot_fn: object | None = None,
+    ):
         calls.append(conversation_id)
-        return await original(conversation_id, **kwargs)
+        return await original(
+            conversation_id,
+            trigger=trigger,
+            version_label=version_label,
+            seal_fence=seal_fence,
+            journal=journal,
+            pinned_session=pinned_session,
+            snapshot_fn=snapshot_fn,
+        )
 
-    persistence._do_capture_workspace = _counting  # type: ignore[method-assign]
+    persistence.capture_workspace = _counting  # type: ignore[method-assign]
     await manager._maybe_snapshot("conv_621005", trigger="suspend")
     assert calls == ["conv_621005"], "exactly one capture, pinned or not"
 
@@ -167,12 +217,22 @@ class _Store:
 def _manager_with_store(executor: object | None, sealed: bool):
     import disco.agent_server.lifecycle as lifecycle_mod
 
-    rt = _Rt(executor)
-    rt._store = _Store([])  # type: ignore[attr-defined]
-    rt._project_store_now = lambda: None  # type: ignore[attr-defined]
+    run_resources = RunResourceRegistry()
+    if executor is not None:
+        run_resources.set_executor("conv_621005", executor)  # type: ignore[arg-type]
+    store = _Store([])
+    persistence = _Persistence(run_resources)
+
     manager = LifecycleManager.__new__(LifecycleManager)
-    manager._rt = rt  # type: ignore[attr-defined]
-    persistence = _Persistence(rt)
+    manager._store = LifecycleStoreAccess(store)  # type: ignore[arg-type]
+    manager._sandbox = LifecycleSandboxAccess.__new__(LifecycleSandboxAccess)
+    manager._sandbox._projects = type(
+        "_Projects", (), {"current_project_store": lambda self: _ProjectStore()}
+    )()  # type: ignore[attr-defined]
+    manager._run_state = LifecycleRunState.__new__(LifecycleRunState)
+    manager._run_state._resources = run_resources
+    manager._run_state._runs = type("_Runs", (), {"generation": lambda self, cid: None})()
+    manager._run_state._loops = type("_Loops", (), {"forget": lambda self, cid: None})()
     manager._persistence = persistence  # type: ignore[attr-defined]
 
     def _resolve(_events, _store, _cid):

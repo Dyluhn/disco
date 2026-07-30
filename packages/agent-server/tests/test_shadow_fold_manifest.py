@@ -1,8 +1,8 @@
 """[REL-2a step2b-2b] Tests for the finish-success artifact-manifest SHADOW fold.
 
-`ConversationRuntime._shadow_fold_manifest` is the low-level, best-effort dual-write. The terminal
-workspace pipeline owns its production fence and mutation record; those ordering guarantees live
-in `test_final_workspace_commit.py`. These tests pin only the writer's projection, idempotence,
+`ArtifactManifestShadow.fold` is the low-level, best-effort dual-write. The terminal workspace
+pipeline owns its production fence and mutation record; those ordering guarantees live in
+`test_final_workspace_commit.py`. These tests pin only the writer's projection, idempotence,
 logging, and soft failure behavior.
 """
 
@@ -61,7 +61,7 @@ async def _finished_conv_with_deliverable(store: SqliteEventStore, path: str) ->
 def _inject_executor(rt: ConversationRuntime, cid: str, fs: MemFS) -> None:
     fake_executor = MagicMock()
     fake_executor.sandbox = fs
-    rt._executors[cid] = fake_executor
+    rt._run_resources.set_executor(cid, fake_executor)
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_shadow_fold_writes_projected_artifact_into_manifest():
     # Manifest starts empty.
     assert await ArtifactMemoryStore(fs).read_artifacts() == ()
 
-    await rt._shadow_fold_manifest(cid)
+    await rt._artifact_manifest_shadow.fold(cid)
 
     paths = {r.path for r in await ArtifactMemoryStore(fs).read_artifacts()}
     assert paths == {"out/index.html"}
@@ -91,8 +91,8 @@ async def test_shadow_fold_is_idempotent_no_duplicate():
     cid = await _finished_conv_with_deliverable(store, "report.pdf")
     _inject_executor(rt, cid, fs)
 
-    await rt._shadow_fold_manifest(cid)
-    await rt._shadow_fold_manifest(cid)
+    await rt._artifact_manifest_shadow.fold(cid)
+    await rt._artifact_manifest_shadow.fold(cid)
 
     records = await ArtifactMemoryStore(fs).read_artifacts()
     assert [r.path for r in records] == ["report.pdf"]
@@ -105,7 +105,7 @@ async def test_shadow_fold_no_sandbox_is_soft_noop():
     rt = _runtime(store)
     cid = await _finished_conv_with_deliverable(store, "out/index.html")
     # No executor injected → getattr(..., "sandbox", None) is None.
-    await rt._shadow_fold_manifest(cid)  # must not raise
+    await rt._artifact_manifest_shadow.fold(cid)  # must not raise
 
 
 @pytest.mark.asyncio
@@ -115,8 +115,8 @@ async def test_shadow_fold_no_sandbox_logs_skip(caplog):
     rt = _runtime(store)
     cid = await _finished_conv_with_deliverable(store, "out/index.html")
 
-    caplog.set_level(logging.INFO, logger="disco.agent_server.runtime")
-    await rt._shadow_fold_manifest(cid)
+    caplog.set_level(logging.INFO, logger="disco.agent_server.artifact_manifest_shadow")
+    await rt._artifact_manifest_shadow.fold(cid)
 
     assert f"shadow fold skipped for {cid}: sandbox already released" in caplog.text
 
@@ -130,7 +130,10 @@ async def test_shadow_fold_success_logs_counts(caplog):
     cid = await _finished_conv_with_deliverable(store, "out/index.html")
     _inject_executor(rt, cid, fs)
 
-    caplog.set_level(logging.INFO, logger="disco.agent_server.runtime")
-    await rt._shadow_fold_manifest(cid)
+    caplog.set_level(logging.INFO, logger="disco.agent_server.artifact_manifest_shadow")
+    await rt._artifact_manifest_shadow.fold(cid)
 
-    assert f"shadow fold ran for {cid}: projected=1 manifest=0 missing=1" in caplog.text
+    assert (
+        f"artifact-manifest shadow divergence for {cid}: "
+        f"missing=['out/index.html'] extra=[]" in caplog.text
+    )

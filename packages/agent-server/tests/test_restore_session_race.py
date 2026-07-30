@@ -26,9 +26,7 @@ import pytest
 from disco.agent_server.runtime import ConversationRuntime
 from disco.agent_server.workspace_service import WorkspaceRestoreStorageError
 from disco.core import (
-    ConversationStatus,
     SqliteEventStore,
-    StatusEvent,
     WorkspaceRestoredEvent,
 )
 from disco.tools.projects import ProjectStore
@@ -84,12 +82,20 @@ class _DyingSession(_HealthySession):
 
 
 def _runtime(store: SqliteEventStore, project_root: Path) -> ConversationRuntime:
-    rt = ConversationRuntime(store, router=MagicMock())
-    cfg = MagicMock()
-    cfg.projects.projects_root = str(project_root)
-    rt._config_store = MagicMock()
-    rt._config_store.load.return_value = cfg
-    return rt
+    from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
+
+    cfg = RouterConfig.model_validate(
+        {
+            "models": {"m": {"model_id": "m", "provider": "fake", "context_window": 8192}},
+            "default_model": "m",
+        }
+    )
+    cfg = cfg.model_copy(
+        update={"projects": ProjectStorageSettings(projects_root=str(project_root))}
+    )
+    cfg_store = ConfigStore(path=Path("/dev/null"))
+    cfg_store.load = lambda: cfg  # type: ignore[method-assign]
+    return ConversationRuntime(store, router=MagicMock(), config=cfg, config_store=cfg_store)
 
 
 def _write_workspace(ps: ProjectStore, cid: str, files: dict[str, bytes]) -> None:
@@ -133,16 +139,16 @@ async def test_restore_survives_a_dying_session_by_reacquiring_once(tmp_path: Pa
     old, ps = _seed_versions(rt)
 
     dying = _DyingSession()
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=dying))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=dying)))
     fresh = _HealthySession({"index.html": b"new"})
 
     def _create_loop(cid: str) -> Any:
         # The documented creation seam (_restore_session -> _loop_for) —
         # production registers a fresh executor here; mirror that effect.
-        rt._executors[cid] = cast(Any, SimpleNamespace(_sandbox=fresh))
+        rt._run_resources.set_executor(cid, cast(Any, SimpleNamespace(_sandbox=fresh)))
         return SimpleNamespace()
 
-    rt._loop_for = _create_loop  # type: ignore[method-assign]
+    rt._loop_factory.loop_for = _create_loop  # type: ignore[method-assign]
 
     result = await rt.restore_workspace_version(CID, old.seq)
 
@@ -175,13 +181,13 @@ async def test_restore_retry_is_bounded_and_failure_is_logged(
 
     first = _DyingSession()
     second = _DyingSession()
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=first))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=first)))
 
     def _create_loop(cid: str) -> Any:
-        rt._executors[cid] = cast(Any, SimpleNamespace(_sandbox=second))
+        rt._run_resources.set_executor(cid, cast(Any, SimpleNamespace(_sandbox=second)))
         return SimpleNamespace()
 
-    rt._loop_for = _create_loop  # type: ignore[method-assign]
+    rt._loop_factory.loop_for = _create_loop  # type: ignore[method-assign]
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(WorkspaceRestoreStorageError):
@@ -211,9 +217,9 @@ async def test_restore_reacquire_never_reuses_the_failed_session(tmp_path: Path)
     old, _ps = _seed_versions(rt)
 
     dying = _DyingSession()
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=dying))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=dying)))
     # Creation seam does NOT replace the executor (creation failed silently).
-    rt._loop_for = lambda cid: SimpleNamespace()  # type: ignore[method-assign]
+    rt._loop_factory.loop_for = lambda cid: SimpleNamespace()  # type: ignore[method-assign]
 
     with pytest.raises(WorkspaceRestoreStorageError):
         await rt.restore_workspace_version(CID, old.seq)

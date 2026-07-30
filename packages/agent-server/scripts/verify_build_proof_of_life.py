@@ -109,7 +109,7 @@ async def main() -> None:
     actions = 0
     for _round in range(30):
         runtime.kick(CID)
-        task = runtime._tasks.get(CID)
+        task = runtime._run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)

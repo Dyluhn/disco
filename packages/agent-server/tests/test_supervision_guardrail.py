@@ -21,7 +21,12 @@ def test_kick_wires_the_supervision_callback():
     src = inspect.getsource(RunSupervisor.create_task)
     assert "add_done_callback" in src, "kick() must register a done-callback on the loop task"
     assert "on_task_done" in src, "kick() must route task completion through the supervisor"
-    assert "_supervisor.create_task" in inspect.getsource(RunController.kick)
+    kick_src = inspect.getsource(RunController.kick)
+    assert "_supervisor.create_task" in kick_src
+    assert "loop_factory=resolve_loop" in kick_src, (
+        "kick() must construct the loop coroutine inside the registered task so "
+        "immediate cancellation cannot leak an un-awaited coroutine"
+    )
 
 
 def test_supervisor_terminalizes_to_error():

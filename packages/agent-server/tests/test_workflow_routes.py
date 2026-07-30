@@ -104,13 +104,13 @@ def _draft_model_json() -> str:
 
 def _quiet_startup(runtime: ConversationRuntime) -> None:
     rt = cast(Any, runtime)
-    rt._start_mcp_pool = mock.AsyncMock()
+    rt._mcp._start_mcp_pool = mock.AsyncMock()
     rt.reconcile_orphaned_runs = mock.AsyncMock()
     rt.prewarm_model_probe = mock.AsyncMock()
     rt.prewarm_vision_probe = mock.AsyncMock()
-    rt._idle_sweep_loop = mock.AsyncMock()
-    rt._schedule_manager_loop = mock.AsyncMock()
-    rt._close_mcp_pool = mock.AsyncMock()
+    rt._idle_sweeper.run = mock.AsyncMock()
+    rt._schedule._schedule_manager_loop = mock.AsyncMock()
+    rt._mcp._close_mcp_pool = mock.AsyncMock()
 
 
 def _runtime_for_project_root(project_root: Path | str, config_path: Path) -> ConversationRuntime:
@@ -240,7 +240,7 @@ async def test_workflow_authoring_context_lists_pickable_inventory(tmp_path: Pat
     cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
     runtime = ConversationRuntime(store, config_store=cfg_store)
     rt = cast(Any, runtime)
-    rt._mcp_http_tools = {
+    rt._mcp._http_tools = {
         "mcp__github__search_issues": ToolDef(
             name="mcp__github__search_issues",
             description="Search GitHub issues.",

@@ -32,6 +32,7 @@ from disco.core import (
     SqliteEventStore,
     View,
 )
+from disco.core.llm import ConfigStore, SecretStore
 from fastapi.testclient import TestClient
 
 # ── minimal sandbox stub (mirrors test_upload.py) ───────────────────────────
@@ -60,6 +61,19 @@ class _FakeExecutor:
         self._sandbox = session
 
 
+class _LiveSessions:
+    """Minimal stand-in for the LiveSessionDirectory named owner."""
+
+    def live_session(self, cid: str) -> _FakeSession | None:
+        return None
+
+    def resolve_cid_prefix(self, cid8: str) -> str | None:
+        return None
+
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return None
+
+
 class _FakeRuntime:
     def __init__(self) -> None:
         self._executors: dict[str, _FakeExecutor] = {}
@@ -77,6 +91,9 @@ class _FakeRuntime:
             size=self.get_upload_size,
         )
         self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
+        self._live_sessions = _LiveSessions()
+        self._config_store = ConfigStore()
+        self._secret_store = SecretStore()
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())

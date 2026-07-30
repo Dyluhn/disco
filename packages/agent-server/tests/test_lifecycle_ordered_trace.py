@@ -106,25 +106,25 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
     await _admit_view(store, "view-trace")
     rt = _runtime(store)
     rt.set_surface(CID, "build")
-    rt._run_generation[CID] = 1
+    rt._run_registry._generations[CID] = 1
 
     trace: list[str] = []
-    rt._tasks[CID] = _LiveTask(trace)
+    rt._run_registry._tasks[CID] = _LiveTask(trace)  # type: ignore[arg-type]
     executor = MagicMock()
     executor.kill = AsyncMock(side_effect=lambda: trace.append("executor.kill"))
     pending = MagicMock()
     pending.destroy = AsyncMock(side_effect=lambda: trace.append("pending.destroy"))
-    rt._executors[CID] = executor
-    rt._pending_sessions[CID] = pending
-    rt._loops[CID] = object()
+    rt._run_resources.set_executor(CID, executor)
+    rt._run_resources.set_pending_session(CID, pending)
+    rt._loop_registry.bind(CID, object())  # type: ignore[arg-type]
 
-    close_actions = rt._close_dangling_actions_for_kill_locked
+    close_actions = rt._run_kills._close_dangling_actions_locked
 
     async def _close(conversation_id: str, authority):
         trace.append("actions.close")
         return await close_actions(conversation_id, authority)
 
-    authority_is_current = rt._control._kill_authority_is_current
+    authority_is_current = rt._lifecycle_commands.authority_is_current_for_events
 
     def _authority(events, authority):
         trace.append("authority.check")
@@ -134,12 +134,12 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
 
     async def _append(conversation_id: str, event: StatusEvent):
         assert rt._workspace.lock(conversation_id).locked()
-        assert rt._workspace.fence_owned_by_current_task(conversation_id)
+        assert rt._workspace._fence_owned_by_current_task(conversation_id)
         trace.append("status.append")
         return await append_status(conversation_id, event)
 
-    monkeypatch.setattr(rt, "_close_dangling_actions_for_kill_locked", _close)
-    monkeypatch.setattr(rt._control, "_kill_authority_is_current", _authority)
+    monkeypatch.setattr(rt._run_kills, "_close_dangling_actions_locked", _close)
+    monkeypatch.setattr(rt._lifecycle_commands, "authority_is_current_for_events", _authority)
     monkeypatch.setattr(rt._lifecycle_commands, "append_status_locked", _append)
 
     await rt.kill(CID)

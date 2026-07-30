@@ -63,12 +63,20 @@ class _MemorySession:
 
 
 def _runtime(store: SqliteEventStore, project_root: Path) -> ConversationRuntime:
-    rt = ConversationRuntime(store, router=MagicMock())
-    cfg = MagicMock()
-    cfg.projects.projects_root = str(project_root)
-    rt._config_store = MagicMock()
-    rt._config_store.load.return_value = cfg
-    return rt
+    from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
+
+    cfg = RouterConfig.model_validate(
+        {
+            "models": {"m": {"model_id": "m", "provider": "fake", "context_window": 8192}},
+            "default_model": "m",
+        }
+    )
+    cfg = cfg.model_copy(
+        update={"projects": ProjectStorageSettings(projects_root=str(project_root))}
+    )
+    cfg_store = ConfigStore(path=Path("/dev/null"))
+    cfg_store.load = lambda: cfg  # type: ignore[method-assign]
+    return ConversationRuntime(store, router=MagicMock(), config=cfg, config_store=cfg_store)
 
 
 def _conversation_app(store: SqliteEventStore, rt: ConversationRuntime) -> FastAPI:
@@ -140,7 +148,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert current is not None
 
     session = _MemorySession({"index.html": b"new", "stale.txt": b"delete me"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
     app = _conversation_app(store, rt)
 
     transport = httpx.ASGITransport(app=app)
@@ -202,7 +210,7 @@ async def test_restore_preserves_current_host_owned_deployment_record(tmp_path: 
     )
     assert ps.cut_verified_version(CID, trigger="turn") is not None
     session = _MemorySession({"index.html": b"current"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
 
     result = await rt.restore_workspace_version(CID, old.seq)
 
@@ -224,7 +232,7 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
     assert old is not None
 
     session = _MemorySession({"index.html": b"new"})
-    rt._executors[CID] = cast(Any, SimpleNamespace(_sandbox=session))
+    rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
     await rt._lifecycle.commit_finished_workspace(
         CID,

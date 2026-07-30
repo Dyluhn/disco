@@ -101,7 +101,7 @@ async def _drive(
     stats = {"actions": 0, "plan_gates": 0, "action_gates": 0, "planning_reads": 0}
     for _round in range(60):
         runtime.kick(CID)
-        task = runtime._tasks.get(CID)
+        task = runtime._run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)
