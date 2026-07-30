@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from disco.agent_server.deep_research_service import DeepResearchService
@@ -30,12 +31,20 @@ class _Store:
         return event
 
 
-class _Runtime:
-    def __init__(self, text: str) -> None:
-        self._store = _Store()
-        self._router = _Router(text)
+class _Drivers:
+    def __init__(self, router: _Router) -> None:
+        self._router = router
 
-        store = self._store
+    def router(self) -> _Router:
+        return self._router
+
+
+class _Harness:
+    def __init__(self, text: str) -> None:
+        self.store = _Store()
+        self.drivers = _Drivers(_Router(text))
+
+        store = self.store
 
         class _LifecycleCommands:
             async def append_status(
@@ -49,10 +58,7 @@ class _Runtime:
                     event = LifecycleCommandService.build_status(event, detail=detail)
                 return await store.append(conversation_id, event)
 
-        self._lifecycle_commands = _LifecycleCommands()
-
-    def _router_now(self) -> _Router:
-        return self._router
+        self.lifecycle_commands = _LifecycleCommands()
 
 
 def _prior_report() -> ReportEvent:
@@ -88,8 +94,17 @@ async def test_follow_up_synthesis_strips_think_before_storing(
     raw_answer: str,
     stored_answer: str,
 ) -> None:
-    rt = _Runtime(raw_answer)
-    svc = DeepResearchService(rt)
+    harness = _Harness(raw_answer)
+    svc = DeepResearchService(
+        store=harness.store,
+        lifecycle_commands=harness.lifecycle_commands,  # type: ignore[arg-type]
+        drivers=harness.drivers,  # type: ignore[arg-type]
+        settings=MagicMock(),
+        preflight=MagicMock(),
+        spaces=MagicMock(),
+        cancellations=MagicMock(),
+        provider=MagicMock(),
+    )
     prior = _prior_report().model_copy(update={"seq": 1})
     user = MessageEvent(
         source=EventSource.USER,
@@ -99,6 +114,8 @@ async def test_follow_up_synthesis_strips_think_before_storing(
     await svc._follow_up_deep_research("c1", [prior, user], prior)
 
     stored_messages = [
-        e for e in rt._store.events if isinstance(e, MessageEvent) and e.source == EventSource.AGENT
+        e
+        for e in harness.store.events
+        if isinstance(e, MessageEvent) and e.source == EventSource.AGENT
     ]
     assert [e.message.content for e in stored_messages] == [stored_answer]

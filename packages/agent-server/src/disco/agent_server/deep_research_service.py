@@ -43,19 +43,15 @@ from disco.retrieval.deep_research import (
 )
 from disco.retrieval.models import Passage
 from disco.retrieval.ranking import Embedder
-from disco.tools.projects import StorageStatus
-
 from .build_loop_components import _NoToolExecutor
 from .deep_research_provider import DeepResearchProvider
 from .deep_research_state import DeepResearchLiveState, DeepResearchState
-from .space_store import JsonSpaceStore
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
 
     from .driver_runtime import DriverPreflight, DriverRuntime
     from .lifecycle_command_service import LifecycleCommandService
-    from .project_runtime_service import ProjectRuntimeService
     from .run_registry import CancellationRegistry
     from .runtime_settings import RuntimeSettings
     from .space_service import SpaceService
@@ -90,7 +86,6 @@ class DeepResearchService:
         spaces: SpaceService,
         cancellations: CancellationRegistry,
         provider: DeepResearchProvider,
-        projects: ProjectRuntimeService,
         state: DeepResearchState | None = None,
         live_state: DeepResearchLiveState | None = None,
     ) -> None:
@@ -102,7 +97,6 @@ class DeepResearchService:
         self._spaces = spaces
         self._cancellations = cancellations
         self._provider = provider
-        self._projects = projects
         self._state = state or DeepResearchState()
         self._live_state = live_state or DeepResearchLiveState()
 
@@ -137,30 +131,11 @@ class DeepResearchService:
         owner_id: str | None,
         include_unclaimed_legacy: bool = False,
     ) -> tuple[frozenset[str], tuple[str, ...]]:
-        if not space_ids:
-            return frozenset(), ()
-        if owner_id is None:
-            return frozenset(), tuple(sorted(space_ids))
-        project_store = self._projects.current_project_store()
-        if project_store.status() != StorageStatus.OK or project_store.root is None:
-            return frozenset(), tuple(sorted(space_ids))
-        space_store = JsonSpaceStore(project_store.root)
-        owned: set[str] = set()
-        forbidden: list[str] = []
-        for space_id in sorted(space_ids):
-            try:
-                record = space_store.get(
-                    space_id,
-                    owner_id=owner_id,
-                    include_unclaimed_legacy=include_unclaimed_legacy,
-                )
-            except ValueError:
-                record = None
-            if record is None:
-                forbidden.append(space_id)
-            else:
-                owned.add(space_id)
-        return frozenset(owned), tuple(forbidden)
+        return self._spaces.validated_space_ids(
+            space_ids,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
 
     def _compose_deep_research_loop(
         self,

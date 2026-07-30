@@ -36,6 +36,8 @@ from .workspace_service import WorkspaceCoordinator
 
 if TYPE_CHECKING:
     from .build_loop_factory import BuildLoopFactory
+    from .conversation_control_service import ConversationControlService
+    from .deep_research_service import DeepResearchService
     from .driver_runtime import DriverRuntime
     from .project_runtime_service import ProjectRuntimeService
     from .run_supervisor import RunFinalizer, RunSupervisor
@@ -215,12 +217,12 @@ class RecurringScheduleControlAdapter:
     def __init__(
         self,
         settings: RuntimeSettings,
-        send_user_turn_fn: Any,
-        set_depth_fn: Any,
+        conversations: ConversationControlService,
+        research: DeepResearchService,
     ) -> None:
         self._settings = settings
-        self._send_user_turn_fn = send_user_turn_fn
-        self._set_depth_fn = set_depth_fn
+        self._conversations = conversations
+        self._research = research
 
     def set_model_override(
         self,
@@ -230,7 +232,7 @@ class RecurringScheduleControlAdapter:
         self._settings.set_model_override(conversation_id, model_id)
 
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
-        self._set_depth_fn(conversation_id, tier)
+        self._research.set_depth(conversation_id, tier)
 
     async def send_user_turn(self, conversation_id: str, text: str) -> MessageEvent:
-        return await self._send_user_turn_fn(conversation_id, text)
+        return await self._conversations.send_user_turn(conversation_id, text)

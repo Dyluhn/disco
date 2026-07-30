@@ -117,5 +117,38 @@ class SpaceService:
             return frozenset()
         return self._space_ids.get(conversation_id, frozenset())
 
+    def validated_space_ids(
+        self,
+        space_ids: frozenset[str],
+        *,
+        owner_id: str | None,
+        include_unclaimed_legacy: bool = False,
+    ) -> tuple[frozenset[str], tuple[str, ...]]:
+        """Partition selected ids by visibility to the conversation owner."""
+        if not space_ids:
+            return frozenset(), ()
+        if owner_id is None:
+            return frozenset(), tuple(sorted(space_ids))
+        root = self._project_root.root()
+        if root is None:
+            return frozenset(), tuple(sorted(space_ids))
+        store = JsonSpaceStore(root)
+        owned: set[str] = set()
+        forbidden: list[str] = []
+        for space_id in sorted(space_ids):
+            try:
+                record = store.get(
+                    space_id,
+                    owner_id=owner_id,
+                    include_unclaimed_legacy=include_unclaimed_legacy,
+                )
+            except ValueError:
+                record = None
+            if record is None:
+                forbidden.append(space_id)
+            else:
+                owned.add(space_id)
+        return frozenset(owned), tuple(forbidden)
+
     def forget(self, conversation_id: str) -> None:
         self._space_ids.pop(conversation_id, None)

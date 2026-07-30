@@ -255,7 +255,6 @@ def _wire_domains(
         spaces=rt._spaces,
         cancellations=rt._cancellations,
         provider=research_provider,
-        projects=rt._projects,
         state=rt._research_state,
         live_state=rt._research_live_state,
     )
@@ -438,8 +437,8 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         project_access=WorkflowProjectAccessAdapter(rt._projects),
         recurring_control=RecurringScheduleControlAdapter(
             rt._settings,
-            rt.send_user_turn,
-            rt._dr.set_depth,
+            rt._conversation_control,
+            rt._dr,
         ),
     )
     rt._sessions = SessionsService(rt)

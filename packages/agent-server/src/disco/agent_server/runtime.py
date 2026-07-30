@@ -7,15 +7,13 @@ their owning services.
 
 from __future__ import annotations
 
-import asyncio
 import ctypes
 import ctypes.util
 import gc
 import os
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from disco.core import (
-    DEFAULT_OWNER_ID,
     ConversationStatus,
     MessageEvent,
     PlanEvent,
@@ -37,7 +35,7 @@ from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.verification import VerificationRequirementsDirective
 from disco.core.workflow import WorkflowRun
-from disco.tools import SandboxService, SandboxSession, SandboxSpec
+from disco.tools import SandboxService, SandboxSpec
 from disco.tools.builtin.verify_appkit_app import (
     APPKIT_LIVE_PREVIEW_NAME as APPKIT_LIVE_PREVIEW_NAME,
 )
@@ -431,37 +429,6 @@ class ConversationRuntime(_RuntimeWiringSchema):
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
         await self._lifecycle._teardown_sandbox(conversation_id)
-
-    def project_store(self) -> ProjectStore:
-        return self._projects.current_project_store()
-
-    def live_session(self, conversation_id: str) -> SandboxSession | None:
-        executor = self._run_resources.executor(conversation_id)
-        return cast(
-            SandboxSession | None,
-            executor.sandbox if executor is not None else None,
-        )
-
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._workspace.lock(conversation_id)
-
-    def port_upstream(self, conversation_id: str, port: int) -> str | None:
-        return self._preview.port_upstream(conversation_id, port)
-
-    async def wake_for_preview(
-        self,
-        cid8: str,
-        port: int,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-    ) -> str | None:
-        return await self._preview.wake_for_preview(cid8, port, owner_id=owner_id)
-
-    async def preview(self, conversation_id: str) -> dict[str, Any]:
-        return await self._preview.preview(conversation_id)
-
-    async def ensure_preview(self, conversation_id: str) -> bool:
-        return await self._preview.ensure_preview(conversation_id)
 
     def start(self, conversation_id: str) -> None:
         self._conversation_control.start(conversation_id)
