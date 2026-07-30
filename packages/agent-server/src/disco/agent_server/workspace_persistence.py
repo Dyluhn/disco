@@ -5,6 +5,9 @@ finalization-journal helpers, ``commit_finished_workspace``, journal recovery,
 workspace capture/version/seal publication, strict snapshot-completeness, and
 synthetic deliverable logic.  ``LifecycleManager`` retains thin one-line
 delegates so the existing runtime/test seams are undisturbed.
+
+Receives its actual collaborators directly — no runtime back-ref, no
+``rt: Any``, no multi-domain locator.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -52,6 +55,15 @@ from disco.tools.projects import (
 )
 
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
+
+if TYPE_CHECKING:
+    from disco.core.store.sqlite import SqliteEventStore
+
+    from .artifact_manifest_shadow import ArtifactManifestShadow
+    from .persistence_notifier import PersistenceNotifier
+    from .project_runtime_service import ProjectRuntimeService
+    from .run_registry import RunRegistry, RunResourceRegistry
+    from .workspace_service import WorkspaceCoordinator
 
 _LOG = logging.getLogger(__name__)
 
@@ -188,7 +200,7 @@ def _seal_refusal_meta(exc: BaseException) -> dict[str, Any] | None:
 
 
 async def probe_finish_sealability(
-    rt: Any,
+    run_resources: RunResourceRegistry,
     conversation_id: str,
     *,
     snapshot_fn: Callable[..., Any] | None,
@@ -210,7 +222,7 @@ async def probe_finish_sealability(
     failures propagate — the core gate treats a probe error as advisory.
     """
 
-    executor = rt._run_resources.executor(conversation_id)
+    executor = run_resources.executor(conversation_id)
     session = getattr(executor, "_sandbox", None) if executor is not None else None
     if session is None or snapshot_fn is None:
         return SealabilityProbeResult(sealable=True, detail="no live workspace to probe")
@@ -232,9 +244,9 @@ def _facts_match_record(facts: WorkspaceTreeFacts, record: VersionRecord) -> boo
 
 
 async def _require_seal_publication_stable(
-    rt: Any,
+    store: SqliteEventStore,
     conversation_id: str,
-    store: ProjectStore,
+    project_store: ProjectStore,
     seal_fence: tuple[int, int | None],
     version: VersionRecord,
     *,
@@ -242,12 +254,14 @@ async def _require_seal_publication_stable(
 ) -> None:
     """Re-prove the durable head and governed live bytes during publication."""
 
-    events = await rt._store.get_events(conversation_id)
+    events = await store.get_events(conversation_id)
     if pending_workspace_run_intent(events) is not None:
         raise RuntimeError("workspace has unprocessed agent run intent")
     if derive_final_workspace_fence(events) != seal_fence:
         raise RuntimeError("workspace event head changed during finalization")
-    if host_mirror and not _facts_match_record(store.inspect_workspace(conversation_id), version):
+    if host_mirror and not _facts_match_record(
+        project_store.inspect_workspace(conversation_id), version
+    ):
         raise RuntimeError("host mirror changed during finalization")
 
 
@@ -281,15 +295,29 @@ def _skipped_capture(conversation_id: str, trigger: str) -> None:
 class WorkspacePersistence:
     """Collaborator owned by ``LifecycleManager`` — all workspace durability logic.
 
-    Receives the runtime back-ref so it can reach the live event store, project
-    store, executor state, and other runtime-owned resources.  Does NOT import
+    Receives its actual collaborators directly.  Does NOT import
     ``snapshot_workspace`` — the caller (``LifecycleManager``'s thin delegate)
     passes it per-call so tests that monkeypatch
     ``disco.agent_server.lifecycle.snapshot_workspace`` continue to work.
     """
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        store: SqliteEventStore,
+        run_resources: RunResourceRegistry,
+        workspace: WorkspaceCoordinator,
+        projects: ProjectRuntimeService,
+        artifact_manifest_shadow: ArtifactManifestShadow,
+        persistence_notifier: PersistenceNotifier,
+        run_registry: RunRegistry,
+    ) -> None:
+        self._store = store
+        self._run_resources = run_resources
+        self._workspace = workspace
+        self._projects = projects
+        self._artifact_manifest_shadow = artifact_manifest_shadow
+        self._persistence_notifier = persistence_notifier
+        self._run_registry = run_registry
 
     # -- journal helper methods ------------------------------------------------
 
@@ -404,7 +432,7 @@ class WorkspacePersistence:
         if host_mirror and not _facts_match_record(facts, version):
             raise RuntimeError("host mirror changed during finalization")
         await _require_seal_publication_stable(
-            self._rt,
+            self._store,
             conversation_id,
             store,
             seal_fence,
@@ -422,14 +450,14 @@ class WorkspacePersistence:
                 }
             )
             self._write_finalization_journal(store, conversation_id, journal)
-        checkpoint = await self._rt._store.append(
+        checkpoint = await self._store.append(
             conversation_id,
             self._checkpoint_event(seal_fence, version),
         )
         if not isinstance(checkpoint, WorkspaceVersionEvent):
             raise RuntimeError("event store returned wrong finalization checkpoint type")
         await _require_seal_publication_stable(
-            self._rt,
+            self._store,
             conversation_id,
             store,
             seal_fence,
@@ -439,7 +467,7 @@ class WorkspacePersistence:
         if journal is not None:
             journal.update({"phase": "checkpoint", "checkpoint_event_id": checkpoint.id})
             self._write_finalization_journal(store, conversation_id, journal)
-        stored = await self._rt._store.append(
+        stored = await self._store.append(
             conversation_id,
             self._seal_event(conversation_id, seal_fence, version),
         )
@@ -447,7 +475,7 @@ class WorkspacePersistence:
             raise RuntimeError("event store returned wrong final seal event type")
         try:
             await _require_seal_publication_stable(
-                self._rt,
+                self._store,
                 conversation_id,
                 store,
                 seal_fence,
@@ -455,7 +483,7 @@ class WorkspacePersistence:
                 host_mirror=host_mirror,
             )
         except Exception:
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 WorkspaceMutationEvent(operation="host.finalization-invalidated"),
             )
@@ -486,9 +514,9 @@ class WorkspacePersistence:
 
         if terminal_event.status is not ConversationStatus.FINISHED:
             raise ValueError("terminal workspace commit requires FINISHED")
-        lock = self._rt.workspace_lock(conversation_id)
+        lock = self._workspace.lock(conversation_id)
         async with lock:
-            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
                 return await self._commit_finished_workspace_locked(
                     conversation_id,
                     terminal_event,
@@ -504,12 +532,12 @@ class WorkspacePersistence:
     ) -> StatusEvent:
         """Publish host-mirror bytes while the caller retains the workspace lock."""
 
-        lock = self._rt.workspace_lock(conversation_id)
+        lock = self._workspace.lock(conversation_id)
         if not lock.locked():
             raise RuntimeError("host-mirror finalization requires the conversation lock")
         if terminal_event.status is not ConversationStatus.FINISHED:
             raise ValueError("terminal workspace commit requires FINISHED")
-        async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+        async with self._workspace.interprocess_mutation_fence(conversation_id):
             return await self._commit_finished_workspace_locked(
                 conversation_id,
                 terminal_event,
@@ -530,14 +558,14 @@ class WorkspacePersistence:
         """Shared journaled terminal pipeline; caller owns the workspace lock."""
 
         if require_inactive_finished_head:
-            if self._rt._workspace.has_run_claim(conversation_id):
+            if self._workspace.has_run_claim(conversation_id):
                 raise RuntimeError("cannot seal a host revision while an agent run is active")
-            current = await self._rt._store.get_state(conversation_id)
+            current = await self._store.get_state(conversation_id)
             if current.execution_status is not ConversationStatus.FINISHED:
                 raise RuntimeError(
                     "host revision can be sealed only from an inactive FINISHED head"
                 )
-        events_before_terminal = await self._rt._store.get_events(conversation_id)
+        events_before_terminal = await self._store.get_events(conversation_id)
         same_id = [event for event in events_before_terminal if event.id == terminal_event.id]
         if same_id:
             # Event ids are the idempotency key for the terminal barrier.  A
@@ -581,9 +609,9 @@ class WorkspacePersistence:
         ):
             raise RuntimeError("cannot seal while an agent run intent is unprocessed")
 
-        store = self._rt._project_store_now()
+        store = self._projects.current_project_store()
         if store is None or store.status() is not StorageStatus.OK:
-            stored = await self._rt._store.append(conversation_id, terminal_event)
+            stored = await self._store.append(conversation_id, terminal_event)
             if not isinstance(stored, StatusEvent):
                 raise RuntimeError("event store returned wrong terminal event type")
             return stored
@@ -602,7 +630,7 @@ class WorkspacePersistence:
                 conversation_id,
                 exc_info=True,
             )
-            stored = await self._rt._store.append(conversation_id, terminal_event)
+            stored = await self._store.append(conversation_id, terminal_event)
             if not isinstance(stored, StatusEvent):
                 raise RuntimeError("event store returned wrong terminal event type") from exc
             return stored
@@ -621,17 +649,17 @@ class WorkspacePersistence:
             # (pilot seed 406546, p4_ff_import_rollback). Holding the reference does
             # not keep a dead box alive — capture still fails closed if the session
             # is gone — it removes the WINDOW.
-            pinned_executor = self._rt._run_resources.executor(conversation_id)
+            pinned_executor = self._run_resources.executor(conversation_id)
             pinned_session = (
                 getattr(pinned_executor, "_sandbox", None) if pinned_executor is not None else None
             )
-            events = await self._rt._store.get_events(conversation_id)
+            events = await self._store.get_events(conversation_id)
             # The shadow manifest is a real workspace write. Record its effect
             # before touching bytes and complete it before FINISHED so the
             # terminal fence and immutable version describe the same cut.
             # Host-mirror commits must never recapture or mutate sandbox bytes.
             if not host_mirror and manifest_shadow_enabled():
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     WorkspaceMutationEvent(
                         operation="agent.artifact-manifest-fold",
@@ -639,16 +667,16 @@ class WorkspacePersistence:
                         agent_view_id=terminal_event.agent_view_id,
                     ),
                 )
-                events = await self._rt._store.get_events(conversation_id)
-                await self._rt._artifact_manifest_shadow.fold(
+                events = await self._store.get_events(conversation_id)
+                await self._artifact_manifest_shadow.fold(
                     conversation_id,
                     events=events,
                 )
-            stored = await self._rt._store.append(conversation_id, terminal_event)
+            stored = await self._store.append(conversation_id, terminal_event)
             if not isinstance(stored, StatusEvent) or stored.seq is None:
                 raise RuntimeError("event store returned an unsequenced terminal event")
             try:
-                events = await self._rt._store.get_events(conversation_id)
+                events = await self._store.get_events(conversation_id)
                 fence = derive_final_workspace_fence(events)
                 if fence[0] != stored.seq:
                     raise RuntimeError("persisted FINISHED is not the canonical terminal fence")
@@ -716,7 +744,7 @@ class WorkspacePersistence:
         Replicated from LifecycleManager so the bulk commit/capture methods can
         use it without a cross-object call.
         """
-        task = self._rt._run_registry.task(conversation_id)
+        task = self._run_registry.task(conversation_id)
         return task is not None and not task.done()
 
     # -- journal recovery ------------------------------------------------------
@@ -730,7 +758,7 @@ class WorkspacePersistence:
         the interrupted finalizer.
         """
 
-        store = self._rt._project_store_now()
+        store = self._projects.current_project_store()
         if store is None or store.status() is not StorageStatus.OK or store.root is None:
             return 0
         recovered = 0
@@ -749,8 +777,8 @@ class WorkspacePersistence:
             if path.is_symlink() or not path.is_file():
                 continue
             conversation_id = project_dir.name
-            lock = self._rt.workspace_lock(conversation_id)
-            async with lock, self._rt._workspace.interprocess_mutation_fence(conversation_id):
+            lock = self._workspace.lock(conversation_id)
+            async with lock, self._workspace.interprocess_mutation_fence(conversation_id):
                 try:
                     raw = json.loads(path.read_text())
                     if not isinstance(raw, dict):
@@ -762,7 +790,7 @@ class WorkspacePersistence:
                         or not isinstance(journal.get("terminal_event_id"), str)
                     ):
                         raise ValueError("journal identity is invalid")
-                    events = await self._rt._store.get_events(conversation_id)
+                    events = await self._store.get_events(conversation_id)
                     if pending_workspace_run_intent(events) is not None:
                         raise ValueError("journal head has an unprocessed agent run intent")
                     terminal = next(
@@ -850,7 +878,7 @@ class WorkspacePersistence:
                     else:
                         raise ValueError(f"unknown finalization journal phase: {phase!r}")
 
-                    stored = await self._rt._store.append(
+                    stored = await self._store.append(
                         conversation_id,
                         self._seal_event(conversation_id, fence, version),
                     )
@@ -875,7 +903,7 @@ class WorkspacePersistence:
         """Best-effort title, creation time, and owner for the project manifest."""
 
         try:
-            summaries = await self._rt._store.list_conversation_summaries(
+            summaries = await self._store.list_conversation_summaries(
                 owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
             )
             row = next((s for s in summaries if s.conversation_id == conversation_id), None)
@@ -906,7 +934,7 @@ class WorkspacePersistence:
         """
 
         if host_mirror:
-            store = self._rt._project_store_now()
+            store = self._projects.current_project_store()
             if store is None or store.status() is not StorageStatus.OK:
                 raise RuntimeError("project store unavailable for host-mirror finalization")
             session = None
@@ -1002,7 +1030,7 @@ class WorkspacePersistence:
 
                 version = _cut_recovery_version(store, conversation_id, trigger, version_label)
                 if version is not None:
-                    stored = await self._rt._store.append(
+                    stored = await self._store.append(
                         conversation_id,
                         WorkspaceVersionEvent(
                             version_seq=version.seq,
@@ -1035,7 +1063,7 @@ class WorkspacePersistence:
                 trigger,
                 exc,
             )
-            await self._rt._persistence_notifier.emit(
+            await self._persistence_notifier.emit(
                 conversation_id,
                 f"snapshot failed: {exc}",
                 meta=_seal_refusal_meta(exc),
@@ -1056,7 +1084,7 @@ class WorkspacePersistence:
         Returns (session, store) or None to indicate a non-sealing skip.
         Raises RuntimeError when seal_fence is set and prerequisites fail.
         """
-        store = self._rt._project_store_now()
+        store = self._projects.current_project_store()
         if store is None:
             _LOG.warning(
                 "snapshot %s: no project store — workspace NOT persisted",
@@ -1072,7 +1100,7 @@ class WorkspacePersistence:
                 conversation_id,
                 status.value,
             )
-            await self._rt._persistence_notifier.emit(
+            await self._persistence_notifier.emit(
                 conversation_id,
                 f"project storage is {status.value}; this build was NOT saved.",
             )
@@ -1087,7 +1115,7 @@ class WorkspacePersistence:
         # rotated between the terminal and the seal, the pinned reference is a dead
         # generation, so fall back to whatever is live now. The pin closes the
         # dropped-executor window; it does not bind the seal to a corpse.
-        executor = self._rt._run_resources.executor(conversation_id)
+        executor = self._run_resources.executor(conversation_id)
         live_session = getattr(executor, "_sandbox", None) if executor is not None else None
         session = pinned_session
         if session is not None and live_session is not None and live_session is not session:
@@ -1119,7 +1147,7 @@ class WorkspacePersistence:
         a missing index.html, an existing app-deliverable, or any read/append failure
         is a silent no-op (the snapshot itself already succeeded)."""
         try:
-            existing = await self._rt._store.get_events(conversation_id)
+            existing = await self._store.get_events(conversation_id)
             latest_admission = next(
                 (
                     event
@@ -1164,7 +1192,7 @@ class WorkspacePersistence:
                     return
                 rel_dir = index.parent.relative_to(snapshot_dir).as_posix()
                 path = rel_dir if rel_dir and rel_dir != "." else "."
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 DeliverableEvent(
                     source=EventSource.AGENT,

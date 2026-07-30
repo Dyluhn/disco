@@ -2,15 +2,15 @@
 
 The coordinator owns the permanent lock registry and the operations that must
 share that serialization domain: host mutation fences, terminal commit hooks,
-version restore, and conversation disposal.  It intentionally reaches the
-runtime through a back-reference instead of importing ``runtime`` or
-``lifecycle`` so the dependency graph remains acyclic.
+version restore, and conversation disposal.  It receives its actual
+collaborators directly — no runtime back-ref, no ``rt: Any``, no multi-domain
+locator.  Disposal and restore-session acquisition are delegated to
+:class:`WorkspaceOwnership` (see ``workspace_ownership.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import logging
 import tempfile
@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from disco.core import (
     ActionEvent,
@@ -41,7 +41,6 @@ from disco.tools.projects import (
     VersionRecord,
     snapshot_workspace,
 )
-from disco.tools.sandbox._container import PREVIEW_PORT
 
 from .lifecycle_command_service import LifecycleCommandService
 from .runtime_settings import _BUILD_LIKE_SURFACES
@@ -51,10 +50,21 @@ from .workspace_commit import (
     WorkspaceRunSuperseded,
     resolve_committed_workspace,
 )
+from .workspace_ownership import WorkspaceOwnership
 from .workspace_process_fence import (
     workspace_process_fence,
     workspace_process_fence_held,
 )
+
+if TYPE_CHECKING:
+    from disco.core.store.sqlite import SqliteEventStore
+
+    from .build_platform_runtime import BuildPlatformRuntime
+    from .lifecycle import LifecycleManager
+    from .project_runtime_service import ProjectRuntimeService
+    from .run_controller import RunController
+    from .run_supervisor import RunPersistenceSupervisor
+    from .runtime_settings import RuntimeSettings
 
 
 class WorkspaceRestoreConflict(ValueError):
@@ -70,18 +80,6 @@ class WorkspaceRestoreStorageError(RuntimeError):
 
 
 _LOG = logging.getLogger(__name__)
-
-
-def _current_lifecycle_task_authority(
-    rt: Any,
-    conversation_id: str,
-) -> tuple[str | None, str | None]:
-    """Return only the exact registered task's captured durable target."""
-
-    task = asyncio.current_task()
-    if task is None or not rt._run_registry.owns_task(conversation_id, task):
-        return None, None
-    return rt._run_authorities.get(task)
 
 
 async def _apply_restore_to_session(
@@ -134,15 +132,57 @@ _OWNED_WORKSPACE_FENCES: ContextVar[frozenset[tuple[str, asyncio.Task[Any]]]] = 
 
 
 class WorkspaceCoordinator:
-    """Own the permanent workspace lock and all cross-surface coordination."""
+    """Own the permanent workspace lock and all cross-surface coordination.
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    A state-free compatibility delegate over the named collaborators: the
+    permanent lock registry and run-claim sets live here; disposal and
+    restore-session acquisition are delegated to :class:`WorkspaceOwnership`.
+
+    ``run_controller`` and ``run_execution`` are bound after construction
+    (see :meth:`bind_run_collaborators`) because they are themselves wired
+    after the coordinator in the composition order — they depend on the
+    coordinator for fence/admission authority, so the cycle is broken here
+    rather than with a runtime back-ref.
+    """
+
+    def __init__(
+        self,
+        store: SqliteEventStore,
+        settings: RuntimeSettings,
+        projects: ProjectRuntimeService,
+        lifecycle_commands: LifecycleCommandService,
+        lifecycle: LifecycleManager,
+        build_platform: BuildPlatformRuntime,
+        ownership: WorkspaceOwnership,
+    ) -> None:
+        self._store = store
+        self._settings = settings
+        self._projects = projects
+        self._lifecycle_commands = lifecycle_commands
+        self._lifecycle = lifecycle
+        self._build_platform = build_platform
+        self._ownership = ownership
+        self._run_controller: RunController | None = None
+        self._run_execution: RunPersistenceSupervisor | None = None
         # Never remove an entry. Replacing a lock after forget/recreate would
         # split waiters across two coordination domains (an ABA race).
         self._locks: dict[str, asyncio.Lock] = {}
         self._pending_runs: set[str] = set()
         self._admitted_runs: set[str] = set()
+
+    def bind_run_collaborators(
+        self,
+        run_controller: RunController,
+        run_execution: RunPersistenceSupervisor,
+    ) -> None:
+        """Bind the run collaborators after they are wired.
+
+        Called once from the composition root after :class:`RunController` and
+        :class:`RunPersistenceSupervisor` exist.  This is an explicit typed
+        binding — not a runtime back-ref, not a dynamic lookup, not a bag.
+        """
+        self._run_controller = run_controller
+        self._run_execution = run_execution
 
     def lock(self, conversation_id: str) -> asyncio.Lock:
         lock = self._locks.get(conversation_id)
@@ -152,7 +192,7 @@ class WorkspaceCoordinator:
         return lock
 
     def _process_fence_workspace(self, conversation_id: str) -> Path | None:
-        store = self._rt._project_store_now()
+        store = self._projects.current_project_store()
         if store is not None:
             # Lock identity must not change merely because the projects volume
             # is temporarily unwritable or unavailable. ``path_for`` is a pure,
@@ -163,7 +203,7 @@ class WorkspaceCoordinator:
         # In-memory/test stores have no shared cross-process event log. Keep a
         # stable identity within this process rather than silently dropping the
         # fence entirely; production runtimes always take the ProjectStore path.
-        store_key = hashlib.sha256(f"{id(self._rt._store)}:{conversation_id}".encode()).hexdigest()
+        store_key = hashlib.sha256(f"{id(self._store)}:{conversation_id}".encode()).hexdigest()
         return Path(tempfile.gettempdir()) / "disco-ephemeral-workspaces" / store_key
 
     @asynccontextmanager
@@ -218,27 +258,28 @@ class WorkspaceCoordinator:
         """
 
         build_run = (
-            self._rt._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
+            self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
         )
+        assert self._run_execution is not None, "run collaborators not yet bound"
         try:
             if build_run:
                 async with self.lock(conversation_id):
                     async with self.interprocess_mutation_fence(conversation_id):
                         if expected_run_intent_id is not None:
-                            events = await self._rt._store.get_events(conversation_id)
+                            events = await self._store.get_events(conversation_id)
                             latest_intent = latest_workspace_run_intent(events)
                             if latest_intent is None or latest_intent.id != expected_run_intent_id:
                                 raise WorkspaceRunSuperseded(
                                     "registered run intent changed before admission"
                                 )
-                        await self._rt._build_platform.record_route_locked(conversation_id)
+                        await self._build_platform.record_route_locked(conversation_id)
                         await self.record_mutation_locked(
                             conversation_id,
                             "agent.run-claimed",
                         )
                         self._pending_runs.discard(conversation_id)
                         self._admitted_runs.add(conversation_id)
-            return await self._rt._run_with_persistence(conversation_id, loop)
+            return await self._run_execution.run(conversation_id, loop)
         finally:
             if build_run:
                 self.clear_run_claim(conversation_id)
@@ -248,7 +289,7 @@ class WorkspaceCoordinator:
 
         if not self.lock(conversation_id).locked():
             raise RuntimeError("run claim requires the workspace fence")
-        task = self._rt._run_registry.active_task(conversation_id)
+        task = self._ownership.active_task(conversation_id)
         if task is not None and conversation_id not in self._admitted_runs:
             self._pending_runs.add(conversation_id)
 
@@ -266,7 +307,7 @@ class WorkspaceCoordinator:
     async def _lifecycle_fence(self, conversation_id: str) -> AsyncIterator[None]:
         """Expose only serialization; lifecycle policy stays in its command service."""
 
-        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
+        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             yield
             return
         if self.fence_owned_by_current_task(conversation_id):
@@ -282,7 +323,7 @@ class WorkspaceCoordinator:
 
         if not self.lock(conversation_id).locked():
             raise RuntimeError("locked lifecycle transition requires the workspace fence")
-        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
+        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             yield
             return
         if self.fence_owned_by_current_task(conversation_id):
@@ -294,7 +335,7 @@ class WorkspaceCoordinator:
     def _require_lifecycle_fence(self, conversation_id: str) -> None:
         """Fail closed unless a Build transition owns both workspace fences."""
 
-        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
+        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             return
         if not self.lock(conversation_id).locked():
             raise RuntimeError("locked status append requires the workspace fence")
@@ -307,7 +348,7 @@ class WorkspaceCoordinator:
     ) -> StatusEvent:
         """Compatibility delegate; the lifecycle service owns authorization."""
 
-        return await self._rt._lifecycle_commands.append_status(conversation_id, event)
+        return await self._lifecycle_commands.append_status(conversation_id, event)
 
     async def append_status_locked(
         self,
@@ -316,7 +357,7 @@ class WorkspaceCoordinator:
     ) -> StatusEvent:
         """Compatibility delegate; the lifecycle service owns authorization."""
 
-        return await self._rt._lifecycle_commands.append_status_locked(
+        return await self._lifecycle_commands.append_status_locked(
             conversation_id,
             event,
         )
@@ -330,7 +371,7 @@ class WorkspaceCoordinator:
     ) -> bool:
         """Compatibility delegate for durable lifecycle authority."""
 
-        return await self._rt._lifecycle_commands.authority_is_current(
+        return await self._lifecycle_commands.authority_is_current(
             conversation_id,
             agent_view_id=agent_view_id,
             run_intent_id=run_intent_id,
@@ -343,7 +384,7 @@ class WorkspaceCoordinator:
         agent_view_id: str | None,
         run_intent_id: str | None,
     ) -> bool:
-        return await self._rt._lifecycle_commands._authority_is_current_locked(
+        return await self._lifecycle_commands._authority_is_current_locked(
             conversation_id,
             agent_view_id=agent_view_id,
             run_intent_id=run_intent_id,
@@ -359,7 +400,7 @@ class WorkspaceCoordinator:
     ) -> StatusEvent | None:
         """Compatibility delegate for an atomic task transition."""
 
-        return await self._rt._lifecycle_commands.append_task_status_if_current(
+        return await self._lifecycle_commands.append_task_status_if_current(
             conversation_id,
             event,
             agent_view_id=agent_view_id,
@@ -376,7 +417,7 @@ class WorkspaceCoordinator:
     ) -> list[Event] | None:
         """Compatibility delegate for a host lifecycle decision."""
 
-        return await self._rt._lifecycle_commands.append_current_run_transition(
+        return await self._lifecycle_commands.append_current_run_transition(
             conversation_id,
             events,
             status,
@@ -419,7 +460,7 @@ class WorkspaceCoordinator:
             paths=tuple(sorted(set(paths))),
             run_protocol_version=(1 if operation.startswith("agent.run-intent.") else None),
         )
-        state = await self._rt._store.get_state(conversation_id)
+        state = await self._store.get_state(conversation_id)
         interrupts_running_view = not operation.startswith("agent.") and (
             state.execution_status
             in {
@@ -431,7 +472,7 @@ class WorkspaceCoordinator:
             }
         )
         if interrupts_running_view:
-            history = await self._rt._store.get_events(conversation_id)
+            history = await self._store.get_events(conversation_id)
             pending: list[Event] = [*self._dangling_action_closures(history), mutation]
             pending.append(
                 WorkspaceMutationEvent(
@@ -439,15 +480,16 @@ class WorkspaceCoordinator:
                     run_protocol_version=1,
                 )
             )
-            stored_events = await self._rt._store.append_many(conversation_id, pending)
+            stored_events = await self._store.append_many(conversation_id, pending)
             stored = next(event for event in stored_events if event.id == mutation.id)
             # A host edit is a new input to an active build. Start or hand off a
             # task while the fence is still held; execution itself queues behind
             # the completed host mutation.
-            self._rt._run_controller.kick(conversation_id)
+            assert self._run_controller is not None, "run collaborators not yet bound"
+            self._run_controller.kick(conversation_id)
             self.claim_registered_run_locked(conversation_id)
         else:
-            stored = await self._rt._store.append(conversation_id, mutation)
+            stored = await self._store.append(conversation_id, mutation)
         if not isinstance(stored, WorkspaceMutationEvent):
             raise RuntimeError("event store returned wrong workspace mutation event type")
         return stored
@@ -482,7 +524,7 @@ class WorkspaceCoordinator:
     ) -> WorkspaceMutationEvent | None:
         """Durably invalidate an old workspace seal before a Build execution ingress."""
 
-        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
+        if self._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             return None
         self._require_process_fence_locked(conversation_id)
         return await self.record_mutation_locked(
@@ -502,10 +544,10 @@ class WorkspaceCoordinator:
 
         if not self.lock(conversation_id).locked():
             raise RuntimeError("run ingress requires the conversation lock")
-        history = await self._rt._store.get_events(conversation_id)
+        history = await self._store.get_events(conversation_id)
         closures = self._dangling_action_closures(history)
         pending = [*closures, *events]
-        if self._rt._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES:
+        if self._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES:
             self._require_process_fence_locked(conversation_id)
             expected_operation = f"agent.run-intent.{source}"
             if intent is not None and (
@@ -533,7 +575,7 @@ class WorkspaceCoordinator:
         """Persist an ingress batch through lifecycle only when it has status."""
 
         if not any(isinstance(event, StatusEvent) for event in pending):
-            return await self._rt._store.append_many(conversation_id, pending)
+            return await self._store.append_many(conversation_id, pending)
         ingress_intent = next(
             (
                 event
@@ -544,7 +586,7 @@ class WorkspaceCoordinator:
             ),
             None,
         )
-        return await self._rt._lifecycle_commands.append_transition_batch_locked(
+        return await self._lifecycle_commands.append_transition_batch_locked(
             conversation_id,
             pending,
             ingress_intent=ingress_intent,
@@ -560,7 +602,8 @@ class WorkspaceCoordinator:
         async with self.lock(conversation_id):
             async with self.interprocess_mutation_fence(conversation_id):
                 await self.record_run_intent_locked(conversation_id, "stranded-followup")
-                self._rt._run_controller.kick(
+                assert self._run_controller is not None, "run collaborators not yet bound"
+                self._run_controller.kick(
                     conversation_id,
                     claimed_user_seq=claimed_user_seq,
                 )
@@ -573,7 +616,7 @@ class WorkspaceCoordinator:
         """Bind one loop's REL-27 probe (lifecycle-resolved: same seam as the seal)."""
 
         async def probe() -> SealabilityProbeResult:
-            return await self._rt._lifecycle.probe_finish_sealability(conversation_id)
+            return await self._lifecycle.probe_finish_sealability(conversation_id)
 
         return probe
 
@@ -583,9 +626,11 @@ class WorkspaceCoordinator:
     ) -> Callable[[StatusEvent], Awaitable[StatusEvent]]:
         """Compatibility delegate for Core's private lifecycle sink."""
 
-        return self._rt._lifecycle_commands.terminal_commit_hook(
+        return self._lifecycle_commands.terminal_commit_hook(
             conversation_id,
-            authority_provider=lambda: _current_lifecycle_task_authority(self._rt, conversation_id),
+            authority_provider=lambda: self._ownership.current_lifecycle_task_authority(
+                conversation_id
+            ),
         )
 
     async def _host_mutation_authority(
@@ -593,7 +638,7 @@ class WorkspaceCoordinator:
         conversation_id: str,
         operation: str,
     ) -> str:
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         latest_finished = max(
             (
                 event.seq
@@ -626,7 +671,7 @@ class WorkspaceCoordinator:
         """Seal an inactive FINISHED host edit by recapturing its sandbox."""
 
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
-        await self._rt._lifecycle_commands.commit_finished_workspace(
+        await self._lifecycle_commands.commit_finished_workspace(
             conversation_id,
             LifecycleCommandService.build_status(
                 ConversationStatus.FINISHED,
@@ -653,7 +698,7 @@ class WorkspaceCoordinator:
         if not self.lock(conversation_id).locked():
             raise RuntimeError("host-mirror finalization requires the conversation lock")
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
-        await self._rt._lifecycle_commands._commit_finished_host_mirror_locked(
+        await self._lifecycle_commands._commit_finished_host_mirror_locked(
             conversation_id,
             LifecycleCommandService.build_status(
                 ConversationStatus.FINISHED,
@@ -673,16 +718,16 @@ class WorkspaceCoordinator:
             raise RuntimeError("committed host-mirror proof requires the conversation lock")
         if self.has_run_claim(conversation_id):
             raise WorkspaceCommitUnavailable("an agent run is active for this workspace")
-        state = await self._rt._store.get_state(conversation_id)
+        state = await self._store.get_state(conversation_id)
         if state.execution_status is not ConversationStatus.FINISHED:
             raise WorkspaceCommitUnavailable("workspace is not at an inactive FINISHED head")
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         committed = resolve_committed_workspace(
             events,
-            self._rt._project_store_now(),
+            self._projects.current_project_store(),
             conversation_id,
         )
-        facts = self._rt._project_store_now().inspect_workspace(conversation_id)
+        facts = self._projects.current_project_store().inspect_workspace(conversation_id)
         record = committed.record
         if (
             facts.file_count != record.file_count
@@ -699,11 +744,11 @@ class WorkspaceCoordinator:
         conversation_id: str,
         operation: str,
     ) -> VersionRecord:
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         try:
             return resolve_committed_workspace(
                 events,
-                self._rt._project_store_now(),
+                self._projects.current_project_store(),
                 conversation_id,
             ).record
         except WorkspaceCommitUnavailable:
@@ -716,11 +761,11 @@ class WorkspaceCoordinator:
     async def restore_version(self, conversation_id: str, seq: int) -> dict:
         async with self.lock(conversation_id):
             async with self.interprocess_mutation_fence(conversation_id):
-                prior_state = await self._rt._store.get_state(conversation_id)
+                prior_state = await self._store.get_state(conversation_id)
                 result = await self.restore_version_locked(conversation_id, seq)
         if prior_state.execution_status is ConversationStatus.FINISHED:
             try:
-                committed = await self._rt.finalize_host_workspace_change(
+                committed = await self.finalize_sandbox_change(
                     conversation_id,
                     "version.restore",
                 )
@@ -735,11 +780,11 @@ class WorkspaceCoordinator:
         if not self.lock(conversation_id).locked():
             raise RuntimeError("locked workspace restore requires the conversation lock")
         self._require_process_fence_locked(conversation_id)
-        state = await self._rt._store.get_state(conversation_id)
+        state = await self._store.get_state(conversation_id)
         if state.execution_status is ConversationStatus.RUNNING:
             raise WorkspaceRestoreConflict("conversation is running")
 
-        store = self._rt._project_store_now()
+        store = self._projects.current_project_store()
         if store.status() is not StorageStatus.OK:
             raise WorkspaceRestoreStorageError(f"project storage is {store.status().value}")
         try:
@@ -751,7 +796,7 @@ class WorkspaceCoordinator:
         except StorageError as exc:
             raise WorkspaceRestoreStorageError(str(exc)) from exc
 
-        session = await self._restore_session(conversation_id)
+        session = await self._ownership.restore_session(conversation_id)
         try:
             with tempfile.TemporaryDirectory(prefix="disco-verified-restore-") as raw_stage:
                 stage = Path(raw_stage)
@@ -781,7 +826,9 @@ class WorkspaceCoordinator:
                         conversation_id,
                         exc_info=True,
                     )
-                    fresh = await self._restore_session(conversation_id, exclude=session)
+                    fresh = await self._ownership.restore_session(
+                        conversation_id, exclude=session
+                    )
                     await _apply_restore_to_session(fresh, entries, stage, store, conversation_id)
         except WorkspaceRestoreStorageError as exc:
             _LOG.error("workspace restore failed for %s: %s", conversation_id, exc)
@@ -804,34 +851,6 @@ class WorkspaceCoordinator:
             "tree_digest": record.tree_digest,
         }
 
-    async def _restore_session(self, conversation_id: str, *, exclude: Any = None) -> Any:
-        """Acquire a session for restore; ``exclude`` marks one that just
-        failed (F-28) — the registry may still return that dying object, and
-        handing it back would retry a dead container as if it were fresh."""
-
-        def _usable(candidate: Any) -> Any:
-            return None if candidate is None or candidate is exclude else candidate
-
-        session = _usable(self._rt.live_session(conversation_id))
-        if session is None:
-            cid8 = conversation_id.removeprefix("conv_")[:8]
-            with contextlib.suppress(Exception):
-                await self._rt.wake_for_preview(cid8, PREVIEW_PORT)
-            session = _usable(self._rt.live_session(conversation_id))
-        if session is None:
-            try:
-                self._rt._loop_factory.loop_for(conversation_id)
-            except Exception as exc:  # noqa: BLE001 — mapped to a named storage error
-                _LOG.error("could not create sandbox for restore of %s: %s", conversation_id, exc)
-                raise WorkspaceRestoreStorageError(
-                    f"could not create sandbox for restore: {exc}"
-                ) from exc
-            session = _usable(self._rt.live_session(conversation_id))
-        if session is None:
-            _LOG.error("sandbox unavailable for restore of %s", conversation_id)
-            raise WorkspaceRestoreStorageError("sandbox unavailable for restore")
-        return session
-
     async def _append_restore_events(
         self,
         conversation_id: str,
@@ -839,7 +858,7 @@ class WorkspaceCoordinator:
         tree_digest: str,
         label: str,
     ) -> None:
-        await self._rt._store.append(
+        await self._store.append(
             conversation_id,
             WorkspaceRestoredEvent(
                 version_seq=seq,
@@ -847,7 +866,7 @@ class WorkspaceCoordinator:
                 label=label,
             ),
         )
-        await self._rt._store.append(
+        await self._store.append(
             conversation_id,
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -866,15 +885,7 @@ class WorkspaceCoordinator:
         )
 
     async def forget(self, conversation_id: str) -> None:
-        self._rt._kernel_pins.clear(conversation_id)
-        task = self._rt._run_registry.task(conversation_id)
-        self._rt._run_registry.detach_task_if_owned(conversation_id, task)
-        if task is not None and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
-        if task is not None:
-            self._rt._run_authorities.discard(task)
+        await self._ownership.cancel_registered_task(conversation_id)
         async with self.lock(conversation_id):
             await self.forget_locked(conversation_id)
 
@@ -884,28 +895,4 @@ class WorkspaceCoordinator:
         # synchronous ingress claim explicitly so a reused conversation id is
         # not rejected forever.
         self.clear_run_claim(conversation_id)
-        executor = self._rt._run_resources.pop_executor(conversation_id)
-        if executor is not None:
-            with contextlib.suppress(Exception):
-                await executor.kill()
-        session = self._rt._run_resources.pop_pending_session(conversation_id)
-        if session is not None:
-            with contextlib.suppress(Exception):
-                await session.destroy()
-        with contextlib.suppress(Exception):
-            await self._rt._sandbox._sandbox_service_now().destroy_by_conversation(
-                conversation_id
-            )
-        self._rt._run_registry.forget(conversation_id)
-        self._rt._run_ingress.forget(conversation_id)
-        self._rt._loop_registry.forget(conversation_id)
-        self._rt._run_recovery.forget(conversation_id)
-        self._rt._cancellations.clear(conversation_id)
-        self._rt._settings._forget(conversation_id)
-        self._rt._contract.forget(conversation_id)
-        self._rt._dr.forget(conversation_id)
-        self._rt._mcp._forget(conversation_id)
-        self._rt._spaces.forget(conversation_id)
-        self._rt._connections.clear_conversation(conversation_id)
-        self._rt._driver_contexts.discard(conversation_id)
-        self._rt._driver_preflight.discard_conversation(conversation_id)
+        await self._ownership.dispose(conversation_id)
