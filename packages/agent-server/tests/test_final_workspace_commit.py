@@ -884,7 +884,7 @@ async def test_host_mirror_finalizer_never_folds_sandbox_manifest(
     monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
     fold = AsyncMock()
     monkeypatch.setattr(rt, "_shadow_fold_manifest", fold)
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         async with rt._workspace.interprocess_mutation_fence(cid):
             await rt.record_workspace_mutation_locked(
                 cid,
@@ -949,11 +949,11 @@ async def test_forget_and_recreate_preserve_workspace_lock_identity(
 ) -> None:
     cid = "conv-workspace-lock-aba"
     rt, _projects = _runtime(event_store, tmp_path)
-    original = rt.workspace_lock(cid)
+    original = rt._workspace.lock(cid)
 
     await rt.forget_conversation(cid)
 
-    assert rt.workspace_lock(cid) is original
+    assert rt._workspace.lock(cid) is original
 
 
 async def test_inactive_finished_host_edit_gets_a_fresh_committed_revision(
@@ -1004,7 +1004,7 @@ async def test_locked_host_mirror_finalizer_seals_mirror_not_stale_sandbox(
         StatusEvent(status=ConversationStatus.FINISHED),
     )
 
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         await rt.record_workspace_mutation_locked(
             cid,
             "cloudflare.deploy-record",
@@ -1059,7 +1059,7 @@ async def test_committed_host_mirror_guard_rejects_unsealed_drift(
         StatusEvent(status=ConversationStatus.FINISHED),
     )
 
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         committed = await rt.require_committed_host_mirror_locked(cid)
         assert committed.record.tree_digest == projects.inspect_workspace(cid).tree_digest
         (projects.path_for(cid) / "index.html").write_bytes(b"drifted")
@@ -1081,7 +1081,7 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
 
     await _seed_running(event_store, cid)
     rt.kick = MagicMock()
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
         with pytest.raises(RuntimeError, match="inactive FINISHED head"):
             await rt.finalize_host_mirror_change_locked(cid, "host-write")
@@ -1092,7 +1092,7 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
     rt._tasks[cid] = active
     rt._workspace._admitted_runs.add(cid)
     try:
-        async with rt.workspace_lock(cid):
+        async with rt._workspace.lock(cid):
             await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
             (projects.path_for(cid) / "index.html").write_bytes(b"host-edit")
             with pytest.raises(RuntimeError, match="agent run is active"):
@@ -1234,7 +1234,7 @@ async def test_host_mirror_finalizer_rejects_wrong_authority_before_append(
         ),
     )
 
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         mutation = await rt.record_workspace_mutation_locked(
             cid,
             "host-write",
@@ -1294,7 +1294,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
         return "done"
 
     monkeypatch.setattr(rt, "_run_with_persistence", fake_run)
-    lock = rt.workspace_lock(cid)
+    lock = rt._workspace.lock(cid)
     async with lock:
         task, _generation = rt._create_run_task(cid, MagicMock())
         await asyncio.sleep(0)
@@ -1352,7 +1352,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
         return "done"
 
     monkeypatch.setattr(rt, "_run_with_persistence", fake_run)
-    lock = rt.workspace_lock(cid)
+    lock = rt._workspace.lock(cid)
     await lock.acquire()
 
     async def queued_deploy_preflight() -> None:
@@ -1381,9 +1381,9 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     cid = "conv-cancel-before-run-entry"
     rt, _projects = _runtime(event_store, tmp_path)
     rt.set_surface(cid, "build")
-    lock = rt.workspace_lock(cid)
+    lock = rt._workspace.lock(cid)
     await lock.acquire()
-    same_lock = rt.workspace_lock(cid)
+    same_lock = rt._workspace.lock(cid)
     task, _generation = rt._create_run_task(cid, MagicMock())
     rt._workspace.claim_registered_run_locked(cid)
     assert rt._workspace.has_run_claim(cid)
@@ -1396,7 +1396,7 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
 
     assert task.cancelled()
     assert not rt._workspace.has_run_claim(cid)
-    assert rt.workspace_lock(cid) is same_lock
+    assert rt._workspace.lock(cid) is same_lock
 
 
 async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
@@ -1426,7 +1426,7 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
         and event.operation == "agent.run-intent.user-turn"
         for event in events
     )
-    async with rt_b.workspace_lock(cid):
+    async with rt_b._workspace.lock(cid):
         with pytest.raises(WorkspaceCommitUnavailable):
             await rt_b.require_committed_host_mirror_locked(cid)
         # Record a mutation first to establish authority, then confirm the
@@ -1496,7 +1496,7 @@ async def test_locked_restore_helper_rejects_missing_local_or_process_fence(
 
     with pytest.raises(RuntimeError, match="conversation lock"):
         await rt._restore_workspace_version_locked(cid, 1)
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         with pytest.raises(RuntimeError, match="process fence"):
             await rt._restore_workspace_version_locked(cid, 1)
 
@@ -1655,7 +1655,7 @@ async def test_host_mirror_finalizer_fails_closed_if_mirror_changes_during_cut(
         return real_cut(*args, **kwargs)
 
     monkeypatch.setattr(projects, "cut_verified_version", raced_cut)
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
         (projects.path_for(cid) / "index.html").write_bytes(b"intended")
         with pytest.raises(WorkspaceCommitUnavailable):
@@ -1698,7 +1698,7 @@ async def test_host_mirror_finalizer_rejects_drift_after_version_cut_returns(
         return version
 
     monkeypatch.setattr(projects, "cut_verified_version", post_cut_drift)
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         async with rt._workspace.interprocess_mutation_fence(cid):
             await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
             (projects.path_for(cid) / "index.html").write_bytes(b"intended-host-bytes")
@@ -1719,7 +1719,7 @@ async def test_host_mirror_finalizer_rejects_drift_after_version_cut_returns(
         )
         == before_checkpoints
     )
-    async with rt.workspace_lock(cid):
+    async with rt._workspace.lock(cid):
         with pytest.raises(WorkspaceCommitUnavailable):
             await rt.require_committed_host_mirror_locked(cid)
 

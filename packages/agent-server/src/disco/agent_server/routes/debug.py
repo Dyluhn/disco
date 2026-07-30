@@ -102,7 +102,9 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                 "sandbox_instance_ids": runtime._lifecycle.sandbox_instance_ids(
                     conversation_id
                 ),
-                "live_session": runtime.live_session(conversation_id) is not None,
+                "live_session": (
+                    runtime._run_resources.executor(conversation_id) is not None
+                ),
                 "mcp_retrieval_searches": [
                     str(getattr(provider, "name", type(provider).__name__))
                     for provider in runtime._mcp._retrieval_searches
@@ -112,17 +114,14 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                     for provider in runtime._mcp._retrieval_extractions
                 ],
             }
-            ps_method = getattr(runtime, "project_store", None)
-            if ps_method is not None:
-                ps = ps_method()
-                if ps is not None:
-                    record = ps.get(conversation_id)
-                    if record is not None:
-                        project_manifest = {
-                            "conversation_id": conversation_id,
-                            "title": record.title or "(untitled)",
-                            "created_at": record.created_at,
-                            "last_snapshot_at": record.last_snapshot_at,
+            ps = runtime._projects.current_project_store()
+            record = ps.get(conversation_id)
+            if record is not None:
+                project_manifest = {
+                    "conversation_id": conversation_id,
+                    "title": record.title or "(untitled)",
+                    "created_at": record.created_at,
+                    "last_snapshot_at": record.last_snapshot_at,
                             "file_count": record.file_count,
                             "total_bytes": record.total_bytes,
                         }

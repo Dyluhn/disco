@@ -239,7 +239,8 @@ async def _read_workspace_file(
 ) -> bytes | None:
     """Read an allowlisted workspace image from the live sandbox, falling back to
     the project-store snapshot on disk. Returns None when no source has the file."""
-    session = runtime.live_session(conversation_id)
+    executor = runtime._run_resources.executor(conversation_id)
+    session = executor.sandbox if executor is not None else None
     if session is not None:
         try:
             data = await session.read_file(norm)
@@ -254,12 +255,7 @@ def _read_workspace_snapshot(
     runtime: ConversationRuntime, conversation_id: str, norm: str
 ) -> bytes | None:
     """Read an allowlisted workspace image from the project-store snapshot on disk."""
-    project_store_method = getattr(runtime, "project_store", None)
-    if project_store_method is None:
-        return None
-    ps = project_store_method()
-    if ps is None:
-        return None
+    ps = runtime._projects.current_project_store()
     store_path = ps.path_for(conversation_id)
     if store_path is None:
         return None
@@ -288,7 +284,7 @@ def _register_workspace_version_routes(
         if runtime is None:
             return {"versions": []}
         try:
-            project_store = runtime.project_store()
+            project_store = runtime._projects.current_project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 return {"versions": []}
             return {
@@ -785,7 +781,7 @@ def _get_space_or_404(
 ) -> None:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime.project_store()
+    project_store = runtime._projects.current_project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,

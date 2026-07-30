@@ -9,6 +9,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from disco.agent_server.build_kernel import BuildKernel
+from disco.agent_server.run_registry import KernelPinRegistry
 from disco.agent_server.run_supervisor import (
     _KERNEL_UNPIN_STATUSES,
     _MAX_NONTERMINAL_REKICKS,
@@ -170,14 +172,25 @@ async def test_control_op_raise_preserves_a_preexisting_pin(
     assert runtime._kernel_pins.current(CID) is pinned
 
 
-def test_clear_pin_lets_next_run_reresolve_to_disco(store: SqliteEventStore) -> None:
-    runtime = _runtime(store)
-    runtime.start(CID)
-    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
+def test_selector_change_does_not_replace_pin_until_clear() -> None:
+    first = MagicMock(spec=BuildKernel)
+    second = MagicMock(spec=BuildKernel)
 
-    runtime._kernel_pins.clear(CID)
-    assert runtime._kernel_pins.current(CID) is None
-    assert runtime._kernel_pins.ensure(CID) is runtime._disco_kernel
+    class MutableSelector:
+        selected: BuildKernel = first
+
+        def select_kernel(self, _conversation_id: str) -> BuildKernel:
+            return self.selected
+
+    selector = MutableSelector()
+    pins = KernelPinRegistry(selector)
+
+    assert pins.ensure(CID) is first
+    selector.selected = second
+    assert pins.ensure(CID) is first
+
+    pins.clear(CID)
+    assert pins.ensure(CID) is second
 
 
 async def test_kill_clears_pin(store: SqliteEventStore) -> None:

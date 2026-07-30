@@ -350,7 +350,7 @@ def _save_instance(
             surface_shown_digest=digest,
         ),
     )
-    root = runtime.project_store().root
+    root = runtime._projects.current_project_store().root
     assert root is not None
     workflows = root / "workflows"
     workflows.mkdir(parents=True, exist_ok=True)
@@ -439,7 +439,7 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         assert record.output_path == "outputs/result.md"
         assert record.verify_verdict == "pass"
         assert manager.list_runs(schedule_id=row.schedule_id)[0].run_cid == record.run_cid
-        assert runtime.project_store().get(record.run_cid) is not None
+        assert runtime._projects.current_project_store().get(record.run_cid) is not None
         resolved = runtime._driver_contexts.resolved_snapshot(record.run_cid)
         assert resolved is not None
         assert resolved.context_window > 0
@@ -1041,7 +1041,7 @@ def test_workflow_schedule_runs_route_lists_history() -> None:
         manager = _workflow_manager(runtime)
         instance = _save_instance(runtime, instance_id="wf_route", tools=())
         row = manager.create_schedule(_spec("wf_route", instance))
-        root = runtime.project_store().root
+        root = runtime._projects.current_project_store().root
         assert root is not None
         runs_path = root / "workflow_schedules" / "runs.json"
         runs_path.parent.mkdir(parents=True, exist_ok=True)

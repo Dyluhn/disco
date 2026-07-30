@@ -354,7 +354,7 @@ def _serve_static_from_snapshot(
     if is_runtime_secret_path(rel_path):
         return None
     try:
-        ps = runtime.project_store()
+        ps = runtime._projects.current_project_store()
         if ps is None or ps.status() != StorageStatus.OK:
             return None
         if version is not None:
@@ -434,7 +434,8 @@ async def _fetch_inside_response(
     if port == NOVNC_PORT:
         return None
     try:
-        session = runtime.live_session(conversation_id)
+        executor = runtime._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return None
         got = await session.fetch_inside(port, rel_path)
@@ -464,10 +465,10 @@ async def _serve_active_finished_projection(
 ) -> Response | None:
     """Proxy the original generation or its exact host-bound sealed restore."""
 
-    resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
-    if resolver is None:
-        return None
-    resolved = await resolver(conversation_id, contract)
+    resolved = await runtime._preview.resolve_finished_preview_runtime(
+        conversation_id,
+        contract,
+    )
     if not isinstance(resolved, dict):
         return None
     port = resolved.get("port")
@@ -481,7 +482,7 @@ async def _serve_active_finished_projection(
         return None
     # GET remains passive: only the authenticated restart action may reconstruct a
     # sealed runtime. This path resolves a manager generation already proven live.
-    upstream = runtime.port_upstream(conversation_id, port)
+    upstream = runtime._preview.port_upstream(conversation_id, port)
     if upstream is None:
         return await _fetch_inside_response(
             runtime,
@@ -706,18 +707,15 @@ async def _wake_for_preview(
     runtime: ConversationRuntime, cid8: str, port: int, *, owner_id: str
 ) -> str | None:
     try:
-        return await runtime.wake_for_preview(cid8, port, owner_id=owner_id)
+        return await runtime._preview.wake_for_preview(cid8, port, owner_id=owner_id)
     except TypeError:
-        return await runtime.wake_for_preview(cid8, port)  # type: ignore[call-arg]
+        return await runtime._preview.wake_for_preview(cid8, port)
 
 
 def _canonical_preview_port(runtime: ConversationRuntime, conversation_id: str) -> int | None:
     """Use the active PreviewManager target without weakening origin capabilities."""
-    resolver = getattr(runtime, "preview_target_port", None)
-    if resolver is None:
-        return PREVIEW_PORT
     try:
-        port = resolver(conversation_id)
+        port = runtime._preview.preview_target_port(conversation_id)
     except Exception:  # noqa: BLE001 — corrupt selection cannot choose an upstream
         return None
     if port is None:
@@ -747,7 +745,7 @@ async def _committed_static_capability_available(
     except Exception:  # noqa: BLE001 — missing evidence cannot authorize fallback
         return False
     if version is None:
-        project_store = runtime.project_store()
+        project_store = runtime._projects.current_project_store()
         if project_store is None or project_store.status() != StorageStatus.OK:
             return False
         try:
@@ -834,7 +832,7 @@ async def _canonical_preview_authority(
         None,
     )
     if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
-        project_store = runtime.project_store()
+        project_store = runtime._projects.current_project_store()
         if project_store is None or project_store.status() != StorageStatus.OK:
             return None
         try:
@@ -850,8 +848,10 @@ async def _canonical_preview_authority(
             return None
         contract = _sealed_runtime_contract(events, conversation_id, committed, entry)
         if contract is not None:
-            resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
-            resolved = await resolver(conversation_id, contract) if resolver is not None else None
+            resolved = await runtime._preview.resolve_finished_preview_runtime(
+                conversation_id,
+                contract,
+            )
             if not isinstance(resolved, dict):
                 return None
             runtime_port = resolved.get("port")
@@ -882,7 +882,7 @@ async def _canonical_preview_authority(
         )
 
     try:
-        metadata = await runtime.preview(conversation_id)
+        metadata = await runtime._preview.preview(conversation_id)
     except Exception:  # noqa: BLE001 — lifecycle authority cannot be guessed
         return None
     generation = metadata.get("generation") if isinstance(metadata, dict) else None
@@ -1117,10 +1117,8 @@ async def _preview_capability_response(
             # Capability mint is an authenticated POST and therefore an explicit
             # recovery boundary. It may restore one sealed managed runtime; the
             # subsequent authority check still binds the fresh generation.
-            ensure = getattr(runtime, "ensure_preview", None)
-            if ensure is not None:
-                await ensure(conversation_id)
-                selected_port = _canonical_preview_port(runtime, conversation_id)
+            await runtime._preview.ensure_preview(conversation_id)
+            selected_port = _canonical_preview_port(runtime, conversation_id)
         if (
             selected_port is None
             and body.transport in {"path", "canonical"}
@@ -1341,7 +1339,8 @@ def _register_live_browser_start_route(
             return Response("config unavailable", status_code=503, media_type="text/plain")
 
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        session = runtime.live_session(conversation_id)
+        executor = runtime._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return Response(
                 _json.dumps(
@@ -1450,7 +1449,8 @@ def _register_live_browser_status_routes(
                 return JSONResponse({"ready": False, "reason": "disabled"})
         except Exception:  # noqa: BLE001
             return JSONResponse({"ready": False, "reason": "config_unavailable"})
-        session = runtime.live_session(conversation_id)
+        executor = runtime._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return JSONResponse({"ready": False, "reason": "no_sandbox"})
         if not getattr(session, "supports_live_view", False):
@@ -1469,7 +1469,8 @@ def _register_live_browser_status_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
-        session = runtime.live_session(conversation_id)
+        executor = runtime._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
@@ -1489,7 +1490,8 @@ def _register_live_browser_status_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
-        session = runtime.live_session(conversation_id)
+        executor = runtime._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
@@ -1595,7 +1597,7 @@ def _register_preview_meta_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
-        return await runtime.preview(conversation_id)
+        return await runtime._preview.preview(conversation_id)
 
     @router.post("/conversations/{conversation_id}/preview/restart")
     async def ensure_preview(conversation_id: str, request: Request) -> dict:
@@ -1604,7 +1606,7 @@ def _register_preview_meta_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"ok": False}
-        return {"ok": await runtime.ensure_preview(conversation_id)}
+        return {"ok": await runtime._preview.ensure_preview(conversation_id)}
 
 
 async def _finished_preview_response(
@@ -1615,7 +1617,7 @@ async def _finished_preview_response(
     events: list[Event],
     preview_cap: PreviewCapability | None,
 ) -> Response:
-    project_store = runtime.project_store()
+    project_store = runtime._projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         return Response(
             "finished workspace is not sealed", status_code=503, media_type="text/plain"
@@ -1899,7 +1901,7 @@ def _register_preview_app_websocket_routes(
             # may use only the exact active-live generation bound to the current
             # final seal; filtered backends without a passive host upstream close
             # honestly because fetch_inside cannot proxy a WebSocket.
-            project_store = runtime.project_store()
+            project_store = runtime._projects.current_project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 await _close_ws(websocket, 1008, "preview not available")
                 return
@@ -1922,17 +1924,19 @@ def _register_preview_app_websocket_routes(
                 if entry is not None
                 else None
             )
-            resolver = getattr(runtime, "resolve_finished_preview_runtime", None)
             resolved = (
-                await resolver(conversation_id, contract)
-                if resolver is not None and contract is not None
+                await runtime._preview.resolve_finished_preview_runtime(
+                    conversation_id,
+                    contract,
+                )
+                if contract is not None
                 else None
             )
             runtime_port = resolved.get("port") if isinstance(resolved, dict) else None
             if contract is None or type(runtime_port) is not int or target_port != runtime_port:
                 await _close_ws(websocket, 1008, "preview not available")
                 return
-            upstream = runtime.port_upstream(conversation_id, runtime_port)
+            upstream = runtime._preview.port_upstream(conversation_id, runtime_port)
             if upstream is None:
                 await _close_ws(websocket, 1008, "preview not available")
                 return

@@ -276,7 +276,7 @@ async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
     rt = _runtime(store)
     rt._settings._set_surface(CID, "build")
-    lock = rt.workspace_lock(CID)
+    lock = rt._workspace.lock(CID)
     await lock.acquire()
 
     killing = asyncio.create_task(rt._control.kill(CID))
@@ -295,7 +295,7 @@ async def test_kill_accepts_current_durable_target_despite_stale_local_generatio
     rt = _runtime(store)
     rt._settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
-    lock = rt.workspace_lock(CID)
+    lock = rt._workspace.lock(CID)
     await lock.acquire()
 
     killing = asyncio.create_task(rt._control.kill(CID, generation=1))
@@ -358,7 +358,7 @@ async def test_kill_closure_waits_for_real_outcome_under_shared_fence() -> None:
     rt._settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
 
-    lock = rt.workspace_lock(CID)
+    lock = rt._workspace.lock(CID)
     await lock.acquire()
     closing = asyncio.create_task(_close_dangling_actions(rt))
     await asyncio.sleep(0)

@@ -114,7 +114,7 @@ def _write_workspace(ps: ProjectStore, cid: str, files: dict[str, bytes]) -> Non
 
 
 def _seed_versions(rt: ConversationRuntime) -> tuple[Any, ProjectStore]:
-    ps = rt.project_store()
+    ps = rt._projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_version(CID, trigger="turn")
     assert old is not None

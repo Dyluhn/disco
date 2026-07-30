@@ -133,7 +133,7 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
     append_status = rt._lifecycle_commands.append_status_locked
 
     async def _append(conversation_id: str, event: StatusEvent):
-        assert rt.workspace_lock(conversation_id).locked()
+        assert rt._workspace.lock(conversation_id).locked()
         assert rt._workspace.fence_owned_by_current_task(conversation_id)
         trace.append("status.append")
         return await append_status(conversation_id, event)

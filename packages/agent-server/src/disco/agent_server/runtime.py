@@ -113,7 +113,7 @@ if TYPE_CHECKING:
     from .control_ops import ControlOps
     from .conversation_control_service import ConversationControlService
     from .deep_research_service import DeepResearchService
-    from .deep_research_state import DeepResearchState
+    from .deep_research_state import DeepResearchLiveState, DeepResearchState
     from .driver_context_state import DriverContextState
     from .driver_runtime import DriverPreflight, DriverRuntime
     from .lifecycle import LifecycleManager
@@ -157,8 +157,7 @@ if TYPE_CHECKING:
 def _has_unfinished_plan(events: list[Any]) -> bool:
     has_plan = any(isinstance(event, PlanEvent) for event in events)
     has_finished = any(
-        isinstance(event, StatusEvent)
-        and event.status is ConversationStatus.FINISHED
+        isinstance(event, StatusEvent) and event.status is ConversationStatus.FINISHED
         for event in events
     )
     return has_plan and not has_finished
@@ -209,21 +208,16 @@ def _default_in_catalog(
     return default if any(model["id"] == default for model in models) else None
 
 
-class ConversationRuntime:
-    """Wiring-only root plus the transport-stable conversation ingress facade."""
-
-    _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
+class _RuntimeWiringSchema:
+    """Static owner inventory for the composition root; stores no values."""
 
     _store: SqliteEventStore
     _skill_store: SkillStore
     _uploads: UploadStore
     _secret_store: SecretStore
-    _injected_router: DefaultLLMRouter | None
-    _enable_thinking: bool
     _config_store: ConfigStore
     _sandbox: SandboxRuntimeService
     _projects: ProjectRuntimeService
-    _mode: OperatingMode
     _loop_registry: LoopRegistry
     _run_registry: RunRegistry
     _run_authorities: RunAuthorityLedger
@@ -250,6 +244,7 @@ class ConversationRuntime:
     _connections: ConnectionTracker
     _appkit_ejection: AppKitEjectionService
     _research_state: DeepResearchState
+    _research_live_state: DeepResearchLiveState
     _dr: DeepResearchService
     _spaces: SpaceService
     _build_retrieval: BuildRetrievalCapabilities
@@ -270,6 +265,12 @@ class ConversationRuntime:
     _run_finalizer: RunFinalizer
     _run_sweep: RunStrandedSweep
     _run_execution: RunPersistenceSupervisor
+
+
+class ConversationRuntime(_RuntimeWiringSchema):
+    """Wiring-only root plus the transport-stable conversation ingress facade."""
+
+    _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
 
     def __init__(
         self,
@@ -484,12 +485,38 @@ class ConversationRuntime:
             steer=steer,
         )
 
+    async def confirm(self, conversation_id: str) -> None:
+        await self._conversation_control.confirm(conversation_id)
+
+    async def reject(
+        self,
+        conversation_id: str,
+        reason: str = "rejected by user",
+    ) -> None:
+        await self._conversation_control.reject(conversation_id, reason)
+
+    async def approve_plan(self, conversation_id: str) -> None:
+        await self._conversation_control.approve_plan(conversation_id)
+
+    async def request_plan(self, conversation_id: str, text: str = "") -> None:
+        await self._conversation_control.request_plan(conversation_id, text)
+
+    async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
+        await self._conversation_control.pick_alternative(conversation_id, option_id)
+
+    async def pause(self, conversation_id: str) -> None:
+        await self._conversation_control.pause(conversation_id)
+
     async def cancel(self, conversation_id: str) -> None:
         await self._conversation_control.cancel(conversation_id)
+
+    async def resume(self, conversation_id: str) -> None:
+        await self._conversation_control.resume(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
         await self._conversation_control.kill(conversation_id)
 
     async def aclose(self) -> None:
-        await self._run_supervisor.close()
+        await self._run_supervisor.cancel_runs()
         await self._driver_preflight.aclose()
+        await self._run_supervisor.close_resources()

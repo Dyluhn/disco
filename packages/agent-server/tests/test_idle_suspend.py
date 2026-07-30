@@ -163,11 +163,11 @@ async def test_wake_for_preview(tmp_path):
     rt.port_upstream = MagicMock(return_value="http://upstream")
 
     # 1. Unknown
-    res = await rt.wake_for_preview("00000000", 8000)
+    res = await rt._preview.wake_for_preview("00000000", 8000)
     assert res is None
 
     # 2. Known without live executor
-    res = await rt.wake_for_preview("12345678", 8000)
+    res = await rt._preview.wake_for_preview("12345678", 8000)
     assert res == "http://upstream"
     rt.ensure_preview.assert_called_once_with("conv_1234567890")
     rt.port_upstream.assert_called_once_with("conv_1234567890", 8000)
@@ -196,9 +196,9 @@ async def test_wake_for_preview_concurrent(tmp_path):
     # acquires the lock; the re-check of _executors INSIDE the lock is what must
     # collapse the storm to a single ensure_preview call.
     await asyncio.gather(
-        rt.wake_for_preview("12345678", 8000),
-        rt.wake_for_preview("12345678", 8000),
-        rt.wake_for_preview("12345678", 8000),
+        rt._preview.wake_for_preview("12345678", 8000),
+        rt._preview.wake_for_preview("12345678", 8000),
+        rt._preview.wake_for_preview("12345678", 8000),
     )
 
     assert rt.ensure_preview.call_count == 1

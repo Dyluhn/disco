@@ -117,7 +117,7 @@ def _save_approved_workflow(rt: ConversationRuntime, instance_id: str) -> None:
             surface_shown_digest=digest,
         ),
     )
-    root = rt.project_store().root
+    root = rt._projects.current_project_store().root
     assert root is not None
     workflows_dir = root / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)

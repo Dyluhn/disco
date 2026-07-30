@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast, get_args
 
-from disco.core import DEFAULT_OWNER_ID, SkillStore
+from disco.core import DEFAULT_OWNER_ID
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -346,7 +346,7 @@ def _workflow_store(
     owner_id: str | None = None,
     include_unclaimed_legacy: bool = False,
 ) -> JsonDirWorkflowStore:
-    project_store = runtime.project_store()
+    project_store = runtime._projects.current_project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
@@ -395,8 +395,7 @@ def _surface_environment(runtime: ConversationRuntime) -> _SurfaceEnvironment:
         if isinstance(name, str) and isinstance(tool_def, ToolDef):
             mcp_defs[name] = tool_def
 
-    skill_store = cast(SkillStore, getattr(runtime, "_skill_store", SkillStore()))
-    skills = skill_store.list()
+    skills = runtime._skill_store.list()
     skill_payloads: dict[str, dict[str, object]] = {}
     for skill in skills:
         payload: dict[str, object] = {
@@ -678,7 +677,7 @@ async def _request_workflow_draft(
     description: str,
     max_tokens: int,
 ) -> str:
-    router = cast(Any, runtime)._router_now()
+    router = runtime._drivers.router()
     resp = await router.complete(
         CompletionRequest(
             profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
@@ -997,7 +996,7 @@ def _delete_ephemeral_workflow_schedule(
     runtime: ConversationRuntime,
     schedule_id: str,
 ) -> None:
-    project_store = runtime.project_store()
+    project_store = runtime._projects.current_project_store()
     root = project_store.root
     if root is None:
         return

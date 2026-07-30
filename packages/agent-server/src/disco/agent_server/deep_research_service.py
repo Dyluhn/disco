@@ -46,7 +46,7 @@ from disco.retrieval.ranking import Embedder
 from disco.tools.projects import StorageStatus
 
 from .build_loop_components import _NoToolExecutor
-from .deep_research_state import DeepResearchState
+from .deep_research_state import DeepResearchLiveState, DeepResearchState
 from .space_store import JsonSpaceStore
 
 _LOG = logging.getLogger(__name__)
@@ -64,22 +64,25 @@ class DeepResearchService:
         rt: Any,
         *,
         state: DeepResearchState | None = None,
+        live_state: DeepResearchLiveState | None = None,
         injected_providers: dict[str, Any] | None = None,
     ) -> None:
         self._rt = rt
         self._state = state or DeepResearchState()
+        self._live_state = live_state or DeepResearchLiveState()
         self._injected_providers = injected_providers
         self._research_providers: dict[str, Any] | None = None
         self._research_encoders_key: tuple[object, ...] | None = None
 
     def enqueue_steer(self, conversation_id: str, text: str) -> bool:
-        return self._state.enqueue_steer(conversation_id, text)
+        return self._live_state.enqueue_steer(conversation_id, text)
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
-        return self._state.inject_source(conversation_id, passage)
+        return self._live_state.inject_source(conversation_id, passage)
 
     def forget(self, conversation_id: str) -> None:
         self._state.forget(conversation_id)
+        self._live_state.forget(conversation_id)
 
     def add_upload_passages(
         self,
@@ -957,15 +960,15 @@ class DeepResearchService:
         # The WS handler enqueues into these; pop_* closures drain them at
         # each section boundary. Queues are removed in `finally` below so the
         # presence of a key = "a DR run is currently in flight for this cid".
-        self._state.begin_live_run(conversation_id)
+        self._live_state.begin(conversation_id)
 
         def pop_steers() -> list[str]:
             """Drain the steer queue (called at each section boundary)."""
-            return self._state.pop_steers(conversation_id)
+            return self._live_state.pop_steers(conversation_id)
 
         def pop_injected_sources() -> list[Passage]:
             """Drain the inject-source queue (called at each section boundary)."""
-            return self._state.pop_injected_sources(conversation_id)
+            return self._live_state.pop_injected_sources(conversation_id)
 
         try:
             result = await run.run(

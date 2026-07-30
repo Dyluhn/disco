@@ -189,7 +189,7 @@ async def test_research_stream_sources_builds_override_and_bypasses_cached_globa
     )
     cached_search = _FakeSearch()
     override_search = _FakeSearch()
-    rt._research_providers = {
+    rt._dr._research_providers = {
         "search": cached_search,
         "extraction": _FakeExtraction(),
         "reranker": _FakeReranker(),
@@ -217,7 +217,13 @@ async def test_research_stream_sources_builds_override_and_bypasses_cached_globa
     monkeypatch.setattr("disco.retrieval.live.build_multi_search", fake_build_multi_search)
     monkeypatch.setattr("disco.retrieval.live.build_live_retrieval", fake_build_live_retrieval)
 
-    frames = [frame async for frame in rt.research_stream("capital?", sources=["arxiv", "ddgs"])]
+    frames = [
+        frame
+        async for frame in rt._dr.research_stream(
+            "capital?",
+            sources=["arxiv", "ddgs"],
+        )
+    ]
 
     assert seen["sources"] == ("arxiv", "ddgs")
     assert seen["search_override"] is override_search
@@ -250,8 +256,8 @@ def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
     )
     on = rt._router_now(enable_thinking=True)._providers["qwen"]
     off = rt._router_now(enable_thinking=False)._providers["qwen"]
-    assert on._enable_thinking is True
-    assert off._enable_thinking is False
+    assert on._drivers._enable_thinking is True
+    assert off._drivers._enable_thinking is False
 
 
 def test_research_rejects_empty_query():
@@ -314,7 +320,7 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
             ),
         )
     )
-    rt.set_surface(cid, "deep_research")
+    rt._settings._set_surface(cid, "deep_research")
     rt.set_autonomous(cid, True)
     exec_mock = AsyncMock()
     monkeypatch.setattr(rt, "_execute_deep_research", exec_mock)

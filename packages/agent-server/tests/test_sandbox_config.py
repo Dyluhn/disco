@@ -139,7 +139,7 @@ class _FakeExecutor:
 async def test_preview_is_backend_aware_and_honest():
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     # no session yet → a clean reason, never a URL
-    p = await rt.preview("c")
+    p = await rt._preview.preview("c")
     assert p["available"] is False
 
     # session exists but no live instance → PASSIVE: a polled GET must not create
@@ -147,7 +147,7 @@ async def test_preview_is_backend_aware_and_honest():
     idle = _FakeSession("local", None)
     idle._instance = None
     rt._executors["idle"] = _FakeExecutor(idle)
-    p = await rt.preview("idle")
+    p = await rt._preview.preview("idle")
     assert p["available"] is False and "isn't running" in p["reason"]
 
     # Podman is NOT special-cased anymore: availability keys on whether a dev server
@@ -155,7 +155,7 @@ async def test_preview_is_backend_aware_and_honest():
     # rootless-podman previews for real, it is not a labeled dead stub. With no
     # routable dev server here it degrades HONESTLY (no fake URL, no backend-name stub).
     rt._executors["pod"] = _FakeExecutor(_FakeSession("podman", "http://nope"))
-    pod = await rt.preview("pod")
+    pod = await rt._preview.preview("pod")
     assert pod["available"] is False
     assert "stub" not in pod
 
@@ -178,14 +178,14 @@ async def test_preview_is_backend_aware_and_honest():
     with unittest.mock.patch(
         "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
     ):
-        loc = await rt.preview("loc")
+        loc = await rt._preview.preview("loc")
         assert loc["available"] is True and loc.get("proxy") is True and "url" not in loc
         assert rt.preview_upstream("loc") == "http://localhost:32768"
 
     # local with no dev server up → a reason, not a fake URL
     rt._executors["bare"] = _FakeExecutor(_FakeSession("local", None))
     with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
-        bare = await rt.preview("bare")
+        bare = await rt._preview.preview("bare")
         assert bare["available"] is False
         assert rt.preview_upstream("bare") is None
 
@@ -196,7 +196,7 @@ async def test_preview_is_backend_aware_and_honest():
     rt.set_surface("owned", "build")
     rt._executors["owned"] = _FakeExecutor(owned)
     with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
-        preparing = await rt.preview("owned")
+        preparing = await rt._preview.preview("owned")
     assert rt.preview_target_port("owned") is None
     assert rt.preview_upstream("owned") is None
     assert preparing["available"] is False
@@ -224,9 +224,9 @@ async def test_multi_port_upstream_resolution():
             return None
 
     rt._executors["c"] = _FakeExecutor(_MultiPortSession("local", "http://h:8000"))
-    assert rt.port_upstream("c", 8000) == "http://h:8000"
-    assert rt.port_upstream("c", 3000) == "http://h:3000"
-    assert rt.port_upstream("c", 9999) is None  # expose_port (backend) defends this
+    assert rt._preview.port_upstream("c", 8000) == "http://h:8000"
+    assert rt._preview.port_upstream("c", 3000) == "http://h:3000"
+    assert rt._preview.port_upstream("c", 9999) is None  # expose_port defends this
 
 
 @pytest.mark.asyncio
@@ -270,7 +270,7 @@ async def test_canonical_preview_follows_sole_managed_platform_port():
     with unittest.mock.patch(
         "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
     ):
-        preview = await rt.preview("managed")
+        preview = await rt._preview.preview("managed")
 
     assert rt.preview_target_port("managed") == 5173
     assert rt.preview_upstream("managed") == "http://managed:5173"
@@ -334,14 +334,14 @@ async def test_canonical_preview_accepts_exact_shared_host_managed_port_only():
         "disco.agent_server.preview_service.port_owners",
         side_effect=mock_port_owners,
     ):
-        preview = await rt.preview("managed-host")
+        preview = await rt._preview.preview("managed-host")
 
     assert rt.preview_target_port("managed-host") == selected_port
     assert rt.preview_upstream("managed-host") == f"http://managed:{selected_port}"
     assert preview["available"] is True
     assert preview["port"] == selected_port
     assert any(entry["port"] == selected_port for entry in preview["ports"])
-    assert rt.port_upstream("managed-host", selected_port + 1) is None
+    assert rt._preview.port_upstream("managed-host", selected_port + 1) is None
 
 
 @pytest.mark.asyncio
@@ -375,7 +375,7 @@ async def test_managed_preview_reports_exact_unready_lifecycle(status, detail, r
     import unittest.mock
 
     with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
-        preview = await rt.preview("managed-unready")
+        preview = await rt._preview.preview("managed-unready")
 
     assert preview["available"] is False
     assert reason_fragment in preview["reason"]
@@ -426,7 +426,7 @@ async def test_managed_unexposable_preview_never_claims_available():
     with unittest.mock.patch(
         "disco.agent_server.preview_service.port_owners", side_effect=mock_port_owners
     ):
-        preview = await rt.preview("managed-unexposable")
+        preview = await rt._preview.preview("managed-unexposable")
 
     assert preview["available"] is False
     assert preview["status"] == "unavailable"
@@ -538,17 +538,17 @@ async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
     rt._maybe_rehydrate = _fake_rehydrate
 
     # no executor + no snapshot record → False, and NO re-materialization
-    assert await rt.ensure_preview("missing") is False
+    assert await rt._preview.ensure_preview("missing") is False
     assert calls == []
 
     # no executor + snapshot present → re-compose, rehydrate, start preview
-    assert await rt.ensure_preview("fin") is True
+    assert await rt._preview.ensure_preview("fin") is True
     assert calls == ["loop_for", "rehydrate"]
     assert session.preview_started is True
 
     # executor already live → straight delegation, no second re-materialization
     session.preview_started = False
-    assert await rt.ensure_preview("fin") is True
+    assert await rt._preview.ensure_preview("fin") is True
     assert calls == ["loop_for", "rehydrate"]
     assert session.preview_started is True
 
@@ -573,7 +573,7 @@ async def test_restart_preview_uses_managed_intent_and_never_legacy_static() -> 
     session._preview_manager = manager
     rt._executors["managed-restart"] = _FakeExecutor(session)
 
-    assert await rt.ensure_preview("managed-restart") is True
+    assert await rt._preview.ensure_preview("managed-restart") is True
     manager.restart_canonical.assert_awaited_once_with()
     assert legacy_calls == 0
 
@@ -593,7 +593,7 @@ async def test_build_restart_without_managed_intent_never_fabricates_static_prev
     session.ensure_preview = _legacy
     rt._executors["no-intent"] = _FakeExecutor(session)
 
-    assert await rt.ensure_preview("no-intent") is False
+    assert await rt._preview.ensure_preview("no-intent") is False
     assert legacy_calls == 0
 
 

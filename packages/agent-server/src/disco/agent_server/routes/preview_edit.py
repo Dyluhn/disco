@@ -74,7 +74,7 @@ def _read_mutable_workspace_file_safe(
     """
     if is_runtime_secret_path(norm):
         return None
-    ps = runtime.project_store() if runtime is not None else None
+    ps = runtime._projects.current_project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         return None
     try:
@@ -111,7 +111,7 @@ async def _read_workspace_file_safe(
     if latest_status is None or latest_status.status is not ConversationStatus.FINISHED:
         return _read_mutable_workspace_file_safe(runtime, conversation_id, norm)
 
-    project_store = runtime.project_store()
+    project_store = runtime._projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         raise HTTPException(status_code=503, detail="finished workspace unavailable")
     try:

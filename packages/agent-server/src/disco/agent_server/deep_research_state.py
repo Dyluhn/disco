@@ -1,4 +1,4 @@
-"""Conversation-scoped settings and live queues for Deep Research."""
+"""Conversation-scoped selections and live input queues for Deep Research."""
 
 from __future__ import annotations
 
@@ -11,23 +11,19 @@ _T = TypeVar("_T")
 
 
 class DeepResearchState:
-    """Own transient Deep Research selections, uploads, and live input queues."""
+    """Own transient Deep Research selections and uploaded passages."""
 
     def __init__(self) -> None:
         self._depth: dict[str, str] = {}
         self._iterative: dict[str, bool] = {}
         self._recency: dict[str, Literal["month", "week"]] = {}
         self._upload_passages: dict[str, list[Passage]] = {}
-        self._steers: dict[str, list[str]] = {}
-        self._injected_sources: dict[str, list[Passage]] = {}
 
     def forget(self, conversation_id: str) -> None:
         self._depth.pop(conversation_id, None)
         self._iterative.pop(conversation_id, None)
         self._recency.pop(conversation_id, None)
         self._upload_passages.pop(conversation_id, None)
-        self._steers.pop(conversation_id, None)
-        self._injected_sources.pop(conversation_id, None)
 
     def add_upload_passages(
         self,
@@ -64,7 +60,19 @@ class DeepResearchState:
     def recency_for(self, conversation_id: str) -> Literal["month", "week"] | None:
         return self._recency.get(conversation_id)
 
-    def begin_live_run(self, conversation_id: str) -> None:
+
+class DeepResearchLiveState:
+    """Own inputs queued for an active Deep Research run."""
+
+    def __init__(self) -> None:
+        self._steers: dict[str, list[str]] = {}
+        self._injected_sources: dict[str, list[Passage]] = {}
+
+    def forget(self, conversation_id: str) -> None:
+        self._steers.pop(conversation_id, None)
+        self._injected_sources.pop(conversation_id, None)
+
+    def begin(self, conversation_id: str) -> None:
         self._steers[conversation_id] = []
         self._injected_sources[conversation_id] = []
 

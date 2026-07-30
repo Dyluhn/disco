@@ -1585,7 +1585,9 @@ def make_preview_session_resolver(
                 cid = runtime.resolve_cid_prefix(cid8)  # type: ignore[attr-defined]
             if not cid:
                 return None
-            return runtime.live_session(cid)  # type: ignore[attr-defined]
+            resources = runtime._run_resources  # type: ignore[attr-defined]
+            executor = resources.executor(cid)
+            return executor.sandbox if executor is not None else None
         except Exception:  # noqa: BLE001 — resolver must never raise into the proxy
             return None
 

@@ -746,7 +746,7 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
         assert restored_session.projection_id != original_projection
         assert restored_session.sandbox_instance_id != original_sandbox
         restored_projection = restored_session.projection_id
-        restored_upstream = restarted.port_upstream(cid, restored_session.port)
+        restored_upstream = restarted._preview.port_upstream(cid, restored_session.port)
         assert restored_upstream is not None
         proxy_app = _app(store, cast(Any, restarted), live_upstream=restored_upstream)
 

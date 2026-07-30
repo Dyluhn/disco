@@ -466,10 +466,11 @@ class TestConversationRuntimeDriverContextSeams:
     @pytest.mark.asyncio
     async def test_invalid_driver_config_is_normalized_to_resolution_error(self) -> None:
         rt = _runtime("ok", model_key="configured", context_window=12288)
-        broken = rt._injected_router._config.model_copy(
+        assert rt._drivers._injected_router is not None
+        broken = rt._drivers._injected_router._config.model_copy(
             update={"default_model": "missing", "assignments": {}}
         )
-        rt._injected_router._config = broken
+        rt._drivers._injected_router._config = broken
         with pytest.raises(DriverContextResolutionError, match="invalid driver configuration"):
             await rt._resolve_driver_context("invalid-config")
 

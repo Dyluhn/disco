@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import posixpath
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from disco.core import (
     ConversationStatus,
@@ -60,7 +60,7 @@ _INLINE_CSP = (
 
 
 async def _read_artifact_bytes(
-    runtime: Any,
+    runtime: ConversationRuntime,
     conversation_id: str,
     norm: str,
 ) -> bytes | None:
@@ -70,12 +70,13 @@ async def _read_artifact_bytes(
     if is_runtime_secret_path(norm):
         return None
     # 1) live sandbox (a running/suspended-but-live conversation)
-    session = runtime.live_session(conversation_id)
+    executor = runtime._run_resources.executor(conversation_id)
+    session = executor.sandbox if executor is not None else None
     if session is not None:
         with contextlib.suppress(Exception):
             return await session.read_file(norm)
     # 2) host ProjectStore snapshot (finished run, sandbox reaped)
-    ps = runtime.project_store()
+    ps = runtime._projects.current_project_store()
     if ps is not None and ps.status() == StorageStatus.OK:
         with contextlib.suppress(Exception):
             workspace = ps.path_for(conversation_id).resolve()
@@ -267,7 +268,7 @@ def _register_artifact_routes(
             None,
         )
         if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
-            project_store = runtime.project_store()
+            project_store = runtime._projects.current_project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 raise HTTPException(status_code=503, detail={"reason": "workspace_unsealed"})
             try:

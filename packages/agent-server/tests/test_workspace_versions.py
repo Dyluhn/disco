@@ -131,7 +131,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store, tmp_path)
-    ps = rt.project_store()
+    ps = rt._projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_version(CID, trigger="turn")
     assert old is not None
@@ -190,7 +190,7 @@ async def test_restore_preserves_current_host_owned_deployment_record(tmp_path: 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local", surface="build")
     rt = _runtime(store, tmp_path)
-    ps = rt.project_store()
+    ps = rt._projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_verified_version(CID, trigger="turn", pin=True)
     assert old is not None
@@ -218,7 +218,7 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local", surface="build")
     rt = _runtime(store, tmp_path)
-    ps = rt.project_store()
+    ps = rt._projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_verified_version(CID, trigger="turn", pin=True)
     assert old is not None

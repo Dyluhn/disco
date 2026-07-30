@@ -104,7 +104,7 @@ async def _seed_appkit_attempt(
         ),
     )
     assert isinstance(intent, WorkspaceMutationEvent)
-    async with runtime.workspace_lock(conversation_id):
+    async with runtime._workspace.lock(conversation_id):
         async with runtime._workspace.interprocess_mutation_fence(conversation_id):
             await runtime._build_platform.record_route_locked(conversation_id)
     admission = current_build_platform_admission(await store.get_events(conversation_id))
@@ -181,7 +181,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert denied.success is False
     assert "recorded human confirmation" in denied.error
     assert APPKIT_EJECTION_PATH not in session.files
-    assert runtime.project_store().list_versions(conversation_id) == []
+    assert runtime._projects.current_project_store().list_versions(conversation_id) == []
 
     await store.append(
         conversation_id,
@@ -208,7 +208,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert rejected.success is False
     assert "replacement engine unavailable" in rejected.error
     assert APPKIT_EJECTION_PATH not in session.files
-    assert runtime.project_store().list_versions(conversation_id) == []
+    assert runtime._projects.current_project_store().list_versions(conversation_id) == []
     assert current_appkit_ejection(await store.get_events(conversation_id)) is None
 
     result = await loop.executor.execute_attributed(call, "view-1")
@@ -222,7 +222,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert receipt.preview_version_seq == receipt.ejected_version_seq
     assert receipt.source_version_seq != receipt.ejected_version_seq
 
-    projects = runtime.project_store()
+    projects = runtime._projects.current_project_store()
     versions = {record.seq: record for record in projects.list_versions(conversation_id)}
     source = versions[receipt.source_version_seq]
     target = versions[receipt.ejected_version_seq]

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import ast
 import inspect
+from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+from disco.agent_server.app import _make_runtime_lifespan
 from disco.agent_server.runtime import ConversationRuntime
 from disco.agent_server.runtime_composition import wire_runtime
 from disco.core import SqliteEventStore
+from fastapi import FastAPI
 
 
 def _runtime() -> ConversationRuntime:
@@ -41,6 +45,7 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
     assert runtime._run_sweep._completion is runtime._run_finalizer
     assert runtime._dr._state is runtime._research_state
+    assert runtime._dr._live_state is runtime._research_live_state
 
     explicit_owners = (
         runtime._run_controller,
@@ -64,18 +69,56 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
 
     assert public == {
         "aclose",
+        "approve_plan",
         "cancel",
-        "ensure_preview",
+        "confirm",
         "kill",
-        "live_session",
-        "port_upstream",
-        "preview",
-        "project_store",
+        "pause",
+        "pick_alternative",
+        "reject",
+        "request_plan",
+        "resume",
         "send_user_turn",
         "start",
-        "wake_for_preview",
-        "workspace_lock",
     }
+
+
+def test_application_owners_do_not_retain_the_runtime() -> None:
+    owner_modules = (
+        "deep_research_service.py",
+        "lifecycle.py",
+        "preview_service.py",
+        "resume_service.py",
+        "sessions_service.py",
+        "workspace_persistence.py",
+        "workspace_service.py",
+    )
+    source_root = Path(__file__).parents[1] / "src/disco/agent_server"
+
+    for module_name in owner_modules:
+        tree = ast.parse((source_root / module_name).read_text())
+        retained_runtime = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr == "_rt"
+        ]
+        assert retained_runtime == [], module_name
+
+    composition = ast.parse(inspect.getsource(wire_runtime))
+    whole_runtime_casts = [
+        node
+        for node in ast.walk(composition)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "cast"
+        and len(node.args) == 2
+        and isinstance(node.args[1], ast.Name)
+        and node.args[1].id == "rt"
+    ]
+    assert whole_runtime_casts == []
 
 
 def test_wire_runtime_body_is_wiring_only() -> None:
@@ -109,11 +152,35 @@ def test_wire_runtime_body_is_wiring_only() -> None:
 async def test_shutdown_order_is_deterministic() -> None:
     runtime = _runtime()
     calls: list[str] = []
-    runtime._run_supervisor.close = AsyncMock(side_effect=lambda: calls.append("runs"))
+    runtime._run_supervisor.cancel_runs = AsyncMock(
+        side_effect=lambda: calls.append("runs")
+    )
     runtime._driver_preflight.aclose = AsyncMock(
         side_effect=lambda: calls.append("driver-preflight")
+    )
+    runtime._run_supervisor.close_resources = AsyncMock(
+        side_effect=lambda: calls.append("resources")
     )
 
     await runtime.aclose()
 
-    assert calls == ["runs", "driver-preflight"]
+    assert calls == ["runs", "driver-preflight", "resources"]
+
+
+async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> None:
+    runtime = _runtime()
+    runtime._mcp._start_mcp_pool = AsyncMock()
+    runtime._mcp._close_mcp_pool = AsyncMock()
+    runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
+    runtime._lifecycle._idle_sweep_loop = AsyncMock()
+    runtime._schedule._schedule_manager_loop = AsyncMock()
+    runtime._drivers.prewarm_model_probe = AsyncMock()
+    runtime._drivers.prewarm_vision_probe = AsyncMock()
+    runtime.aclose = AsyncMock()
+
+    with pytest.raises(RuntimeError, match="request scope failed"):
+        async with _make_runtime_lifespan(":memory:", runtime)(FastAPI()):
+            raise RuntimeError("request scope failed")
+
+    runtime.aclose.assert_awaited_once_with()
+    runtime._mcp._close_mcp_pool.assert_awaited_once_with()

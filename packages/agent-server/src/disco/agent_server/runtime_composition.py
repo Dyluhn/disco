@@ -43,7 +43,7 @@ from .connection_tracker import ConnectionTracker, LifecycleSuspender
 from .control_ops import ControlOps
 from .conversation_control_service import ConversationControlService
 from .deep_research_service import DeepResearchService
-from .deep_research_state import DeepResearchState
+from .deep_research_state import DeepResearchLiveState, DeepResearchState
 from .driver_context_state import DriverContextState
 from .driver_runtime import DriverPreflight, DriverRuntime
 from .driver_runtime_ports import (
@@ -148,8 +148,6 @@ def _wire_foundation(
     rt._skill_store = skill_store or SkillStore()
     rt._uploads = UploadStore(f"{db_path}.uploads" if db_path else "")
     rt._secret_store = secret_store or SecretStore()
-    rt._injected_router = router
-    rt._enable_thinking = enable_thinking
     rt._config_store = _config_store(config, config_store)
     rt._sandbox = SandboxRuntimeService(
         rt._config_store,
@@ -157,7 +155,6 @@ def _wire_foundation(
         sandbox_spec or SandboxSpec(),
     )
     rt._projects = ProjectRuntimeService(rt._config_store, store)
-    rt._mode = mode
     if inspect_enabled():
         install_inspect()
 
@@ -237,9 +234,11 @@ def _wire_domains(
         transitions=rt._build_platform,
     )
     rt._research_state = DeepResearchState()
+    rt._research_live_state = DeepResearchLiveState()
     rt._dr = DeepResearchService(
         rt,
         state=rt._research_state,
+        live_state=rt._research_live_state,
         injected_providers=research_providers,
     )
     rt._spaces = SpaceService(ConfiguredProjectRoot(rt._config_store), rt._dr)

@@ -135,7 +135,7 @@ def _attach_inspect_journal(event_db_path: str) -> None:
 
 def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
     try:
-        project_store = runtime.project_store()
+        project_store = runtime._projects.current_project_store()
         status = project_store.status()
         root = project_store.root
         if status != StorageStatus.OK or root is None:
@@ -149,6 +149,23 @@ def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
         seed_builtin_workflows(root)
     except Exception:
         _LOG.warning("Builtin workflow seed failed", exc_info=True)
+
+
+async def _cancel_lifespan_task(
+    task: asyncio.Task[None] | None,
+    *,
+    label: str,
+) -> None:
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        _LOG.warning("%s task failed during shutdown", label, exc_info=True)
 
 
 def _make_runtime_lifespan(
@@ -197,22 +214,18 @@ def _make_runtime_lifespan(
             schedule_task = asyncio.create_task(
                 active_runtime._schedule._schedule_manager_loop()
             )
-        yield
-        if schedule_task is not None:
-            schedule_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await schedule_task
-        if idle_sweep_task is not None:
-            idle_sweep_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await idle_sweep_task
-        if mcp_start_task is not None and not mcp_start_task.done():
-            mcp_start_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await mcp_start_task
-        if runtime is not None:
-            with contextlib.suppress(Exception):
-                await runtime._mcp._close_mcp_pool()
+        try:
+            yield
+        finally:
+            await _cancel_lifespan_task(schedule_task, label="schedule")
+            await _cancel_lifespan_task(idle_sweep_task, label="idle-sweep")
+            await _cancel_lifespan_task(mcp_start_task, label="mcp-startup")
+            if runtime is not None:
+                try:
+                    await runtime.aclose()
+                finally:
+                    with contextlib.suppress(Exception):
+                        await runtime._mcp._close_mcp_pool()
 
     return runtime_lifespan
 

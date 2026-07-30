@@ -168,10 +168,10 @@ def test_resolve_kernel_kind(selected: str | None, expected: BuildKernelKind) ->
 
 def test_select_kernel_picks_disco_for_every_value(store: SqliteEventStore) -> None:
     disco = _kernel_harness(store).kernel
-    assert select_kernel(None, disco=disco, selected="disco") is disco
-    assert select_kernel(None, disco=disco, selected="pi_experimental") is disco
-    assert select_kernel(None, disco=disco, selected="pi") is disco
-    assert select_kernel(None, disco=disco, selected="garbage") is disco
+    assert select_kernel(disco=disco, selected="disco") is disco
+    assert select_kernel(disco=disco, selected="pi_experimental") is disco
+    assert select_kernel(disco=disco, selected="pi") is disco
+    assert select_kernel(disco=disco, selected="garbage") is disco
 
 
 # ---- protocol conformance ----------------------------------------------------
@@ -352,7 +352,7 @@ def test_legacy_selection_values_pin_disco(
     legacy: str, store: SqliteEventStore
 ) -> None:
     rt = _kernel_harness(store)
-    selected = select_kernel(None, disco=rt.kernel, selected=legacy)
+    selected = select_kernel(disco=rt.kernel, selected=legacy)
     assert selected is rt.kernel
 
 

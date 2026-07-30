@@ -540,8 +540,10 @@ class RunSupervisor:
             )
         )
 
-    async def close(self) -> None:
+    async def cancel_runs(self) -> None:
         await self._registry.close()
+
+    async def close_resources(self) -> None:
         await self._resources.close()
         self._authorities.clear()
         self._ingress.clear()
