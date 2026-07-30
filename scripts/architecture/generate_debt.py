@@ -98,6 +98,14 @@ PKG05_CONTEXT_RESOLVED_IDS = frozenset(
         "PY-0703",
     }
 )
+PKG05_LOOP_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(476, 504)),
+        *(f"PY-{number:04d}" for number in range(556, 632)),
+        *(f"PY-{number:04d}" for number in range(652, 661)),
+        "PY-0702",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -107,8 +115,9 @@ RESOLVED_IDS = (
     | PKG04_STORES_RESOLVED_IDS
     | PKG04_IDENTITY_RESOLVED_IDS
     | PKG05_CONTEXT_RESOLVED_IDS
+    | PKG05_LOOP_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 757
+EXPECTED_ACTIVE_DEBT_ROWS = 643
 EXPECTED_OBSERVATIONS = 19
 LOCATION_OVERRIDES = {
     "DM-012": (
