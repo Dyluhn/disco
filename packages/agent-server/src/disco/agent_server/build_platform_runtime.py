@@ -1,19 +1,21 @@
 """Runtime admission bridge for Build Platform Core.
 
 The collaborator owns route selection and durable identity bookkeeping. It does
-not execute component intents: the existing runtime/executor/workspace services
+not execute component intents: the existing executor and workspace services
 remain the only effect authorities.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Literal
+from dataclasses import dataclass, replace
+from typing import Literal, Protocol
 
 from disco.core import (
     AppKitEjectionEvent,
     BuildPlatformAdmissionEvent,
     ConversationStatus,
+    Event,
     StatusEvent,
     WorkspaceMutationEvent,
     current_appkit_ejection,
@@ -28,26 +30,71 @@ from disco.core.build_platform import (
     RunAdmissionAnchor,
     derive_run_admission_identity,
 )
+from disco.core.llm import ToolSpec
+from disco.core.store import EventStore
 from disco.core.verification import (
     AdmittedVerificationContract,
+    HostVerificationClaim,
     VerificationCheckContract,
     VerificationDeliveryContract,
     VerificationParameter,
 )
 
-from .appkit_ejection import AppKitEjectionService
 from .build_platform_shadow import (
+    BuildPlatformRouteRecord,
     appkit_platform_route_enabled,
     freeform_platform_route_enabled,
     select_appkit_platform_route,
     select_freeform_platform_route,
 )
+from .workspace_service import WorkspaceCoordinator
 
 BuildRoute = Literal["legacy", "platform"]
+CompositionAuthority = Literal["legacy", "build_platform_core"]
+
+
+class BuildSurfaceClassifier(Protocol):
+    """Classify whether a conversation uses Build admission."""
+
+    def is_build_like(self, conversation_id: str) -> bool: ...
+
+
+class BuildRouteRollback(Protocol):
+    """Discard a just-composed executor when route resolution fails closed."""
+
+    def discard_composed_executor(self, conversation_id: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _RouteState:
+    record: BuildPlatformRouteRecord | None = None
+    pin: BuildRoute | None = None
+    selected_route: BuildRoute | None = None
+    selected_profile: ComponentId | None = None
+    appkit_ejected: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmissionFields:
+    authority: CompositionAuthority
+    digest: str | None
+    run_identity: str | None
+    verification_claims: tuple[HostVerificationClaim, ...]
+    verification_contract: AdmittedVerificationContract | None
+
+
+_EMPTY_ROUTE_STATE = _RouteState()
+_LEGACY_ADMISSION = _AdmissionFields(
+    authority="legacy",
+    digest=None,
+    run_identity=None,
+    verification_claims=(),
+    verification_contract=None,
+)
 
 
 def _record_verification_contract(
-    record: Any | None,
+    record: BuildPlatformRouteRecord | None,
 ) -> AdmittedVerificationContract | None:
     if record is None:
         return None
@@ -98,93 +145,282 @@ def _record_verification_contract(
     )
 
 
-def _record_verification_claims(
-    contract: AdmittedVerificationContract | None,
-) -> tuple[Any, ...]:
-    return contract.required_claims if contract is not None else ()
+def _released_sequence(events: Iterable[Event]) -> int:
+    return max(
+        (
+            event.seq
+            for event in events
+            if isinstance(event, StatusEvent)
+            and type(event.seq) is int
+            and event.status
+            in {
+                ConversationStatus.FINISHED,
+                ConversationStatus.ERROR,
+                ConversationStatus.STUCK,
+                ConversationStatus.IDLE,
+            }
+        ),
+        default=-1,
+    )
+
+
+def _admission_for_intent(
+    events: Iterable[Event],
+    intent: WorkspaceMutationEvent,
+) -> BuildPlatformAdmissionEvent | None:
+    return next(
+        (
+            event
+            for event in reversed(list(events))
+            if isinstance(event, BuildPlatformAdmissionEvent) and event.run_intent_id == intent.id
+        ),
+        None,
+    )
+
+
+def _validate_existing_admission(
+    existing: BuildPlatformAdmissionEvent,
+    *,
+    route: BuildRoute,
+    profile: ComponentId,
+) -> None:
+    if existing.route != route or existing.profile_id != profile.canonical:
+        raise RuntimeError("run intent already has a different Build admission")
+
+
+def _platform_fields(
+    record: BuildPlatformRouteRecord,
+    profile: ComponentId,
+    intent: WorkspaceMutationEvent,
+    conversation_id: str,
+) -> _AdmissionFields:
+    if record.composition.profile.id != profile:
+        raise RuntimeError("Platform route resolved a different Build profile")
+    if type(intent.seq) is not int:
+        raise RuntimeError("Build route intent has no canonical sequence")
+    contract = _record_verification_contract(record)
+    identity = derive_run_admission_identity(
+        CompositionDigest(digest=record.composition_digest),
+        RunAdmissionAnchor(
+            conversation_id=conversation_id,
+            run_intent_event_id=intent.id,
+            run_intent_seq=intent.seq,
+            run_intent_operation=intent.operation,
+        ),
+    ).value
+    return _AdmissionFields(
+        authority="build_platform_core",
+        digest=record.composition_digest,
+        run_identity=identity,
+        verification_claims=contract.required_claims if contract is not None else (),
+        verification_contract=contract,
+    )
+
+
+def _transition_fields(
+    conversation_id: str,
+    intent: WorkspaceMutationEvent,
+    route: BuildRoute,
+    prepared_record: BuildPlatformRouteRecord | None,
+) -> tuple[_AdmissionFields, BuildPlatformRouteRecord | None]:
+    if route == "legacy":
+        return _LEGACY_ADMISSION, None
+    if prepared_record is None:
+        raise RuntimeError("Platform ejection has no prepared composition")
+    if prepared_record.composition.profile.id != FREEFORM_PROFILE_ID:
+        raise RuntimeError("ejection resolved a non-Freeform composition")
+    if not isinstance(prepared_record.composition_digest, str):
+        raise RuntimeError("ejection composition has no valid digest")
+    fields = _platform_fields(
+        prepared_record,
+        FREEFORM_PROFILE_ID,
+        intent,
+        conversation_id,
+    )
+    return fields, prepared_record
 
 
 class BuildPlatformRuntime:
     """Per-runtime Platform route state, reconstructed from durable events."""
 
-    def __init__(self, runtime: Any) -> None:
-        self._rt = runtime
-        self.route_records: dict[str, Any] = {}
-        self.route_pins: dict[str, BuildRoute] = {}
-        self.selected_routes: dict[str, BuildRoute] = {}
-        self.selected_profiles: dict[str, ComponentId] = {}
-        self.appkit_ejected: dict[str, bool] = {}
-        self.ejection = AppKitEjectionService(runtime)
+    def __init__(
+        self,
+        *,
+        store: EventStore,
+        workspace: WorkspaceCoordinator,
+        surfaces: BuildSurfaceClassifier,
+        rollback: BuildRouteRollback,
+    ) -> None:
+        self._store = store
+        self._workspace = workspace
+        self._surfaces = surfaces
+        self._rollback = rollback
+        self._states: dict[str, _RouteState] = {}
+
+    def _state(self, conversation_id: str) -> _RouteState:
+        return self._states.get(conversation_id, _EMPTY_ROUTE_STATE)
+
+    def _save(self, conversation_id: str, state: _RouteState) -> None:
+        if state == _EMPTY_ROUTE_STATE:
+            self._states.pop(conversation_id, None)
+        else:
+            self._states[conversation_id] = state
+
+    @property
+    def route_records(self) -> dict[str, BuildPlatformRouteRecord]:
+        return {
+            conversation_id: state.record
+            for conversation_id, state in self._states.items()
+            if state.record is not None
+        }
+
+    @property
+    def route_pins(self) -> dict[str, BuildRoute]:
+        return {
+            conversation_id: state.pin
+            for conversation_id, state in self._states.items()
+            if state.pin is not None
+        }
+
+    @property
+    def selected_routes(self) -> dict[str, BuildRoute]:
+        return {
+            conversation_id: state.selected_route
+            for conversation_id, state in self._states.items()
+            if state.selected_route is not None
+        }
+
+    @property
+    def selected_profiles(self) -> dict[str, ComponentId]:
+        return {
+            conversation_id: state.selected_profile
+            for conversation_id, state in self._states.items()
+            if state.selected_profile is not None
+        }
+
+    @property
+    def appkit_ejected(self) -> dict[str, bool]:
+        return {
+            conversation_id: state.appkit_ejected
+            for conversation_id, state in self._states.items()
+            if state.appkit_ejected is not None
+        }
 
     async def prepare_route_pin(self, conversation_id: str) -> None:
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
-            self.route_pins.pop(conversation_id, None)
+        state = self._state(conversation_id)
+        if not self._surfaces.is_build_like(conversation_id):
+            self._save(conversation_id, replace(state, pin=None))
             return
-        events = await self._rt._store.get_events(conversation_id)
-        self.appkit_ejected[conversation_id] = current_appkit_ejection(events) is not None
+        events = await self._store.get_events(conversation_id)
         admission = current_build_platform_admission(events)
-        if admission is None:
-            self.route_pins.pop(conversation_id, None)
-        else:
-            self.route_pins[conversation_id] = admission.route
+        self._save(
+            conversation_id,
+            replace(
+                state,
+                appkit_ejected=current_appkit_ejection(events) is not None,
+                pin=admission.route if admission is not None else None,
+            ),
+        )
+
+    def _set_selection(
+        self,
+        conversation_id: str,
+        *,
+        route: BuildRoute | None,
+        profile: ComponentId | None,
+        record: BuildPlatformRouteRecord | None,
+    ) -> None:
+        self._save(
+            conversation_id,
+            replace(
+                self._state(conversation_id),
+                selected_route=route,
+                selected_profile=profile,
+                record=record,
+            ),
+        )
+
+    def _selection_failed(self, conversation_id: str) -> None:
+        self._rollback.discard_composed_executor(conversation_id)
+        self._set_selection(conversation_id, route=None, profile=None, record=None)
 
     def select_freeform(
         self,
         conversation_id: str,
         *,
         eligible: bool,
-        tool_specs: Iterable[Any],
+        tool_specs: Iterable[ToolSpec],
     ) -> None:
         if not eligible:
-            self.selected_routes.pop(conversation_id, None)
-            self.selected_profiles.pop(conversation_id, None)
+            state = self._state(conversation_id)
+            self._save(
+                conversation_id,
+                replace(state, selected_route=None, selected_profile=None),
+            )
             return
-        pinned = self.route_pins.get(conversation_id)
-        platform = pinned == "platform" or (pinned is None and freeform_platform_route_enabled())
-        self.selected_routes[conversation_id] = "platform" if platform else "legacy"
-        self.selected_profiles[conversation_id] = FREEFORM_PROFILE_ID
+        state = self._state(conversation_id)
+        platform = state.pin == "platform" or (
+            state.pin is None and freeform_platform_route_enabled()
+        )
+        route: BuildRoute = "platform" if platform else "legacy"
         if not platform:
-            self.route_records.pop(conversation_id, None)
+            self._set_selection(
+                conversation_id,
+                route=route,
+                profile=FREEFORM_PROFILE_ID,
+                record=None,
+            )
             return
         try:
-            self.route_records[conversation_id] = select_freeform_platform_route(
-                tool_specs=tool_specs
-            )
+            record = select_freeform_platform_route(tool_specs=tool_specs)
         except Exception:
-            self._rt._executors.pop(conversation_id, None)
-            self.route_records.pop(conversation_id, None)
-            self.selected_routes.pop(conversation_id, None)
-            self.selected_profiles.pop(conversation_id, None)
+            self._selection_failed(conversation_id)
             raise
+        self._set_selection(
+            conversation_id,
+            route=route,
+            profile=FREEFORM_PROFILE_ID,
+            record=record,
+        )
 
     def select_appkit(
         self,
         conversation_id: str,
         *,
         eligible: bool,
-        tool_specs: Iterable[Any],
+        tool_specs: Iterable[ToolSpec],
     ) -> None:
         if not eligible:
-            self.selected_routes.pop(conversation_id, None)
-            self.selected_profiles.pop(conversation_id, None)
+            state = self._state(conversation_id)
+            self._save(
+                conversation_id,
+                replace(state, selected_route=None, selected_profile=None),
+            )
             return
-        pinned = self.route_pins.get(conversation_id)
-        platform = pinned == "platform" or (pinned is None and appkit_platform_route_enabled())
-        self.selected_routes[conversation_id] = "platform" if platform else "legacy"
-        self.selected_profiles[conversation_id] = APPKIT_PROFILE_ID
+        state = self._state(conversation_id)
+        platform = state.pin == "platform" or (
+            state.pin is None and appkit_platform_route_enabled()
+        )
+        route: BuildRoute = "platform" if platform else "legacy"
         if not platform:
-            self.route_records.pop(conversation_id, None)
+            self._set_selection(
+                conversation_id,
+                route=route,
+                profile=APPKIT_PROFILE_ID,
+                record=None,
+            )
             return
         try:
-            self.route_records[conversation_id] = select_appkit_platform_route(
-                tool_specs=tool_specs
-            )
+            record = select_appkit_platform_route(tool_specs=tool_specs)
         except Exception:
-            self._rt._executors.pop(conversation_id, None)
-            self.route_records.pop(conversation_id, None)
-            self.selected_routes.pop(conversation_id, None)
-            self.selected_profiles.pop(conversation_id, None)
+            self._selection_failed(conversation_id)
             raise
+        self._set_selection(
+            conversation_id,
+            route=route,
+            profile=APPKIT_PROFILE_ID,
+            record=record,
+        )
 
     def select_builtin(
         self,
@@ -192,102 +428,83 @@ class BuildPlatformRuntime:
         *,
         appkit: bool,
         eligible: bool,
-        tool_specs: Iterable[Any],
+        tool_specs: Iterable[ToolSpec],
     ) -> None:
-        selector = self.select_appkit if appkit else self.select_freeform
-        selector(
+        if appkit:
+            self.select_appkit(
+                conversation_id,
+                eligible=eligible,
+                tool_specs=tool_specs,
+            )
+        else:
+            self.select_freeform(
+                conversation_id,
+                eligible=eligible,
+                tool_specs=tool_specs,
+            )
+
+    async def _current_intent(
+        self,
+        conversation_id: str,
+        events: list[Event],
+    ) -> tuple[WorkspaceMutationEvent, list[Event]]:
+        intent = latest_workspace_run_intent(events)
+        if (
+            intent is not None
+            and type(intent.seq) is int
+            and intent.seq > _released_sequence(events)
+        ):
+            return intent, events
+        stored = await self._store.append(
             conversation_id,
-            eligible=eligible,
-            tool_specs=tool_specs,
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.runtime-kick",
+                run_protocol_version=1,
+            ),
         )
+        if not isinstance(stored, WorkspaceMutationEvent):
+            raise RuntimeError("event store returned a malformed run intent")
+        if type(stored.seq) is not int:
+            raise RuntimeError("Build route intent has no canonical sequence")
+        return stored, [*events, stored]
+
+    def _selected_admission_fields(
+        self,
+        conversation_id: str,
+        profile: ComponentId,
+        intent: WorkspaceMutationEvent,
+    ) -> _AdmissionFields:
+        state = self._state(conversation_id)
+        if state.selected_route != "platform":
+            return _LEGACY_ADMISSION
+        if state.record is None or not isinstance(state.record.composition_digest, str):
+            raise RuntimeError("Platform route has no valid composition record")
+        return _platform_fields(state.record, profile, intent, conversation_id)
 
     async def record_route_locked(self, conversation_id: str) -> None:
-        selected = self.selected_routes.get(conversation_id)
-        profile = self.selected_profiles.get(conversation_id)
-        if selected is None or profile is None:
+        state = self._state(conversation_id)
+        route = state.selected_route
+        profile = state.selected_profile
+        if route is None or profile is None:
             return
-        events = await self._rt._store.get_events(conversation_id)
-        intent = latest_workspace_run_intent(events)
-        released_seq = max(
-            (
-                event.seq
-                for event in events
-                if isinstance(event, StatusEvent)
-                and type(event.seq) is int
-                and event.status
-                in {
-                    ConversationStatus.FINISHED,
-                    ConversationStatus.ERROR,
-                    ConversationStatus.STUCK,
-                    ConversationStatus.IDLE,
-                }
-            ),
-            default=-1,
-        )
-        if intent is None or type(intent.seq) is not int or intent.seq <= released_seq:
-            stored_intent = await self._rt._store.append(
-                conversation_id,
-                WorkspaceMutationEvent(
-                    operation="agent.run-intent.runtime-kick",
-                    run_protocol_version=1,
-                ),
-            )
-            if not isinstance(stored_intent, WorkspaceMutationEvent):
-                raise RuntimeError("event store returned a malformed run intent")
-            intent = stored_intent
-            events = [*events, stored_intent]
-        intent_seq = intent.seq
-        if type(intent_seq) is not int:
-            raise RuntimeError("Build route intent has no canonical sequence")
-        existing = next(
-            (
-                event
-                for event in reversed(events)
-                if isinstance(event, BuildPlatformAdmissionEvent)
-                and event.run_intent_id == intent.id
-            ),
-            None,
-        )
+        events = await self._store.get_events(conversation_id)
+        intent, events = await self._current_intent(conversation_id, events)
+        existing = _admission_for_intent(events, intent)
         if existing is not None:
-            if existing.route != selected or existing.profile_id != profile.canonical:
-                raise RuntimeError("run intent already has a different Build admission")
+            _validate_existing_admission(existing, route=route, profile=profile)
             return
-
-        digest: str | None = None
-        run_identity: str | None = None
-        authority: Literal["legacy", "build_platform_core"] = "legacy"
-        verification_claims: tuple[Any, ...] = ()
-        verification_contract: AdmittedVerificationContract | None = None
-        if selected == "platform":
-            record = self.route_records.get(conversation_id)
-            if record is None or not isinstance(record.composition_digest, str):
-                raise RuntimeError("Platform route has no valid composition record")
-            if record.composition.profile.id != profile:
-                raise RuntimeError("Platform route resolved a different Build profile")
-            digest = record.composition_digest
-            authority = "build_platform_core"
-            run_identity = derive_run_admission_identity(
-                CompositionDigest(digest=digest),
-                RunAdmissionAnchor(
-                    conversation_id=conversation_id,
-                    run_intent_event_id=intent.id,
-                    run_intent_seq=intent_seq,
-                    run_intent_operation=intent.operation,
-                ),
-            ).value
-            verification_contract = _record_verification_contract(record)
-            verification_claims = _record_verification_claims(verification_contract)
-        await self._rt._store.append(
+        fields = self._selected_admission_fields(conversation_id, profile, intent)
+        await self._store.append(
             conversation_id,
             BuildPlatformAdmissionEvent(
-                route=selected,
+                route=route,
                 profile_id=profile.canonical,
                 run_intent_id=intent.id,
-                composition_authority=authority,
-                composition_digest=digest,
-                run_identity=run_identity,
-                verification_claims=verification_claims,
-                verification_contract=verification_contract,
+                composition_authority=fields.authority,
+                composition_digest=fields.digest,
+                run_identity=fields.run_identity,
+                verification_claims=fields.verification_claims,
+                verification_contract=fields.verification_contract,
             ),
         )
 
@@ -295,25 +512,17 @@ class BuildPlatformRuntime:
         self,
         conversation_id: str,
         *,
-        tool_specs: Iterable[Any],
-    ) -> Any | None:
+        tool_specs: Iterable[ToolSpec],
+    ) -> BuildPlatformRouteRecord | None:
         """Resolve the replacement composition before any revision is published."""
 
-        if not self._rt.workspace_lock(conversation_id).locked():
+        if not self._workspace.lock(conversation_id).locked():
             raise RuntimeError("AppKit ejection requires the workspace fence")
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         intent = latest_workspace_run_intent(events)
         if intent is None or type(intent.seq) is not int:
             raise RuntimeError("AppKit ejection has no admitted Build run intent")
-        existing = next(
-            (
-                event
-                for event in reversed(events)
-                if isinstance(event, BuildPlatformAdmissionEvent)
-                and event.run_intent_id == intent.id
-            ),
-            None,
-        )
+        existing = _admission_for_intent(events, intent)
         if existing is None or existing.profile_id != APPKIT_PROFILE_ID.canonical:
             raise RuntimeError("AppKit ejection requires the current AppKit admission")
         if existing.route == "legacy":
@@ -330,81 +539,49 @@ class BuildPlatformRuntime:
         conversation_id: str,
         ejection: AppKitEjectionEvent,
         *,
-        prepared_record: Any | None,
+        prepared_record: BuildPlatformRouteRecord | None,
     ) -> AppKitEjectionEvent:
         """Atomically supersede the AppKit admission at the revision boundary."""
 
-        if not self._rt.workspace_lock(conversation_id).locked():
+        if not self._workspace.lock(conversation_id).locked():
             raise RuntimeError("AppKit ejection requires the workspace fence")
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         intent = latest_workspace_run_intent(events)
         if intent is None or type(intent.seq) is not int:
             raise RuntimeError("AppKit ejection has no admitted Build run intent")
-        existing = next(
-            (
-                event
-                for event in reversed(events)
-                if isinstance(event, BuildPlatformAdmissionEvent)
-                and event.run_intent_id == intent.id
-            ),
-            None,
-        )
+        existing = _admission_for_intent(events, intent)
         if existing is None or existing.profile_id != APPKIT_PROFILE_ID.canonical:
             raise RuntimeError("AppKit ejection requires the current AppKit admission")
-
-        route = existing.route
-        digest: str | None = None
-        run_identity: str | None = None
-        authority: Literal["legacy", "build_platform_core"] = "legacy"
-        verification_claims: tuple[Any, ...] = ()
-        verification_contract: AdmittedVerificationContract | None = None
-        record: Any | None = None
-        if route == "platform":
-            record = prepared_record
-            if record is None:
-                raise RuntimeError("Platform ejection has no prepared composition")
-            if record.composition.profile.id != FREEFORM_PROFILE_ID:
-                raise RuntimeError("ejection resolved a non-Freeform composition")
-            digest = record.composition_digest
-            if not isinstance(digest, str):
-                raise RuntimeError("ejection composition has no valid digest")
-            authority = "build_platform_core"
-            run_identity = derive_run_admission_identity(
-                CompositionDigest(digest=digest),
-                RunAdmissionAnchor(
-                    conversation_id=conversation_id,
-                    run_intent_event_id=intent.id,
-                    run_intent_seq=intent.seq,
-                    run_intent_operation=intent.operation,
-                ),
-            ).value
-            verification_contract = _record_verification_contract(record)
-            verification_claims = _record_verification_claims(verification_contract)
+        fields, record = _transition_fields(
+            conversation_id,
+            intent,
+            existing.route,
+            prepared_record,
+        )
         replacement = BuildPlatformAdmissionEvent(
-            route=route,
+            route=existing.route,
             profile_id=FREEFORM_PROFILE_ID.canonical,
             run_intent_id=intent.id,
-            composition_authority=authority,
-            composition_digest=digest,
-            run_identity=run_identity,
+            composition_authority=fields.authority,
+            composition_digest=fields.digest,
+            run_identity=fields.run_identity,
             transition="appkit_ejection",
             supersedes_admission_id=existing.id,
-            verification_claims=verification_claims,
-            verification_contract=verification_contract,
+            verification_claims=fields.verification_claims,
+            verification_contract=fields.verification_contract,
         )
-        stored = await self._rt._store.append_many(
-            conversation_id,
-            [ejection, replacement],
-        )
+        stored = await self._store.append_many(conversation_id, [ejection, replacement])
         stored_ejection = stored[0]
         if not isinstance(stored_ejection, AppKitEjectionEvent):
             raise RuntimeError("event store returned a malformed AppKit ejection")
-        self.route_pins[conversation_id] = route
-        self.selected_routes[conversation_id] = route
-        self.selected_profiles[conversation_id] = FREEFORM_PROFILE_ID
-        if record is None:
-            self.route_records.pop(conversation_id, None)
-        else:
-            self.route_records[conversation_id] = record
-        self.appkit_ejected[conversation_id] = True
+        self._save(
+            conversation_id,
+            _RouteState(
+                record=record,
+                pin=existing.route,
+                selected_route=existing.route,
+                selected_profile=FREEFORM_PROFILE_ID,
+                appkit_ejected=True,
+            ),
+        )
         return stored_ejection
