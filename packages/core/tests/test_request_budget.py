@@ -7,6 +7,7 @@ from typing import cast
 
 import httpx
 import pytest
+import test_request_budget_loop as _loop_cases
 from disco.core import CondensationEvent, CondensationRequest, LLMMessage, View
 from disco.core.llm import (
     CallContext,
@@ -1026,4 +1027,81 @@ class TestE_FailOpen:
         events_after = await store.get_events(CID)
         assert not any(
             isinstance(e, CondensationEvent) and e.summary == "[snip]" for e in events_after
+        )
+
+
+# Preserve the accepted pytest/static identities while the implementation
+# bodies live in the bounded companion module.  Each compatibility method
+# delegates to the exact extracted case and therefore exercises the same
+# assertions and fixtures under its historical node ID.
+class TestF_RetryRecomputation(_loop_cases.TestF_RetryRecomputation):
+    async def test_provider_unavailable_retry_recomputes_tools(self) -> None:
+        await super().test_provider_unavailable_retry_recomputes_tools()
+
+
+class TestG_WindowExceeded(_loop_cases.TestG_WindowExceeded):
+    async def test_context_window_exceeded_after_preview_still_hard_resets(
+        self,
+        monkeypatch,
+    ) -> None:
+        await super().test_context_window_exceeded_after_preview_still_hard_resets(monkeypatch)
+
+
+class TestH_OutputReserve(_loop_cases.TestH_OutputReserve):
+    async def test_no_output_reserve_below_cutoff_calls_model(self) -> None:
+        await super().test_no_output_reserve_below_cutoff_calls_model()
+
+    async def test_output_reserve_crosses_cutoff_compacts_no_model_call(self) -> None:
+        await super().test_output_reserve_crosses_cutoff_compacts_no_model_call()
+
+
+class TestI_TelemetryMonkeypatch(_loop_cases.TestI_TelemetryMonkeypatch):
+    async def test_inspect_off_emits_zero_events(self, monkeypatch) -> None:
+        await super().test_inspect_off_emits_zero_events(monkeypatch)
+
+    async def test_within_budget_emits_scalar_event(self, monkeypatch) -> None:
+        await super().test_within_budget_emits_scalar_event(monkeypatch)
+
+    async def test_unavailable_emits_no_scalar_fields(self, monkeypatch) -> None:
+        await super().test_unavailable_emits_no_scalar_fields(monkeypatch)
+
+    async def test_compacted_context_pack_emits_scalar_event(self, monkeypatch) -> None:
+        await super().test_compacted_context_pack_emits_scalar_event(monkeypatch)
+
+    async def test_no_progress_emits_scalar_event(self, monkeypatch) -> None:
+        await super().test_no_progress_emits_scalar_event(monkeypatch)
+
+    async def test_should_condense_raises_emits_unavailable_scalar_event(
+        self,
+        monkeypatch,
+    ) -> None:
+        await super().test_should_condense_raises_emits_unavailable_scalar_event(monkeypatch)
+
+    async def test_logging_exception_does_not_change_behavior(self, monkeypatch) -> None:
+        await super().test_logging_exception_does_not_change_behavior(monkeypatch)
+
+
+class TestJ_ProviderPreviewProof(_loop_cases.TestJ_ProviderPreviewProof):
+    def test_preview_scalars_match_payload_shape(self) -> None:
+        super().test_preview_scalars_match_payload_shape()
+
+    def test_preview_no_routing_decision_emitted(self) -> None:
+        super().test_preview_no_routing_decision_emitted()
+
+
+class TestK_CompactionPolicyDefaultRaising(_loop_cases.TestK_CompactionPolicyDefaultRaising):
+    async def test_compaction_policy_default_raises_still_calls_model(
+        self,
+        monkeypatch,
+    ) -> None:
+        await super().test_compaction_policy_default_raises_still_calls_model(monkeypatch)
+
+
+class TestL_ViewOfRaisingInCondenserFallback(_loop_cases.TestL_ViewOfRaisingInCondenserFallback):
+    async def test_view_of_raises_only_when_condenser_attempted_still_calls_model(
+        self,
+        monkeypatch,
+    ) -> None:
+        await super().test_view_of_raises_only_when_condenser_attempted_still_calls_model(
+            monkeypatch
         )

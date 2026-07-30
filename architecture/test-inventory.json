@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "cf1b5ca24ce1d43729e50591b58ed13aa09806c6",
+  "source_identity": "39303331bf6000b88c07e5319fdfc7deae38875b",
   "collected": {
     "counts": {
-      "packages": 9768,
+      "packages": 9774,
       "harness": 1236,
       "integrations": 9,
       "tests": 328
     },
-    "total": 11341,
+    "total": 11347,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5658,6 +5658,12 @@
         "packages/core/tests/test_provider_ledger_emit.py::test_request_shape_is_exact_utf8_and_never_retains_payload_data",
         "packages/core/tests/test_provider_ledger_emit.py::test_shape_failure_keeps_provider_traffic_and_base_attempt_evidence",
         "packages/core/tests/test_provider_ledger_emit.py::test_shared_ledger_keeps_only_sanitized_bounded_metadata",
+        "packages/core/tests/test_provider_request_contract.py::test_long_horizon_resume_retries_the_exact_compacted_request",
+        "packages/core/tests/test_provider_request_contract.py::test_planning_request_matches_accepted_ordered_bytes",
+        "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[drop_constraint]",
+        "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[drop_schema]",
+        "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[reorder_constraint]",
+        "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[reorder_tools]",
         "packages/core/tests/test_questions_v2_intake.py::test_autonomous_plan_context_gets_questions_v2_assumptions",
         "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_allows_only_one_round_before_submit_plan",
         "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_answer_resumes_to_submit_plan",
@@ -11362,9 +11368,9 @@
     }
   },
   "mapping_static": {
-    "identity": "cf1b5ca24ce1d43729e50591b58ed13aa09806c6",
-    "python_test_file_count": 757,
-    "python_static_test_id_count": 9224,
+    "identity": "39303331bf6000b88c07e5319fdfc7deae38875b",
+    "python_test_file_count": 760,
+    "python_static_test_id_count": 9242,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11659,6 +11665,7 @@
       "packages/core/tests/release_remediation/test_r2_multiservice_env.py",
       "packages/core/tests/release_remediation/test_r3_persistence_topology.py",
       "packages/core/tests/release_remediation/test_r5_appkit_no_heredoc.py",
+      "packages/core/tests/request_budget_support.py",
       "packages/core/tests/test_actionless_completion.py",
       "packages/core/tests/test_agent_error_detail.py",
       "packages/core/tests/test_agent_isolation.py",
@@ -11825,6 +11832,7 @@
       "packages/core/tests/test_prose_plan_harvest.py",
       "packages/core/tests/test_provider_guard.py",
       "packages/core/tests/test_provider_ledger_emit.py",
+      "packages/core/tests/test_provider_request_contract.py",
       "packages/core/tests/test_questions_v2_intake.py",
       "packages/core/tests/test_records_auth.py",
       "packages/core/tests/test_records_primitive.py",
@@ -11840,6 +11848,7 @@
       "packages/core/tests/test_replan_pending_valve.py",
       "packages/core/tests/test_replan_restatement_rescue.py",
       "packages/core/tests/test_request_budget.py",
+      "packages/core/tests/test_request_budget_loop.py",
       "packages/core/tests/test_resource_context.py",
       "packages/core/tests/test_restore_authorizes_weakening.py",
       "packages/core/tests/test_revision_force_submit.py",
@@ -17560,6 +17569,9 @@
       "packages/core/tests/test_provider_ledger_emit.py::test_request_shape_is_exact_utf8_and_never_retains_payload_data",
       "packages/core/tests/test_provider_ledger_emit.py::test_shape_failure_keeps_provider_traffic_and_base_attempt_evidence",
       "packages/core/tests/test_provider_ledger_emit.py::test_shared_ledger_keeps_only_sanitized_bounded_metadata",
+      "packages/core/tests/test_provider_request_contract.py::test_long_horizon_resume_retries_the_exact_compacted_request",
+      "packages/core/tests/test_provider_request_contract.py::test_planning_request_matches_accepted_ordered_bytes",
+      "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift",
       "packages/core/tests/test_questions_v2_intake.py::test_autonomous_plan_context_gets_questions_v2_assumptions",
       "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_allows_only_one_round_before_submit_plan",
       "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_answer_resumes_to_submit_plan",
@@ -17780,6 +17792,21 @@
       "packages/core/tests/test_request_budget.py::test_valid_provider_returns_estimate",
       "packages/core/tests/test_request_budget.py::test_view_of_raises_only_when_condenser_attempted_still_calls_model",
       "packages/core/tests/test_request_budget.py::test_within_budget_emits_scalar_event",
+      "packages/core/tests/test_request_budget_loop.py::test_compacted_context_pack_emits_scalar_event",
+      "packages/core/tests/test_request_budget_loop.py::test_compaction_policy_default_raises_still_calls_model",
+      "packages/core/tests/test_request_budget_loop.py::test_context_window_exceeded_after_preview_still_hard_resets",
+      "packages/core/tests/test_request_budget_loop.py::test_inspect_off_emits_zero_events",
+      "packages/core/tests/test_request_budget_loop.py::test_logging_exception_does_not_change_behavior",
+      "packages/core/tests/test_request_budget_loop.py::test_no_output_reserve_below_cutoff_calls_model",
+      "packages/core/tests/test_request_budget_loop.py::test_no_progress_emits_scalar_event",
+      "packages/core/tests/test_request_budget_loop.py::test_output_reserve_crosses_cutoff_compacts_no_model_call",
+      "packages/core/tests/test_request_budget_loop.py::test_preview_no_routing_decision_emitted",
+      "packages/core/tests/test_request_budget_loop.py::test_preview_scalars_match_payload_shape",
+      "packages/core/tests/test_request_budget_loop.py::test_provider_unavailable_retry_recomputes_tools",
+      "packages/core/tests/test_request_budget_loop.py::test_should_condense_raises_emits_unavailable_scalar_event",
+      "packages/core/tests/test_request_budget_loop.py::test_unavailable_emits_no_scalar_fields",
+      "packages/core/tests/test_request_budget_loop.py::test_view_of_raises_only_when_condenser_attempted_still_calls_model",
+      "packages/core/tests/test_request_budget_loop.py::test_within_budget_emits_scalar_event",
       "packages/core/tests/test_resource_context.py::test_bounded_essential_large_single_line_read_bypasses_generic_snip",
       "packages/core/tests/test_resource_context.py::test_bp06_cannot_mask_an_essential_read_older_than_eight_outputs",
       "packages/core/tests/test_resource_context.py::test_changed_revision_snapshot_labels_historical_read_stale",
@@ -26265,6 +26292,56 @@
           "packages/core/tests/test_event_contract_corpus.py::test_migration_is_pure_idempotent_and_defensively_copies",
           "packages/core/tests/test_event_contract_corpus.py::test_store_rejects_untyped_values_before_any_persistence",
           "packages/core/tests/test_event_contract_corpus.py::test_unknown_kind_and_unexpected_known_kind_field_fail_closed"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-05-CONTEXT",
+      "root": "packages",
+      "source_identity_before": "cf1b5ca24ce1d43729e50591b58ed13aa09806c6",
+      "source_identity_after": "39303331bf6000b88c07e5319fdfc7deae38875b",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9768,
+          "after_count": 9774,
+          "added_ids": [
+            "packages/core/tests/test_provider_request_contract.py::test_long_horizon_resume_retries_the_exact_compacted_request",
+            "packages/core/tests/test_provider_request_contract.py::test_planning_request_matches_accepted_ordered_bytes",
+            "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[drop_constraint]",
+            "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[drop_schema]",
+            "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[reorder_constraint]",
+            "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift[reorder_tools]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/request_budget_support.py",
+          "packages/core/tests/test_provider_request_contract.py",
+          "packages/core/tests/test_request_budget_loop.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_provider_request_contract.py::test_long_horizon_resume_retries_the_exact_compacted_request",
+          "packages/core/tests/test_provider_request_contract.py::test_planning_request_matches_accepted_ordered_bytes",
+          "packages/core/tests/test_provider_request_contract.py::test_resume_golden_rejects_constraint_or_tool_drift",
+          "packages/core/tests/test_request_budget_loop.py::test_compacted_context_pack_emits_scalar_event",
+          "packages/core/tests/test_request_budget_loop.py::test_compaction_policy_default_raises_still_calls_model",
+          "packages/core/tests/test_request_budget_loop.py::test_context_window_exceeded_after_preview_still_hard_resets",
+          "packages/core/tests/test_request_budget_loop.py::test_inspect_off_emits_zero_events",
+          "packages/core/tests/test_request_budget_loop.py::test_logging_exception_does_not_change_behavior",
+          "packages/core/tests/test_request_budget_loop.py::test_no_output_reserve_below_cutoff_calls_model",
+          "packages/core/tests/test_request_budget_loop.py::test_no_progress_emits_scalar_event",
+          "packages/core/tests/test_request_budget_loop.py::test_output_reserve_crosses_cutoff_compacts_no_model_call",
+          "packages/core/tests/test_request_budget_loop.py::test_preview_no_routing_decision_emitted",
+          "packages/core/tests/test_request_budget_loop.py::test_preview_scalars_match_payload_shape",
+          "packages/core/tests/test_request_budget_loop.py::test_provider_unavailable_retry_recomputes_tools",
+          "packages/core/tests/test_request_budget_loop.py::test_should_condense_raises_emits_unavailable_scalar_event",
+          "packages/core/tests/test_request_budget_loop.py::test_unavailable_emits_no_scalar_fields",
+          "packages/core/tests/test_request_budget_loop.py::test_view_of_raises_only_when_condenser_attempted_still_calls_model",
+          "packages/core/tests/test_request_budget_loop.py::test_within_budget_emits_scalar_event"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
