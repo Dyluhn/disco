@@ -338,9 +338,6 @@ class RuntimeSettings:
     def _get_model_override(self, conversation_id: str) -> str | None:
         return self._model_overrides.get(conversation_id)
 
-    def assist_override(self, conversation_id: str) -> bool | None:
-        return self._assist.get(conversation_id)
-
     def _evict_model_binding(self, conversation_id: str) -> None:
         self._model_bindings.evict_for_model_change(conversation_id)
 

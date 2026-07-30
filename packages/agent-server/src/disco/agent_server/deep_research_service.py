@@ -710,7 +710,7 @@ class DeepResearchService:
         # caught below and surfaced as ERROR, but a TRUE black-hole (endpoint
         # accepts the socket and never responds) would stall the DR kick
         # unboundedly with the conversation pinned RUNNING. Pre-flight
-        # QUERY_REWRITER too (bounded by _DRIVER_PREFLIGHT_TIMEOUT_S inside
+        # QUERY_REWRITER too (bounded by the DriverPreflight timeout inside
         # _preflight_driver) BEFORE setting RUNNING so EVERY role on the kick
         # path is genuinely bounded. When override pins all roles to one model
         # this is a cache hit (no added latency).

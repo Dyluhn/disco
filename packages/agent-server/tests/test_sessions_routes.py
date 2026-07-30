@@ -50,9 +50,9 @@ def _make_fake_runtime(sessions: list[SessionInfo] | None = None) -> MagicMock:
                 return SessionView(running=s.busy, output=f"output of {name}")
         return None
 
-    rt.sessions_list = AsyncMock(side_effect=_sessions_list)
-    rt.sessions_snapshot = AsyncMock(side_effect=_sessions_snapshot)
-    rt.session_view = AsyncMock(side_effect=_session_view)
+    rt._sessions.sessions_list = AsyncMock(side_effect=_sessions_list)
+    rt._sessions.sessions_snapshot = AsyncMock(side_effect=_sessions_snapshot)
+    rt._sessions.session_view = AsyncMock(side_effect=_session_view)
     return rt
 
 

@@ -440,9 +440,10 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         assert record.verify_verdict == "pass"
         assert manager.list_runs(schedule_id=row.schedule_id)[0].run_cid == record.run_cid
         assert runtime.project_store().get(record.run_cid) is not None
-        resolved = runtime._resolved_driver_contexts[record.run_cid]
+        resolved = runtime._driver_contexts.resolved_snapshot(record.run_cid)
+        assert resolved is not None
         assert resolved.context_window > 0
-        assert record.run_cid not in runtime._resolved_context_for_compose
+        assert runtime._driver_contexts.compose_snapshot(record.run_cid) is None
 
         executor = runtime._executors[record.run_cid]
         callable_names = executor.callable_tool_names()

@@ -66,7 +66,7 @@ def test_transient_failure_succeeds_on_second_attempt() -> None:
     assert len(result) == 1
     assert result[0].name == "dev"
     assert list_mock.call_count == 2
-    assert runtime._last_sessions.get(cid) == result
+    assert runtime._connections.last_sessions_get(cid) == result
 
 
 def test_dead_pipe_with_history_returns_stale() -> None:
@@ -118,7 +118,7 @@ def test_dead_pipe_cold_no_history_returns_empty_stale() -> None:
 
 
 def test_no_sandbox_returns_empty_not_stale() -> None:
-    """live_session → None ⇒ ([], False) and _last_sessions untouched."""
+    """live_session → None ⇒ ([], False) and the owner cache untouched."""
     runtime = _make_runtime_no_sandbox()
     cid = "conv_no_sandbox"
 
@@ -129,7 +129,7 @@ def test_no_sandbox_returns_empty_not_stale() -> None:
 
     assert result == []
     assert stale is False
-    assert cid not in runtime._last_sessions
+    assert cid not in runtime._connections._last_sessions
 
 
 def test_teardown_hygiene() -> None:
@@ -140,12 +140,12 @@ def test_teardown_hygiene() -> None:
     cid = "conv_hygiene"
 
     async def run():
-        # Populate _last_sessions.
+        # Populate the connection owner's last-session cache.
         await runtime.sessions_snapshot(cid)
-        assert cid in runtime._last_sessions
+        assert cid in runtime._connections._last_sessions
         # Teardown should evict it.
         await runtime._teardown_sandbox(cid)
-        assert cid not in runtime._last_sessions
+        assert cid not in runtime._connections._last_sessions
 
     asyncio.run(run())
 

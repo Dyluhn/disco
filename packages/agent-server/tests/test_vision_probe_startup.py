@@ -13,7 +13,7 @@ Hermetic: `probe_all_vision` is stubbed — no network. The two cases that matte
 
 from __future__ import annotations
 
-import disco.agent_server.runtime as runtime_mod
+import disco.agent_server.driver_runtime as driver_runtime_mod
 from disco.agent_server import ConversationRuntime
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ModelRole, Requirement, SecretBox, SecretStore
@@ -62,7 +62,7 @@ async def test_prewarm_runs_probe_and_overlays_vision(tmp_path, monkeypatch):
         assert origin_approved(entry.base_url, f"model:{entry.provider}", entry.api_key_env)
         return {"driver-local": True}
 
-    monkeypatch.setattr(runtime_mod, "probe_all_vision_with_approvals", _fake_probe)
+    monkeypatch.setattr(driver_runtime_mod, "probe_all_vision_with_approvals", _fake_probe)
     await rt.prewarm_vision_probe()
 
     assert "config" in called  # the probe was actually invoked at startup
@@ -80,7 +80,7 @@ async def test_prewarm_is_fail_soft_on_probe_error(tmp_path, monkeypatch):
         assert origin_approved is not None
         raise RuntimeError("probe endpoint exploded")
 
-    monkeypatch.setattr(runtime_mod, "probe_all_vision_with_approvals", _boom)
+    monkeypatch.setattr(driver_runtime_mod, "probe_all_vision_with_approvals", _boom)
     await rt.prewarm_vision_probe()  # must not raise
 
     # still loadable, still table-only (no overlay installed)
