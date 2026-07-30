@@ -765,6 +765,8 @@ class ProcessSandboxInstance:
         while survivors and asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.05)
             survivors &= self._workspace_process_pids()
+        # This retry proof remains with the existing sandbox owner.
+        # PKG-10-SANDBOX owns its later extraction with the class debt.
         if survivors:
             raise SandboxUnavailableError(
                 "process sandbox termination could not be confirmed for "
