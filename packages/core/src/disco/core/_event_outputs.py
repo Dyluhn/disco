@@ -186,18 +186,40 @@ class RuntimeConstraintEvent(BaseEvent, LLMConvertible):
 
     Why this is typed rather than prose: in the `k460000` diagnostic the process
     backend refused a host-process kill, condensation forgot the refusal span, and
-    the model repeated the same forbidden operation. A refusal delivered only as
-    tool-error *text* is ordinary forgettable content. A constraint carries its own
+    the model repeated the same forbidden operation.  A refusal delivered only as
+    tool-error *text* is ordinary forgettable content.  A constraint carries its own
     identity, so the View can keep exactly one live copy of it near current context
     no matter how many times it is re-observed or how often the log is condensed.
 
-    ``constraint_key`` is stable identity; ``scope`` limits applicability;
-    ``guidance`` records the bounded prohibition; ``alternative`` gives the
-    supported recovery; ``capability_generation`` bounds its lifetime; and
-    ``active=False`` explicitly lifts it.
+    Field roles:
 
-    Host authority only: ``source`` is fixed to SYSTEM, and transient failures
-    never produce this durable event.
+    ``constraint_key``
+        Stable identity.  Re-observing the same prohibition re-emits the same key,
+        and only the newest event for a key stays live -- so repeated observations
+        never grow context.
+    ``scope``
+        What the constraint applies to (e.g. the backend it is true of).
+    ``guidance``
+        Bounded statement of what is not permitted.  Deliberately length-capped: a
+        constraint that can grow without limit becomes its own context problem.
+    ``alternative``
+        The supported way to accomplish the intent.  A prohibition without a usable
+        alternative just blocks the model; the recovery path is the point.
+    ``capability_generation``
+        The host capability generation this was true under.  When the backend or
+        its capabilities change generation, constraints from an older generation
+        stop being live -- a prohibition must not outlive the configuration that
+        justified it.
+    ``active``
+        False explicitly lifts a constraint for its key.
+
+    **Host authority only.**  ``source`` is fixed to SYSTEM.  Model prose cannot
+    create one of these, and a model-authored lookalike in ordinary content has no
+    authority because it is not this event type.
+
+    **Transient failures must never produce one.**  A command that failed once and
+    may succeed on retry is not a constraint; pinning it would turn a blip into a
+    permanent belief.  Only a durable host-enforced prohibition qualifies.
     """
 
     kind: Literal[EventKind.RUNTIME_CONSTRAINT] = EventKind.RUNTIME_CONSTRAINT

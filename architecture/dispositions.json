@@ -149,7 +149,7 @@
     "state": "active",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-12-FE-SHELL",
-    "location": "packages/core/src/disco/core/events.py:Event:1594-1624 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",
+    "location": "packages/core/src/disco/core/events.py:Event:187-217 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",
     "role_category": "backend/frontend event and WS discriminator sets drift (three event kinds and token frame absent from TS; connection is UI-local)"
   },
   {
@@ -4187,7 +4187,7 @@
   {
     "id": "PY-0444",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/equality.py:event_content_eq:57-102",
@@ -4196,7 +4196,7 @@
   {
     "id": "PY-0445",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:current_build_platform_admission:1646-1738",
@@ -4205,7 +4205,7 @@
   {
     "id": "PY-0446",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:current_appkit_ejection:1741-1859",
@@ -4214,7 +4214,7 @@
   {
     "id": "PY-0447",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:current_appkit_ejection:1741-1859",
@@ -4223,7 +4223,7 @@
   {
     "id": "PY-0448",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:_workspace_run_intent_state:1862-1936",
@@ -4232,7 +4232,7 @@
   {
     "id": "PY-0449",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:workspace_terminal_matches_current_run:2037-2082",
@@ -4241,7 +4241,7 @@
   {
     "id": "PY-0450",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:_strict_workspace_actions_are_closed:2160-2201",
@@ -4250,7 +4250,7 @@
   {
     "id": "PY-0451",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:derive_final_workspace_fence:2204-2263",
@@ -4259,7 +4259,7 @@
   {
     "id": "PY-0452",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:_route_identity_is_exact:968-997",
@@ -4268,7 +4268,7 @@
   {
     "id": "PY-0453",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:accept:2099-2150",
@@ -4277,7 +4277,7 @@
   {
     "id": "PY-0454",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/events.py:<module>:1-2282",
@@ -6158,7 +6158,7 @@
   {
     "id": "PY-0663",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-04-EVENTS",
     "location": "packages/core/src/disco/core/state.py:reconstruct:79-198",

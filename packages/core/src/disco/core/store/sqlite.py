@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..events import (
-    BaseEvent,
     Event,
     EventAdapter,
     WorkspaceVersionEvent,
@@ -262,16 +261,6 @@ CREATE TABLE IF NOT EXISTS dod_specs (
 def _row_to_event(payload: str) -> Event:
     """Deserialize a stored payload: JSON -> migrate -> validate (§4)."""
     return EventAdapter.validate_python(migrate_event(json.loads(payload)))
-
-
-def _require_concrete_event(event: object) -> Event:
-    """Reject untyped or envelope-only values before a persistence transaction."""
-    if not isinstance(event, BaseEvent) or type(event) is BaseEvent:
-        raise TypeError("event store append requires a concrete Event instance")
-    try:
-        return EventAdapter.validate_python(event)
-    except ValueError as exc:
-        raise TypeError("event store append requires a concrete Event instance") from exc
 
 
 def _persist_one(store: SqliteEventStore, conversation_id: str, event: Event) -> tuple[Event, bool]:
@@ -1143,9 +1132,7 @@ class SqliteEventStore(_ClosableSqliteStore):
         ]
 
     def revoke_share_token(self, token: str, *, owner_id: str) -> bool:
-        """Revoke a share token. OWNER-SCOPED — a caller can only revoke a
-        token that was issued to it. Returns True if a row was marked
-        revoked, False otherwise (not found, already revoked, or not owned)."""
+        """Revoke an owner-scoped token, returning whether an active row changed."""
         async_marker = datetime.now().isoformat()
         cur = self._conn.execute(
             "UPDATE share_tokens SET revoked_at = ? "
@@ -1212,3 +1199,15 @@ class SqliteEventStore(_ClosableSqliteStore):
                 yield ev
         finally:
             self._subscribers[conversation_id].discard(queue)
+
+
+def _require_concrete_event(event: object) -> Event:
+    """Reject untyped or envelope-only values before a persistence transaction."""
+    from ..events import BaseEvent
+
+    if not isinstance(event, BaseEvent) or type(event) is BaseEvent:
+        raise TypeError("event store append requires a concrete Event instance")
+    try:
+        return EventAdapter.validate_python(event)
+    except ValueError as exc:
+        raise TypeError("event store append requires a concrete Event instance") from exc

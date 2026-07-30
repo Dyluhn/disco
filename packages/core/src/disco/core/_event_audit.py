@@ -153,12 +153,16 @@ class ScheduleRunEvent(BaseEvent):
 
 
 class ClarifyEvent(BaseEvent):
-    """Pre-plan clarification gate (RP-13).
+    """Pre-plan clarification gate (RP-13). When the request is ambiguous and
+    the planner needs structured user input before committing to a plan, it
+    calls the `clarify` virtual tool. The loop intercepts the call, emits this
+    event carrying MULTIPLE typed questions, and halts at
+    AWAITING_USER_QUESTION. The user answers each question; the answers are
+    re-injected as context and planning proceeds.
 
-    The event carries multiple typed questions and halts at
-    AWAITING_USER_QUESTION. It is not LLMConvertible; answers return as a user
-    MessageEvent.
-    """
+    NOT LLMConvertible — the clarify card is a UI gate, not a model-facing event.
+    The user's answers are re-injected as a regular USER MessageEvent, which the
+    model reads on its next View."""
 
     kind: Literal[EventKind.CLARIFY] = EventKind.CLARIFY
     source: EventSource = EventSource.AGENT
@@ -167,7 +171,13 @@ class ClarifyEvent(BaseEvent):
 
 
 class QuestionsV2Event(BaseEvent):
-    """Structured pre-plan intake gate (§K)."""
+    """Structured pre-plan intake gate (§K).
+
+    In interactive planning, the model may emit exactly one batched
+    `questions_v2` tool call before `submit_plan`. The loop turns that call into
+    this typed event and halts at AWAITING_USER_QUESTION. Autonomous runs skip the
+    gate and put assumptions in the plan context instead.
+    """
 
     kind: Literal[EventKind.QUESTIONS_V2] = EventKind.QUESTIONS_V2
     source: EventSource = EventSource.AGENT
@@ -176,7 +186,15 @@ class QuestionsV2Event(BaseEvent):
 
 
 class ContextResolvedEvent(BaseEvent):
-    """A deferred range-resolution marker that does not itself forget content."""
+    """CXT-3 — the agent's DEFERRED 'snip' mark: a seq range [start,end] the agent
+    has declared resolved (an exploration concluded, stale tool chatter) and that
+    MAY be forgotten from the model view later — but ONLY once a durable summary
+    exists and context pressure warrants it (context_compact_if_needed). On its
+    own this event changes nothing: it does not tombstone, so View.of is unaffected
+    until a CondensationEvent is actually emitted for the range.
+
+    NOT LLMConvertible — pure intent/bookkeeping. The model only ever sees the
+    inline summary of the CondensationEvent that eventually executes the snip."""
 
     kind: Literal[EventKind.CONTEXT_RESOLVED] = EventKind.CONTEXT_RESOLVED
     source: EventSource = EventSource.AGENT
@@ -188,7 +206,12 @@ class ContextResolvedEvent(BaseEvent):
 
 
 class ContextSummaryEvent(BaseEvent):
-    """Records the durable summary that permits later range compaction."""
+    """CXT-3 — records that a durable summary was written for a resolved range
+    (the 'state exists elsewhere' precondition for compaction). The non-empty
+    `summary` is the content that will replace the forgotten span when the snip
+    executes, so its presence + non-emptiness is the durability proof.
+
+    NOT LLMConvertible — internal context-compaction marker."""
 
     kind: Literal[EventKind.CONTEXT_SUMMARY] = EventKind.CONTEXT_SUMMARY
     source: EventSource = EventSource.SYSTEM
