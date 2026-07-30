@@ -1,9 +1,9 @@
 """Compatibility facade and sole ordered AgentLoop entry point."""
-# ruff: noqa: E501, F401, I001
+# ruff: noqa: E501, I001
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING as TYPE_CHECKING
 
 from .conversation_controls import ConversationControls as _ConversationControls
 # fmt: off
@@ -62,12 +62,8 @@ from .planning_gates import PlanningGateController as _PlanningGateController
 from .replanning import ReplanningController as _ReplanningController
 from .transition import TransitionCoordinator as _TransitionCoordinator
 
-if TYPE_CHECKING:
-    from .boundaries import StreamHook
-
-
 class AgentLoop:
-    """[CONTRACT] The orchestrator and compatibility surface."""
+    """[CONTRACT] The orchestrator and stable compatibility surface."""
 
     _autonomous: bool
     _quiet: bool

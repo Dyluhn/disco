@@ -10,6 +10,10 @@ import disco.core.loop.engine as engine_module
 import pytest
 from disco.core import ConversationStatus, Event, StatusEvent
 from disco.core.loop.engine import AgentLoop
+from disco.core.loop.loop_facade_compat import (
+    _COMPATIBILITY_METHODS,
+    _AgentLoopCompatibility,
+)
 from disco.core.loop.loop_runtime import LoopRuntime
 from disco.core.loop.transition import TransitionCoordinator
 
@@ -78,6 +82,11 @@ def test_terminal_success_has_one_persistence_route() -> None:
 def test_agent_loop_compatibility_facade_stays_below_250_lines() -> None:
     source_lines, _line_number = inspect.getsourcelines(AgentLoop)
     assert len(source_lines) < 250
+    assert AgentLoop.__bases__ == (object,)
+    for name in _COMPATIBILITY_METHODS:
+        assert inspect.getattr_static(AgentLoop, name) is inspect.getattr_static(
+            _AgentLoopCompatibility, name
+        )
 
 
 async def test_finished_publication_crosses_transition_and_commit_hook() -> None:
