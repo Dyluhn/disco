@@ -279,7 +279,7 @@ def _configure_middleware(
         # Fix 2 (codex P1): in-sandbox liveness fallback so the canonical iframe
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(
-            runtime._preview if runtime is not None else None
+            runtime._live_sessions if runtime is not None else None
         ),
         require_capability=True,
         redemption_store=store,

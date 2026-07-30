@@ -1,14 +1,9 @@
 """BuildKernel seam.
 
-Proves the seam is a ZERO-behavior-change wrapper:
-
-  * the current Build runs through `DiscoKernel`, which is a thin pass-through to
-    the SAME collaborators the agent-server already drives (the event store +
-    `ControlOps` + `kick` + `ResumeService`), with IDENTICAL events/args;
-  * the kernel selector resolves legacy/unknown persisted values to `DiscoKernel`;
-  * `ConversationControlService` routes plan/action-gate ops through the pinned
-    kernel and, with the current `disco` kernel, lands on `ControlOps` exactly
-    as before.
+`DiscoKernel` delegates to explicit production owners without changing events
+or arguments; legacy selectors resolve to Disco. `ConversationControlService`
+routes plan/action gates through the pinned kernel.
+The assertions preserve the transport-visible contract at each edge.
 """
 
 from __future__ import annotations
@@ -45,9 +40,6 @@ from disco.core.verification import (
 )
 
 CID = "conv-build-kernel-test"
-
-
-# ---- helpers -----------------------------------------------------------------
 
 
 @pytest.fixture
@@ -345,13 +337,15 @@ async def test_disco_kernel_turn_waits_for_host_workspace_fence(store: SqliteEve
 # ---- conversation control routes THROUGH the pinned kernel -----------------
 
 
-def test_kernel_pin_registry_resolves_disco(store: SqliteEventStore) -> None:
+def test_runtime_kernel_for_resolves_disco_by_default(
+    store: SqliteEventStore,
+) -> None:
     rt = _kernel_harness(store)
     assert rt.pins.ensure(CID) is rt.kernel
 
 
 @pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
-def test_legacy_selection_values_pin_disco(
+def test_runtime_kernel_for_resolves_legacy_values_to_disco(
     legacy: str, store: SqliteEventStore
 ) -> None:
     rt = _kernel_harness(store)
@@ -359,7 +353,7 @@ def test_legacy_selection_values_pin_disco(
     assert selected is rt.kernel
 
 
-async def test_conversation_control_ops_route_through_disco_kernel(
+async def test_runtime_control_ops_route_through_disco_kernel(
     store: SqliteEventStore,
 ) -> None:
     """The control owner pins Disco and preserves every gate argument."""

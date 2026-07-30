@@ -1,7 +1,7 @@
 """DC-04b — sessions_snapshot retry + stale-degrade tests (DEFECT-1).
 
 Fixture pattern mirrors test_sessions_routes.py: real ConversationRuntime with
-a mocked live_session whose sessions.list is an AsyncMock, plus a TestClient
+a mocked live-session directory whose sessions.list is an AsyncMock, plus a TestClient
 created via create_app(store, runtime=...) for route-layer assertions.
 """
 
@@ -31,14 +31,14 @@ def _make_runtime_with_mock_session(list_mock: AsyncMock) -> ConversationRuntime
     fake_session = MagicMock()
     fake_session.sessions = fake_manager
 
-    runtime._preview.live_session = MagicMock(return_value=fake_session)
+    runtime._live_sessions.live_session = MagicMock(return_value=fake_session)
     return runtime
 
 
 def _make_runtime_no_sandbox() -> ConversationRuntime:
     store = SqliteEventStore(":memory:")
     runtime = ConversationRuntime(store)
-    runtime._preview.live_session = MagicMock(return_value=None)
+    runtime._live_sessions.live_session = MagicMock(return_value=None)
     return runtime
 
 

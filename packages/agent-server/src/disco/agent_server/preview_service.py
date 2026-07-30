@@ -24,7 +24,7 @@ import logging
 import posixpath
 import shlex
 from dataclasses import replace
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any
 
 from disco.core import DEFAULT_OWNER_ID, ConversationStatus, DeliverableEvent
 from disco.core.loop.preview_target import is_managed_host_preview_port
@@ -33,48 +33,61 @@ from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.port_owner import port_owners
 
+from .live_session_directory import LiveSessionDirectory
 from .preview_manager import PreviewManager, preview_requires_node_dependencies
 from .preview_projection import (
     SealedPreviewRuntimeContract,
     derive_sealed_preview_runtime_contract,
 )
-from .preview_service_dependencies import PreviewServiceDependencies
+from .preview_status import (
+    empty_preview_metadata,
+    managed_preview_metadata,
+    managed_unavailable_reason,
+)
 from .runtime_settings import _BUILD_LIKE_SURFACES
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
+
+if TYPE_CHECKING:
+    from disco.core.llm import ConfigStore
+    from disco.core.store.sqlite import SqliteEventStore
+
+    from .build_loop_factory import BuildLoopFactory
+    from .connection_tracker import ConnectionTracker
+    from .lifecycle import LifecycleManager
+    from .project_runtime_service import ProjectRuntimeService
+    from .runtime_settings import RuntimeSettings
+    from .workspace_service import WorkspaceCoordinator
 
 _LOG = logging.getLogger(__name__)
 
 
-class PreviewService(PreviewServiceDependencies):
+class PreviewService:
+    def __init__(
+        self,
+        live_sessions: LiveSessionDirectory,
+        store: SqliteEventStore,
+        config_store: ConfigStore,
+        settings: RuntimeSettings,
+        connections: ConnectionTracker,
+        projects: ProjectRuntimeService,
+        lifecycle: LifecycleManager,
+        loop_factory: BuildLoopFactory,
+        workspace: WorkspaceCoordinator,
+    ) -> None:
+        self._live_sessions = live_sessions
+        self._store = store
+        self._config_store = config_store
+        self._settings = settings
+        self._connections = connections
+        self._projects = projects
+        self._lifecycle = lifecycle
+        self._loop_factory = loop_factory
+        self._workspace = workspace
+
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Return the already-live sandbox session without creating one."""
 
-        executor = self._run_resources.executor(conversation_id)
-        session = executor.sandbox if executor is not None else None
-        return cast(SandboxSession | None, session)
-
-    def resolve_cid_prefix(self, cid8: str) -> str | None:
-        """Full conversation id whose uuid part starts with cid8 — live executors only
-        (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
-        matches = [
-            cid
-            for cid in self._run_resources.conversation_ids(executors_only=True)
-            if cid.removeprefix("conv_").startswith(cid8)
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        return None
-
-    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
-        matches: list[str] = []
-        for cid in self._run_resources.conversation_ids(executors_only=True):
-            if not cid.removeprefix("conv_").startswith(cid8):
-                continue
-            if await self._store.conversation_owned_by(cid, owner_id):
-                matches.append(cid)
-        if len(matches) == 1:
-            return matches[0]
-        return None
+        return self._live_sessions.live_session(conversation_id)
 
     def _live_browser_enabled(self) -> bool:
         """Read the live-browser Settings flag; default-deny on any config failure."""
@@ -82,65 +95,6 @@ class PreviewService(PreviewServiceDependencies):
             return bool(self._config_store.load().live_browser.enabled)
         except Exception:  # noqa: BLE001 — config unavailable ⇒ feature OFF
             return False
-
-    @staticmethod
-    def _empty_preview_metadata(*, port: int | None = None) -> dict[str, Any]:
-        return {
-            "port": port,
-            "status": None,
-            "generation": None,
-            "launch_kind": None,
-            "reload_strategy": None,
-            "update_error": None,
-        }
-
-    @classmethod
-    def _managed_preview_metadata(cls, manager: Any) -> tuple[dict[str, Any], str]:
-        """Read the canonical lifecycle snapshot without probing or launching."""
-
-        if manager is None:
-            return cls._empty_preview_metadata(), ""
-        try:
-            lifecycle = manager.canonical_lifecycle_session()
-            data = lifecycle.to_dict() if lifecycle is not None else None
-        except Exception:  # noqa: BLE001 — malformed registry fails closed
-            data = None
-        if not isinstance(data, dict):
-            return cls._empty_preview_metadata(), ""
-        port = data.get("port")
-        if not isinstance(port, int) or isinstance(port, bool):
-            port = None
-        status = data.get("status")
-        generation = data.get("generation")
-        launch_kind = data.get("launch_kind")
-        reload_strategy = data.get("reload_strategy")
-        metadata = {
-            "port": port,
-            "status": status if isinstance(status, str) else None,
-            "generation": generation if isinstance(generation, str) else None,
-            "launch_kind": launch_kind if isinstance(launch_kind, str) else None,
-            "reload_strategy": (reload_strategy if reload_strategy in {"hmr", "reload"} else None),
-            "update_error": (
-                data.get("update_error") if isinstance(data.get("update_error"), str) else None
-            ),
-        }
-        detail = data.get("detail")
-        return metadata, detail if isinstance(detail, str) else ""
-
-    @staticmethod
-    def _managed_unavailable_reason(status: str | None, detail: str) -> str | None:
-        if status == "starting":
-            return "Preparing preview: the managed runtime is starting."
-        if status == "restarting":
-            return "Preparing preview: the managed runtime is restarting."
-        if status == "crashed":
-            suffix = f" {detail}" if detail else ""
-            return f"The managed preview runtime crashed.{suffix}"
-        if status == "stopped":
-            return "The managed preview runtime is stopped."
-        if status == "unavailable":
-            return detail or "The managed preview is healthy but cannot be exposed here."
-        return None
 
     def preview_target_port(self, conversation_id: str) -> int | None:
         """Resolve the canonical preview route to its sole managed live preview.
@@ -155,8 +109,7 @@ class PreviewService(PreviewServiceDependencies):
         the newest remaining servable selection.  Once a manager exists, no healthy
         selection means unavailable rather than a hidden legacy-8000 fallback.
         """
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
             # Owned Build sessions reserve Preview for PreviewManager from their first
@@ -199,8 +152,7 @@ class PreviewService(PreviewServiceDependencies):
         starts/restarts a command.
         """
 
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
             return False
@@ -216,8 +168,7 @@ class PreviewService(PreviewServiceDependencies):
     ) -> dict[str, Any] | None:
         """Resolve the exact original generation or its host-bound sealed restore."""
 
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
             return None
@@ -491,8 +442,7 @@ class PreviewService(PreviewServiceDependencies):
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Resolve a curated port, gating noVNC on live-view enablement and capability."""
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         if session is None:
             return None
         if port not in USER_PORTS and (
@@ -515,7 +465,7 @@ class PreviewService(PreviewServiceDependencies):
         It does NOT restart agent-started dev servers (vite/express) — requests
         for ports nothing listens on after wake will proxy to a 502.
         """
-        cid = await self.resolve_owned_cid_prefix(cid8, owner_id)
+        cid = await self._live_sessions.resolve_owned_cid_prefix(cid8, owner_id)
         if cid is not None:
             return self.port_upstream(cid, port)
 
@@ -536,7 +486,7 @@ class PreviewService(PreviewServiceDependencies):
 
         lock = self._connections.wake_lock_for(cid)
         async with lock:
-            if self._run_resources.has_executor(cid):
+            if self._live_sessions.live_session(cid) is not None:
                 return self.port_upstream(cid, port)
             woke = await self.ensure_preview(cid)
             if woke:
@@ -561,18 +511,17 @@ class PreviewService(PreviewServiceDependencies):
         actually routable (expose_port / port_owners), NOT by the backend's name — a local
         rootless podman publishes real localhost URLs and previews exactly like the local
         backend; a genuinely unroutable backend still degrades honestly below."""
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         if session is None:
             return {
                 "available": False,
                 "reason": "The agent hasn't started a sandbox yet.",
                 "owner": None,
                 "ports": [],
-                **self._empty_preview_metadata(),
+                **empty_preview_metadata(),
             }
         manager = getattr(session, "_preview_manager", None)
-        metadata, managed_detail = self._managed_preview_metadata(manager)
+        metadata, managed_detail = managed_preview_metadata(manager)
         # Passive probe ONLY: this GET is polled by the UI, and a read path must not
         # create a sandbox (that's _ensure()'s side effect) or surface its failures
         # as a 500. No live instance → no preview, plainly stated.
@@ -580,7 +529,7 @@ class PreviewService(PreviewServiceDependencies):
         if inst is None:
             return {
                 "available": False,
-                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
                 or "The agent's sandbox isn't running yet.",
                 "owner": None,
                 "ports": [],
@@ -613,7 +562,7 @@ class PreviewService(PreviewServiceDependencies):
         if metadata["status"] == "unavailable":
             return {
                 "available": False,
-                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail),
+                "reason": managed_unavailable_reason(metadata["status"], managed_detail),
                 "owner": _owner_json(owner)
                 if owner is not None and owner.pid is not None
                 else None,
@@ -630,7 +579,7 @@ class PreviewService(PreviewServiceDependencies):
             )
             return {
                 "available": False,
-                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
                 or preparing_reason
                 or "No health-verified managed preview is currently available.",
                 "owner": None,
@@ -640,7 +589,7 @@ class PreviewService(PreviewServiceDependencies):
         if owner is None or owner.pid is None:
             return {
                 "available": False,
-                "reason": self._managed_unavailable_reason(metadata["status"], managed_detail)
+                "reason": managed_unavailable_reason(metadata["status"], managed_detail)
                 or f"No dev server detected. Run one on port {target_port} inside the "
                 "sandbox to see a live preview.",
                 "owner": None,
@@ -648,7 +597,7 @@ class PreviewService(PreviewServiceDependencies):
                 **(
                     metadata
                     if manager is not None
-                    else self._empty_preview_metadata(port=target_port)
+                    else empty_preview_metadata(port=target_port)
                 ),
             }
 
@@ -657,7 +606,7 @@ class PreviewService(PreviewServiceDependencies):
             "proxy": True,
             "owner": _owner_json(owner),
             "ports": ports_payload,
-            **(metadata if manager is not None else self._empty_preview_metadata(port=target_port)),
+            **(metadata if manager is not None else empty_preview_metadata(port=target_port)),
         }
 
     async def ensure_preview(self, conversation_id: str) -> bool:
@@ -669,8 +618,7 @@ class PreviewService(PreviewServiceDependencies):
         the documented resume path: re-compose the loop/executor (lazy sandbox),
         rehydrate the snapshot, then start the preview — the user explicitly asked to
         see the artifact again, and that's exactly what the snapshot is for."""
-        executor = self._run_resources.executor(conversation_id)
-        session = getattr(executor, "_sandbox", None) if executor is not None else None
+        session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         store = self._projects.current_project_store()
 
@@ -678,7 +626,7 @@ class PreviewService(PreviewServiceDependencies):
         # deliberately outside canonical Build Preview and cannot mint managed
         # runtime verification authority.
         if (
-            executor is None
+            session is None
             and self._settings._surface_of(conversation_id)
             not in _BUILD_LIKE_SURFACES
         ):
@@ -692,8 +640,7 @@ class PreviewService(PreviewServiceDependencies):
                 return False
             self._loop_factory.loop_for(conversation_id)
             await self._lifecycle._maybe_rehydrate(conversation_id)
-            executor = self._run_resources.executor(conversation_id)
-            session = getattr(executor, "_sandbox", None) if executor is not None else None
+            session = self._live_sessions.live_session(conversation_id)
             if session is None:
                 return False
             try:
@@ -756,10 +703,9 @@ class PreviewService(PreviewServiceDependencies):
                     files = tuple(
                         (entry.path, verified.read_bytes(entry.path)) for entry in verified.files
                     )
-                if executor is None:
+                if session is None:
                     self._loop_factory.loop_for(conversation_id)
-                    executor = self._run_resources.executor(conversation_id)
-                session = getattr(executor, "_sandbox", None) if executor is not None else None
+                    session = self._live_sessions.live_session(conversation_id)
                 if session is None:
                     return False
                 manager = getattr(session, "_preview_manager", None)

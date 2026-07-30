@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 from disco.core import (
@@ -44,6 +44,8 @@ from .run_supervision_protocols import (
     RunSurfacePolicy,
 )
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
+
+RunLoopInput = AgentLoop | Awaitable[AgentLoop] | Callable[[], Awaitable[AgentLoop]]
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +475,7 @@ class RunSupervisor:
     def create_task(
         self,
         conversation_id: str,
-        loop: AgentLoop | Awaitable[AgentLoop],
+        loop: RunLoopInput,
         *,
         claimed_user_seq: int | None = None,
         expected_run_intent_id: str | None = None,
@@ -483,8 +485,11 @@ class RunSupervisor:
             raise RuntimeError("conversation already has a live run task")
 
         async def run() -> ConversationState:
+            pending = loop() if callable(loop) else loop
             selected_loop = (
-                loop if isinstance(loop, AgentLoop) else await cast(Awaitable[AgentLoop], loop)
+                loop
+                if isinstance(loop, AgentLoop)
+                else await cast(Awaitable[AgentLoop], pending)
             )
             return await self._workspace.run_after_admission(
                 conversation_id,

@@ -11,8 +11,7 @@ Contract locked here:
     preserved (this file only exercises the OFF-loop path so the
     read/cache-TTL decision is the only thing under test).
 
-Time is controlled via monkeypatch of `time.monotonic` so the test is
-deterministic and runs in milliseconds, not real seconds.
+Monkeypatched monotonic time keeps the tests deterministic and fast.
 """
 
 from __future__ import annotations

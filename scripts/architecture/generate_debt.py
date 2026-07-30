@@ -134,6 +134,7 @@ PKG06_RUNTIME_RESOLVED_IDS = frozenset(
         "PY-0189",
         "PY-0190",
         "PY-0193",
+        "PY-0239",
     }
 ) | frozenset(
     {
@@ -155,7 +156,7 @@ RESOLVED_IDS = (
     | PKG06_LIFECYCLE_RESOLVED_IDS
     | PKG06_RUNTIME_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 600
+EXPECTED_ACTIVE_DEBT_ROWS = 599
 EXPECTED_OBSERVATIONS = 16
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
@@ -164,7 +165,7 @@ LOCATION_OVERRIDES = {
     ),
     "DM-012": (
         "packages/agent-server/src/disco/agent_server/preview_service.py:"
-        "_sealed_runtime_contract:234-253 + "
+        "_sealed_runtime_contract:196-215 + "
         "harness/build_soak/adapters/_client_collection.py:"
         "_CollectionMixin.collect_browser_evidence:409-491"
     ),

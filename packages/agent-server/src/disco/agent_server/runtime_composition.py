@@ -70,6 +70,7 @@ from .lifecycle_ports import (
     LifecycleStoreAccess,
     LifecycleUploads,
 )
+from .live_session_directory import LiveSessionDirectory
 from .mcp_manager import McpManager
 from .persistence_notifier import PersistenceNotifier
 from .preview_service import PreviewService
@@ -461,8 +462,9 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._driver_contexts,
         mode,
     )
+    rt._live_sessions = LiveSessionDirectory(rt._run_resources, rt._store)
     rt._preview = PreviewService(
-        rt._run_resources,
+        rt._live_sessions,
         rt._store,
         rt._config_store,
         rt._settings,
@@ -479,7 +481,7 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._mcp,
         rt._lifecycle,
         rt._connections,
-        rt._preview,
+        rt._live_sessions,
     )
     rt._workspace_ownership.bind_restore_session(
         WorkspaceRestoreSession(

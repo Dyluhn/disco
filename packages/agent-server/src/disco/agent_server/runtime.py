@@ -118,6 +118,7 @@ if TYPE_CHECKING:
     from .lifecycle_command_service import LifecycleCommandService
     from .lifecycle_idle_sweep import LifecycleIdleSweeper
     from .lifecycle_ports import LifecycleIdleSweepDeps
+    from .live_session_directory import LiveSessionDirectory
     from .mcp_manager import McpManager
     from .persistence_notifier import PersistenceNotifier
     from .preview_service import PreviewService
@@ -262,6 +263,7 @@ class _RuntimeWiringSchema:
     _loop_factory: BuildLoopFactory
     _schedule: ScheduleService
     _sessions: SessionsService
+    _live_sessions: LiveSessionDirectory
     _preview: PreviewService
     _sandbox_resources: SandboxResourceReconciler
     _run_supervisor: RunSupervisor
