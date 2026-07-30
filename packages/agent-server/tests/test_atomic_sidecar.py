@@ -84,7 +84,8 @@ def test_save_preserves_existing_file_on_failure(
     assert path, f"runtime did not configure {sidecar_attr}"
 
     _seed(path, seed_payload)
-    expected_bytes = open(path, "rb").read()
+    with open(path, "rb") as f:
+        expected_bytes = f.read()
     assert expected_bytes, "precondition: seed must have produced non-empty bytes"
 
     _crash_json_dump(monkeypatch)
@@ -96,7 +97,8 @@ def test_save_preserves_existing_file_on_failure(
         pass
 
     assert os.path.exists(path), f"sidecar {path} vanished after failed save"
-    post_bytes = open(path, "rb").read()
+    with open(path, "rb") as f:
+        post_bytes = f.read()
     assert post_bytes == expected_bytes, (
         f"sidecar {path} was TRUNCATED by a failed save - write is not atomic. "
         f"Before: {expected_bytes!r}  After: {post_bytes!r}"
@@ -116,7 +118,8 @@ def test_save_assist_is_already_atomic(tmp_path, monkeypatch):
     assert path
 
     _seed(path, {"conv-A": True})
-    expected_bytes = open(path, "rb").read()
+    with open(path, "rb") as f:
+        expected_bytes = f.read()
     assert expected_bytes
 
     _crash_json_dump(monkeypatch)
@@ -125,7 +128,8 @@ def test_save_assist_is_already_atomic(tmp_path, monkeypatch):
     except Exception:
         pass
 
-    assert open(path, "rb").read() == expected_bytes
+    with open(path, "rb") as f:
+        assert f.read() == expected_bytes
 
 
 def test_save_autonomous_succeeds_on_happy_path(tmp_path, monkeypatch):
