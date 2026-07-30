@@ -15,7 +15,11 @@ import httpx
 import pytest
 from disco.agent_server import ConversationRuntime
 from disco.agent_server.routes.schedules import make_schedules_router
-from disco.agent_server.workflow_schedule import WorkflowScheduleManager
+from disco.agent_server.workflow_run_service import WorkflowRunService
+from disco.agent_server.workflow_schedule import (
+    WorkflowScheduleManager,
+    WorkflowScheduleRunRecord,
+)
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -291,6 +295,15 @@ def _runtime(
     return runtime, store
 
 
+def _workflow_runs(runtime: ConversationRuntime) -> WorkflowRunService:
+    return cast(WorkflowRunService, runtime._schedule._workflow_runs)
+
+
+def _workflow_manager(runtime: ConversationRuntime) -> WorkflowScheduleManager:
+    manager_runtime = cast(ConversationRuntime, runtime._schedule._runtime_port)
+    return WorkflowScheduleManager(manager_runtime)
+
+
 def _workflow_definition(
     *,
     tools: tuple[str, ...],
@@ -416,7 +429,7 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
     )
     try:
         instance = _save_instance(runtime, instance_id="wf_ok", tools=("file_write",))
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_ok", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -460,7 +473,7 @@ async def test_sealed_workflow_schedule_uses_declared_egress_allow() -> None:
                 egress_allow=("example.com",),
             ),
         )
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_declared_egress", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -484,7 +497,7 @@ async def test_sealed_workflow_schedule_empty_egress_stays_fully_denied() -> Non
     )
     try:
         instance = _save_instance(runtime, instance_id="wf_empty_egress", tools=("file_write",))
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_empty_egress", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -508,7 +521,7 @@ async def test_sealed_workflow_schedule_kick_message_has_honest_outcome_rules() 
     )
     try:
         instance = _save_instance(runtime, instance_id="wf_kick_rules", tools=("file_write",))
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_kick_rules", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -582,7 +595,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
     fire: asyncio.Task[Any] | None = None
     try:
         instance = _save_instance(runtime, instance_id="wf_atomic_ingress", tools=("file_write",))
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_atomic_ingress", instance))
 
         fire = asyncio.create_task(manager.fire_now(row.schedule_id))
@@ -619,20 +632,17 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
     try:
         instance = _save_instance(runtime, instance_id="wf_incumbent", tools=())
         spec = _spec("wf_incumbent", instance)
-        (
-            cid,
-            fired_at,
-            workflow_run,
-            output_path,
-            message,
-            setup_record,
-        ) = await runtime._sealed_run_conversation_setup(
+        workflow_service = _workflow_runs(runtime)
+        setup = await workflow_service._conversation_setup(
             schedule_id="sched_incumbent",
             spec=spec,
             coalesced=False,
             owner_id="local",
         )
-        assert workflow_run is not None and message is not None and setup_record is None
+        cid = setup.conversation_id
+        assert setup.workflow_run is not None
+        assert setup.message is not None
+        assert setup.failure is None
 
         incumbent = asyncio.create_task(release_incumbent.wait())
         runtime._tasks[cid] = incumbent
@@ -643,17 +653,17 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
             runtime._create_run_task(cid, cast(Any, object()))
         assert runtime._tasks[cid] is incumbent
 
-        result = await runtime._sealed_run_execute(
+        result = await workflow_service._execution.execute(
             schedule_id="sched_incumbent",
             spec=spec,
             conversation_id=cid,
-            fired_at=fired_at,
-            workflow_run=workflow_run,
-            fallback_output_path=output_path,
-            schedule_message=message,
+            fired_at=setup.fired_at,
+            workflow_run=setup.workflow_run,
+            output_path=setup.output_path,
+            message=setup.message,
             coalesced=False,
         )
-        assert isinstance(result, runtime_mod.WorkflowScheduleRunRecord)
+        assert isinstance(result, WorkflowScheduleRunRecord)
         assert result.terminal_state == ConversationStatus.ERROR.value
         assert runtime._tasks[cid] is incumbent
         assert runtime._loops[cid] is prior_loop
@@ -676,20 +686,17 @@ async def test_sealed_schedule_refuses_a_newer_durable_head(
     try:
         instance = _save_instance(runtime, instance_id=f"wf_ahead_{ahead_kind}", tools=())
         spec = _spec(f"wf_ahead_{ahead_kind}", instance)
-        (
-            cid,
-            fired_at,
-            workflow_run,
-            output_path,
-            message,
-            setup_record,
-        ) = await runtime._sealed_run_conversation_setup(
+        workflow_service = _workflow_runs(runtime)
+        setup = await workflow_service._conversation_setup(
             schedule_id="sched_ahead",
             spec=spec,
             coalesced=False,
             owner_id="local",
         )
-        assert workflow_run is not None and message is not None and setup_record is None
+        cid = setup.conversation_id
+        assert setup.workflow_run is not None
+        assert setup.message is not None
+        assert setup.failure is None
         ahead = WorkspaceMutationEvent(
             operation=(
                 "agent.run-intent.host-mutation"
@@ -704,18 +711,18 @@ async def test_sealed_schedule_refuses_a_newer_durable_head(
         monkeypatch.setattr(runtime, "_run_with_persistence", run)
         monkeypatch.setattr(runtime, "_rekick_unadmitted_superseding_intent", handoff)
 
-        result = await runtime._sealed_run_execute(
+        result = await workflow_service._execution.execute(
             schedule_id="sched_ahead",
             spec=spec,
             conversation_id=cid,
-            fired_at=fired_at,
-            workflow_run=workflow_run,
-            fallback_output_path=output_path,
-            schedule_message=message,
+            fired_at=setup.fired_at,
+            workflow_run=setup.workflow_run,
+            output_path=setup.output_path,
+            message=setup.message,
             coalesced=False,
         )
 
-        assert isinstance(result, runtime_mod.WorkflowScheduleRunRecord)
+        assert isinstance(result, WorkflowScheduleRunRecord)
         assert "lost pristine ingress authority" in (result.error or "")
         run.assert_not_awaited()
         assert cid not in runtime._tasks
@@ -744,7 +751,7 @@ async def test_sealed_schedule_append_failure_cleans_exact_registration(
     monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", fail_append)
     try:
         instance = _save_instance(runtime, instance_id="wf_append_failure", tools=())
-        record = await runtime.run_sealed_workflow_schedule(
+        record = await _workflow_runs(runtime).run(
             schedule_id="sched_append_failure",
             spec=_spec("wf_append_failure", instance),
         )
@@ -795,7 +802,7 @@ async def test_post_ingress_schedule_failure_is_owned_by_exact_authority(
     monkeypatch.setattr(runtime, "_run_with_persistence", fail_run)
     try:
         instance = _save_instance(runtime, instance_id="wf_typed_failure", tools=())
-        record = await runtime.run_sealed_workflow_schedule(
+        record = await _workflow_runs(runtime).run(
             schedule_id="sched_typed_failure",
             spec=_spec("wf_typed_failure", instance),
         )
@@ -843,7 +850,7 @@ async def test_stale_post_ingress_failure_cannot_poison_newer_intent(
     try:
         instance = _save_instance(runtime, instance_id="wf_stale_failure", tools=())
         fire = asyncio.create_task(
-            runtime.run_sealed_workflow_schedule(
+            _workflow_runs(runtime).run(
                 schedule_id="sched_stale_failure",
                 spec=_spec("wf_stale_failure", instance),
             )
@@ -936,7 +943,7 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
     fire_task: asyncio.Task[object] | None = None
     try:
         instance = _save_instance(runtime, instance_id="wf_lifecycle", tools=("file_write",))
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_lifecycle", instance))
 
         fire_task = asyncio.create_task(manager.fire_now(row.schedule_id))
@@ -979,7 +986,7 @@ async def test_sealed_workflow_schedule_autonomous_plan_auto_approves() -> None:
             instance_id="wf_auto_plan",
             tools=("submit_plan", "file_write"),
         )
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_auto_plan", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -1001,7 +1008,7 @@ async def test_sealed_workflow_schedule_needs_input_lands_terminal_explanation()
     runtime, _store = _runtime([("blocked", [_needs_input()])])
     try:
         instance = _save_instance(runtime, instance_id="wf_needs_connector", tools=())
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         row = manager.create_schedule(_spec("wf_needs_connector", instance))
 
         record = await manager.fire_now(row.schedule_id)
@@ -1030,7 +1037,7 @@ async def test_sealed_workflow_schedule_needs_input_lands_terminal_explanation()
 def test_workflow_schedule_runs_route_lists_history() -> None:
     runtime, store = _runtime([])
     try:
-        manager = WorkflowScheduleManager(runtime)
+        manager = _workflow_manager(runtime)
         instance = _save_instance(runtime, instance_id="wf_route", tools=())
         row = manager.create_schedule(_spec("wf_route", instance))
         root = runtime.project_store().root

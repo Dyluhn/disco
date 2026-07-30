@@ -18,13 +18,10 @@ import asyncio
 import contextlib
 import contextvars
 import hashlib
-import json
 import logging
 import os
 import time
-import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,7 +29,6 @@ from disco.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
     AgentErrorEvent,
-    ConversationState,
     ConversationStatus,
     Event,
     EventSource,
@@ -186,7 +182,15 @@ from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
 from .runtime_settings import RuntimeSettings
-from .schedule_service import ScheduleService
+from .schedule_service import (
+    RecurringScheduleControl,
+    ScheduleService,
+    WorkflowConversationSettings,
+    WorkflowLoopFactory,
+    WorkflowModelAccess,
+    WorkflowProjectAccess,
+    WorkflowRunControl,
+)
 from .security_live_verifier import make_security_live_verifier
 from .sessions_service import SessionsService
 from .share_service import ShareService
@@ -197,7 +201,7 @@ from .verify.dispatcher import HostVerifierDispatcher
 from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
 from .workflow_events import handle_workflow_tool_event
-from .workflow_schedule import WorkflowScheduleRunRecord
+from .workflow_run_service import WorkflowRunService
 from .workspace_commit import (
     CommittedWorkspaceView,
     WorkspaceRunSuperseded,
@@ -231,35 +235,6 @@ def toolscope_audit_enabled() -> bool:
 def workflow_router_enabled() -> bool:
     """True iff DISCO_WORKFLOW_ROUTER is truthy (default OFF)."""
     return str(disco_env(_WORKFLOW_ROUTER_FLAG) or "").strip().lower() in _TRUTHY
-
-
-class _WorkflowOutputPathParams(dict[str, object]):
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
-
-
-def _render_workflow_output_path(template: str, params: dict[str, object]) -> str:
-    try:
-        return template.format_map(_WorkflowOutputPathParams(params))
-    except (KeyError, IndexError, ValueError):
-        return template
-
-
-def _workflow_history_fields(
-    events: list[Event],
-    *,
-    fallback_output_path: str,
-) -> tuple[str, str]:
-    for event in reversed(events):
-        if not isinstance(event, StatusEvent):
-            continue
-        detail = event.detail or ""
-        if not detail.startswith("workflow_output_contract_"):
-            continue
-        output_path = str(event.meta.get("workflow_output_path") or fallback_output_path)
-        verdict = str(event.meta.get("verdict") or "unverified")
-        return output_path, verdict
-    return fallback_output_path, "unverified"
 
 
 from .build_contract_service import (  # noqa: E402
@@ -1104,11 +1079,23 @@ class ConversationRuntime:
         # (_cancel_flags is shared with kill/cancel/resume); the service reaches
         # state via a back-ref. See deep_research_service.py.
         self._dr = DeepResearchService(self)
-        # Scheduled tasks (RP-08): lazy ScheduleManager accessor + CRUD/preview +
-        # run-history read. The lazily-created _sched_manager handle stays on the
-        # runtime; the service reaches it + _store via a back-ref. See
-        # schedule_service.py.
-        self._schedule = ScheduleService(self)
+        # ScheduleService owns sealed workflow execution and the temporary typed
+        # compatibility port for the legacy ScheduleManager.
+        self._schedule = ScheduleService(
+            self._store,
+            workflow_runs=WorkflowRunService(
+                self._store,
+                lifecycle_commands=self._lifecycle_commands,
+                workspace=self._workspace,
+                project_access=cast(WorkflowProjectAccess, self),
+                settings=cast(WorkflowConversationSettings, self),
+                model_access=cast(WorkflowModelAccess, self),
+                loop_factory=cast(WorkflowLoopFactory, self),
+                run_control=cast(WorkflowRunControl, self),
+            ),
+            project_access=cast(WorkflowProjectAccess, self),
+            recurring_control=cast(RecurringScheduleControl, self),
+        )
         # Shell-session reads + upload write-through. The caches + tuning
         # constants stay on the runtime; the service reaches them + live_session
         # via a back-ref. See sessions_service.py.
@@ -4738,528 +4725,6 @@ class ConversationRuntime:
         for session in self._pending_sessions.values():
             with contextlib.suppress(Exception):
                 await session.destroy()
-
-    async def _record_workflow_schedule_error(
-        self,
-        conversation_id: str,
-        *,
-        detail: str,
-        explanation: str,
-        agent_view_id: str | None = None,
-        run_intent_id: str | None = None,
-    ) -> bool:
-        events: list[Event] = [
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=explanation),
-            ),
-            MessageEvent(
-                source=EventSource.AGENT,
-                message=LLMMessage(role="assistant", content=explanation),
-            ),
-            LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=detail),
-        ]
-        stored = await self._lifecycle_commands.append_task_status_if_current(
-            conversation_id,
-            cast(StatusEvent, events[-1]),
-            agent_view_id=agent_view_id,
-            run_intent_id=run_intent_id,
-            prefix_events=events[:-1],
-        )
-        return stored is not None
-
-    async def _sealed_run_conversation_setup(
-        self,
-        *,
-        schedule_id: str,
-        spec: ScheduleSpec,
-        coalesced: bool,
-        owner_id: str,
-    ) -> tuple[
-        str,
-        datetime,
-        WorkflowRun | None,
-        str,
-        MessageEvent | None,
-        WorkflowScheduleRunRecord | None,
-    ]:
-        conversation_id = f"conv_{uuid.uuid4().hex}"
-        self._store.create_conversation(
-            conversation_id,
-            owner_id=owner_id,
-            surface="agent",
-            title=f"Workflow schedule {spec.instance_id}",
-        )
-        self.set_surface(conversation_id, "agent")
-        self.set_autonomous(conversation_id, True)
-
-        fired_at = datetime.now(UTC)
-        project_root = self._project_store_now().root
-        workflow_store = JsonDirWorkflowStore(project_root or "", owner_id=owner_id)
-        fallback_output_path = ""
-
-        try:
-            instance = workflow_store.get_instance(spec.instance_id)
-        except ValueError as exc:
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_instance_invalid_id",
-                explanation=f"Workflow schedule {schedule_id} could not run: {exc}",
-            )
-            return (
-                conversation_id,
-                fired_at,
-                None,
-                fallback_output_path,
-                None,
-                WorkflowScheduleRunRecord(
-                    schedule_id=schedule_id,
-                    run_cid=conversation_id,
-                    fired_at=fired_at,
-                    terminal_state=ConversationStatus.ERROR.value,
-                    output_path="",
-                    verify_verdict="error",
-                    coalesced=coalesced,
-                    error=str(exc),
-                ),
-            )
-
-        if instance is None:
-            message = (
-                f"Workflow schedule {schedule_id} could not run: instance "
-                f"{spec.instance_id!r} was not found."
-            )
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_instance_not_found",
-                explanation=message,
-            )
-            return (
-                conversation_id,
-                fired_at,
-                None,
-                fallback_output_path,
-                None,
-                WorkflowScheduleRunRecord(
-                    schedule_id=schedule_id,
-                    run_cid=conversation_id,
-                    fired_at=fired_at,
-                    terminal_state=ConversationStatus.ERROR.value,
-                    output_path="",
-                    verify_verdict="error",
-                    coalesced=coalesced,
-                    error=message,
-                ),
-            )
-
-        if instance.definition_digest != spec.instance_digest:
-            message = (
-                f"Workflow schedule {schedule_id} could not run: pinned digest "
-                f"{spec.instance_digest!r} does not match current instance digest "
-                f"{instance.definition_digest!r}."
-            )
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_instance_digest_mismatch",
-                explanation=message,
-            )
-            return (
-                conversation_id,
-                fired_at,
-                None,
-                fallback_output_path,
-                None,
-                WorkflowScheduleRunRecord(
-                    schedule_id=schedule_id,
-                    run_cid=conversation_id,
-                    fired_at=fired_at,
-                    terminal_state=ConversationStatus.ERROR.value,
-                    output_path="",
-                    verify_verdict="error",
-                    coalesced=coalesced,
-                    error=message,
-                ),
-            )
-
-        if not instance.enabled or instance.approval is None:
-            reason = (
-                "workflow_instance_not_enabled"
-                if not instance.enabled
-                else "workflow_instance_not_approved"
-            )
-            message = (
-                f"Workflow schedule {schedule_id} could not run: instance "
-                f"{spec.instance_id!r} is not enabled and approved."
-            )
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail=reason,
-                explanation=message,
-            )
-            return (
-                conversation_id,
-                fired_at,
-                None,
-                fallback_output_path,
-                None,
-                WorkflowScheduleRunRecord(
-                    schedule_id=schedule_id,
-                    run_cid=conversation_id,
-                    fired_at=fired_at,
-                    terminal_state=ConversationStatus.ERROR.value,
-                    output_path="",
-                    verify_verdict="error",
-                    coalesced=coalesced,
-                    error=message,
-                ),
-            )
-
-        workflow_run = WorkflowRun(
-            run_id=f"wfrun_{uuid.uuid4().hex}",
-            definition=instance.definition,
-            params=instance.params,
-        )
-        fallback_output_path = _render_workflow_output_path(
-            instance.definition.output_contract.path_template,
-            instance.params,
-        )
-
-        schedule_message = MessageEvent(
-            source=EventSource.USER,
-            message=LLMMessage(
-                role="user",
-                content=(
-                    "Run this sealed workflow schedule.\n"
-                    f"Schedule id: {schedule_id}\n"
-                    f"Workflow instance: {spec.instance_id}\n"
-                    f"Definition digest: {spec.instance_digest}\n"
-                    f"Output path: {fallback_output_path}\n"
-                    "Parameters:\n"
-                    f"{json.dumps(instance.params, sort_keys=True)}\n\n"
-                    "Outcome rules:\n"
-                    "If the task cannot be completed with the provided tools/params "
-                    "(missing information, unreachable target, impossible request): "
-                    "call needs_input with the question, or skip with the reason. "
-                    "NEVER fabricate results and NEVER finish with a failure narrative "
-                    "as if the task succeeded."
-                ),
-            ),
-        )
-        # The schedule USER turn is deliberately not runnable yet.  The exact
-        # sealed loop/task and this ingress are published together in
-        # ``_sealed_run_execute`` under the workspace authority fence.
-        return (
-            conversation_id,
-            fired_at,
-            workflow_run,
-            fallback_output_path,
-            schedule_message,
-            None,
-        )
-
-    async def _sealed_run_execute(
-        self,
-        *,
-        schedule_id: str,
-        spec: ScheduleSpec,
-        conversation_id: str,
-        fired_at: datetime,
-        workflow_run: WorkflowRun,
-        fallback_output_path: str,
-        schedule_message: MessageEvent,
-        coalesced: bool,
-    ) -> ConversationState | WorkflowScheduleRunRecord:
-        def failed(error: str) -> WorkflowScheduleRunRecord:
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path=fallback_output_path,
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=error,
-            )
-
-        # Avoid composing an executor over an incumbent; the fenced check handles races.
-        incumbent = self._tasks.get(conversation_id)
-        if incumbent is not None and not incumbent.done():
-            return failed("sealed workflow schedule found an existing live run task")
-
-        try:
-            snapshot = await self._resolve_driver_context(conversation_id)
-        except DriverContextResolutionError as exc:
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_driver_context_resolution_failed",
-                explanation=(
-                    f"Workflow schedule {schedule_id} could not resolve its driver "
-                    f"context before execution: {exc}"
-                ),
-            )
-            return failed(str(exc))
-        self._resolved_context_for_compose[conversation_id] = snapshot
-        try:
-            override = snapshot.model_key
-            router = self._router_now(
-                pick=override,
-                surface="agent",
-                autonomous=True,
-                conversation_id=conversation_id,
-            )
-            agent = BuildAgent(
-                router,
-                conversation_id=conversation_id,
-                model_override=override,
-                driver_context_window=snapshot.context_window,
-            )
-            previous_executor = self._executors.get(conversation_id)
-            try:
-                loop = self._compose_build_loop(
-                    conversation_id,
-                    router,
-                    agent,
-                    driver_context_window=snapshot.context_window,
-                    sealed_workflow_run=workflow_run,
-                    sealed_workflow_instance_id=spec.instance_id,
-                )
-            except ValueError as exc:
-                await self._record_workflow_schedule_error(
-                    conversation_id,
-                    detail="workflow_scope_compile_failed",
-                    explanation=(
-                        f"Workflow schedule {schedule_id} could not run because its "
-                        f"sealed tool scope failed to compile: {exc}"
-                    ),
-                )
-                return failed(str(exc))
-        finally:
-            if self._resolved_context_for_compose.get(conversation_id) is snapshot:
-                self._resolved_context_for_compose.pop(conversation_id, None)
-        self._resolved_driver_contexts[conversation_id] = snapshot
-        sealed_executor = self._executors.get(conversation_id)
-        loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
-            _cid, frame
-        )
-        intent = WorkspaceMutationEvent(
-            operation="agent.run-intent.workflow-schedule",
-            run_protocol_version=1,
-        )
-        # Creating a task while the process-fence ContextVar says "owned" would
-        # copy that transient ownership into the child after the parent releases
-        # the lock.  Capture the caller's real context before entering either
-        # fence, then use it for the suspended run task registered inside them.
-        sealed_task_context = contextvars.copy_context()
-
-        task: asyncio.Task[Any] | None = None
-        generation: int | None = None
-        previous_loop: AgentLoop | None = None
-        try:
-            async with self.workspace_lock(conversation_id):
-                async with self._workspace.interprocess_mutation_fence(conversation_id):
-                    incumbent = self._tasks.get(conversation_id)
-                    if incumbent is not None and not incumbent.done():
-                        raise WorkspaceRunSuperseded(
-                            "sealed workflow schedule lost task registration authority"
-                        )
-                    # A sealed schedule conversation is fresh and private.  Any
-                    # durable event here was written after setup and therefore owns
-                    # the head; never append a stale schedule turn behind it.
-                    if await self._store.get_events(conversation_id):
-                        raise WorkspaceRunSuperseded(
-                            "sealed workflow schedule lost pristine ingress authority"
-                        )
-
-                    previous_loop = self._loops.get(conversation_id)
-                    self._loops[conversation_id] = loop
-                    try:
-                        task, generation = self._create_run_task(
-                            conversation_id,
-                            loop,
-                            expected_run_intent_id=intent.id,
-                            task_context=sealed_task_context,
-                        )
-                        # Publish the in-memory claim before the first await after
-                        # registration.  The task is gated on this same local lock,
-                        # so it cannot inspect history before the exact ingress lands.
-                        self._workspace.claim_registered_run_locked(conversation_id)
-                        stored = await self._workspace.append_run_ingress_locked(
-                            conversation_id,
-                            [schedule_message],
-                            "workflow-schedule",
-                            intent=intent,
-                        )
-                        stored_user = next(
-                            (
-                                event
-                                for event in stored
-                                if isinstance(event, MessageEvent)
-                                and event.id == schedule_message.id
-                            ),
-                            None,
-                        )
-                        if stored_user is None or stored_user.seq is None:
-                            raise RuntimeError("schedule ingress did not return its USER identity")
-                        self._run_claimed_user_seq[conversation_id] = max(
-                            stored_user.seq,
-                            self._run_claimed_user_seq.get(conversation_id, -1),
-                        )
-                    except BaseException:
-                        if task is not None and self._tasks.get(conversation_id) is task:
-                            self._tasks.pop(conversation_id, None)
-                            self._workspace.clear_run_claim(conversation_id)
-                            task.cancel()
-                        if self._loops.get(conversation_id) is loop:
-                            if previous_loop is None:
-                                self._loops.pop(conversation_id, None)
-                            else:
-                                self._loops[conversation_id] = previous_loop
-                        raise
-        except BaseException as exc:
-            if task is not None:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                self._run_task_authorities.pop(task, None)
-            if self._executors.get(conversation_id) is sealed_executor:
-                if previous_executor is None:
-                    self._executors.pop(conversation_id, None)
-                else:
-                    self._executors[conversation_id] = previous_executor
-            if sealed_executor is not None and sealed_executor is not previous_executor:
-                with contextlib.suppress(Exception):
-                    await sealed_executor.kill()
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            if isinstance(exc, WorkspaceRunSuperseded):
-                await self._rekick_unadmitted_superseding_intent(conversation_id)
-                return failed(str(exc))
-            await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_schedule_ingress_failed",
-                explanation=(f"Workflow schedule {schedule_id} could not start: {exc}"),
-            )
-            return failed(str(exc))
-
-        assert task is not None
-        assert generation is not None
-        run_error: Exception | None = None
-        state: ConversationState | None = None
-        try:
-            state = cast(ConversationState, await task)
-        except Exception as exc:  # task cancellation still propagates to the caller
-            run_error = exc
-        finally:
-            if self._tasks.get(conversation_id) is task:
-                self._tasks.pop(conversation_id, None)
-                self._workspace.clear_run_claim(conversation_id)
-            agent_view_id, run_intent_id = self._run_task_authorities.pop(
-                task,
-                (None, intent.id),
-            )
-
-        if run_error is not None:
-            if isinstance(run_error, WorkspaceRunSuperseded):
-                await self._rekick_unadmitted_superseding_intent(conversation_id)
-                return failed(str(run_error))
-            recorded = await self._record_workflow_schedule_error(
-                conversation_id,
-                detail="workflow_schedule_run_failed",
-                explanation=(f"Workflow schedule {schedule_id} failed while running: {run_error}"),
-                agent_view_id=agent_view_id,
-                run_intent_id=run_intent_id,
-            )
-            if not recorded:
-                await self._rekick_unadmitted_superseding_intent(conversation_id)
-            return failed(str(run_error))
-
-        assert state is not None
-        await self._finalize_clean_return(
-            conversation_id,
-            generation,
-            agent_view_id=agent_view_id,
-            run_intent_id=run_intent_id,
-        )
-        return state
-
-    async def _sealed_run_record_history(
-        self,
-        *,
-        schedule_id: str,
-        conversation_id: str,
-        fired_at: datetime,
-        state: ConversationState,
-        fallback_output_path: str,
-        coalesced: bool,
-    ) -> WorkflowScheduleRunRecord:
-        authoritative = await self._store.get_state(conversation_id)
-        events = await self._store.get_events(conversation_id)
-        output_path, verify_verdict = _workflow_history_fields(
-            events,
-            fallback_output_path=fallback_output_path,
-        )
-        terminal_state = authoritative.execution_status or state.execution_status
-        return WorkflowScheduleRunRecord(
-            schedule_id=schedule_id,
-            run_cid=conversation_id,
-            fired_at=fired_at,
-            terminal_state=terminal_state.value,
-            output_path=output_path,
-            verify_verdict=verify_verdict,
-            coalesced=coalesced,
-        )
-
-    async def run_sealed_workflow_schedule(
-        self,
-        *,
-        schedule_id: str,
-        spec: ScheduleSpec,
-        owner_id: str = DEFAULT_OWNER_ID,
-        coalesced: bool = False,
-    ) -> WorkflowScheduleRunRecord:
-        """Fire a workflow schedule as a fresh sealed agent conversation.
-
-        The schedule pins an instance id + definition digest. Any mismatch fails
-        closed before tools are exposed. Successful fires compose the normal agent
-        build loop in workflow RUN phase with the compiled workflow scope, so router
-        tools are never registered and autonomous mode withholds ask/clarify tools.
-        """
-        (
-            conversation_id,
-            fired_at,
-            workflow_run,
-            fallback_output_path,
-            schedule_message,
-            setup_record,
-        ) = await self._sealed_run_conversation_setup(
-            schedule_id=schedule_id,
-            spec=spec,
-            coalesced=coalesced,
-            owner_id=owner_id,
-        )
-        if setup_record is not None:
-            return setup_record
-
-        execute_result = await self._sealed_run_execute(
-            schedule_id=schedule_id,
-            spec=spec,
-            conversation_id=conversation_id,
-            fired_at=fired_at,
-            workflow_run=cast(WorkflowRun, workflow_run),
-            fallback_output_path=fallback_output_path,
-            schedule_message=cast(MessageEvent, schedule_message),
-            coalesced=coalesced,
-        )
-        if isinstance(execute_result, WorkflowScheduleRunRecord):
-            return execute_result
-
-        return await self._sealed_run_record_history(
-            schedule_id=schedule_id,
-            conversation_id=conversation_id,
-            fired_at=fired_at,
-            state=execute_result,
-            fallback_output_path=fallback_output_path,
-            coalesced=coalesced,
-        )
 
     # ---- RP-08: scheduled tasks ---------------------------------------------
 

@@ -1,40 +1,193 @@
-"""Scheduled tasks (RP-08) — extracted from `runtime.py`.
-
-God-file decomposition (pure move, zero behavior change). The schedule-facing
-accessors move out of runtime.py into a `ScheduleService` collaborator
-constructed once in `ConversationRuntime`: the lazy `ScheduleManager` accessor
-+ lifespan trampoline (`_schedule_manager` / `_schedule_manager_loop`), the CRUD
-+ preview surface (`create_schedule` / `list_schedules` / `delete_schedule` /
-`preview_schedule_runs`), and the activity-dashboard history read
-(`list_recent_schedule_runs`).
-
-The lazily-created `_sched_manager` handle stays on `ConversationRuntime` (the
-ScheduleManager is constructed with the runtime itself as its second arg); the
-service reaches it + `_store` via a back-reference. Every method keeps a
-one-line delegator on `ConversationRuntime` because the app lifespan + routes
-call each on the runtime.
-"""
+"""Typed schedule ownership and the legacy manager compatibility boundary."""
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import contextvars
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from disco.core.workflow import ScheduleSpec
+from disco.core import MessageEvent
+from disco.core.llm import DefaultLLMRouter
+from disco.core.loop import AgentLoop, RouterAgent
+from disco.core.store.sqlite import SqliteEventStore
+from disco.core.workflow import ScheduleSpec, WorkflowRun
+from disco.tools import DefaultToolExecutor
+from disco.tools.projects import ProjectStore
 
+from .driver_context import ResolvedDriverContext
+from .workflow_schedule import WorkflowScheduleRunRecord
+
+if TYPE_CHECKING:
+    from .runtime import ConversationRuntime
+
+
+class WorkflowConversationSettings(Protocol):
+    def set_surface(self, conversation_id: str, surface: str) -> None: ...
+
+    def set_autonomous(self, conversation_id: str, value: bool = True) -> None: ...
+
+
+class WorkflowModelAccess(Protocol):
+    async def _resolve_driver_context(self, conversation_id: str) -> ResolvedDriverContext: ...
+
+    def _router_now(
+        self,
+        pick: str | None = None,
+        *,
+        surface: str | None = None,
+        autonomous: bool = False,
+        conversation_id: str | None = None,
+    ) -> DefaultLLMRouter: ...
+
+
+class WorkflowLoopFactory(Protocol):
+    def _compose_build_loop(
+        self,
+        conversation_id: str,
+        router: DefaultLLMRouter,
+        agent: RouterAgent,
+        *,
+        driver_context_window: int | None = None,
+        sealed_workflow_run: WorkflowRun | None = None,
+        sealed_workflow_instance_id: str | None = None,
+    ) -> AgentLoop: ...
+
+
+class WorkflowRunControl(Protocol):
+    _tasks: dict[str, asyncio.Task[Any]]
+    _loops: dict[str, AgentLoop]
+    _executors: dict[str, DefaultToolExecutor]
+    _run_task_authorities: dict[asyncio.Task[Any], tuple[str | None, str | None]]
+    _run_claimed_user_seq: dict[str, int]
+    _resolved_context_for_compose: dict[str, ResolvedDriverContext]
+    _resolved_driver_contexts: dict[str, ResolvedDriverContext]
+
+    def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
+
+    def _create_run_task(
+        self,
+        conversation_id: str,
+        loop: AgentLoop | None = None,
+        *,
+        expected_run_intent_id: str | None = None,
+        task_context: contextvars.Context | None = None,
+    ) -> tuple[asyncio.Task[Any], int]: ...
+
+    async def _finalize_clean_return(
+        self,
+        conversation_id: str,
+        generation: int | None = None,
+        *,
+        agent_view_id: str | None = None,
+        run_intent_id: str | None = None,
+    ) -> None: ...
+
+    async def _rekick_unadmitted_superseding_intent(self, conversation_id: str) -> None: ...
+
+
+class WorkflowRunner(Protocol):
+    async def run(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        owner_id: str,
+        coalesced: bool,
+    ) -> WorkflowScheduleRunRecord: ...
+
+
+class WorkflowProjectAccess(Protocol):
+    def _project_store_now(self) -> ProjectStore: ...
+
+
+class RecurringScheduleControl(Protocol):
+    def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
+
+    def set_depth(self, conversation_id: str, tier: str | None) -> None: ...
+
+    async def send_user_turn(self, conversation_id: str, text: str) -> MessageEvent: ...
+
+
+class WorkflowErrorRecorder(Protocol):
+    async def __call__(
+        self,
+        conversation_id: str,
+        *,
+        detail: str,
+        explanation: str,
+        agent_view_id: str | None = None,
+        run_intent_id: str | None = None,
+    ) -> bool: ...
+
+
+class _ScheduleRuntimeAdapter:
+    """Static compatibility port for ScheduleManager pending its later package."""
+
+    def __init__(
+        self,
+        workflow_runs: WorkflowRunner,
+        project_access: WorkflowProjectAccess,
+        recurring_control: RecurringScheduleControl,
+    ) -> None:
+        self._workflow_runs = workflow_runs
+        self._project_access = project_access
+        self._recurring_control = recurring_control
+
+    def _project_store_now(self) -> ProjectStore:
+        return self._project_access._project_store_now()
+
+    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
+        self._recurring_control.set_model_override(conversation_id, model_id)
+
+    def set_depth(self, conversation_id: str, tier: str | None) -> None:
+        self._recurring_control.set_depth(conversation_id, tier)
+
+    async def send_user_turn(self, conversation_id: str, text: str) -> MessageEvent:
+        return await self._recurring_control.send_user_turn(conversation_id, text)
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        owner_id: str,
+        coalesced: bool,
+    ) -> WorkflowScheduleRunRecord:
+        return await self._workflow_runs.run(
+            schedule_id=schedule_id,
+            spec=spec,
+            owner_id=owner_id,
+            coalesced=coalesced,
+        )
 
 class ScheduleService:
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        store: SqliteEventStore,
+        *,
+        workflow_runs: WorkflowRunner,
+        project_access: WorkflowProjectAccess,
+        recurring_control: RecurringScheduleControl,
+    ) -> None:
+        self._store = store
+        self._workflow_runs = workflow_runs
+        self._runtime_port = _ScheduleRuntimeAdapter(
+            workflow_runs,
+            project_access,
+            recurring_control,
+        )
+        self._sched_manager: Any | None = None
 
     def _schedule_manager(self) -> Any:
-        """Lazy accessor for the ScheduleManager (avoids circular import at
-        module load).  The manager is created on first access (or already held
-        after _start_schedule_manager is called at lifespan start)."""
-        if not hasattr(self._rt, "_sched_manager"):
+        """Create the legacy manager lazily without giving it the runtime."""
+        if self._sched_manager is None:
             from .schedule import ScheduleManager
 
-            self._rt._sched_manager = ScheduleManager(self._rt._store, self._rt)
-        return self._rt._sched_manager
+            self._sched_manager = ScheduleManager(
+                self._store,
+                cast("ConversationRuntime", self._runtime_port),
+            )
+        return self._sched_manager
 
     async def _schedule_manager_loop(self) -> None:
         """Thin trampoline: lifespan task → ScheduleManager.run().  Mirrors the
@@ -163,7 +316,4 @@ class ScheduleService:
     def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[dict]:
         """Owner-scoped recent scheduled-run history for the activity dashboard
         (delegates to the store; newest first, with schedule description + title)."""
-        fn = getattr(self._rt._store, "list_recent_schedule_runs", None)
-        if fn is None:  # a store without the audit table (defensive)
-            return []
-        return fn(owner_id, limit)
+        return self._store.list_recent_schedule_runs(owner_id, limit)
