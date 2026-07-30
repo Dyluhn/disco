@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from disco.core import SkillStore
 from disco.core.inspect import inspect_enabled
@@ -42,6 +42,7 @@ from .build_retrieval import BuildRetrievalCapabilities
 from .connection_tracker import ConnectionTracker, LifecycleSuspender
 from .control_ops import ControlOps
 from .conversation_control_service import ConversationControlService
+from .deep_research_provider import DeepResearchProvider
 from .deep_research_service import DeepResearchService
 from .deep_research_state import DeepResearchLiveState, DeepResearchState
 from .driver_context_state import DriverContextState
@@ -87,15 +88,7 @@ from .runtime_settings import (
 )
 from .sandbox_resource_reconciler import SandboxResourceReconciler
 from .sandbox_runtime_service import SandboxRuntimeService
-from .schedule_service import (
-    RecurringScheduleControl,
-    ScheduleService,
-    WorkflowConversationSettings,
-    WorkflowLoopFactory,
-    WorkflowModelAccess,
-    WorkflowProjectAccess,
-    WorkflowRunControl,
-)
+from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_service import ConfiguredProjectRoot, SpaceService
@@ -103,6 +96,14 @@ from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .upload_store import UploadStore
 from .workflow_run_service import WorkflowRunService
+from .workflow_runtime_ports import (
+    RecurringScheduleControlAdapter,
+    WorkflowConversationSettingsAdapter,
+    WorkflowLoopFactoryAdapter,
+    WorkflowModelAccessAdapter,
+    WorkflowProjectAccessAdapter,
+    WorkflowRunControlAdapter,
+)
 from .workspace_service import WorkspaceCoordinator
 
 if TYPE_CHECKING:
@@ -235,13 +236,29 @@ def _wire_domains(
     )
     rt._research_state = DeepResearchState()
     rt._research_live_state = DeepResearchLiveState()
-    rt._dr = DeepResearchService(
-        rt,
-        state=rt._research_state,
-        live_state=rt._research_live_state,
+    research_provider = DeepResearchProvider(
+        rt._config_store,
+        rt._secret_store,
+        rt._mcp,
         injected_providers=research_providers,
     )
-    rt._spaces = SpaceService(ConfiguredProjectRoot(rt._config_store), rt._dr)
+    rt._spaces = SpaceService(
+        ConfiguredProjectRoot(rt._config_store),
+        research_provider,
+    )
+    rt._dr = DeepResearchService(
+        store=rt._store,
+        lifecycle_commands=rt._lifecycle_commands,
+        drivers=rt._drivers,
+        settings=rt._settings,
+        preflight=rt._driver_preflight,
+        spaces=rt._spaces,
+        cancellations=rt._cancellations,
+        provider=research_provider,
+        projects=rt._projects,
+        state=rt._research_state,
+        live_state=rt._research_live_state,
+    )
     rt._build_retrieval = BuildRetrievalCapabilities(rt._dr, rt._mcp)
     rt._build_shadows = BuildShadowLedger()
     rt._artifact_manifest_shadow = ArtifactManifestShadow(
@@ -295,24 +312,6 @@ def _wire_loops(rt: ConversationRuntime, *, mode: OperatingMode) -> None:
         rt._driver_contexts,
         mode,
     )
-    workflow_runs = WorkflowRunService(
-        rt._store,
-        lifecycle_commands=rt._lifecycle_commands,
-        workspace=rt._workspace,
-        project_access=cast(WorkflowProjectAccess, rt),
-        settings=cast(WorkflowConversationSettings, rt),
-        model_access=cast(WorkflowModelAccess, rt),
-        loop_factory=cast(WorkflowLoopFactory, rt),
-        run_control=cast(WorkflowRunControl, rt),
-    )
-    rt._schedule = ScheduleService(
-        rt._store,
-        workflow_runs=workflow_runs,
-        project_access=cast(WorkflowProjectAccess, rt),
-        recurring_control=cast(RecurringScheduleControl, rt),
-    )
-    rt._sessions = SessionsService(rt)
-    rt._preview = PreviewService(rt)
 
 
 def _wire_runs(rt: ConversationRuntime) -> None:
@@ -413,6 +412,38 @@ def _wire_runs(rt: ConversationRuntime) -> None:
         RunPersistence(rt._workspace, rt._lifecycle),
         DeepResearchRun(rt._dr),
     )
+    workflow_runs = WorkflowRunService(
+        rt._store,
+        lifecycle_commands=rt._lifecycle_commands,
+        workspace=rt._workspace,
+        project_access=WorkflowProjectAccessAdapter(rt._projects),
+        settings=WorkflowConversationSettingsAdapter(rt._settings),
+        model_access=WorkflowModelAccessAdapter(rt._drivers),
+        loop_factory=WorkflowLoopFactoryAdapter(rt._loop_factory),
+        run_control=WorkflowRunControlAdapter(
+            rt._run_registry,
+            rt._run_authorities,
+            rt._run_ingress,
+            rt._loop_registry,
+            rt._run_resources,
+            rt._driver_contexts,
+            rt._workspace,
+            rt._run_supervisor,
+            rt._run_finalizer,
+        ),
+    )
+    rt._schedule = ScheduleService(
+        rt._store,
+        workflow_runs=workflow_runs,
+        project_access=WorkflowProjectAccessAdapter(rt._projects),
+        recurring_control=RecurringScheduleControlAdapter(
+            rt._settings,
+            rt.send_user_turn,
+            rt._dr.set_depth,
+        ),
+    )
+    rt._sessions = SessionsService(rt)
+    rt._preview = PreviewService(rt)
 
 
 def wire_runtime(
