@@ -21,9 +21,26 @@ helpers live in ``_event_render``.  Platform and workspace folds live in
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import json
+import re
+import uuid
+from collections.abc import Iterable
+from contextvars import ContextVar
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, TypeAdapter
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
+
+from . import _event_folds_platform as _platform_folds
+from . import _event_folds_workspace as _workspace_folds
 
 # ---- audit events -----------------------------------------------------------
 from ._event_audit import (
@@ -146,6 +163,24 @@ from ._event_types import (
     _new_id,
     _now,
 )
+from .dod import DoDPredicate, predicate_to_dict
+from .effects import (
+    ActionProfile,
+    EffectReceipt,
+    FinalWorkspaceSeal,
+    RecoveryLeaseTransition,
+)
+from .verification import (
+    AdmittedVerificationContract,
+    HostVerificationClaim,
+    HostVerificationResult,
+    PreviewSelectionIdentity,
+    VerificationArtifactIdentity,
+    VerificationClaimStatus,
+    VerificationDeliveryContract,
+    VerificationExecutionIdentity,
+    VerificationRequirementsDirective,
+)
 
 # ---- the discriminated union the store/serde use ----------------------------
 
@@ -180,6 +215,12 @@ Event = Annotated[
     | ContextSummaryEvent,
     Field(discriminator="kind"),
 ]
+
+# The fold modules intentionally do not import this facade (which would create a
+# cycle) or define a second discriminated union. Bind their forward annotation
+# namespace to the sole canonical union once it exists.
+_platform_folds.Event = Event
+_workspace_folds.Event = Event
 
 # Single shared validator/serializer for the union. Consumers parse arbitrary
 # event dicts (post-migration) through this; the `kind` field selects the
