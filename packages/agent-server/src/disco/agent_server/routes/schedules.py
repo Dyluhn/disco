@@ -36,12 +36,12 @@ def make_schedules_router(
             # model_override. An explicit schedule pick stays authoritative.
             schedule_model = body.model_override
             if not schedule_model:
-                last = runtime.get_last_selected_model()
+                last = runtime._settings.get_last_selected_model()
                 if last:
                     cfg = runtime._config_store.load()
                     if last in cfg.models:
                         schedule_model = last
-            result = runtime.create_schedule(
+            result = runtime._schedule.create_schedule(
                 conversation_id=conversation_id,
                 owner_id=current_owner_id(request),
                 rrule=body.rrule,
@@ -61,7 +61,7 @@ def make_schedules_router(
         if runtime is None:
             return {"schedules": []}
         return {
-            "schedules": runtime.list_schedules(
+            "schedules": runtime._schedule.list_schedules(
                 owner_id=current_owner_id(request), conversation_id=conversation_id
             )
         }
@@ -71,7 +71,10 @@ def make_schedules_router(
         """Delete a schedule by id. OWNER-SCOPED. Returns `{deleted: true/false}`."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        deleted = runtime.delete_schedule(schedule_id, owner_id=current_owner_id(request))
+        deleted = runtime._schedule.delete_schedule(
+            schedule_id,
+            owner_id=current_owner_id(request),
+        )
         return {"ok": deleted, "schedule_id": schedule_id, "deleted": deleted}
 
     @router.post("/api/conversations/{conversation_id}/schedules/{schedule_id}/fire-now")
@@ -82,7 +85,10 @@ def make_schedules_router(
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         await require_owned_conversation(request, store, conversation_id)
-        fired = await runtime.fire_schedule_now(schedule_id, owner_id=current_owner_id(request))
+        fired = await runtime._schedule.fire_now(
+            schedule_id,
+            owner_id=current_owner_id(request),
+        )
         if not fired:
             raise HTTPException(status_code=404, detail={"reason": "schedule_not_found"})
         return {"ok": True, "schedule_id": schedule_id, "fired": True}
@@ -93,7 +99,7 @@ def make_schedules_router(
         saving a schedule — the confirm card shows next-3-runs to the user."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        times = runtime.preview_schedule_runs(
+        times = runtime._schedule.preview_schedule_runs(
             body.rrule,
             body.n,
             timezone=body.timezone,
@@ -116,7 +122,7 @@ def make_schedules_router(
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         try:
-            return runtime.create_workflow_schedule(
+            return runtime._schedule.create_workflow_schedule(
                 body,
                 owner_id=current_owner_id(request),
             )
@@ -129,7 +135,7 @@ def make_schedules_router(
             return {"schedules": []}
         session = current_session(request)
         return {
-            "schedules": runtime.list_workflow_schedules(
+            "schedules": runtime._schedule.list_workflow_schedules(
                 owner_id=session.owner_id,
                 include_unclaimed_legacy=session.is_admin,
             )
@@ -145,7 +151,7 @@ def make_schedules_router(
             return {"runs": []}
         session = current_session(request)
         return {
-            "runs": runtime.list_workflow_schedule_runs(
+            "runs": runtime._schedule.list_workflow_schedule_runs(
                 schedule_id=schedule_id,
                 owner_id=session.owner_id,
                 include_unclaimed_legacy=session.is_admin,
@@ -158,7 +164,7 @@ def make_schedules_router(
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         session = current_session(request)
-        record = await runtime.fire_workflow_schedule_now(
+        record = await runtime._schedule.fire_workflow_schedule_now(
             schedule_id,
             owner_id=session.owner_id,
             include_unclaimed_legacy=session.is_admin,

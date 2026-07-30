@@ -41,7 +41,7 @@ def make_sandbox_router(runtime: ConversationRuntime | None) -> APIRouter:
         real run environment. `{reachable, backend, detail}` (SandboxHealthDTO shape)."""
         if runtime is None:
             return {"reachable": False, "backend": "unknown", "detail": "runtime unavailable"}
-        reachable, backend, detail = await runtime.probe_active_sandbox()
+        reachable, backend, detail = await runtime._sandbox.probe_active_sandbox()
         return {"reachable": reachable, "backend": backend, "detail": detail}
 
     @router.post("/api/sandbox/test")
@@ -66,7 +66,7 @@ def make_sandbox_router(runtime: ConversationRuntime | None) -> APIRouter:
             image=body.image or "disco-sandbox:base",
             workspace_root=body.workspace_root or "/var/lib/disco/workspaces",
         )
-        ok, status, detail = await runtime.probe_sandbox_config(settings)
+        ok, status, detail = await runtime._sandbox.probe_sandbox_config(settings)
         return {"ok": ok, "status": status, "detail": detail, "provider": body.backend}
 
     return router
