@@ -16,7 +16,6 @@ is an adapter over the EXISTING entry points —
     confirm / reject / request_plan  → `ControlOps` (the plan/action gate)
   * pick_alternative / pause /
     cancel / resume / kill           → the existing control surface
-  * subscribe / get_state           → the existing event store
 
 — it does NOT turn `AgentLoop.run()` into an `AsyncIterator[KernelEvent]`.
 `KernelEvent` is therefore just a reuse of the existing `disco.core.Event`
@@ -25,10 +24,9 @@ spine (the store's element type), not a new parallel event type.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
-from disco.core import ConversationState, Event, MessageEvent
+from disco.core import Event, MessageEvent
 from disco.core.appkit import BuildBrief
 from disco.core.verification import VerificationRequirementsDirective
 
@@ -58,10 +56,10 @@ class BuildKernel(Protocol):
     `DiscoKernel` is a faithful pass-through (ZERO behavior change).
 
     The campaign's "core" surface is start / send_user_turn / approve_plan /
-    reject_plan / cancel / resume + the event subscription accessor; the
-    remaining methods (confirm / reject / request_plan / pick_alternative /
-    pause / kill / get_state) round out the real Disco control surface the WS and
-    REST routes already drive, so the seam is implementable end-to-end today.
+    reject_plan / cancel / resume; the remaining methods (confirm / reject /
+    request_plan / pick_alternative / pause / kill) round out the real Disco
+    control surface the WS and REST routes already drive, so the seam is
+    implementable end-to-end today.
     """
 
     #: Stable identifier of the kernel implementation (matches `BuildKernelKind`).
@@ -130,16 +128,4 @@ class BuildKernel(Protocol):
 
     async def kill(self, conversation_id: str) -> None:
         """The hard kill switch — halt the run, revoke caps, tear down the box."""
-        ...
-
-    # -- events / state -------------------------------------------------------
-    async def subscribe(
-        self, conversation_id: str, *, after_seq: int | None = None
-    ) -> AsyncIterator[KernelEvent]:
-        """The conversation's event stream: history after `after_seq`, then live
-        appends. Awaited to obtain the async iterator (mirrors the store)."""
-        ...
-
-    async def get_state(self, conversation_id: str) -> ConversationState:
-        """The reconstructed conversation state (status + pending gate ids)."""
         ...
