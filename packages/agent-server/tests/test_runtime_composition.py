@@ -137,6 +137,24 @@ def test_application_owners_do_not_retain_the_runtime() -> None:
     assert whole_runtime_casts == []
 
 
+def test_runtime_consumers_do_not_reach_through_composition_resources() -> None:
+    source_root = Path(__file__).parents[1] / "src/disco/agent_server"
+    consumers = [
+        source_root / "host_proxy.py",
+        source_root / "preview_service.py",
+        *sorted((source_root / "routes").glob("*.py")),
+    ]
+
+    for path in consumers:
+        tree = ast.parse(path.read_text())
+        private_resource_access = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "_run_resources"
+        ]
+        assert private_resource_access == [], path.name
+
+
 def test_wire_runtime_body_is_wiring_only() -> None:
     function = ast.parse(inspect.getsource(wire_runtime)).body[0]
     assert isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
