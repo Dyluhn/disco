@@ -72,6 +72,7 @@ from disco.retrieval.deep_research import (
     DepthTier,
     decompose_query,
 )
+from disco.retrieval.models import Passage
 from disco.tools.projects import StorageStatus
 
 from .space_store import JsonSpaceStore
@@ -88,6 +89,28 @@ class DeepResearchService:
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+        self._steer_queues: dict[str, list[str]] = {}
+        self._injected_source_queues: dict[str, list[Passage]] = {}
+
+    def enqueue_steer(self, conversation_id: str, text: str) -> bool:
+        """Queue a steer only while this owner has an active research run."""
+        queue = self._steer_queues.get(conversation_id)
+        if queue is None:
+            return False
+        queue.append(text)
+        return True
+
+    def inject_source(self, conversation_id: str, passage: Passage) -> bool:
+        """Queue a typed source only while this owner has an active run."""
+        queue = self._injected_source_queues.get(conversation_id)
+        if queue is None:
+            return False
+        queue.append(passage)
+        return True
+
+    def forget(self, conversation_id: str) -> None:
+        self._steer_queues.pop(conversation_id, None)
+        self._injected_source_queues.pop(conversation_id, None)
 
     def _validated_space_ids(
         self,
@@ -990,24 +1013,24 @@ class DeepResearchService:
         flag = asyncio.Event()
         self._rt._cancel_flags[conversation_id] = flag
 
-        # D3: initialise per-cid steer/inject queues on the runtime.
+        # D3: initialise per-cid steer/inject queues on the research owner.
         # The WS handler enqueues into these; pop_* closures drain them at
         # each section boundary. Queues are removed in `finally` below so the
         # presence of a key = "a DR run is currently in flight for this cid".
-        self._rt._dr_steer[conversation_id] = []
-        self._rt._dr_injected_sources[conversation_id] = []
+        self._steer_queues[conversation_id] = []
+        self._injected_source_queues[conversation_id] = []
 
         def pop_steers() -> list[str]:
             """Drain the steer queue (called at each section boundary)."""
-            queue = self._rt._dr_steer.get(conversation_id, [])
+            queue = self._steer_queues.get(conversation_id, [])
             if not queue:
                 return []
             steers, queue[:] = queue[:], []
             return steers
 
-        def pop_injected_sources() -> list[Any]:
+        def pop_injected_sources() -> list[Passage]:
             """Drain the inject-source queue (called at each section boundary)."""
-            queue = self._rt._dr_injected_sources.get(conversation_id, [])
+            queue = self._injected_source_queues.get(conversation_id, [])
             if not queue:
                 return []
             injected, queue[:] = queue[:], []
@@ -1039,8 +1062,7 @@ class DeepResearchService:
             self._rt._cancel_flags.pop(conversation_id, None)
             # D3: remove per-cid queues so the WS handler knows no DR run is
             # active for this cid (it tests `cid in _dr_steer` for routing).
-            self._rt._dr_steer.pop(conversation_id, None)
-            self._rt._dr_injected_sources.pop(conversation_id, None)
+            self.forget(conversation_id)
             # Return the run's transient working set (fetch buffers + ONNX batch
             # temporaries, already freed by the time run.run() returned) back to
             # the OS, so a long-lived server doesn't accumulate a permanent RSS

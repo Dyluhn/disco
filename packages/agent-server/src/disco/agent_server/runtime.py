@@ -904,15 +904,6 @@ class ConversationRuntime:
         # the engine polls it at each sub-question/section boundary and halts,
         # keeping the partial report (resumable). See _execute_deep_research.
         self._cancel_flags: dict[str, asyncio.Event] = {}
-        # D3: per-cid mid-run steer / inject-source queues. Populated by the WS
-        # `steer` / `inject_source` frame handlers when a DR run is in progress;
-        # drained at each section boundary by the engine's pop_steers /
-        # pop_injected_sources hooks. Keys are ONLY present during an active DR run
-        # (_execute_deep_research initialises them, `finally` removes them).
-        # _dr_injected_sources stores pre-converted Passage objects (the WS handler
-        # converts raw text to a Passage immediately on receipt).
-        self._dr_steer: dict[str, list[str]] = {}
-        self._dr_injected_sources: dict[str, list[Any]] = {}  # list[Passage]
         # G1/DR-4: per-conversation upload corpus (text files ingested at upload
         # time → citable Passages for both basic research and DR runs).
         # Keyed by conversation_id; value is a flat list of Passage objects.

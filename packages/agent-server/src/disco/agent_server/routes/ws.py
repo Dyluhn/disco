@@ -124,7 +124,8 @@ async def _handle_control_frame(
     elif frame.type == "cancel":
         await runtime.cancel(conversation_id)
     elif frame.type == "resume":
-        await runtime.resume_conversation(conversation_id)
+        await runtime._contract._fold_contract_from_history(conversation_id)
+        await runtime._resume.resume_conversation(conversation_id)
 
 
 async def _handle_send_message_frame(
@@ -200,9 +201,9 @@ async def _handle_steer_frame(
     # at each section boundary → the steer becomes a new gather leg.
     # OFF-path (no DR run active): falls through to the original agent-loop kick,
     # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
-    if runtime is not None and conversation_id in runtime._dr_steer:
-        runtime._dr_steer[conversation_id].append(frame.steer_text)
-    elif runtime is not None:
+    if runtime is not None and runtime._dr.enqueue_steer(conversation_id, frame.steer_text):
+        return
+    if runtime is not None:
         await runtime.send_user_turn(conversation_id, frame.steer_text, steer=True)
     else:
         await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
@@ -244,7 +245,7 @@ def _handle_inject_source_frame(
     # pop_injected_sources callback can return typed Passage objects.
     # URL → Passage extraction is a follow-up (async, requires extraction
     # provider); only plaintext is accepted in v1.
-    if runtime is None or conversation_id not in runtime._dr_injected_sources:
+    if runtime is None:
         return
     import hashlib as _hashlib
 
@@ -258,7 +259,7 @@ def _handle_inject_source_frame(
         source_url="user-injected",
         source_title="User-injected source",
     )
-    runtime._dr_injected_sources[conversation_id].append(passage)
+    runtime._dr.inject_source(conversation_id, passage)
 
 
 async def _require_ws_session(websocket: WebSocket):
@@ -323,23 +324,23 @@ async def _send_conversation_state_frame(
     state = await store.get_state(conversation_id)
     # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
     if runtime is not None:
-        sstate = runtime.sandbox_state(conversation_id)
+        sstate = runtime._lifecycle.sandbox_state(conversation_id)
         if sstate is not None:
             state.extras["sandbox"] = sstate
-        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+        sandbox_ids = runtime._lifecycle.sandbox_instance_ids(conversation_id)
         if sandbox_ids:
             state.extras["sandbox_instance_ids"] = sandbox_ids
-        if runtime.is_autonomous(conversation_id):
+        if runtime._settings.is_autonomous(conversation_id):
             state.extras["autonomous"] = True
-        if runtime.is_quiet(conversation_id):
+        if runtime._settings.is_quiet(conversation_id):
             state.extras["quiet"] = True
         # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
         # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
-        state.extras["assist"] = runtime.is_assist(conversation_id)
+        state.extras["assist"] = runtime._settings.is_assist(conversation_id)
     # BP-15: mirror the HTTP /state sandbox_backend overlay.
     state_dict = state.model_dump(mode="json")
     if runtime is not None:
-        sbackend = runtime.sandbox_backend_name()
+        sbackend = runtime._sandbox.backend_name()
         if sbackend is not None:
             state_dict["sandbox_backend"] = sbackend
     await _send_json_redacted(websocket, {"type": "state", "state": state_dict})
@@ -462,7 +463,7 @@ def _parse_research_request(
     # P3: seed from last-selected when no explicit override is given.
     model_override = body.get("model_override") or None
     if not model_override and runtime is not None:
-        model_override = runtime.get_last_selected_model()
+        model_override = runtime._settings.get_last_selected_model()
     drop_weak = bool(body.get("drop_weak"))
     think = bool(body.get("think"))
     domains = body.get("domains_deny") or []
@@ -545,7 +546,7 @@ async def _stream_research_frames(
 ) -> None:
     """Stream research frames to the WebSocket, handling errors and closing."""
     try:
-        async for frame in runtime.research_stream(
+        async for frame in runtime._dr.research_stream(
             query,
             model_override=params["model_override"],
             drop_weak=params["drop_weak"],
