@@ -20,6 +20,7 @@ from .preview_models import (
     PreviewSession,
     PreviewStatus,
     _fcntl,
+    _PreviewPortPool,
 )
 
 
@@ -45,7 +46,7 @@ class _PreviewPortResource(ABC):
         self,
         sandbox: Any,
         *,
-        port_pool: list[int] | None = None,
+        port_pool: _PreviewPortPool | None = None,
         health_attempts: int = 10,
         health_interval_s: float = 0.3,
         supervise_interval_s: float = 4.0,
@@ -54,7 +55,7 @@ class _PreviewPortResource(ABC):
         self._sandbox = sandbox
         self._owns_sandbox = owns_sandbox
         self._pool: list[int] = (
-            list(port_pool) if port_pool is not None else _default_port_pool(sandbox)
+            list(port_pool.ports) if port_pool is not None else _default_port_pool(sandbox)
         )
         self._health_attempts = max(1, health_attempts)
         self._health_interval_s = health_interval_s

@@ -38,6 +38,13 @@ class PreviewReloadStrategy(str, Enum):
     RELOAD = "reload"
 
 
+@dataclass(frozen=True, slots=True)
+class _PreviewPortPool:
+    """Typed configuration boundary for platform-owned preview ports."""
+
+    ports: tuple[int, ...]
+
+
 # How a bare framework name maps to a start command. `{port}` is filled with the
 # PLATFORM-allocated port — never anything the model supplied. Anything not listed
 # falls through to the static file server (the safe MVP default).

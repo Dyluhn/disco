@@ -10,6 +10,7 @@ from .preview_models import (
     PreviewReloadStrategy,
     PreviewSession,
     PreviewStatus,
+    _PreviewPortPool,
     preview_projection_digest,
     preview_requires_node_dependencies,
 )
@@ -111,7 +112,11 @@ class PreviewManager(
     ) -> None:
         self._resource = PreviewResource(
             sandbox,
-            port_pool=port_pool,
+            port_pool=(
+                _PreviewPortPool(tuple(port_pool))
+                if port_pool is not None
+                else None
+            ),
             health_attempts=health_attempts,
             health_interval_s=health_interval_s,
             supervise_interval_s=supervise_interval_s,
