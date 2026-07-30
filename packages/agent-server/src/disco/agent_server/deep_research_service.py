@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -46,8 +46,19 @@ from disco.retrieval.ranking import Embedder
 from disco.tools.projects import StorageStatus
 
 from .build_loop_components import _NoToolExecutor
+from .deep_research_provider import DeepResearchProvider
 from .deep_research_state import DeepResearchState
 from .space_store import JsonSpaceStore
+
+if TYPE_CHECKING:
+    from disco.core.store.sqlite import SqliteEventStore
+
+    from .driver_runtime import DriverPreflight, DriverRuntime
+    from .lifecycle_command_service import LifecycleCommandService
+    from .project_runtime_service import ProjectRuntimeService
+    from .run_registry import CancellationRegistry
+    from .runtime_settings import RuntimeSettings
+    from .space_service import SpaceService
 
 _LOG = logging.getLogger(__name__)
 
@@ -57,20 +68,41 @@ def _clean_model_text(text: str | None) -> str:
 
 
 class DeepResearchService:
-    """Deep Research + live-research-stream logic; runtime wiring via the back-ref."""
+    """Deep Research + live-research-stream logic.
+
+    The service constructor takes explicit named owners — never a whole
+    runtime. The owners are the narrow collaborators the service actually
+    uses: the event store, lifecycle commands, driver runtime, settings,
+    driver preflight, space service, cancellation registry, the Deep Research
+    provider (which owns provider/secret/origin resolution), the project
+    runtime service (for space-id validation), and the optional Deep Research
+    state.
+    """
 
     def __init__(
         self,
-        rt: Any,
         *,
+        store: SqliteEventStore,
+        lifecycle_commands: LifecycleCommandService,
+        drivers: DriverRuntime,
+        settings: RuntimeSettings,
+        preflight: DriverPreflight,
+        spaces: SpaceService,
+        cancellations: CancellationRegistry,
+        provider: DeepResearchProvider,
+        projects: ProjectRuntimeService,
         state: DeepResearchState | None = None,
-        injected_providers: dict[str, Any] | None = None,
     ) -> None:
-        self._rt = rt
+        self._store = store
+        self._lifecycle_commands = lifecycle_commands
+        self._drivers = drivers
+        self._settings = settings
+        self._preflight = preflight
+        self._spaces = spaces
+        self._cancellations = cancellations
+        self._provider = provider
+        self._projects = projects
         self._state = state or DeepResearchState()
-        self._injected_providers = injected_providers
-        self._research_providers: dict[str, Any] | None = None
-        self._research_encoders_key: tuple[object, ...] | None = None
 
     def enqueue_steer(self, conversation_id: str, text: str) -> bool:
         return self._state.enqueue_steer(conversation_id, text)
@@ -93,7 +125,7 @@ class DeepResearchService:
 
     def embedder(self) -> Embedder:
         """Return the live research embedder for Space corpus ingestion."""
-        return cast(Embedder, self._research()["embedder"])
+        return self._provider.embedder()
 
     def _validated_space_ids(
         self,
@@ -106,7 +138,7 @@ class DeepResearchService:
             return frozenset(), ()
         if owner_id is None:
             return frozenset(), tuple(sorted(space_ids))
-        project_store = self._rt._projects.current_project_store()
+        project_store = self._projects.current_project_store()
         if project_store.status() != StorageStatus.OK or project_store.root is None:
             return frozenset(), tuple(sorted(space_ids))
         space_store = JsonSpaceStore(project_store.root)
@@ -148,7 +180,7 @@ class DeepResearchService:
         # production-path EXPLICIT-pass gate (no silent default).
         return AgentLoop(
             conversation_id,
-            self._rt._store,
+            self._store,
             agent,
             _NoToolExecutor(),
             router,
@@ -189,175 +221,10 @@ class DeepResearchService:
         return self._state.recency_for(conversation_id)
 
     def _research(self, search_override: Any | None = None) -> dict[str, Any]:
-        # A statically-injected provider set (tests) is used as-is. Otherwise build
-        # from the PERSISTED encoder mode, and rebuild if the Settings toggle changed
-        # it — so flipping local↔remote takes effect on the next research run without
-        # a restart (rebuild is cheap: fastembed models are module-cached, not per
-        # provider instance).
-        if self._injected_providers is not None:
-            if search_override is not None:
-                return {
-                    **self._injected_providers,
-                    "search": search_override,
-                }
-            return self._injected_providers
-        cfg = self._rt._config_store.load()
-        enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
-        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
-
-        search_secret_url = {
-            "tavily": "https://api.tavily.com",
-            "brave": sch.base_url or "https://api.search.brave.com",
-            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
-        }.get(sch.provider, sch.base_url)
-        extraction_secret_url = (
-            ext.base_url or "https://api.firecrawl.dev"
-            if ext.provider == "firecrawl"
-            else ext.base_url
-        )
-        search_purpose = f"search:{sch.provider}"
-        extraction_purpose = f"extraction:{ext.provider}"
-        # paid-provider keys resolve by the configured env-var NAME (same mechanism
-        # as model api_key_env): the encrypted store wins, else the live env.
-        # Bundled providers (ddgs/local) need no key.
-        search_key = (
-            self._rt._resolve_secret(sch.api_key_env) or ""
-            if self._rt._origin_approved(search_secret_url, search_purpose, sch.api_key_env)
-            and secret_ref_allowed_for_origin(sch.api_key_env, search_secret_url)
-            else ""
-        )
-        ext_key = (
-            self._rt._resolve_secret(ext.api_key_env) or ""
-            if self._rt._origin_approved(extraction_secret_url, extraction_purpose, ext.api_key_env)
-            and secret_ref_allowed_for_origin(ext.api_key_env, extraction_secret_url)
-            else ""
-        )
-        approval_key = self._rt._config_store.approval_store(
-            secret_store=self._rt._secret_store
-        ).verified()
-        key = (
-            enc.remote,
-            enc.reranker_url,
-            enc.embedder_url,
-            enc.nli_url,
-            sch.provider,
-            sch.base_url,
-            sch.api_key_env,
-            ext.provider,
-            ext.base_url,
-            ext.api_key_env,
-            approval_key,
-        )
-        if search_override is not None:
-            from disco.retrieval.live import build_live_retrieval
-
-            return build_live_retrieval(
-                remote=enc.remote,
-                reranker_url=enc.reranker_url,
-                embedder_url=enc.embedder_url,
-                nli_url=enc.nli_url,
-                search_provider=sch.provider,
-                search_base_url=sch.base_url,
-                search_api_key=search_key,
-                search_secret_ref=sch.api_key_env,
-                search_override=search_override,
-                extraction_provider=ext.provider,
-                extraction_base_url=ext.base_url,
-                extraction_api_key=ext_key,
-                extraction_secret_ref=ext.api_key_env,
-                origin_approved=self._rt._origin_approved,
-            )
-        if self._research_providers is None or self._research_encoders_key != key:
-            from disco.retrieval.live import build_live_retrieval
-
-            self._research_providers = build_live_retrieval(
-                remote=enc.remote,
-                reranker_url=enc.reranker_url,
-                embedder_url=enc.embedder_url,
-                nli_url=enc.nli_url,
-                search_provider=sch.provider,
-                search_base_url=sch.base_url,
-                search_api_key=search_key,
-                search_secret_ref=sch.api_key_env,
-                extraction_provider=ext.provider,
-                extraction_base_url=ext.base_url,
-                extraction_api_key=ext_key,
-                extraction_secret_ref=ext.api_key_env,
-                origin_approved=self._rt._origin_approved,
-            )
-            self._research_encoders_key = key
-        return self._research_providers
+        return self._provider.research(search_override=search_override)
 
     def _search_override_for_sources(self, sources: Sequence[str] | None) -> Any | None:
-        clean = tuple(str(source).strip() for source in (sources or ()) if str(source).strip())
-        if not clean:
-            return None
-        cfg = self._rt._config_store.load()
-        sch = cfg.search
-        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
-
-        provider_urls = {
-            "tavily": "https://api.tavily.com",
-            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
-            "brave": sch.base_url or "https://api.search.brave.com",
-        }
-
-        def key_for(provider: str, *fallback_names: str) -> str:
-            target_url = provider_urls.get(provider, "")
-            purpose = f"search:{provider}"
-            if not target_url:
-                return ""
-            if sch.provider == provider and sch.api_key_env:
-                key = (
-                    self._rt._resolve_secret(sch.api_key_env)
-                    if self._rt._origin_approved(target_url, purpose, sch.api_key_env)
-                    and secret_ref_allowed_for_origin(sch.api_key_env, target_url)
-                    else None
-                )
-                if key:
-                    return key
-            for name in fallback_names:
-                key = (
-                    self._rt._resolve_secret(name)
-                    if self._rt._origin_approved(target_url, purpose, name)
-                    and secret_ref_allowed_for_origin(name, target_url)
-                    else None
-                )
-                if key:
-                    return key
-            return ""
-
-        from disco.retrieval.live import build_multi_search
-
-        return build_multi_search(
-            clean,
-            searxng_url=(
-                sch.base_url
-                if sch.provider == "searxng"
-                and self._rt._origin_approved(sch.base_url, "search:searxng", "")
-                else ""
-            ),
-            tavily_key=key_for("tavily", "TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
-            ss_key=key_for(
-                "semantic_scholar",
-                "SEMANTIC_SCHOLAR_API_KEY",
-                "DISCO_SEMANTIC_SCHOLAR_API_KEY",
-                "S2_API_KEY",
-            ),
-            brave_key=key_for(
-                "brave",
-                "BRAVE_SEARCH_API_KEY",
-                "DISCO_BRAVE_SEARCH_API_KEY",
-                "BRAVE_API_KEY",
-            ),
-            brave_url=(
-                sch.base_url
-                if sch.provider == "brave"
-                and self._rt._origin_approved(sch.base_url, "search:brave", sch.api_key_env)
-                else ""
-            ),
-            site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
-        )
+        return self._provider.search_override_for_sources(sources)
 
     async def _preflight_encoders(
         self, deps: dict[str, Any], *, required: tuple[str, ...]
@@ -436,16 +303,16 @@ class DeepResearchService:
         # FALSE-BLOCK a healthy answerer and MISS a dead one. When a pill is set
         # the override pins every role to the same model, so RAG_ANSWERER still
         # resolves to the picked model.
-        driver_reason = await self._rt._preflight_driver(
+        driver_reason = await self._preflight.check(
             conversation_id, override=model_override, role=ModelRole.RAG_ANSWERER
         )
         if driver_reason is not None:
             yield {"type": "error", "message": driver_reason}
             return
-        requested_space_ids = space_ids or self._rt._spaces.get_space_ids(conversation_id)
+        requested_space_ids = space_ids or self._spaces.get_space_ids(conversation_id)
         space_owner_id = owner_id
         if space_owner_id is None and conversation_id:
-            space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
+            space_owner_id = self._store.conversation_owner_id_sync(conversation_id)
         requested_space_ids, forbidden_space_ids = self._validated_space_ids(
             requested_space_ids,
             owner_id=space_owner_id,
@@ -469,8 +336,11 @@ class DeepResearchService:
             return
         # RP-05b §3: MCP retrieval providers join the citation path here too — the
         # composite hands MCP-discovered hits to the SAME GroundingPipeline.
-        search, extraction = self._rt._mcp._compose_mcp_retrieval(deps)
-        router = self._rt._router_now(pick=model_override, enable_thinking=think)
+        search, extraction = self._provider.compose_mcp_retrieval(deps)
+        router = self._drivers.router(
+            pick=model_override,
+            enable_thinking=think,
+        )
         # G1/DR-4 F3: load seed passages from the upload corpus for this cid.
         # Empty list when no text files were attached (the OFF path).
         seed_passages = self.get_upload_passages(conversation_id) if conversation_id else []
@@ -495,7 +365,7 @@ class DeepResearchService:
             seed_passages=seed_passages,
             corpus_ids=requested_space_ids,
             embedder=deps.get("embedder"),
-            vector_store=self._rt._spaces.space_vector_store(),
+            vector_store=self._spaces.space_vector_store(),
         ):
             yield frame
 
@@ -512,8 +382,8 @@ class DeepResearchService:
         All actions persist via the event store; the WS surface streams them.
         Failures surface as ErrorEvent on the log — never raise out of the
         background task."""
-        events = await self._rt._store.get_events(conversation_id)
-        state = await self._rt._store.get_state(conversation_id)
+        events = await self._store.get_events(conversation_id)
+        state = await self._store.get_state(conversation_id)
         plans = [e for e in events if isinstance(e, PlanEvent)]
         reports = [e for e in events if isinstance(e, ReportEvent)]
 
@@ -563,7 +433,7 @@ class DeepResearchService:
         # full ReportEvent supersedes the partial one from the stop.
         if state.execution_status == ConversationStatus.PAUSED:
             partial = reports[-1] if reports else None
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id,
                 ConversationStatus.RUNNING,
                 detail="plan_approved",
@@ -626,12 +496,12 @@ class DeepResearchService:
         # stuck RUNNING with only a system-reminder. Pre-flight the role the run
         # uses for generation (RAG_ANSWERER) BEFORE setting RUNNING; on failure
         # emit a NAMED StatusEvent(ERROR) and do NOT start.
-        override = self._rt._settings._get_model_override(conversation_id)
-        preflight_reason = await self._rt._preflight_driver(
+        override = self._settings._get_model_override(conversation_id)
+        preflight_reason = await self._preflight.check(
             conversation_id, override=override, role=ModelRole.RAG_ANSWERER
         )
         if preflight_reason is not None:
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id, ConversationStatus.ERROR, detail=preflight_reason[:200]
             )
             return
@@ -646,16 +516,16 @@ class DeepResearchService:
         # _preflight_driver) BEFORE setting RUNNING so EVERY role on the kick
         # path is genuinely bounded. When override pins all roles to one model
         # this is a cache hit (no added latency).
-        rewriter_reason = await self._rt._preflight_driver(
+        rewriter_reason = await self._preflight.check(
             conversation_id, override=override, role=ModelRole.QUERY_REWRITER
         )
         if rewriter_reason is not None:
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id, ConversationStatus.ERROR, detail=rewriter_reason[:200]
             )
             return
 
-        await self._rt._lifecycle_commands.append_status(
+        await self._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.RUNNING
         )
         tier = self._depth_for(conversation_id)
@@ -669,8 +539,8 @@ class DeepResearchService:
         # the override (see the DeepResearchRun compose below) — without it HERE,
         # a user's pick silently applied to gather/synthesis but NOT to the
         # decompose/plan step (the exact half-applied-pill bug).
-        router = self._rt._drivers.router(
-            pick=self._rt._settings._get_model_override(conversation_id)
+        router = self._drivers.router(
+            pick=self._settings._get_model_override(conversation_id)
         )
         recency_window = self._recency_for(conversation_id)
         try:
@@ -681,7 +551,7 @@ class DeepResearchService:
                 recency_window=recency_window,
             )
         except Exception as exc:  # noqa: BLE001 — surface as a system reminder
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
@@ -700,7 +570,7 @@ class DeepResearchService:
             # RAG_ANSWERER pre-flight above did not cover) must take the
             # conversation to ERROR — NOT leave it stuck RUNNING with only the
             # reminder above (the conversation would otherwise spin forever).
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id,
                 ConversationStatus.ERROR,
                 detail=(f"Plan decomposition failed: {type(exc).__name__}: {exc}")[:200],
@@ -725,19 +595,19 @@ class DeepResearchService:
                 + "\n".join(f"{i + 1}. {s.title}" for i, s in enumerate(subqs))
             ),
         )
-        await self._rt._store.append(conversation_id, plan)
-        if self._rt._settings._effective_autonomous(conversation_id):
+        await self._store.append(conversation_id, plan)
+        if self._settings._effective_autonomous(conversation_id):
             # Headless/autonomous DR: no human to approve the plan. Auto-approve
             # inline (emit the same RUNNING/plan_approved StatusEvent approve_plan
             # would) and run the engine directly — otherwise the run stalls forever
             # at AWAITING_PLAN_APPROVAL. Mirrors the Build loop's autonomous
             # plan auto-approve (engine.py).
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id, ConversationStatus.RUNNING, detail="plan_approved"
             )
             await self._execute_deep_research(conversation_id, plan)
             return
-        await self._rt._lifecycle_commands.append_status(
+        await self._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
         )
 
@@ -759,7 +629,7 @@ class DeepResearchService:
         from .runtime import _release_process_memory
 
         # Find the query from the user's last (pre-plan) message.
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         query = next(
             (
                 e.message.content
@@ -782,11 +652,11 @@ class DeepResearchService:
             RouterQueryRewriter,
         )
 
-        research_sources = self._rt._settings.get_research_sources(conversation_id)
+        research_sources = self._settings.get_research_sources(conversation_id)
         search_override = self._search_override_for_sources(research_sources)
         deps = self._research(search_override=search_override)
-        space_ids = self._rt._spaces.get_space_ids(conversation_id)
-        space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
+        space_ids = self._spaces.get_space_ids(conversation_id)
+        space_owner_id = self._store.conversation_owner_id_sync(conversation_id)
         space_ids, forbidden_space_ids = self._validated_space_ids(
             space_ids,
             owner_id=space_owner_id,
@@ -803,28 +673,28 @@ class DeepResearchService:
         # On failure: emit a NAMED StatusEvent(ERROR) + ErrorEvent and DO NOT run.
         from disco.core import ErrorEvent
 
-        override = self._rt._settings._get_model_override(conversation_id)
+        override = self._settings._get_model_override(conversation_id)
         # P1-3: the DR engine synthesises/judges with RAG_ANSWERER — probe THAT
         # role, not AGENT_DRIVER (which DR generation does not use).
         required_encoders = ("reranker", "nli", "embedder") if space_ids else ("reranker", "nli")
-        preflight_reason = await self._rt._preflight_driver(
+        preflight_reason = await self._preflight.check(
             conversation_id, override=override, role=ModelRole.RAG_ANSWERER
         ) or await self._preflight_encoders(deps, required=required_encoders)
         if preflight_reason is not None:
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 ErrorEvent(code="deep_research_preflight", detail=preflight_reason),
             )
-            await self._rt._lifecycle_commands.append_status(
+            await self._lifecycle_commands.append_status(
                 conversation_id, ConversationStatus.ERROR, detail=preflight_reason[:200]
             )
             return
         # RP-05b §3: deep research's discovery/extraction also flows MCP providers
         # through the SAME engine, so deep-research citations can come from the MCP
         # tier identically to bundled providers.
-        search, extraction = self._rt._mcp._compose_mcp_retrieval(deps)
-        router = self._rt._drivers.router(
-            pick=self._rt._settings._get_model_override(conversation_id)
+        search, extraction = self._provider.compose_mcp_retrieval(deps)
+        router = self._drivers.router(
+            pick=self._settings._get_model_override(conversation_id)
         )
         retrieval_engine = DefaultRetrievalEngine(
             search=search,
@@ -832,7 +702,7 @@ class DeepResearchService:
             reranker=deps["reranker"],
             embedder=deps.get("embedder"),
             rewriter=RouterQueryRewriter(router),
-            vector_store=self._rt._spaces.space_vector_store(),
+            vector_store=self._spaces.space_vector_store(),
         )
         # RAM-aware peak-memory guard (OOM fix): bound how many gather legs run
         # their fetch/extract/embed/rerank body at once. Applies on EVERY tier —
@@ -843,7 +713,7 @@ class DeepResearchService:
         # ones); it does NOT gate the cap on/off.
         from disco.retrieval.deep_research.concurrency import gather_concurrency_for
 
-        in_process_encoders = not self._rt._config_store.load().encoders.remote
+        in_process_encoders = self._provider.in_process_encoders()
         gather_cap = gather_concurrency_for(
             in_process_encoders=in_process_encoders,
             n_subquestions=len(plan_steps),
@@ -906,13 +776,13 @@ class DeepResearchService:
                     last_action = next(
                         (
                             e
-                            for e in reversed(await self._rt._store.get_events(conversation_id))
+                            for e in reversed(await self._store.get_events(conversation_id))
                             if isinstance(e, ActionEvent)
                         ),
                         None,
                     )
                     action_id = last_action.id if last_action else ""
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     ObservationEvent(
                         tool_result=ToolResult(
@@ -931,7 +801,7 @@ class DeepResearchService:
                 thought=f"Deep Research: {kind}",
                 tool_call=ToolCall(tool_name=kind, arguments=payload),
             )
-            await self._rt._store.append(conversation_id, event)
+            await self._store.append(conversation_id, event)
             key = _corr_key(payload)
             if key is not None:
                 action_by_key[key] = event.id
@@ -951,7 +821,7 @@ class DeepResearchService:
 
         # Fresh cancel flag for this execution; the engine polls it at each
         # sub-question/section boundary so Stop actually halts the run.
-        flag = self._rt._cancellations.begin(conversation_id)
+        flag = self._cancellations.begin(conversation_id)
 
         # D3: initialise per-cid steer/inject queues on the research owner.
         # The WS handler enqueues into these; pop_* closures drain them at
@@ -981,7 +851,7 @@ class DeepResearchService:
         except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
             from disco.core import ErrorEvent
 
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 ErrorEvent(
                     code="deep_research_failed",
@@ -990,7 +860,7 @@ class DeepResearchService:
             )
             return
         finally:
-            self._rt._cancellations.clear(conversation_id)
+            self._cancellations.clear(conversation_id)
             # D3: remove per-cid queues so the WS handler knows no DR run is
             # active for this cid (it tests `cid in _dr_steer` for routing).
             self.forget(conversation_id)
@@ -1003,9 +873,9 @@ class DeepResearchService:
         # Emit the partial-or-final ReportEvent. If the user pressed Stop, the run
         # halted at a checkpoint (bounded_by="stopped") with the partial report
         # preserved → emit PAUSED (resumable), NOT FINISHED.
-        await self._rt._store.append(conversation_id, result.to_event())
+        await self._store.append(conversation_id, result.to_event())
         stopped = getattr(result, "bounded_by", None) == "stopped"
-        await self._rt._lifecycle_commands.append_status(
+        await self._lifecycle_commands.append_status(
             conversation_id,
             ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,
             detail="stopped" if stopped else None,
@@ -1058,7 +928,7 @@ class DeepResearchService:
         if not follow_up_query or not follow_up_query.strip():
             return
 
-        await self._rt._lifecycle_commands.append_status(
+        await self._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.RUNNING, detail="follow_up"
         )
 
@@ -1068,14 +938,14 @@ class DeepResearchService:
             # No corpus to ground on — just answer directly.
             # WALK-12: emit a phase signal so the UI can show "Writing answer…"
             # instead of appearing frozen (the backend call is otherwise opaque).
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: synthesizing answer (no passage corpus)",
                     tool_call=ToolCall(tool_name="phase", arguments={"phase": "synthesizing"}),
                 ),
             )
-            router = self._rt._router_now()
+            router = self._drivers.router()
             try:
                 answer = await router.complete(
                     CompletionRequest(
@@ -1085,7 +955,7 @@ class DeepResearchService:
                         max_tokens=1400,
                     )
                 )
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     MessageEvent(
                         source=EventSource.AGENT,
@@ -1096,7 +966,7 @@ class DeepResearchService:
                     ),
                 )
             except Exception as exc:
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -1110,7 +980,7 @@ class DeepResearchService:
                         ),
                     ),
                 )
-                await self._rt._lifecycle_commands.append_status(
+                await self._lifecycle_commands.append_status(
                     conversation_id,
                     ConversationStatus.ERROR,
                 )
@@ -1118,7 +988,7 @@ class DeepResearchService:
         else:
             # WALK-12: emit "reading" phase so the UI shows "Reading sources…"
             # while we build the grounding block from the report corpus.
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: reading grounding passages from report corpus",
@@ -1154,14 +1024,14 @@ class DeepResearchService:
             )
 
             # WALK-12: emit "synthesizing" phase so the UI shows "Writing answer…"
-            await self._rt._store.append(
+            await self._store.append(
                 conversation_id,
                 ActionEvent(
                     thought="Follow-up: synthesizing grounded answer",
                     tool_call=ToolCall(tool_name="phase", arguments={"phase": "synthesizing"}),
                 ),
             )
-            router = self._rt._router_now()
+            router = self._drivers.router()
             try:
                 answer = await router.complete(
                     CompletionRequest(
@@ -1171,7 +1041,7 @@ class DeepResearchService:
                         max_tokens=1400,
                     )
                 )
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     MessageEvent(
                         source=EventSource.AGENT,
@@ -1182,7 +1052,7 @@ class DeepResearchService:
                     ),
                 )
             except Exception as exc:
-                await self._rt._store.append(
+                await self._store.append(
                     conversation_id,
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
@@ -1196,13 +1066,13 @@ class DeepResearchService:
                         ),
                     ),
                 )
-                await self._rt._lifecycle_commands.append_status(
+                await self._lifecycle_commands.append_status(
                     conversation_id,
                     ConversationStatus.ERROR,
                 )
                 return
 
-        await self._rt._lifecycle_commands.append_status(
+        await self._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.FINISHED, detail="follow_up_complete"
         )
 
@@ -1224,7 +1094,7 @@ class DeepResearchService:
         conversations emit one; standard research and build do not."""
         from .report_export import export_report as _export
 
-        events = await self._rt._store.get_events(conversation_id)
+        events = await self._store.get_events(conversation_id)
         reports = [e for e in events if isinstance(e, ReportEvent)]
         if not reports:
             return None
