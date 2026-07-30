@@ -23,6 +23,23 @@ from disco.tools.sandbox import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _close_owned_event_stores(monkeypatch):
+    """Close every externally owned event store created by this test module."""
+    store_type = SqliteEventStore
+    owned_stores = []
+
+    def create_store(*args, **kwargs):
+        store = store_type(*args, **kwargs)
+        owned_stores.append(store)
+        return store
+
+    monkeypatch.setitem(globals(), "SqliteEventStore", create_store)
+    yield
+    for store in reversed(owned_stores):
+        store.close()
+
+
 def test_build_sandbox_service_maps_each_backend(monkeypatch):
     monkeypatch.delenv("DISCO_LOCAL_ENGINE", raising=False)
 
