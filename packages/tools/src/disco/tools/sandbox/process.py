@@ -652,6 +652,8 @@ class ProcessSandboxInstance:
     @property
     def workspace_path(self) -> str | None:
         """Expose the dev backend's absolute workspace root for path predicates."""
+        # This backend returns a concrete host path for workspace predicates.
+        # Container backends return None because their filesystem is isolated.
         return str(self._workspace)
 
     def display_url(self) -> str | None:

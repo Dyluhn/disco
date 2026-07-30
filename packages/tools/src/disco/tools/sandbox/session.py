@@ -828,6 +828,7 @@ class SandboxSession:
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
                 pass
+        # Retain the instance owner until backend destruction is confirmed.
         inst = self._instance
         if inst is not None:
             await inst.destroy()
