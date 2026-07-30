@@ -40,6 +40,47 @@ def _canonical_row(row: Any) -> str:
     return json.dumps(row, sort_keys=True, separators=(",", ":"))
 
 
+def _transition_for(authority: dict[str, Any], package: str) -> dict[str, Any]:
+    matches = [row for row in authority["additive_transitions"] if row.get("package") == package]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _without_later_transition_additions(authority: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(authority)
+    for transition in authority["additive_transitions"]:
+        if transition["package"] == "PKG-02-GATE":
+            continue
+        for root, row in transition["collected_roots"].items():
+            additions = set(row["added_ids"])
+            result["collected"]["roots"][root] = [
+                node_id
+                for node_id in result["collected"]["roots"][root]
+                if node_id not in additions
+            ]
+        for key, additions in transition["mapping_static_additions"].items():
+            if key == "fixtures":
+                claimed = {_canonical_row(row) for row in additions}
+                result["mapping_static"][key] = [
+                    row
+                    for row in result["mapping_static"][key]
+                    if _canonical_row(row) not in claimed
+                ]
+            else:
+                claimed = set(additions)
+                result["mapping_static"][key] = [
+                    item for item in result["mapping_static"][key] if item not in claimed
+                ]
+    collected = result["collected"]
+    collected["counts"] = {root: len(node_ids) for root, node_ids in collected["roots"].items()}
+    collected["total"] = sum(collected["counts"].values())
+    mapping = result["mapping_static"]
+    for prefix in ("python", "typescript"):
+        mapping[f"{prefix}_test_file_count"] = len(mapping[f"{prefix}_test_files"])
+        mapping[f"{prefix}_static_test_id_count"] = len(mapping[f"{prefix}_static_test_ids"])
+    return result
+
+
 def _git(root: Path, *args: str, input_text: str | None = None) -> str:
     return subprocess.check_output(
         ["git", "-C", str(root), *args],
@@ -190,8 +231,8 @@ class TestMappingStatic:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         mapping = baseline["mapping_static"]
         expected_counts = {
-            "python_test_file_count": 753,
-            "python_static_test_id_count": 9186,
+            "python_test_file_count": 757,
+            "python_static_test_id_count": 9224,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
         }
@@ -477,14 +518,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 9622,
-            "harness": 1230,
+            "packages": 9768,
+            "harness": 1236,
             "integrations": 9,
-            "tests": 327,
+            "tests": 328,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11188 == sum(expected.values())
+        assert collected["total"] == 11341 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -500,7 +541,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11188}
+        assert result == {"collected_total": 11341}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -519,9 +560,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9186,
+            "python_static_ids": 9224,
             "typescript_static_ids": 1200,
-            "collected_total": 11188,
+            "collected_total": 11341,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -532,17 +573,19 @@ class TestBaselineValidation:
         advanced = copy.deepcopy(baseline)
         advanced["source_identity"] = latest_identity
         advanced["mapping_static"]["identity"] = latest_identity
-        pkg02_files = set(
-            advanced["additive_transitions"][0]["mapping_static_additions"]["python_test_files"]
-        )
+        represented_files = {
+            path
+            for transition in advanced["additive_transitions"]
+            for path in transition["mapping_static_additions"]["python_test_files"]
+        }
         later_file = next(
             path
             for path in advanced["mapping_static"]["python_test_files"]
-            if path not in pkg02_files
+            if path not in represented_files
         )
         advanced["additive_transitions"].append(
             {
-                "package": "PKG-03-HARNESS-TRANSPORT",
+                "package": "PKG-05-CONTEXT",
                 "root": "multiple",
                 "source_identity_before": baseline["source_identity"],
                 "source_identity_after": latest_identity,
@@ -560,11 +603,38 @@ class TestBaselineValidation:
         result = _check_exact_live(monkeypatch, advanced, baseline)
         assert result["ok"] is True, result["problems"]
 
+        later_collected = (
+            "tests/architecture/test_public_api.py::"
+            "TestExtractInitSurface::test_later_package_addition"
+        )
+        later_static = "tests/architecture/test_public_api.py::test_later_package_addition"
+        advanced["collected"]["roots"]["tests"].append(later_collected)
+        advanced["collected"]["roots"]["tests"].sort()
+        advanced["collected"]["counts"]["tests"] += 1
+        advanced["collected"]["total"] += 1
+        advanced["mapping_static"]["python_static_test_ids"].append(later_static)
+        advanced["mapping_static"]["python_static_test_ids"].sort()
+        advanced["mapping_static"]["python_static_test_id_count"] += 1
+        later_transition = _transition_for(advanced, "PKG-05-CONTEXT")
+        later_transition["root"] = "tests"
+        later_transition["collected_roots"] = {
+            "tests": {
+                "before_count": baseline["collected"]["counts"]["tests"],
+                "after_count": advanced["collected"]["counts"]["tests"],
+                "added_ids": [later_collected],
+            }
+        }
+        later_transition["mapping_static_additions"]["python_static_test_ids"] = [later_static]
+        result = _check_exact_live(monkeypatch, advanced, advanced)
+        assert result["ok"] is True, result["problems"]
+
         forged = copy.deepcopy(baseline)
         forged_identity = "f" * 40
         forged["source_identity"] = forged_identity
         forged["mapping_static"]["identity"] = forged_identity
-        forged["additive_transitions"][0]["source_identity_after"] = forged_identity
+        _transition_for(forged, "PKG-03-HARNESS-TRANSPORT")["source_identity_after"] = (
+            forged_identity
+        )
 
         mismatched_identity = copy.deepcopy(baseline)
         mismatched_identity["mapping_static"]["identity"] = (
@@ -578,17 +648,21 @@ class TestBaselineValidation:
         wrong_container["additive_transitions"] = {"anything": "goes"}
 
         wrong_counts = copy.deepcopy(baseline)
-        wrong_counts["additive_transitions"][0]["collected_roots"]["tests"]["before_count"] = 24
+        _transition_for(wrong_counts, "PKG-02-GATE")["collected_roots"]["tests"]["before_count"] = (
+            24
+        )
 
         forged_set = copy.deepcopy(baseline)
-        forged_ids = forged_set["additive_transitions"][0]["collected_roots"]["tests"]["added_ids"]
+        forged_ids = _transition_for(forged_set, "PKG-02-GATE")["collected_roots"]["tests"][
+            "added_ids"
+        ]
         forged_ids[0] = "tests/forged.py::test_forged"
         forged_ids.sort()
 
         substituted_collected = copy.deepcopy(baseline)
-        collected_additions = substituted_collected["additive_transitions"][0]["collected_roots"][
-            "tests"
-        ]["added_ids"]
+        collected_additions = _transition_for(substituted_collected, "PKG-02-GATE")[
+            "collected_roots"
+        ]["tests"]["added_ids"]
         accepted_collected = next(
             node_id
             for node_id in baseline["collected"]["roots"]["tests"]
@@ -598,7 +672,7 @@ class TestBaselineValidation:
         collected_additions.sort()
 
         substituted_static = copy.deepcopy(baseline)
-        static_additions = substituted_static["additive_transitions"][0][
+        static_additions = _transition_for(substituted_static, "PKG-02-GATE")[
             "mapping_static_additions"
         ]["python_static_test_ids"]
         accepted_static = next(
@@ -610,9 +684,9 @@ class TestBaselineValidation:
         static_additions.sort()
 
         same_identity = copy.deepcopy(baseline)
-        same_identity["additive_transitions"][0]["source_identity_before"] = baseline[
-            "source_identity"
-        ]
+        _transition_for(same_identity, "PKG-03-HARNESS-TRANSPORT")["source_identity_before"] = (
+            baseline["source_identity"]
+        )
 
         unrepresented_identity = copy.deepcopy(baseline)
         unrepresented_identity["source_identity"] = latest_identity
@@ -620,12 +694,12 @@ class TestBaselineValidation:
 
         duplicate = copy.deepcopy(baseline)
         duplicate["additive_transitions"].append(
-            copy.deepcopy(duplicate["additive_transitions"][0])
+            copy.deepcopy(_transition_for(duplicate, "PKG-02-GATE"))
         )
 
         overlap = copy.deepcopy(baseline)
-        overlapping_row = copy.deepcopy(overlap["additive_transitions"][0])
-        overlapping_row["package"] = "PKG-03-HARNESS-TRANSPORT"
+        overlapping_row = copy.deepcopy(_transition_for(overlap, "PKG-02-GATE"))
+        overlapping_row["package"] = "PKG-04-STORES"
         overlap["additive_transitions"].append(overlapping_row)
 
         cases = (
@@ -1058,7 +1132,9 @@ class TestDeselectionDetection:
         assert authority.read_bytes() == before
 
         temp_authority = tmp_path / "architecture/test-inventory.json"
-        write(temp_authority, json.dumps(baseline, indent=2) + "\n")
+        regeneration_baseline = copy.deepcopy(baseline)
+        regeneration_baseline["additive_transitions"] = []
+        write(temp_authority, json.dumps(regeneration_baseline, indent=2) + "\n")
         next_identity = _git(REPO_ROOT, "rev-parse", "HEAD")
         monkeypatch.setattr(
             inventory_static,
@@ -1083,9 +1159,7 @@ class TestDeselectionDetection:
         monkeypatch.setattr(
             test_inventory,
             "_config_identities",
-            lambda _root: copy.deepcopy(
-                baseline["frontend_real_collection"]["config_identities"]
-            ),
+            lambda _root: copy.deepcopy(baseline["frontend_real_collection"]["config_identities"]),
         )
 
         def collect(_root: Path, root_dir: str, marker: str = ""):
@@ -1099,19 +1173,31 @@ class TestDeselectionDetection:
             test_inventory.regenerate_inventory(tmp_path, next_identity)
         assert temp_authority.read_bytes() == before
 
-        transition = baseline["additive_transitions"][0]
-        accepted_roots = copy.deepcopy(baseline["collected"]["roots"])
+        pkg02_live = _without_later_transition_additions(baseline)
+        monkeypatch.setattr(
+            test_inventory,
+            "scan_mapping_static",
+            lambda _root: _mapping_actual(pkg02_live),
+        )
+
+        def collect_pkg02(_root: Path, root_dir: str, marker: str = ""):
+            if (root_dir, marker) == ("packages", "sandbox_integration"):
+                return sorted(test_inventory.SANDBOX_INTEGRATION_DESELECTED_IDS), ""
+            return copy.deepcopy(pkg02_live["collected"]["roots"][root_dir]), ""
+
+        monkeypatch.setattr(test_inventory, "_collect_pytest_ids", collect_pkg02)
+
+        transition = _transition_for(pkg02_live, "PKG-02-GATE")
+        accepted_roots = copy.deepcopy(pkg02_live["collected"]["roots"])
         added_ids = set(transition["collected_roots"]["tests"]["added_ids"])
         accepted_roots["tests"] = [
             node_id for node_id in accepted_roots["tests"] if node_id not in added_ids
         ]
-        accepted_mapping = copy.deepcopy(baseline["mapping_static"])
+        accepted_mapping = copy.deepcopy(pkg02_live["mapping_static"])
         additions = transition["mapping_static_additions"]
         for key in ("python_test_files", "python_static_test_ids"):
             added = set(additions[key])
-            accepted_mapping[key] = [
-                item for item in accepted_mapping[key] if item not in added
-            ]
+            accepted_mapping[key] = [item for item in accepted_mapping[key] if item not in added]
         accepted_mapping["identity"] = inventory_static._PKG02_BEFORE
         monkeypatch.setattr(
             inventory_static,
@@ -1120,14 +1206,10 @@ class TestDeselectionDetection:
         )
 
         substituted_roots = copy.deepcopy(accepted_roots)
-        substituted_roots["tests"][0] = transition["collected_roots"]["tests"][
-            "added_ids"
-        ][0]
+        substituted_roots["tests"][0] = transition["collected_roots"]["tests"]["added_ids"][0]
         substituted_roots["tests"].sort()
         substituted_mapping = copy.deepcopy(accepted_mapping)
-        substituted_mapping["python_static_test_ids"][0] = additions[
-            "python_static_test_ids"
-        ][0]
+        substituted_mapping["python_static_test_ids"][0] = additions["python_static_test_ids"][0]
         substituted_mapping["python_static_test_ids"].sort()
         before = temp_authority.read_bytes()
         with pytest.raises(RuntimeError, match="frozen live test IDs") as error:

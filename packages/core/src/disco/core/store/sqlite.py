@@ -1,7 +1,6 @@
 """SQLite EventStore — event-state-contract.md §6.2 (the v1 [INTERIOR] impl).
 
-Dependency-free: stdlib `sqlite3` under a per-store asyncio.Lock. The store is
-single-process/single-event-loop in v1; the lock makes the read-max-then-insert
+Dependency-free: stdlib `sqlite3`; one asyncio.Lock makes the read-max-then-insert
 critical section atomic across awaits, which is what gives G1 (monotonic,
 gap-free seq) even under concurrent `append()` coroutines. WAL mode gives G5
 (reads don't block writes pathologically).
@@ -10,6 +9,10 @@ gap-free seq) even under concurrent `append()` coroutines. WAL mode gives G5
 on connect it drains history after `after_seq`, then streams live appends,
 deduping the overlap by seq. This is the §7 reconnect/replay path; the WebSocket
 endpoint (deferred to the server package) wraps it.
+
+The store is split across private static mixins (conversation identity/listing,
+DoD specs, share tokens, schedule delegates) to stay within the architecture
+budget. The schema DDL/version authority lives in ``store/schema.py``.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +30,7 @@ from ..events import (
     Event,
     EventAdapter,
     WorkspaceVersionEvent,
+    _require_concrete_event,
     derive_final_workspace_fence,
     event_to_json_dict,
 )
@@ -36,9 +40,13 @@ from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
 from .preview_leases import LocalPreviewLease, LocalPreviewLeaseStore
 from .preview_redemptions import PreviewRedemptionStore
-from .sqlite_schedules import ScheduleStore
+from .schema import apply_schema
+from .sqlite_conversations import _ConversationListingMixin, _ConversationMixin
+from .sqlite_dod_specs import _DodSpecMixin
+from .sqlite_schedules import ScheduleStore, _ScheduleMixin
+from .sqlite_share_tokens import _ShareTokenMixin
 
-if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
+if TYPE_CHECKING:
     from ..dod import DoDSpec
 
 MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024
@@ -82,180 +90,6 @@ def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
         else:
             total += len(str(item)) * 6 + 2
     return total
-
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    conversation_id TEXT    NOT NULL,
-    seq             INTEGER NOT NULL,
-    id              TEXT    NOT NULL,
-    kind            TEXT    NOT NULL,
-    source          TEXT    NOT NULL,
-    created_at      TEXT    NOT NULL,
-    payload         TEXT    NOT NULL,
-    PRIMARY KEY (conversation_id, seq),
-    UNIQUE (conversation_id, id)
-);
-CREATE TABLE IF NOT EXISTS conversations (
-    conversation_id TEXT PRIMARY KEY,
-    owner_id        TEXT NOT NULL,
-    space_id        TEXT,
-    title           TEXT,
-    created_at      TEXT NOT NULL,
-    status          TEXT,
-    surface         TEXT, -- "research" | "build" | "deep_research" (set at create)
-    appkit_mode     INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_conversations_owner
-    ON conversations (owner_id, created_at DESC);
-CREATE TABLE IF NOT EXISTS share_tokens (
-    -- RP-06: revocable share-link tokens (base62 random) for static-bundle replay.
-    -- The token IS the URL slug; the row points back at the conversation whose
-    -- events the bundle was built from + the bundle's metadata. Revocation =
-    -- setting `revoked_at`; lookups must filter `revoked_at IS NULL`. The
-    -- PRIMARY KEY is the token (random collision-free base62 over a 16-byte
-    -- entropy pool = ~22 chars; the column width is generous to allow future
-    -- entropy bumps without a migration).
-    token          TEXT    PRIMARY KEY,
-    conversation_id TEXT   NOT NULL,
-    owner_id       TEXT    NOT NULL,
-    created_at     TEXT    NOT NULL,
-    revoked_at     TEXT,                  -- NULL = active; ISO-8601 if revoked
-    bundle_seq     INTEGER NOT NULL,      -- the last_seq captured at export time
-    bundle_title   TEXT,                  -- title captured at token issue time
-    bundle_surface TEXT NOT NULL DEFAULT 'research', -- surface captured at issue
-    -- The bundle is rebuilt on demand (events are append-only; the share
-    -- selector walks the live log) — this column is the seq boundary the
-    -- future re-export uses to detect "the conversation moved since the link
-    -- was created" and rebuild from scratch (a real-time event on the
-    -- conversation AFTER share creation → the viewer shows a "newer events
-    -- available" hint; we never auto-include them, the user re-exports).
-    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-);
-CREATE INDEX IF NOT EXISTS idx_share_tokens_conv
-    ON share_tokens (conversation_id);
-CREATE TABLE IF NOT EXISTS preview_redemptions (
-    -- Short-lived preview intents are bearer credentials delivered only in a
-    -- form POST body. Registration at mint + this durable consumed_at fence
-    -- makes exchange atomic across restarts, processes, and worker replicas
-    -- sharing the deployment database.
-    jti         TEXT PRIMARY KEY,
-    expires_at  INTEGER NOT NULL,
-    consumed_at INTEGER
-);
-CREATE INDEX IF NOT EXISTS idx_preview_redemptions_expiry
-    ON preview_redemptions (expires_at);
-CREATE TABLE IF NOT EXISTS local_preview_leases (
-    conversation_id TEXT PRIMARY KEY,
-    owner_id        TEXT NOT NULL,
-    listener_port   INTEGER NOT NULL UNIQUE,
-    target_port     INTEGER NOT NULL,
-    authority_id    TEXT NOT NULL,
-    expires_at      INTEGER NOT NULL,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-);
-CREATE INDEX IF NOT EXISTS idx_local_preview_leases_expiry
-    ON local_preview_leases (expires_at);
-CREATE TABLE IF NOT EXISTS local_preview_origin_state (
-    -- Retained after a lease expires so a recycled browser origin is purged
-    -- before another authority can receive generated-app cookies or storage.
-    listener_port INTEGER PRIMARY KEY,
-    authority_id  TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS schedules (
-    -- RP-08: cron-style recurring agent runs. One row per user-created schedule.
-    -- `rrule` stores a cron expression (cronsim-parseable, 5-field standard cron).
-    -- `depth` + `model_override` reproduce the user's settings on each scheduled
-    -- run. `next_run` is updated after each fire (always a future time after the
-    -- coalesced catch-up policy runs). `enabled = 0` pauses without deleting.
-    schedule_id     TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    owner_id        TEXT NOT NULL,
-    rrule           TEXT NOT NULL,
-    description     TEXT NOT NULL,
-    timezone        TEXT NOT NULL DEFAULT 'UTC',
-    depth           TEXT,
-    model_override  TEXT,
-    created_at      TEXT NOT NULL,
-    enabled         INTEGER NOT NULL DEFAULT 1,
-    next_run        TEXT,
-    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-);
-CREATE INDEX IF NOT EXISTS idx_schedules_owner
-    ON schedules (owner_id, conversation_id);
-CREATE TABLE IF NOT EXISTS schedule_runs (
-    -- RP-08: audit log of every scheduled run that fired. `coalesced = 1` when
-    -- N missed fires were coalesced into this single catch-up run (downtime policy).
-    run_id          TEXT PRIMARY KEY,
-    schedule_id     TEXT NOT NULL,
-    conversation_id TEXT NOT NULL,
-    fired_at        TEXT NOT NULL,
-    coalesced       INTEGER NOT NULL DEFAULT 0,
-    FOREIGN KEY (schedule_id) REFERENCES schedules(schedule_id)
-);
-CREATE INDEX IF NOT EXISTS idx_schedule_runs_sched
-    ON schedule_runs (schedule_id, fired_at DESC);
-CREATE TABLE IF NOT EXISTS mcp_approvals (
-    -- RP-05: per-server MCP tool-description approvals. One row per server;
-    -- the description_hash is the SHA-256 fingerprint of the canonicalized
-    -- tool descriptions the operator approved. A hash mismatch on pool
-    -- start raises ApprovalRequired (the server refuses to start until
-    -- re-approval). The PK is the server name (matching McpServerConfig.name).
-    server          TEXT PRIMARY KEY,
-    description_hash TEXT NOT NULL,
-    approved_at     TEXT NOT NULL,  -- ISO-8601
-    approved_by     TEXT NOT NULL   -- operator username
-);
-CREATE TABLE IF NOT EXISTS mcp_approval_pending (
-    -- E6 (#10): per-server DRIFT row, written by the agent-server when its
-    -- live pool detects a description_hash mismatch against mcp_approvals at
-    -- startup. Carries the AUTHORITATIVE new_hash the live server advertised
-    -- (NOT a recompute). The app-server reads this on GET /api/mcp to
-    -- surface the REAL new_hash on the ApprovalDiff. The agent-server clears
-    -- the row when the operator accepts the new tool descriptions via
-    -- POST /api/mcp/servers/{name}/approve (create_mcp_approval deletes it
-    -- in the same transaction). Without this table the UI sees only the
-    -- STORED (old) hash from mcp_approvals and the diff is useless (or
-    -- worse, shows the same value for both old and new).
-    server          TEXT PRIMARY KEY,
-    old_hash        TEXT NOT NULL,  -- the LAST APPROVED hash (mcp_approvals.description_hash)
-    new_hash        TEXT NOT NULL,  -- the AUTHORITATIVE live pool's hash
-    detected_at     TEXT NOT NULL   -- ISO-8601
-);
-CREATE TABLE IF NOT EXISTS mcp_config_approvals (
-    -- S-W4: approval of the server configuration happens before connect.
-    -- This ledger is separate from discovered tool-schema approvals because
-    -- discovery itself may spawn host code or perform network side effects.
-    server          TEXT PRIMARY KEY,
-    config_hash     TEXT NOT NULL,
-    approved_at     TEXT NOT NULL,
-    approved_by     TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS dod_specs (
-    -- C1a: external Definition-of-Done spec, one row per conversation.
-    --
-    -- Sibling to `conversations` and `events`, OUTSIDE the agent-editable
-    -- event stream. The agent has no tool that mutates this table: the only
-    -- writer is the store's `set_dod_spec` (server-side, NOT exposed as a
-    -- tool) and that writer is WRITE-ONCE — a second call with the same
-    -- `conversation_id` raises `DoDSpecAlreadySet`. The `replace_dod_spec`
-    -- method is the named, always-raise hook for any future "weaken"
-    -- affordance to fail loudly rather than silently mutate.
-    --
-    -- The `spec` column carries the serialized DoDSpec (predicates + meta);
-    -- we keep the predicates as JSON text rather than relational rows so
-    -- the spec is a single atomic read/write — no half-written predicates,
-    -- no "spec exists but its predicates are gone" half-states.
-    --
-    -- `set_at` + `set_by` are audit fields, never consulted by the
-    -- evaluator. The PK is `conversation_id` (one spec per conversation).
-    conversation_id TEXT PRIMARY KEY,
-    spec            TEXT NOT NULL,  -- JSON-encoded DoDSpec
-    set_at          TEXT NOT NULL,  -- ISO-8601
-    set_by          TEXT NOT NULL,  -- "system" | "user" | "plan:<step-id>" — audit only
-    FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id)
-);
-"""
 
 
 def _row_to_event(payload: str) -> Event:
@@ -347,7 +181,13 @@ def _persist_one(store: SqliteEventStore, conversation_id: str, event: Event) ->
     return stored, True
 
 
-class _ClosableSqliteStore:
+class _ClosableSqliteStore(
+    _ConversationMixin,
+    _ConversationListingMixin,
+    _DodSpecMixin,
+    _ShareTokenMixin,
+    _ScheduleMixin,
+):
     """Idempotent connection ownership shared by the concrete event store."""
 
     _closed: bool
@@ -424,7 +264,125 @@ class SqliteEventStore(_ClosableSqliteStore):
 
     Pass a filesystem path for durability across reopens (the G2 restart path),
     or ":memory:" for ephemeral use (tests that don't reopen).
+
+    The store is split across private static mixins (conversation identity/
+    listing, DoD specs, share tokens, schedule delegates) to stay within the
+    architecture budget. The schema DDL/version authority lives in
+    ``store/schema.py``.
     """
+
+    if TYPE_CHECKING:
+
+        def create_conversation(
+            self,
+            conversation_id: str,
+            *,
+            owner_id: str = DEFAULT_OWNER_ID,
+            space_id: str | None = None,
+            title: str | None = None,
+            surface: str | None = None,
+            origin: str | None = None,
+            appkit_mode: bool = False,
+        ) -> None: ...
+
+        def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None: ...
+
+        async def update_title(self, conversation_id: str, title: str) -> None: ...
+
+        async def get_title(self, conversation_id: str) -> str | None: ...
+
+        async def set_dod_spec(
+            self,
+            conversation_id: str,
+            spec: DoDSpec,
+            *,
+            set_by: str = "system",
+        ) -> DoDSpec: ...
+
+        async def get_dod_spec(self, conversation_id: str) -> DoDSpec | None: ...
+
+        async def get_external_dod_spec(self, conversation_id: str) -> DoDSpec | None: ...
+
+        async def replace_dod_spec(
+            self,
+            conversation_id: str,
+            spec: DoDSpec,
+            *,
+            actor: str = "system",
+        ) -> DoDSpec: ...
+
+        async def conversation_exists(self, conversation_id: str) -> bool: ...
+
+        async def conversation_owner_id(self, conversation_id: str) -> str | None: ...
+
+        def conversation_owner_id_sync(self, conversation_id: str) -> str | None: ...
+
+        async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool: ...
+
+        async def list_conversations(
+            self,
+            *,
+            owner_id: str,
+            limit: int = 50,
+            cursor: str | None = None,
+        ) -> list[str]: ...
+
+        async def list_conversation_summaries(
+            self,
+            *,
+            owner_id: str,
+            limit: int = 50,
+            cursor: str | None = None,
+            nonempty_only: bool = False,
+            space_id: str | None = None,
+        ) -> list[ConversationSummary]: ...
+
+        async def set_conversation_space(
+            self, conversation_id: str, space_id: str | None
+        ) -> None: ...
+
+        async def clear_space_members(
+            self, space_id: str, *, owner_id: str | None = None
+        ) -> None: ...
+
+        def conversation_origin(self, conversation_id: str) -> str | None: ...
+
+        async def delete_conversation(self, conversation_id: str, *, owner_id: str) -> bool: ...
+
+        def create_share_token(
+            self,
+            token: str,
+            conversation_id: str,
+            owner_id: str,
+            *,
+            bundle_seq: int,
+            bundle_title: str | None,
+            bundle_surface: str,
+        ) -> None: ...
+
+        def lookup_share_token(self, token: str) -> dict | None: ...
+
+        def list_share_tokens(self, *, owner_id: str) -> list[dict]: ...
+
+        def revoke_share_token(self, token: str, *, owner_id: str) -> bool: ...
+
+        def create_schedule(self, row: dict) -> None: ...
+
+        def list_schedules(
+            self, *, owner_id: str, conversation_id: str | None = None
+        ) -> list[dict]: ...
+
+        def list_enabled_schedules(self) -> list[dict]: ...
+
+        def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool: ...
+
+        def update_schedule_next_run(self, schedule_id: str, next_run: str | None) -> None: ...
+
+        def create_schedule_run(self, row: dict) -> None: ...
+
+        def list_schedule_runs(self, schedule_id: str) -> list[dict]: ...
+
+        def list_recent_schedule_runs(self, owner_id: str, limit: int = 50) -> list[dict]: ...
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         # Retained so sidecar persistence (runtime B0 overrides/surfaces/autonomous)
@@ -435,80 +393,14 @@ class SqliteEventStore(_ClosableSqliteStore):
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._closed = False
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL;")
-        self._conn.execute("PRAGMA synchronous=FULL;")  # durable on commit (G2)
-        self._conn.executescript(_SCHEMA)
-        # Migration: add `surface` to pre-existing conversations tables (CREATE TABLE
-        # IF NOT EXISTS won't add a new column). Idempotent — ignore "duplicate".
         try:
-            self._conn.execute("ALTER TABLE conversations ADD COLUMN space_id TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_title TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_surface TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self._conn.execute("ALTER TABLE conversations ADD COLUMN status TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            # AppKit identity is immutable conversation metadata, not a process-local
-            # runtime toggle. Existing conversations upgrade to ordinary mode.
-            self._conn.execute(
-                "ALTER TABLE conversations ADD COLUMN appkit_mode INTEGER NOT NULL DEFAULT 0"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            # `origin` marks a conversation that was IMPORTED from a share bundle
-            # (untrusted third-party data) — used to enforce read-only at the server
-            # edge and badge it in the UI. NULL = a normal first-party conversation.
-            self._conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            # F06 migration is intentionally UTC: old rows were evaluated as UTC.
-            # Reinterpreting them in the host's local zone would silently change
-            # their firing time. New rows persist the user's selected IANA zone.
-            self._conn.execute(
-                "ALTER TABLE schedules ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        try:
-            self._conn.execute(
-                "ALTER TABLE local_preview_leases ADD COLUMN authority_id TEXT NOT NULL DEFAULT ''"
-            )
-        except sqlite3.OperationalError:
-            pass  # column already exists
-        # Pre-authority local Preview leases cannot safely survive the upgrade:
-        # their listener may refer to any process generation on the same port.
-        self._conn.execute("DELETE FROM local_preview_leases WHERE authority_id = ''")
-        # Legacy share rows could not preserve their original metadata. Freeze
-        # the current values once at upgrade so they at least stop tracking
-        # future title/surface changes after this security migration. The NULL
-        # surface is the migration marker; newly issued rows always set it even
-        # when their captured title is legitimately NULL.
-        self._conn.execute(
-            "UPDATE share_tokens SET bundle_title = "
-            "(SELECT title FROM conversations WHERE conversations.conversation_id = "
-            "share_tokens.conversation_id) WHERE bundle_surface IS NULL"
-        )
-        self._conn.execute(
-            "UPDATE share_tokens SET bundle_surface = COALESCE("
-            "(SELECT surface FROM conversations WHERE conversations.conversation_id = "
-            "share_tokens.conversation_id), 'research') WHERE bundle_surface IS NULL"
-        )
-        self._conn.commit()
+            apply_schema(self._conn)
+            self._conn.execute("PRAGMA journal_mode=WAL;")
+            self._conn.execute("PRAGMA synchronous=FULL;")  # durable on commit (G2)
+        except BaseException:
+            self._conn.close()
+            self._closed = True
+            raise
         self._schedules = ScheduleStore(self._conn)
         self._write_lock = asyncio.Lock()
         self._preview_redemptions = PreviewRedemptionStore(self._conn)
@@ -524,242 +416,6 @@ class SqliteEventStore(_ClosableSqliteStore):
         # only; a late joiner simply misses in-flight deltas and gets the final
         # persisted ActionEvent instead.
         self._eph_subscribers: dict[str, set[asyncio.Queue[dict]]] = defaultdict(set)
-
-    # ---- conversation metadata (extends the protocol; used by app-server) ----
-
-    def create_conversation(
-        self,
-        conversation_id: str,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-        space_id: str | None = None,
-        title: str | None = None,
-        surface: str | None = None,
-        origin: str | None = None,
-        appkit_mode: bool = False,
-    ) -> None:
-        """Register a conversation with explicit ownership (§6.1). Idempotent.
-        Auto-creation on first append uses DEFAULT_OWNER_ID; call this to set a
-        real owner/space/title/surface up front (the §7.5 POST /conversations path).
-        `surface` ("research"|"build"|"agent"|"deep_research") is persisted so History
-        can route an item to the right surface. `origin="imported"` marks a bundle
-        import (untrusted, read-only) — NULL for a normal first-party conversation.
-        ``appkit_mode`` is immutable: idempotent re-registration never changes the
-        value first captured for this conversation."""
-        self._conn.execute(
-            "INSERT OR IGNORE INTO conversations "
-            "(conversation_id, owner_id, space_id, title, created_at, surface, origin, "
-            "appkit_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                conversation_id,
-                owner_id,
-                space_id,
-                title,
-                datetime.now().isoformat(),
-                surface,
-                origin,
-                int(appkit_mode),
-            ),
-        )
-        self._conn.commit()
-
-    def conversation_appkit_mode_sync(self, conversation_id: str) -> bool | None:
-        """Return immutable AppKit identity, or ``None`` for an unknown id."""
-
-        row = self._conn.execute(
-            "SELECT appkit_mode FROM conversations WHERE conversation_id = ? LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
-        return bool(row["appkit_mode"]) if row is not None else None
-
-    async def update_title(self, conversation_id: str, title: str) -> None:
-        """Set a conversation's display title (the History/Projects label).
-
-        Used by the auto-title service to replace the `'(untitled)'` default with a
-        model-summarized title derived from the first user message. Overwrites the
-        stored title unconditionally — the 'only when unset' gate lives in the caller
-        (so a future user-supplied rename can also use this path). No-op on an unknown
-        id (UPDATE of zero rows)."""
-        async with self._write_lock:
-            with self._conn:
-                self._conn.execute(
-                    "UPDATE conversations SET title = ? WHERE conversation_id = ?",
-                    (title, conversation_id),
-                )
-
-    async def get_title(self, conversation_id: str) -> str | None:
-        """The stored title (None if unset / unknown id). Cheap point-read used by
-        the auto-title service to stay idempotent (skip already-titled conversations)."""
-        cur = self._conn.execute(
-            "SELECT title FROM conversations WHERE conversation_id = ?",
-            (conversation_id,),
-        )
-        row = cur.fetchone()
-        return row["title"] if row else None
-
-    # ---- DoD spec (C1a: storage + accessor + immutability) -------------------
-    # The DoD spec lives in a sibling table to `conversations` and `events`,
-    # OUTSIDE the agent-editable event stream. There is NO agent tool that
-    # calls these methods. `set_dod_spec` is WRITE-ONCE: a second call with
-    # the same conversation_id raises DoDSpecAlreadySet and leaves the
-    # original intact. `replace_dod_spec` is the named, always-raise hook for
-    # any future "weaken" affordance to fail loudly. See `core/dod.py` for
-    # the full immutability argument.
-
-    async def set_dod_spec(
-        self, conversation_id: str, spec: DoDSpec, *, set_by: str = "system"
-    ) -> DoDSpec:
-        """Persist the DoD spec for a conversation. WRITE-ONCE: a second call
-        raises `DoDSpecAlreadySet` and the original is preserved.
-
-        `set_by` is an audit label (never consulted by the evaluator). We use
-        a transaction (write-lock + sqlite txn) so a concurrent race between
-        two `set_dod_spec` calls cannot interleave a half-written spec —
-        the second caller sees the row and raises.
-
-        The spec is serialized as a single JSON blob: predicates + meta
-        round-trip atomically. Validation is the caller's job (build a
-        `DoDSpec` via the Pydantic model); we don't re-validate on write
-        beyond the JSON round-trip, because the spec is frozen upstream."""
-        from ..dod import DoDSpec, DoDSpecAlreadySet  # local import: dod.py is a leaf
-
-        if not isinstance(spec, DoDSpec):
-            # Don't accept free-form dicts here — the storage shape is the
-            # Pydantic model. Callers go through DoDSpec(predicates=...).
-            raise TypeError(f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}")
-        payload = spec.to_json_dict()
-        now = datetime.now(UTC).isoformat()
-        async with self._write_lock:
-            with self._conn:
-                # Idempotency check inside the txn: if a row already exists,
-                # raise without touching it. The PRIMARY KEY constraint would
-                # also catch a naive double-insert, but checking first lets us
-                # raise the precise exception (and not the sqlite IntegrityError).
-                existing = self._conn.execute(
-                    "SELECT 1 FROM dod_specs WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()
-                if existing is not None:
-                    raise DoDSpecAlreadySet(
-                        f"DoD spec for {conversation_id!r} is already set; "
-                        "the spec is write-once. Capture a new conversation "
-                        "if the acceptance criteria changed."
-                    )
-                # Make sure the parent conversation row exists — the FK
-                # constraint would otherwise reject the insert. (Auto-create
-                # mirrors `create_conversation`'s "idempotent register" pattern
-                # so a spec can be set at conversation creation time, before
-                # the first event is appended.)
-                self._conn.execute(
-                    "INSERT OR IGNORE INTO conversations "
-                    "(conversation_id, owner_id, created_at) "
-                    "VALUES (?, ?, ?)",
-                    (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
-                )
-                self._conn.execute(
-                    "INSERT INTO dod_specs "
-                    "(conversation_id, spec, set_at, set_by) "
-                    "VALUES (?, ?, ?, ?)",
-                    (
-                        conversation_id,
-                        json.dumps(payload),
-                        now,
-                        set_by,
-                    ),
-                )
-        return spec
-
-    async def get_dod_spec(self, conversation_id: str) -> DoDSpec | None:
-        """Accessor. Returns the stored `DoDSpec` or `None` when no spec has
-        been captured yet. A pure read; no copy, no wrapping, no mutation.
-
-        The returned spec is the live Pydantic model — frozen, so even an
-        in-process attempt to mutate the result is a `ValidationError`."""
-        from ..dod import DoDSpec
-
-        row = self._conn.execute(
-            "SELECT spec FROM dod_specs WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return DoDSpec.from_json_dict(json.loads(row["spec"]))
-
-    async def get_external_dod_spec(self, conversation_id: str) -> DoDSpec | None:
-        """Return the immutable external authority row, excluding legacy plan rows.
-
-        Before H368's authority split, plan approval copied model predicates into
-        ``dod_specs`` with ``set_by=system:plan_approval``. Keep those bytes for
-        audit and compatibility through ``get_dod_spec``, but never reinterpret
-        them as user/system/profile/harness requirements.
-        """
-        from ..dod import DoDSpec
-
-        row = self._conn.execute(
-            "SELECT spec, set_by FROM dod_specs WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()
-        if row is None or str(row["set_by"]).startswith("system:plan_approval"):
-            return None
-        return DoDSpec.from_json_dict(json.loads(row["spec"]))
-
-    async def replace_dod_spec(
-        self, conversation_id: str, spec: DoDSpec, *, actor: str = "system"
-    ) -> DoDSpec:
-        """Write-once BOOTSTRAP + MONOTONIC external replacement (v2).
-
-        The spec can be EXTENDED by an external authority but never WEAKENED — the
-        monotonic guard (`is_monotonic_extension`) is enforced HERE, in the
-        store, so no caller can route around it. The contract:
-
-          * No spec exists → bootstrap (same as `set_dod_spec`).
-          * Spec exists AND `new` is a monotonic extension (only adds / renames
-            within, never drops a committed deliverable) → UPDATE in place.
-          * Spec exists AND `new` would WEAKEN it → raise `DoDSpecAlreadySet`
-            (original preserved). Model-authored plan revisions are revision-scoped
-            in the append-only event log and never call this method.
-
-        `actor` is recorded as `set_by` on an accepted update (audit), but does
-        NOT buy a weakening: even a human operator cannot drop a committed bar
-        via this method (the user-facing relax path is a new conversation)."""
-        from ..dod import DoDSpec, DoDSpecAlreadySet, is_monotonic_extension
-
-        if not isinstance(spec, DoDSpec):
-            raise TypeError(f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}")
-        payload = spec.to_json_dict()
-        now = datetime.now(UTC).isoformat()
-        async with self._write_lock:
-            with self._conn:
-                row = self._conn.execute(
-                    "SELECT spec FROM dod_specs WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()
-                if row is None:
-                    # Bootstrap inside the same txn (mirrors set_dod_spec).
-                    self._conn.execute(
-                        "INSERT OR IGNORE INTO conversations "
-                        "(conversation_id, owner_id, created_at) VALUES (?, ?, ?)",
-                        (conversation_id, DEFAULT_OWNER_ID, datetime.now().isoformat()),
-                    )
-                    self._conn.execute(
-                        "INSERT INTO dod_specs "
-                        "(conversation_id, spec, set_at, set_by) VALUES (?, ?, ?, ?)",
-                        (conversation_id, json.dumps(payload), now, actor),
-                    )
-                    return spec
-                existing = DoDSpec.from_json_dict(json.loads(row[0]))
-                if not is_monotonic_extension(existing, spec):
-                    raise DoDSpecAlreadySet(
-                        f"DoD spec for {conversation_id!r} cannot be replaced: the new "
-                        "spec would WEAKEN it (a committed deliverable was dropped without "
-                        "an explicit rename). The acceptance bar can only be EXTENDED."
-                    )
-                self._conn.execute(
-                    "UPDATE dod_specs SET spec = ?, set_at = ?, set_by = ? "
-                    "WHERE conversation_id = ?",
-                    (json.dumps(payload), now, actor, conversation_id),
-                )
-        return spec
 
     # ---- writes --------------------------------------------------------------
 
@@ -802,6 +458,7 @@ class SqliteEventStore(_ClosableSqliteStore):
             self._eph_subscribers[conversation_id].discard(queue)
 
     async def append(self, conversation_id: str, event: Event) -> Event:
+        event = _require_concrete_event(event)
         async with self._write_lock:
             with self._conn:
                 stored, is_new = self._store_one(conversation_id, event)
@@ -810,6 +467,7 @@ class SqliteEventStore(_ClosableSqliteStore):
         return stored
 
     async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]:
+        events = [_require_concrete_event(event) for event in events]
         stored_new: list[Event] = []
         results: list[Event] = []
         async with self._write_lock:
@@ -884,157 +542,6 @@ class SqliteEventStore(_ClosableSqliteStore):
         events = self._query(conversation_id, None)
         return ConversationState.reconstruct(conversation_id, events)
 
-    async def conversation_exists(self, conversation_id: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM conversations WHERE conversation_id = ? LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
-        return row is not None
-
-    async def conversation_owner_id(self, conversation_id: str) -> str | None:
-        return self.conversation_owner_id_sync(conversation_id)
-
-    def conversation_owner_id_sync(self, conversation_id: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1",
-            (conversation_id,),
-        ).fetchone()
-        return row["owner_id"] if row is not None else None
-
-    async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool:
-        return await self.conversation_owner_id(conversation_id) == owner_id
-
-    async def list_conversations(
-        self, *, owner_id: str, limit: int = 50, cursor: str | None = None
-    ) -> list[str]:
-        # [INTERIOR] v1 cursor = opaque integer offset string. The ownership
-        # filter is the load-bearing part (§6.1): no cross-owner data, ever.
-        offset = int(cursor) if cursor else 0
-        rows = self._conn.execute(
-            "SELECT conversation_id FROM conversations WHERE owner_id = ? "
-            "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
-            (owner_id, limit, offset),
-        ).fetchall()
-        return [r["conversation_id"] for r in rows]
-
-    async def list_conversation_summaries(
-        self,
-        *,
-        owner_id: str,
-        limit: int = 50,
-        cursor: str | None = None,
-        nonempty_only: bool = False,
-        space_id: str | None = None,
-    ) -> list[ConversationSummary]:
-        """Owner-scoped library rows (id/title/created_at), newest first — what the
-        History surface lists (§6.1). Same ownership filter as `list_conversations`;
-        no cross-owner data, ever.
-
-        BW-08: ``nonempty_only`` hides 0-event "ghost" conversations — rows that
-        were pre-created but never actually used (no first user message, no title,
-        nothing to show). The user-facing History/Projects listings pass it True
-        (belt-and-suspenders to the lazy client pre-create); the activity feed and
-        other internal readers leave it False so a freshly-kicked, mid-first-append
-        running task is never dropped."""
-        offset = int(cursor) if cursor else 0
-        clauses = ["owner_id = ?"]
-        params: list[str | int] = [owner_id]
-        if space_id == "":
-            clauses.append("space_id IS NULL")
-        elif space_id is not None:
-            clauses.append("space_id = ?")
-            params.append(space_id)
-        if nonempty_only:
-            clauses.append(
-                "EXISTS (SELECT 1 FROM events e WHERE e.conversation_id = c.conversation_id)"
-            )
-        where_clause = " AND ".join(clauses)
-        params.extend([limit, offset])
-        rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, space_id, title, created_at, status, "
-            "surface, origin "
-            "FROM conversations c "
-            f"WHERE {where_clause} "
-            "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
-            tuple(params),
-        ).fetchall()
-        summaries: list[ConversationSummary] = []
-        repairs: list[tuple[str, str]] = []
-        for r in rows:
-            cid = r["conversation_id"]
-            status = r["status"]
-            if status is None:
-                # RP-01: Read repair. Backfill the status column from the event log.
-                state = await self.get_state(cid)
-                status = state.execution_status.value
-                repairs.append((status, cid))
-
-            summaries.append(
-                ConversationSummary(
-                    conversation_id=cid,
-                    owner_id=r["owner_id"],
-                    space_id=r["space_id"],
-                    title=r["title"],
-                    created_at=r["created_at"],
-                    status=status,
-                    surface=r["surface"] or "research",  # null (pre-migration) → research
-                    origin=r["origin"],  # None for first-party; "imported" for a bundle import
-                )
-            )
-
-        if repairs:
-            self._conn.executemany(
-                "UPDATE conversations SET status = ? WHERE conversation_id = ?",
-                repairs,
-            )
-            self._conn.commit()
-
-        return summaries
-
-    async def set_conversation_space(self, conversation_id: str, space_id: str | None) -> None:
-        """Move a conversation into a Space folder, or clear it to Unfiled."""
-        clean_space_id = space_id.strip() if isinstance(space_id, str) else None
-        async with self._write_lock:
-            with self._conn:
-                self._conn.execute(
-                    "UPDATE conversations SET space_id = ? WHERE conversation_id = ?",
-                    (clean_space_id or None, conversation_id),
-                )
-
-    async def clear_space_members(self, space_id: str, *, owner_id: str | None = None) -> None:
-        sql = "UPDATE conversations SET space_id = NULL WHERE space_id = ?"
-        params: tuple[str, ...] = (space_id,)
-        if owner_id is not None:
-            sql += " AND owner_id = ?"
-            params = (space_id, owner_id)
-        async with self._write_lock:
-            with self._conn:
-                self._conn.execute(sql, params)
-
-    def conversation_origin(self, conversation_id: str) -> str | None:
-        """The `origin` marker ("imported" or None) — the server-edge gate for
-        read-only enforcement on imported conversations. Cheap sync lookup."""
-        row = self._conn.execute(
-            "SELECT origin FROM conversations WHERE conversation_id = ?",
-            (conversation_id,),
-        ).fetchone()
-        return row["origin"] if row is not None else None
-
-    async def delete_conversation(self, conversation_id: str, *, owner_id: str) -> bool:
-        """Delete a conversation and all its events — OWNER-SCOPED (a caller can
-        only delete its own, §6.1). Returns True if a row was removed. Destructive
-        and irreversible; the gate is the UI confirm."""
-        async with self._write_lock:
-            cur = self._conn.execute(
-                "DELETE FROM conversations WHERE conversation_id = ? AND owner_id = ?",
-                (conversation_id, owner_id),
-            )
-            if cur.rowcount == 0:
-                return False  # not found OR not owned — no cross-owner deletes
-            self._conn.execute("DELETE FROM events WHERE conversation_id = ?", (conversation_id,))
-            self._conn.commit()
-        return True
-
     # ---- live subscription (§7 reconnect/replay path) ------------------------
 
     async def subscribe(
@@ -1046,128 +553,6 @@ class SqliteEventStore(_ClosableSqliteStore):
             async for ev in await store.subscribe(cid, after_seq=k): ...
         """
         return self._subscribe(conversation_id, after_seq)
-
-    # ---- share tokens (RP-06) ----------------------------------------------
-
-    def create_share_token(
-        self,
-        token: str,
-        conversation_id: str,
-        owner_id: str,
-        *,
-        bundle_seq: int,
-        bundle_title: str | None,
-        bundle_surface: str,
-    ) -> None:
-        """Persist a new share token pointing at a conversation. The row
-        records the conversation + the bundle's last_seq at export time. A
-        second call for the SAME (token) is a no-op (`INSERT OR IGNORE`) —
-        the token is the PRIMARY KEY and is server-generated + random; the
-        idempotency is the cheap defense against a double-clicked "Share"
-        button issuing a write twice."""
-        self._conn.execute(
-            "INSERT OR IGNORE INTO share_tokens "
-            "(token, conversation_id, owner_id, created_at, bundle_seq, "
-            "bundle_title, bundle_surface) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                token,
-                conversation_id,
-                owner_id,
-                datetime.now().isoformat(),
-                int(bundle_seq),
-                bundle_title,
-                bundle_surface,
-            ),
-        )
-        self._conn.commit()
-
-    def lookup_share_token(self, token: str) -> dict | None:
-        """Fetch a share token row by its public id. Returns None when missing
-        or revoked — the two cases are deliberately conflated in the public
-        API: a revoked link looks IDENTICAL to a non-existent one to the
-        viewer (404, not 410), so revocation cannot be probed to confirm a
-        conversation exists."""
-        row = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
-            "bundle_title, bundle_surface "
-            "FROM share_tokens WHERE token = ? AND revoked_at IS NULL",
-            (token,),
-        ).fetchone()
-        if row is None:
-            return None
-        return {
-            "token": row["token"],
-            "conversation_id": row["conversation_id"],
-            "owner_id": row["owner_id"],
-            "created_at": row["created_at"],
-            "bundle_seq": int(row["bundle_seq"]),
-            "bundle_title": row["bundle_title"],
-            "bundle_surface": row["bundle_surface"] or "research",
-        }
-
-    def list_share_tokens(self, *, owner_id: str) -> list[dict]:
-        """List the active share tokens for one owner (the History
-        "shared links" affordance). Revoked links are NOT returned by
-        default; pass `include_revoked=True` for an audit view."""
-        rows = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
-            "bundle_title, bundle_surface "
-            "FROM share_tokens WHERE owner_id = ? AND revoked_at IS NULL "
-            "ORDER BY created_at DESC",
-            (owner_id,),
-        ).fetchall()
-        return [
-            {
-                "token": r["token"],
-                "conversation_id": r["conversation_id"],
-                "owner_id": r["owner_id"],
-                "created_at": r["created_at"],
-                "bundle_seq": int(r["bundle_seq"]),
-                "bundle_title": r["bundle_title"],
-                "bundle_surface": r["bundle_surface"] or "research",
-            }
-            for r in rows
-        ]
-
-    def revoke_share_token(self, token: str, *, owner_id: str) -> bool:
-        """Revoke a share token. OWNER-SCOPED — a caller can only revoke a
-        token that was issued to it. Returns True if a row was marked
-        revoked, False otherwise (not found, already revoked, or not owned)."""
-        async_marker = datetime.now().isoformat()
-        cur = self._conn.execute(
-            "UPDATE share_tokens SET revoked_at = ? "
-            "WHERE token = ? AND owner_id = ? AND revoked_at IS NULL",
-            (async_marker, token, owner_id),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
-
-    # ---- schedules (RP-08) --------------------------------------------------
-    # Delegated to ScheduleStore to keep SqliteEventStore within its size budget.
-
-    def create_schedule(self, row: dict) -> None:
-        self._schedules.create_schedule(row)
-
-    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
-        return self._schedules.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
-
-    def list_enabled_schedules(self) -> list[dict]:
-        return self._schedules.list_enabled_schedules()
-
-    def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
-        return self._schedules.delete_schedule(schedule_id, owner_id=owner_id)
-
-    def update_schedule_next_run(self, schedule_id: str, next_run: str | None) -> None:
-        self._schedules.update_schedule_next_run(schedule_id, next_run)
-
-    def create_schedule_run(self, row: dict) -> None:
-        self._schedules.create_schedule_run(row)
-
-    def list_schedule_runs(self, schedule_id: str) -> list[dict]:
-        return self._schedules.list_schedule_runs(schedule_id)
-
-    def list_recent_schedule_runs(self, owner_id: str, limit: int = 50) -> list[dict]:
-        return self._schedules.list_recent_schedule_runs(owner_id, limit)
 
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the

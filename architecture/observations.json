@@ -88,14 +88,6 @@
     "source_disposition_id": "DM-013"
   },
   {
-    "id": "DM-014",
-    "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/store/sqlite.py:441-477 + packages/core/src/disco/core/migration.py:migrate_event:14-32",
-    "concern": "additive SQLite/event migration has no database version or downgrade-write proof",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "DM-014"
-  },
-  {
     "id": "DM-015",
     "kind": "distributed_concern",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
@@ -114,7 +106,7 @@
   {
     "id": "DM-017",
     "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/events.py:Event:1594-1624 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",
+    "location": "packages/core/src/disco/core/events.py:Event:187-217 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",
     "concern": "backend/frontend event and WS discriminator sets drift (three event kinds and token frame absent from TS; connection is UI-local)",
     "owner_package": "PKG-12-FE-SHELL",
     "source_disposition_id": "DM-017"
@@ -134,14 +126,6 @@
     "concern": "secret-key rotation has no re-encryption migration and can lock all stored secrets",
     "owner_package": "PKG-11-SETTINGS",
     "source_disposition_id": "DM-019"
-  },
-  {
-    "id": "DM-020",
-    "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/store/sqlite.py:198-233 + packages/tools/src/disco/tools/mcp/migrations.py:39-67",
-    "concern": "MCP approval tables have duplicate CREATE authorities that can drift",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "DM-020"
   },
   {
     "id": "DM-021",
@@ -166,13 +150,5 @@
     "classification": "typed protocol contract (not a concrete service)",
     "owner_package": "PKG-06-RUNTIME",
     "source_disposition_id": "PY-0188"
-  },
-  {
-    "id": "PY-0664",
-    "kind": "typed_non_violation",
-    "location": "packages/core/src/disco/core/store/base.py:EventStore:56-177",
-    "classification": "typed protocol contract (not a concrete service)",
-    "owner_package": "PKG-04-STORES",
-    "source_disposition_id": "PY-0664"
   }
 ]

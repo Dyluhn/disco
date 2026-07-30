@@ -110,9 +110,7 @@ def _git_output(root: Path, *args: str) -> bytes:
             stderr=subprocess.PIPE,
         )
     except (OSError, subprocess.SubprocessError) as error:
-        raise RuntimeError(
-            "inventory source identity must resolve to a Git commit"
-        ) from error
+        raise RuntimeError("inventory source identity must resolve to a Git commit") from error
 
 
 def _inventory_at(root: Path, revision: str) -> tuple[dict[str, Any], bytes]:
@@ -139,14 +137,18 @@ def _source_prior(
 ) -> tuple[dict[str, Any], bytes, str]:
     if not isinstance(source_identity, str) or not _GIT_COMMIT.fullmatch(source_identity):
         raise RuntimeError("inventory source_identity must be a full Git commit")
-    lineage = _git_output(
-        root,
-        "rev-list",
-        "--parents",
-        "-n",
-        "1",
-        source_identity,
-    ).decode().split()
+    lineage = (
+        _git_output(
+            root,
+            "rev-list",
+            "--parents",
+            "-n",
+            "1",
+            source_identity,
+        )
+        .decode()
+        .split()
+    )
     if len(lineage) != 2 or lineage[0] != source_identity:
         raise RuntimeError("inventory source_identity must have exactly one parent")
     _, source_blob = _inventory_at(root, source_identity)
@@ -171,14 +173,10 @@ def candidate_prior(root: Path, source_identity: Any) -> dict[str, Any]:
     if len(lineage) != 2 or lineage[0] != head or lineage[1] != parent:
         raise RuntimeError("test inventory candidate is not the source sibling")
     changed = set(
-        _git_output(root, "diff", "--name-only", source_identity, head, "--")
-        .decode()
-        .splitlines()
+        _git_output(root, "diff", "--name-only", source_identity, head, "--").decode().splitlines()
     )
     if not changed <= _DERIVED_PATHS:
-        raise RuntimeError(
-            f"test inventory candidate has non-derived drift: {sorted(changed)}"
-        )
+        raise RuntimeError(f"test inventory candidate has non-derived drift: {sorted(changed)}")
     return prior
 
 
@@ -390,16 +388,42 @@ def _ids_owned_by_paths(value: Any) -> list[str]:
     return [item for item in value if isinstance(item, str) and item.partition("::")[0] in paths]
 
 
+def _later_ids(
+    transitions: list[dict[str, Any]],
+    path: tuple[str, ...],
+) -> set[str]:
+    result: set[str] = set()
+    for transition in transitions:
+        if transition.get("package") == _PKG02:
+            continue
+        value: Any = transition
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if isinstance(value, list):
+            result.update(item for item in value if isinstance(item, str))
+    return result
+
+
 def _check_pkg02_exact_additions(
     row: dict[str, Any],
+    transitions: list[dict[str, Any]],
     baseline: dict[str, Any],
     problems: list[str],
 ) -> None:
+    later_collected = _later_ids(
+        transitions,
+        ("collected_roots", "tests", "added_ids"),
+    )
     collected = row.get("collected_roots")
     tests = collected.get("tests") if isinstance(collected, dict) else {}
     actual_collected = tests.get("added_ids") if isinstance(tests, dict) else None
     current_collected = baseline.get("collected", {}).get("roots", {}).get("tests")
-    if actual_collected != _ids_owned_by_paths(current_collected):
+    frozen_collected = [
+        node_id
+        for node_id in _ids_owned_by_paths(current_collected)
+        if node_id not in later_collected
+    ]
+    if actual_collected != frozen_collected:
         problems.append("PKG-02-GATE collected additions must equal its frozen live test IDs")
 
     additions = row.get("mapping_static_additions")
@@ -411,7 +435,14 @@ def _check_pkg02_exact_additions(
     current_static = (
         current_mapping.get("python_static_test_ids") if isinstance(current_mapping, dict) else None
     )
-    if additions.get("python_static_test_ids") != _ids_owned_by_paths(current_static):
+    later_static = _later_ids(
+        transitions,
+        ("mapping_static_additions", "python_static_test_ids"),
+    )
+    frozen_static = [
+        node_id for node_id in _ids_owned_by_paths(current_static) if node_id not in later_static
+    ]
+    if additions.get("python_static_test_ids") != frozen_static:
         problems.append("PKG-02-GATE static additions must equal its frozen live test IDs")
 
 
@@ -463,7 +494,7 @@ def _check_pkg02_transition(
     )
     if mapping_facts != (14, 302, [], [], []):
         problems.append("PKG-02-GATE mapping-static addition relation is not exact")
-    _check_pkg02_exact_additions(row, baseline, problems)
+    _check_pkg02_exact_additions(row, transitions, baseline, problems)
 
 
 def _check_identity_chain(

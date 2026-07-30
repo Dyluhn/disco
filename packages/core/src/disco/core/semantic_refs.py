@@ -288,6 +288,124 @@ def _section_of(target: SemanticTarget) -> str | None:
     return None
 
 
+def _gather_slide_candidates(
+    toks: set[str], n: int | None, context: SemanticReferenceContext
+) -> tuple[list[SemanticTarget], bool]:
+    """SLIDE — "slide N" / "Nth slide": resolve by explicit ordinal equality. Returns the
+    matching slide locators and whether a label matched but the ordinal exceeded the deck."""
+    if "slide" not in toks or n is None:
+        return [], False
+    hits = [s for s in context.slides if s.ordinal == n]
+    if hits:
+        return [SlideLocator(slide_id=s.id) for s in hits], False
+    return [], True
+
+
+def _gather_ordinal_section_candidates(
+    toks: set[str], n: int | None, context: SemanticReferenceContext
+) -> tuple[list[SemanticTarget], bool]:
+    """SECTION BY ORDINAL — "section N": explicit ordinal equality. Returns the matching
+    section locators and whether the ordinal exceeded the section ordinals present."""
+    if "section" not in toks or n is None:
+        return [], False
+    hits = [s for s in context.sections if s.ordinal == n]
+    if hits:
+        return [SectionLocator(section_id=s.id) for s in hits], False
+    return [], True
+
+
+def _gather_field_candidates(norm: str, context: SemanticReferenceContext) -> list[SemanticTarget]:
+    """FIELD — section label + field label both present in the phrase."""
+    out: list[SemanticTarget] = []
+    for f in context.fields:
+        sec = next((s for s in context.sections if s.id == f.section_id), None)
+        sec_labels = (sec.label, *sec.aliases) if sec is not None else ()
+        if _labels_match(norm, sec_labels) and _labels_match(norm, f.labels or (f.field_id,)):
+            out.append(FieldLocator(section_id=f.section_id, field_id=f.field_id))
+    return out
+
+
+def _gather_collection_candidates(
+    norm: str, n: int | None, context: SemanticReferenceContext
+) -> tuple[list[SemanticTarget], set[str], bool]:
+    """COLLECTION ITEM — ordinal + collection label; index is positional (0-based). A matched
+    collection (in- OR out-of-range) "claims" its owning section, so an indexed intent like
+    "fifth pricing column" does NOT silently degrade into the whole "pricing" section. Returns
+    the indexed locators, the claimed owning-section ids, and whether the ordinal exceeded the
+    collection length."""
+    if n is None:
+        return [], set(), False
+    candidates: list[SemanticTarget] = []
+    claimed_sections: set[str] = set()
+    out_of_range = False
+    for col in context.collections:
+        if _labels_match(norm, (*col.labels, col.item_kind)):
+            claimed_sections.add(col.id.split(".", 1)[0])
+            idx = human_ordinal_to_index(n)
+            if idx < col.length:
+                candidates.append(IndexedLocator(collection_id=col.id, index=idx))
+            else:
+                out_of_range = True
+    return candidates, claimed_sections, out_of_range
+
+
+def _gather_bare_section_candidates(
+    norm: str, context: SemanticReferenceContext
+) -> list[SemanticTarget]:
+    """BARE SECTION — a section whose label (or alias) appears in the phrase."""
+    out: list[SemanticTarget] = []
+    for s in context.sections:
+        if _labels_match(norm, (s.label, *s.aliases)):
+            out.append(SectionLocator(section_id=s.id))
+    return out
+
+
+def _gather_comment_anchor_candidates(
+    norm: str, context: SemanticReferenceContext
+) -> list[SemanticTarget]:
+    """COMMENT ANCHOR — a stable comment anchor whose label (or id) appears in the phrase."""
+    out: list[SemanticTarget] = []
+    for a in context.comment_anchors:
+        if _labels_match(norm, (a.label, a.id)):
+            out.append(CommentAnchorLocator(anchor_id=a.id))
+    return out
+
+
+def _dedupe(targets: list[SemanticTarget]) -> list[SemanticTarget]:
+    seen: set[str] = set()
+    out: list[SemanticTarget] = []
+    for t in targets:
+        key = qualified_target_id(t)  # kind-qualified — distinct targets never collapse
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
+
+
+def _resolve_verdict(
+    candidates: list[SemanticTarget],
+    claimed_sections: set[str],
+    out_of_range: bool,
+) -> ReferenceResolution:
+    """Apply subsumption, kind-qualified dedupe, and the verdict. A bare SectionLocator(S) is
+    subsumed by any field/item that refines S, so "hero headline" resolves to the field, not
+    field-vs-section ambiguity. Genuinely unrelated cross-kind matches (e.g. a section AND a
+    comment anchor sharing a label) survive → ambiguous. An otherwise viable candidate beats
+    out-of-range, which beats no-match."""
+    refined = {sid for t in candidates if (sid := _section_of(t)) is not None} | claimed_sections
+    survivors = [
+        t for t in candidates if not (isinstance(t, SectionLocator) and t.section_id in refined)
+    ]
+    uniq = _dedupe(survivors)
+    if len(uniq) == 1:
+        return _resolved(uniq[0])
+    if len(uniq) > 1:
+        return _ambiguous([qualified_target_id(t) for t in uniq])
+    if out_of_range:
+        return _reject(ResolutionReason.OUT_OF_RANGE)
+    return _reject(ResolutionReason.NO_MATCH)
+
+
 def resolve_human_reference(
     phrase: str, *, context: SemanticReferenceContext
 ) -> ReferenceResolution:
@@ -312,74 +430,22 @@ def resolve_human_reference(
         False  # a label matched but the ordinal exceeded its range — only wins if nothing else does
     )
 
-    # SLIDE — "slide N" / "Nth slide": resolve by explicit ordinal equality.
-    if "slide" in toks and n is not None:
-        hits = [s for s in context.slides if s.ordinal == n]
-        if hits:
-            candidates += [SlideLocator(slide_id=s.id) for s in hits]
-        else:
-            out_of_range = True
+    # Gathering order: slide, ordinal section, field, collection, bare section, comment anchor.
+    slide_hits, slide_oor = _gather_slide_candidates(toks, n, context)
+    candidates += slide_hits
+    out_of_range = out_of_range or slide_oor
 
-    # SECTION BY ORDINAL — "section N": explicit ordinal equality.
-    if "section" in toks and n is not None:
-        hits = [s for s in context.sections if s.ordinal == n]
-        if hits:
-            candidates += [SectionLocator(section_id=s.id) for s in hits]
-        else:
-            out_of_range = True
+    section_hits, section_oor = _gather_ordinal_section_candidates(toks, n, context)
+    candidates += section_hits
+    out_of_range = out_of_range or section_oor
 
-    # FIELD — section label + field label both present.
-    for f in context.fields:
-        sec = next((s for s in context.sections if s.id == f.section_id), None)
-        sec_labels = (sec.label, *sec.aliases) if sec is not None else ()
-        if _labels_match(norm, sec_labels) and _labels_match(norm, f.labels or (f.field_id,)):
-            candidates.append(FieldLocator(section_id=f.section_id, field_id=f.field_id))
+    candidates += _gather_field_candidates(norm, context)
 
-    # COLLECTION ITEM — ordinal + collection label; index is positional (0-based). A matched
-    # collection (in- OR out-of-range) "claims" its owning section, so an indexed intent like
-    # "fifth pricing column" does NOT silently degrade into the whole "pricing" section.
-    claimed_sections: set[str] = set()
-    if n is not None:
-        for col in context.collections:
-            if _labels_match(norm, (*col.labels, col.item_kind)):
-                claimed_sections.add(col.id.split(".", 1)[0])
-                idx = human_ordinal_to_index(n)
-                if idx < col.length:
-                    candidates.append(IndexedLocator(collection_id=col.id, index=idx))
-                else:
-                    out_of_range = True
+    col_hits, claimed_sections, col_oor = _gather_collection_candidates(norm, n, context)
+    candidates += col_hits
+    out_of_range = out_of_range or col_oor
 
-    # BARE SECTION label + COMMENT ANCHOR.
-    for s in context.sections:
-        if _labels_match(norm, (s.label, *s.aliases)):
-            candidates.append(SectionLocator(section_id=s.id))
-    for a in context.comment_anchors:
-        if _labels_match(norm, (a.label, a.id)):
-            candidates.append(CommentAnchorLocator(anchor_id=a.id))
+    candidates += _gather_bare_section_candidates(norm, context)
+    candidates += _gather_comment_anchor_candidates(norm, context)
 
-    # SUBSUMPTION: a bare SectionLocator(S) is subsumed by any field/item that refines S, so
-    # "hero headline" resolves to the field, not field-vs-section ambiguity. Genuinely unrelated
-    # cross-kind matches (e.g. a section AND a comment anchor sharing a label) survive → ambiguous.
-    refined = {sid for t in candidates if (sid := _section_of(t)) is not None} | claimed_sections
-    survivors = [
-        t for t in candidates if not (isinstance(t, SectionLocator) and t.section_id in refined)
-    ]
-    uniq = _dedupe(survivors)
-    if len(uniq) == 1:
-        return _resolved(uniq[0])
-    if len(uniq) > 1:
-        return _ambiguous([qualified_target_id(t) for t in uniq])
-    if out_of_range:
-        return _reject(ResolutionReason.OUT_OF_RANGE)
-    return _reject(ResolutionReason.NO_MATCH)
-
-
-def _dedupe(targets: list[SemanticTarget]) -> list[SemanticTarget]:
-    seen: set[str] = set()
-    out: list[SemanticTarget] = []
-    for t in targets:
-        key = qualified_target_id(t)  # kind-qualified — distinct targets never collapse
-        if key not in seen:
-            seen.add(key)
-            out.append(t)
-    return out
+    return _resolve_verdict(candidates, claimed_sections, out_of_range)
