@@ -3353,9 +3353,7 @@ class ConversationRuntime:
             # Test/dev seam: a pinned router has no real endpoint to probe.
             return None
         cid = conversation_id or ""
-        override = (
-            override if override is not None else self._settings._get_model_override(cid)
-        )
+        override = override if override is not None else self._settings._get_model_override(cid)
         cfg = self._config_store.load()
         if override and override in cfg.models:
             key = override
