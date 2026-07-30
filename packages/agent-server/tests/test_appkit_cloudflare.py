@@ -2976,6 +2976,7 @@ def test_cfut_token_redacted():
 class _FakeRuntime:
     def __init__(self, ps: ProjectStore) -> None:
         self._ps = ps
+        self._workspace = self
         self._lock = asyncio.Lock()
         self.mutations: list[tuple[str, tuple[str, ...]]] = []
         self._committed = ps.cut_verified_version(
