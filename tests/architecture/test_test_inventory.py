@@ -196,8 +196,8 @@ class TestMappingStatic:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         mapping = baseline["mapping_static"]
         expected_counts = {
-            "python_test_file_count": 754,
-            "python_static_test_id_count": 9192,
+            "python_test_file_count": 757,
+            "python_static_test_id_count": 9224,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
         }
@@ -483,14 +483,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 9622,
+            "packages": 9768,
             "harness": 1236,
             "integrations": 9,
-            "tests": 327,
+            "tests": 328,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11194 == sum(expected.values())
+        assert collected["total"] == 11341 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -506,7 +506,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11194}
+        assert result == {"collected_total": 11341}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -525,9 +525,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9192,
+            "python_static_ids": 9224,
             "typescript_static_ids": 1200,
-            "collected_total": 11194,
+            "collected_total": 11341,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -566,6 +566,31 @@ class TestBaselineValidation:
         )
         advanced["additive_transitions"].sort(key=_canonical_row)
         result = _check_exact_live(monkeypatch, advanced, baseline)
+        assert result["ok"] is True, result["problems"]
+
+        later_collected = (
+            "tests/architecture/test_public_api.py::"
+            "TestExtractInitSurface::test_later_package_addition"
+        )
+        later_static = "tests/architecture/test_public_api.py::test_later_package_addition"
+        advanced["collected"]["roots"]["tests"].append(later_collected)
+        advanced["collected"]["roots"]["tests"].sort()
+        advanced["collected"]["counts"]["tests"] += 1
+        advanced["collected"]["total"] += 1
+        advanced["mapping_static"]["python_static_test_ids"].append(later_static)
+        advanced["mapping_static"]["python_static_test_ids"].sort()
+        advanced["mapping_static"]["python_static_test_id_count"] += 1
+        later_transition = _transition_for(advanced, "PKG-04-STORES")
+        later_transition["root"] = "tests"
+        later_transition["collected_roots"] = {
+            "tests": {
+                "before_count": baseline["collected"]["counts"]["tests"],
+                "after_count": advanced["collected"]["counts"]["tests"],
+                "added_ids": [later_collected],
+            }
+        }
+        later_transition["mapping_static_additions"]["python_static_test_ids"] = [later_static]
+        result = _check_exact_live(monkeypatch, advanced, advanced)
         assert result["ok"] is True, result["problems"]
 
         forged = copy.deepcopy(baseline)
