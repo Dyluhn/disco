@@ -1,25 +1,7 @@
-"""Persisted per-conversation settings and surface identity.
+"""Owned runtime settings state, persistence, policy, and surface recovery.
 
-``RuntimeSettings`` owns the settings collections, their sidecar paths, and all
-read/write/recovery behavior. ``ConversationRuntime`` retains only narrow
-compatibility delegates while the remaining runtime collaborators migrate to
-this boundary.
-
-  - driver model override:  _load_overrides / _save_overrides / set_model_override
-  - surface map:            _load_surfaces / _save_surfaces / set_surface
-                            / surface_of
-  - autonomous (headless):  _load_autonomous / _save_autonomous / set_autonomous
-                            / _effective_autonomous / is_autonomous
-  - assist tier:            _load_assist / _save_assist / set_assist
-                            / _effective_assist / is_assist
-                            / _is_small_assist_default
-  - quiet mode:             _load_quiet / _save_quiet / set_quiet
-                            / _effective_quiet / is_quiet
-  - atomic settings gate:   apply_settings_change / _conversation_is_pristine
-                            per-cid asyncio.Lock in _settings_locks
-
-The constructor accepts concrete stores and narrowly typed hooks. It never
-receives the runtime, a dependency bag, or a service locator.
+The boundary uses concrete stores and cohesive owner objects. It never receives
+the runtime, a callable-field facade, a dependency bag, or a service locator.
 """
 
 from __future__ import annotations
@@ -141,6 +123,176 @@ class _RuntimeModelBindings:
                 self._pending_sessions[conversation_id] = cast(SandboxSession, session)
 
 
+class _RuntimeSurfaceSettings:
+    """Own the durable surface map and its ordered recovery ladder."""
+
+    def __init__(
+        self,
+        *,
+        db_path: str,
+        store: SqliteEventStore,
+        config_store: ConfigStore,
+    ) -> None:
+        self._store = store
+        self._config_store = config_store
+        self._path = f"{db_path}.surfaces.json" if db_path else ""
+        self._surfaces = self._load()
+
+    def _load(self) -> dict[str, str]:
+        if self._path and os.path.exists(self._path):
+            try:
+                with open(self._path) as f:
+                    data = json.load(f)
+                return {str(k): str(v) for k, v in data.items() if v in _VALID_SURFACES}
+            except Exception:  # noqa: BLE001 — corrupt/missing → start empty
+                return {}
+        return {}
+
+    def _save(self) -> None:
+        if not self._path:
+            return
+        import tempfile
+
+        try:
+            dir_name = os.path.dirname(self._path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
+                json.dump(self._surfaces, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._path)
+        except Exception:  # noqa: BLE001 — persistence is best-effort
+            pass
+
+    def _set(self, conversation_id: str, surface: str) -> None:
+        self._surfaces[conversation_id] = surface if surface in _VALID_SURFACES else "research"
+        self._save()
+
+    def _get(self, conversation_id: str) -> str:
+        cached = self._surfaces.get(conversation_id)
+        if cached is not None:
+            return cached
+        try:
+            conn0 = getattr(self._store, "_conn", None)
+            if conn0 is not None:
+                row = conn0.execute(
+                    "SELECT surface FROM conversations WHERE conversation_id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if row is not None and row["surface"] in _VALID_SURFACES:
+                    self._surfaces[conversation_id] = row["surface"]
+                    self._save()
+                    return row["surface"]
+        except Exception:  # noqa: BLE001 — best-effort recovery, fall through
+            pass
+        project_store = ProjectStore(self._config_store.load().projects.projects_root)
+        if project_store.status() == StorageStatus.OK:
+            try:
+                if project_store.get(conversation_id) is not None:
+                    self._surfaces[conversation_id] = "build"
+                    self._save()
+                    return "build"
+            except Exception:  # noqa: BLE001 — best-effort recovery
+                pass
+        try:
+            conn = getattr(self._store, "_conn", None)
+            if conn is not None:
+                kinds = {
+                    row["kind"]
+                    for row in conn.execute(
+                        "SELECT DISTINCT kind FROM events WHERE conversation_id = ?",
+                        (conversation_id,),
+                    )
+                }
+                if "report" in kinds:
+                    self._surfaces[conversation_id] = "deep_research"
+                    self._save()
+                    return "deep_research"
+                if "plan" in kinds and "action" not in kinds:
+                    self._surfaces[conversation_id] = "deep_research"
+                    self._save()
+                    return "deep_research"
+        except Exception:  # noqa: BLE001 — best-effort recovery
+            pass
+        return "research"
+
+
+class _RuntimeModeSettings:
+    """Own transient artifact/AppKit identity caches and research source pins."""
+
+    _VALID_RESEARCH_SOURCES = frozenset(
+        {
+            "ddgs",
+            "arxiv",
+            "news",
+            "semantic_scholar",
+            "searxng",
+            "tavily",
+            "brave",
+            "site_scoped",
+        }
+    )
+
+    def __init__(
+        self,
+        store: SqliteEventStore,
+        appkit_ejections: Mapping[str, bool],
+    ) -> None:
+        self._store = store
+        self._appkit_ejections = appkit_ejections
+        self._artifact_mode: dict[str, bool] = {}
+        self._appkit_mode: dict[str, bool] = {}
+        self._research_sources: dict[str, tuple[str, ...]] = {}
+
+    def _set_artifact(self, conversation_id: str, on: bool) -> None:
+        stored_appkit = self._store.conversation_appkit_mode_sync(conversation_id)
+        if on and stored_appkit:
+            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
+        self._artifact_mode[conversation_id] = bool(on)
+
+    def _artifact_enabled(self, conversation_id: str) -> bool:
+        return self._artifact_mode.get(conversation_id, False)
+
+    def _set_appkit(self, conversation_id: str, on: bool) -> None:
+        requested = bool(on)
+        if requested and self._artifact_mode.get(conversation_id, False):
+            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
+        stored = self._store.conversation_appkit_mode_sync(conversation_id)
+        if stored is None:
+            self._store.create_conversation(conversation_id, appkit_mode=requested)
+            stored = requested
+        elif stored != requested:
+            raise ValueError("appkit_mode is immutable after conversation creation")
+        self._appkit_mode[conversation_id] = stored
+
+    def _appkit_enabled(self, conversation_id: str) -> bool:
+        from disco.core.flags import appkit_enabled
+
+        stored = self._store.conversation_appkit_mode_sync(conversation_id)
+        if stored is True and self._appkit_ejections.get(conversation_id, False):
+            return False
+        if stored is True and not appkit_enabled():
+            raise RuntimeError(
+                "AppKit is unavailable on this deployment (DISCO_APPKIT_ENABLED=0); "
+                "the governed conversation was not opened as Freeform"
+            )
+        return stored is True
+
+    def _set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
+        clean: list[str] = []
+        for raw in sources:
+            source = str(raw).strip().lower()
+            if source in self._VALID_RESEARCH_SOURCES and source not in clean:
+                clean.append(source)
+        if clean:
+            self._research_sources[conversation_id] = tuple(clean)
+        else:
+            self._research_sources.pop(conversation_id, None)
+
+    def _get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
+        if not conversation_id:
+            return ()
+        return self._research_sources.get(conversation_id, ())
+
+
 class RuntimeSettings:
     def __init__(
         self,
@@ -156,92 +308,33 @@ class RuntimeSettings:
         self._config_store = config_store
         self._routing = routing
         self._model_bindings = model_bindings
-        self._appkit_ejections = appkit_ejections
+        self._surface_settings = _RuntimeSurfaceSettings(
+            db_path=db_path,
+            store=store,
+            config_store=config_store,
+        )
+        self._mode_settings = _RuntimeModeSettings(store, appkit_ejections)
 
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
-        self._surface_path = f"{db_path}.surfaces.json" if db_path else ""
         self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
         self._assist_path = f"{db_path}.assist.json" if db_path else ""
         self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
         self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
 
         self._model_overrides = self._load_overrides()
-        self._surfaces = self._load_surfaces()
         self._autonomous = self._load_autonomous()
         self._assist = self._load_assist()
         self._quiet = self._load_quiet()
-        self._artifact_mode: dict[str, bool] = {}
-        self._appkit_mode: dict[str, bool] = {}
-        self._research_sources: dict[str, tuple[str, ...]] = {}
 
         # Order C: per-conversation lock for atomic pre-kick settings changes.
         # Acquired by apply_settings_change so concurrent PATCHes are serialized
         # and a PATCH can't race the loop-compose+register step in kick().
         self._settings_locks: dict[str, asyncio.Lock] = {}
 
-    # Narrow compatibility views. The collections remain owned and initialized
-    # here; ConversationRuntime's temporary properties only delegate to these.
-
-    @property
-    def _model_overrides_view(self) -> dict[str, str]:
-        return self._model_overrides
-
-    @_model_overrides_view.setter
-    def _model_overrides_view(self, value: dict[str, str]) -> None:
-        self._model_overrides = value
-
-    @property
-    def _surfaces_view(self) -> dict[str, str]:
-        return self._surfaces
-
-    @property
-    def _autonomous_view(self) -> dict[str, bool]:
-        return self._autonomous
-
-    @property
-    def _assist_view(self) -> dict[str, bool]:
-        return self._assist
-
-    @property
-    def _quiet_view(self) -> dict[str, bool]:
-        return self._quiet
-
-    @property
-    def _artifact_mode_view(self) -> dict[str, bool]:
-        return self._artifact_mode
-
-    @property
-    def _appkit_mode_view(self) -> dict[str, bool]:
-        return self._appkit_mode
-
-    @property
-    def _override_sidecar_path(self) -> str:
-        return self._override_path
-
-    @property
-    def _surface_sidecar_path(self) -> str:
-        return self._surface_path
-
-    @property
-    def _autonomous_sidecar_path(self) -> str:
-        return self._autonomous_path
-
-    @property
-    def _assist_sidecar_path(self) -> str:
-        return self._assist_path
-
-    @property
-    def _quiet_sidecar_path(self) -> str:
-        return self._quiet_path
-
-    @property
-    def _last_model_sidecar_path(self) -> str:
-        return self._last_model_path
-
-    def get_model_override(self, conversation_id: str) -> str | None:
+    def _get_model_override(self, conversation_id: str) -> str | None:
         return self._model_overrides.get(conversation_id)
 
-    def evict_model_binding(self, conversation_id: str) -> None:
+    def _evict_model_binding(self, conversation_id: str) -> None:
         self._model_bindings.evict_for_model_change(conversation_id)
 
     # ---- driver model override ---------------------------------------------
@@ -343,88 +436,16 @@ class RuntimeSettings:
     # ---- surface map -------------------------------------------------------
 
     def _load_surfaces(self) -> dict[str, str]:
-        """The persisted surface map (sidecar next to PMX_DB). Unknown values are
-        dropped (treated as never-set → the recovery ladder still applies), so a
-        hand-edited or future-versioned sidecar can't compose an invalid loop."""
-        if self._surface_path and os.path.exists(self._surface_path):
-            try:
-                with open(self._surface_path) as f:
-                    data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v in _VALID_SURFACES}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
-                return {}
-        return {}
+        return self._surface_settings._load()
 
     def _save_surfaces(self) -> None:
-        if not self._surface_path:
-            return
-        import tempfile
+        self._surface_settings._save()
 
-        try:
-            dir_name = os.path.dirname(self._surface_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._surfaces, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._surface_path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
-            pass
+    def _set_surface(self, conversation_id: str, surface: str) -> None:
+        self._surface_settings._set(conversation_id, surface)
 
-    def set_surface(self, conversation_id: str, surface: str) -> None:
-        """Select and persist a conversation surface before it runs."""
-        self._surfaces[conversation_id] = surface if surface in _VALID_SURFACES else "research"
-        self._save_surfaces()
-
-    def surface_of(self, conversation_id: str) -> str:
-        """Recover a conversation's surface from durable signals in priority order."""
-        cached = self._surfaces.get(conversation_id)
-        if cached is not None:
-            return cached
-        # Rung 0 — authoritative DB column written at conversation creation.
-        try:
-            conn0 = getattr(self._store, "_conn", None)
-            if conn0 is not None:
-                row = conn0.execute(
-                    "SELECT surface FROM conversations WHERE conversation_id = ?",
-                    (conversation_id,),
-                ).fetchone()
-                if row is not None and row["surface"] in _VALID_SURFACES:
-                    self._surfaces[conversation_id] = row["surface"]
-                    self._save_surfaces()
-                    return row["surface"]
-        except Exception:  # noqa: BLE001 — best-effort recovery, fall through
-            pass
-        project_store = ProjectStore(self._config_store.load().projects.projects_root)
-        if project_store.status() == StorageStatus.OK:
-            try:
-                if project_store.get(conversation_id) is not None:
-                    self._surfaces[conversation_id] = "build"
-                    self._save_surfaces()
-                    return "build"
-            except Exception:  # noqa: BLE001 — best-effort recovery
-                pass
-        # ReportEvent is the durable Deep Research discriminator. A plan without
-        # an action is the legacy paused-at-plan-gate fallback.
-        try:
-            conn = getattr(self._store, "_conn", None)
-            if conn is not None:
-                kinds = {
-                    row["kind"]
-                    for row in conn.execute(
-                        "SELECT DISTINCT kind FROM events WHERE conversation_id = ?",
-                        (conversation_id,),
-                    )
-                }
-                if "report" in kinds:
-                    self._surfaces[conversation_id] = "deep_research"
-                    self._save_surfaces()
-                    return "deep_research"
-                if "plan" in kinds and "action" not in kinds:
-                    self._surfaces[conversation_id] = "deep_research"
-                    self._save_surfaces()
-                    return "deep_research"
-        except Exception:  # noqa: BLE001 — best-effort recovery
-            pass
-        return "research"
+    def _surface_of(self, conversation_id: str) -> str:
+        return self._surface_settings._get(conversation_id)
 
     # ---- autonomous (headless) ---------------------------------------------
 
@@ -467,7 +488,7 @@ class RuntimeSettings:
         gate, so an autonomous=True flag there is uniformly treated as interactive."""
         return (
             self._autonomous.get(conversation_id, False)
-            and self.surface_of(conversation_id) in _AUTONOMOUS_SURFACES
+            and self._surface_of(conversation_id) in _AUTONOMOUS_SURFACES
         )
 
     def is_autonomous(self, conversation_id: str) -> bool:
@@ -508,7 +529,7 @@ class RuntimeSettings:
     def _effective_quiet(self, conversation_id: str) -> bool:
         return (
             self._quiet.get(conversation_id, False)
-            and self.surface_of(conversation_id) in _BUILD_LIKE_SURFACES
+            and self._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
         )
 
     def is_quiet(self, conversation_id: str) -> bool:
@@ -788,87 +809,23 @@ class RuntimeSettings:
     # ---- artifact_mode (C6) ------------------------------------------------
 
     def set_artifact_mode(self, conversation_id: str, on: bool) -> None:
-        """Mark a conversation as artifact-mode (C6). In-memory only — the flag
-        is set at create time from the body and is not needed to survive a restart
-        (artifact-mode conversations are short-lived authoring sessions)."""
-        stored_appkit = self._store.conversation_appkit_mode_sync(conversation_id)
-        if on and stored_appkit:
-            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
-        self._artifact_mode[conversation_id] = bool(on)
+        self._mode_settings._set_artifact(conversation_id, on)
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
-        """True when the conversation was created with artifact_mode=True."""
-        return self._artifact_mode.get(conversation_id, False)
+        return self._mode_settings._artifact_enabled(conversation_id)
 
     # ---- appkit_mode (EPIC F) ----------------------------------------------
 
     def set_appkit_mode(self, conversation_id: str, on: bool) -> None:
-        """Capture immutable AppKit identity for legacy/internal create callers.
-
-        The public create route writes the bit with the rest of the conversation
-        row. This compatibility seam may create a missing row, but it can never
-        flip an existing identity in either direction.
-        """
-
-        requested = bool(on)
-        if requested and self._artifact_mode.get(conversation_id, False):
-            raise ValueError("artifact_mode and appkit_mode are mutually exclusive")
-        stored = self._store.conversation_appkit_mode_sync(conversation_id)
-        if stored is None:
-            self._store.create_conversation(conversation_id, appkit_mode=requested)
-            stored = requested
-        elif stored != requested:
-            raise ValueError("appkit_mode is immutable after conversation creation")
-        # Retain the old map as a non-authoritative compatibility cache for code
-        # inspecting runtime internals. Every effective read below goes to SQLite.
-        self._appkit_mode[conversation_id] = stored
+        self._mode_settings._set_appkit(conversation_id, on)
 
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
-        """Return immutable AppKit identity or fail closed when unavailable.
-
-        The deployment switch may block AppKit, but it may never turn a governed
-        conversation into Freeform. Re-enabling restores composition without
-        changing the stored identity.
-        """
-        from disco.core.flags import appkit_enabled
-
-        stored = self._store.conversation_appkit_mode_sync(conversation_id)
-        if stored is True and self._appkit_ejections.get(conversation_id, False):
-            return False
-        if stored is True and not appkit_enabled():
-            raise RuntimeError(
-                "AppKit is unavailable on this deployment (DISCO_APPKIT_ENABLED=0); "
-                "the governed conversation was not opened as Freeform"
-            )
-        return stored is True
+        return self._mode_settings._appkit_enabled(conversation_id)
 
     # ---- per-query research sources ---------------------------------------
 
-    _VALID_RESEARCH_SOURCES = frozenset(
-        {
-            "ddgs",
-            "arxiv",
-            "news",
-            "semantic_scholar",
-            "searxng",
-            "tavily",
-            "brave",
-            "site_scoped",
-        }
-    )
-
     def set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
-        clean: list[str] = []
-        for raw in sources:
-            source = str(raw).strip().lower()
-            if source in self._VALID_RESEARCH_SOURCES and source not in clean:
-                clean.append(source)
-        if clean:
-            self._research_sources[conversation_id] = tuple(clean)
-        else:
-            self._research_sources.pop(conversation_id, None)
+        self._mode_settings._set_research_sources(conversation_id, sources)
 
     def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
-        if not conversation_id:
-            return ()
-        return self._research_sources.get(conversation_id, ())
+        return self._mode_settings._get_research_sources(conversation_id)
