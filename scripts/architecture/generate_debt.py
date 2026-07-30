@@ -154,6 +154,17 @@ PKG11_AUTH_QUOTA_RESOLVED_IDS = frozenset(
         "PY-0671",
     }
 )
+PKG11_SETTINGS_RESOLVED_IDS = frozenset(
+    {
+        "DM-015",
+        *(f"PY-{number:04d}" for number in range(275, 281)),
+        *(f"PY-{number:04d}" for number in range(325, 329)),
+        *(f"PY-{number:04d}" for number in range(364, 367)),
+        *(f"PY-{number:04d}" for number in range(368, 372)),
+        *(f"PY-{number:04d}" for number in range(457, 461)),
+        "PY-0473",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -167,9 +178,10 @@ RESOLVED_IDS = (
     | PKG06_LIFECYCLE_RESOLVED_IDS
     | PKG06_RUNTIME_RESOLVED_IDS
     | PKG11_AUTH_QUOTA_RESOLVED_IDS
+    | PKG11_SETTINGS_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 587
-EXPECTED_OBSERVATIONS = 16
+EXPECTED_ACTIVE_DEBT_ROWS = 565
+EXPECTED_OBSERVATIONS = 15
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
     "DM-001": (

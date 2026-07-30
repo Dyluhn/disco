@@ -80,14 +80,6 @@
     "source_disposition_id": "DM-013"
   },
   {
-    "id": "DM-015",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
-    "concern": "settings duplicated between process dictionaries and schemaless JSON sidecars with corruption-to-default recovery",
-    "owner_package": "PKG-11-SETTINGS",
-    "source_disposition_id": "DM-015"
-  },
-  {
     "id": "DM-017",
     "kind": "distributed_concern",
     "location": "packages/core/src/disco/core/events.py:Event:187-217 + packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425",

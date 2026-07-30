@@ -128,7 +128,7 @@
   {
     "id": "DM-015",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
@@ -2666,7 +2666,7 @@
   {
     "id": "PY-0275",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:_test_tts_probe:85-196",
@@ -2675,7 +2675,7 @@
   {
     "id": "PY-0276",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:_test_tts_probe:85-196",
@@ -2684,7 +2684,7 @@
   {
     "id": "PY-0277",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:make_probes_router:199-382",
@@ -2693,7 +2693,7 @@
   {
     "id": "PY-0278",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -2702,7 +2702,7 @@
   {
     "id": "PY-0279",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -2711,7 +2711,7 @@
   {
     "id": "PY-0280",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -3116,7 +3116,7 @@
   {
     "id": "PY-0325",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_model_probe.py:_do_live_model_probe:30-90",
@@ -3125,7 +3125,7 @@
   {
     "id": "PY-0326",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_model_probe.py:_models_context_length:93-151",
@@ -3134,7 +3134,7 @@
   {
     "id": "PY-0327",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:RuntimeSettings:301-845",
@@ -3143,7 +3143,7 @@
   {
     "id": "PY-0328",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:RuntimeSettings:301-845",
@@ -3467,7 +3467,7 @@
   {
     "id": "PY-0364",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState:154-1036",
@@ -3476,7 +3476,7 @@
   {
     "id": "PY-0365",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState:154-1036",
@@ -3485,7 +3485,7 @@
   {
     "id": "PY-0366",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:<module>:1-1043",
@@ -3503,7 +3503,7 @@
   {
     "id": "PY-0368",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/provider_config_service.py:enable_provider_model:205-281",
@@ -3512,7 +3512,7 @@
   {
     "id": "PY-0369",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/config.py:make_config_router:28-167",
@@ -3521,7 +3521,7 @@
   {
     "id": "PY-0370",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/providers.py:_normalize_openai_compat:170-218",
@@ -3530,7 +3530,7 @@
   {
     "id": "PY-0371",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/providers.py:make_providers_router:305-443",
@@ -4304,7 +4304,7 @@
   {
     "id": "PY-0457",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config.py:default_config:545-691",
@@ -4313,7 +4313,7 @@
   {
     "id": "PY-0458",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:ConfigStore:49-568",
@@ -4322,7 +4322,7 @@
   {
     "id": "PY-0459",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:ConfigStore:49-568",
@@ -4331,7 +4331,7 @@
   {
     "id": "PY-0460",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:_operator_approvals:441-524",
@@ -4448,7 +4448,7 @@
   {
     "id": "PY-0473",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
