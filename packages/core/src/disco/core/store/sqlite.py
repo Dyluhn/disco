@@ -1,7 +1,6 @@
 """SQLite EventStore — event-state-contract.md §6.2 (the v1 [INTERIOR] impl).
 
-Dependency-free: stdlib `sqlite3` under a per-store asyncio.Lock. The store is
-single-process/single-event-loop in v1; the lock makes the read-max-then-insert
+Dependency-free: stdlib `sqlite3`; one asyncio.Lock makes the read-max-then-insert
 critical section atomic across awaits, which is what gives G1 (monotonic,
 gap-free seq) even under concurrent `append()` coroutines. WAL mode gives G5
 (reads don't block writes pathologically).
@@ -27,6 +26,7 @@ from ..events import (
     Event,
     EventAdapter,
     WorkspaceVersionEvent,
+    _require_concrete_event,
     derive_final_workspace_fence,
     event_to_json_dict,
 )
@@ -1199,15 +1199,3 @@ class SqliteEventStore(_ClosableSqliteStore):
                 yield ev
         finally:
             self._subscribers[conversation_id].discard(queue)
-
-
-def _require_concrete_event(event: object) -> Event:
-    """Reject untyped or envelope-only values before a persistence transaction."""
-    from ..events import BaseEvent
-
-    if not isinstance(event, BaseEvent) or type(event) is BaseEvent:
-        raise TypeError("event store append requires a concrete Event instance")
-    try:
-        return EventAdapter.validate_python(event)
-    except ValueError as exc:
-        raise TypeError("event store append requires a concrete Event instance") from exc
