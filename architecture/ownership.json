@@ -33,11 +33,11 @@
     {
       "kind": "workspace_service",
       "path": "packages/agent-server/src/disco/agent_server/workspace_service.py",
-      "symbol": "WorkspaceService",
+      "symbol": "WorkspaceCoordinator",
       "disposition_id": "DM-002",
       "classification": "distributed_concern",
       "owns": "workspace version and immutable snapshot authority",
-      "evidence": "workspace service + project store distributed concern"
+      "evidence": "single coordinator port over the existing fence, persistence owner, project store and revision source"
     },
     {
       "kind": "project_store",
@@ -52,14 +52,14 @@
   "effect_owners": [
     {
       "kind": "route_adapter_effect_violation",
-      "path": "packages/agent-server/src/disco/agent_server/routes/projects.py",
-      "symbols": ["_clone_git_url", "_copy_scanned_tree", "_handle_import_project", "_materialize_zip"],
+      "path": "packages/agent-server/src/disco/agent_server/routes/projects_import.py",
+      "symbols": ["_copy_scanned_tree", "_extract_zip_entries", "clone_git_url", "_materialize_source", "import_project"],
       "disposition_ids": ["PY-0281", "PY-0282", "PY-0283", "PY-0284", "PY-0285"],
-      "owns": "route-owned process/filesystem effects (shutil.rmtree, subprocess, mkdir)",
-      "evidence": "exact direct effect owners: _copy_scanned_tree (filesystem copy/delete), _materialize_zip (filesystem materialization), _clone_git_url (process), _handle_import_project (temporary directory/delete plus persistence delegation)",
+      "owns": "bounded project-import process/filesystem mechanics behind translation-only routes",
+      "evidence": "exact direct effect owners after PKG-07 extraction: copy, zip extraction, git process, source materialization and import transaction mechanics",
       "rule": "route adapters may validate/translate/delegate/render but may not own persistence, process/filesystem/network effects or lifecycle transitions",
       "frozen_observation": true,
-      "owner_package": "PKG-04-ROUTES"
+      "owner_package": "PKG-07-WORKSPACE"
     },
     {
       "kind": "frontend_transport",

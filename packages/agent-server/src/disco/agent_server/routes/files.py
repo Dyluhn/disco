@@ -1,50 +1,26 @@
-"""File-upload + declared-artifact download routes."""
+"""File-upload and declared-artifact routes."""
 
 from __future__ import annotations
 
-import contextlib
-import posixpath
-from pathlib import Path
 from typing import Annotated
 
-from disco.core import (
-    ConversationStatus,
-    DatasourceEvent,
-    EventSource,
-    LLMMessage,
-    MessageEvent,
-    StatusEvent,
-)
+from disco.core import ConversationStatus
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
-from ..uploads_ingest import parse_upload_to_doc
-from ..workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
-from ._common import (
-    _ARTIFACT_TYPES,
-    _MAX_CONV_BYTES,
-    _MAX_FILE_BYTES,
-    _MAX_FILES_PER_REQUEST,
-    _declared_artifacts,
-    _reject_if_imported,
-    _sanitize_name,
-    require_owned_conversation,
+from ._common import _MAX_FILES_PER_REQUEST, _reject_if_imported, require_owned_conversation
+from .files_support import (
+    ArtifactRejected,
+    ingest_uploads,
+    resolve_artifact,
+)
+from .files_support import (
+    _read_artifact_bytes as _read_artifact_bytes,
 )
 
-# C5 — Content-Security-Policy applied when ?inline=true. sandbox allow-scripts
-# sandboxes the document but permits slide-navigation JS; default-src 'none' blocks
-# all loads; style-src/img-src/font-src permit inline CSS + same-origin/data assets.
-# frame-ancestors limits who may EMBED the artifact (anti-clickjacking). 'self' covers
-# the production same-origin case (frontend + agent-server behind one origin). In DEV
-# the Vite UI (:5173) is a DIFFERENT origin from the agent-server (:8000), so the
-# PreviewPane iframe was blocked ("permission") — R8. We allow the configured frontend
-# origin(s) explicitly (NOT a blanket `*`, which would re-open cross-site clickjacking).
-# DISCO_PREVIEW_FRAME_ANCESTORS = space-separated extra origins; the default covers the
-# standard local dev + loopback hosts (override to add a tunnel/tailnet origin).
 _DEFAULT_PREVIEW_ANCESTORS = (
     "http://localhost:5173 http://127.0.0.1:5173 http://localhost:8000 http://127.0.0.1:8000"
 )
@@ -59,171 +35,44 @@ _INLINE_CSP = (
 ).strip()
 
 
-async def _read_artifact_bytes(
-    runtime: ConversationRuntime,
-    conversation_id: str,
-    norm: str,
-) -> bytes | None:
-    """Read a declared artifact's bytes: the live sandbox first, then the host
-    ProjectStore snapshot (so a FINISHED run with a reaped sandbox still serves).
-    Returns None if neither source has it. Caller enforces size + 404."""
-    if is_runtime_secret_path(norm):
-        return None
-    # 1) live sandbox (a running/suspended-but-live conversation)
-    session = runtime.live_session(conversation_id)
-    if session is not None:
-        with contextlib.suppress(Exception):
-            return await session.read_file(norm)
-    # 2) host ProjectStore snapshot (finished run, sandbox reaped)
-    ps = runtime.project_store()
-    if ps is not None and ps.status() == StorageStatus.OK:
-        with contextlib.suppress(Exception):
-            workspace = ps.path_for(conversation_id).resolve()
-            resolved = (workspace / norm).resolve()
-            if resolved.is_relative_to(workspace) and resolved.is_file():
-                return resolved.read_bytes()
-    return None
-
-
 def _register_upload_routes(
-    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+    router: APIRouter,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
 ) -> None:
-    """Register the POST /conversations/{id}/files upload route."""
-
     @router.post("/conversations/{conversation_id}/files")
     async def upload_files(
         conversation_id: str,
         request: Request,
         files: Annotated[list[UploadFile], File()],
     ) -> JSONResponse:
-        """Upload accepted files under uploads/; reject all-invalid batches with 413."""
+        """Upload accepted files under uploads/."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         state = await store.get_state(conversation_id)
         if state.execution_status == ConversationStatus.ERROR:
             raise HTTPException(status_code=409, detail={"reason": "conversation_in_error_state"})
-
         if len(files) > _MAX_FILES_PER_REQUEST:
             raise HTTPException(
                 status_code=413,
                 detail={"reason": f"too_many_files_per_request (max {_MAX_FILES_PER_REQUEST})"},
             )
-
         if runtime is None:
             raise HTTPException(status_code=409, detail={"reason": "no_active_sandbox"})
-        session = runtime.upload_session(conversation_id)
-
-        saved: list[dict] = []
-        rejected: list[dict] = []
-
-        for upload in files:
-            raw_name = upload.filename or ""
-            clean = _sanitize_name(raw_name)
-            if clean is None:
-                rejected.append({"name": raw_name, "reason": "empty filename after sanitization"})
-                continue
-
-            data = await upload.read()
-            if len(data) > _MAX_FILE_BYTES:
-                rejected.append(
-                    {
-                        "name": raw_name,
-                        "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
-                    }
-                )
-                continue
-
-            # Quota, collision choice, invalidation, and both writes share the
-            # finalization lock. Two simultaneous uploads can never select the
-            # same suffix or slip a write between FINISHED and its seal.
-            async with runtime.workspace_fence(conversation_id):
-                server_names = runtime._uploads.names(conversation_id)
-                try:
-                    sandbox_names: set[str] = set(await session.list_dir("uploads"))
-                except Exception:  # noqa: BLE001 — uploads/ may not exist yet
-                    sandbox_names = set()
-                existing_names = server_names | sandbox_names
-                existing_bytes = runtime._uploads.size(conversation_id)
-                for fname in sandbox_names - server_names:
-                    try:
-                        existing_bytes += len(await session.read_file(f"uploads/{fname}"))
-                    except Exception:  # noqa: BLE001
-                        pass
-                if existing_bytes + len(data) > _MAX_CONV_BYTES:
-                    rejected.append(
-                        {
-                            "name": raw_name,
-                            "reason": "conversation upload quota (100 MB) would be exceeded",
-                        }
-                    )
-                    continue
-
-                stem = Path(clean).stem
-                suffix = Path(clean).suffix
-                final_name = clean
-                counter = 2
-                while final_name in existing_names:
-                    final_name = f"{stem}-{counter}{suffix}"
-                    counter += 1
-                upload_path = f"uploads/{final_name}"
-                await runtime.record_workspace_mutation_locked(
-                    conversation_id,
-                    "upload.write",
-                    paths=(upload_path,),
-                )
-                await session.write_file(upload_path, data)
-                runtime._uploads.store(conversation_id, final_name, data)
-
-            # G1/DR-4 F2: for supported document types, parse the bytes
-            # into Passages and add them to the per-conversation upload corpus so
-            # they become citable in DR runs and basic research (F3).
-            # Unsupported types (.zip, binaries, etc.) remain in the sandbox for the
-            # agent to read but are NOT indexed as retrievable passages.
-            upload_doc = parse_upload_to_doc(final_name, data, conversation_id)
-            if upload_doc is not None and upload_doc.passages:
-                runtime.add_upload_passages(
-                    conversation_id,
-                    list(upload_doc.passages),
-                )
-
-            saved.append({"name": final_name, "bytes": len(data)})
-
-        if saved:
-            parts = ", ".join(f"uploads/{s['name']} ({s['bytes']:,} bytes)" for s in saved)
-            announcement = f"User uploaded: {parts}"
-            await store.append(
-                conversation_id,
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=announcement),
-                ),
-            )
-            # D6: emit exactly ONE DatasourceEvent at the attach site so the
-            # View pins the contract (condensation-immune, see events.py:509).
-            # An uploaded file IS a durable data source — the verbatim contract
-            # (path + size) must survive arbitrarily long builds instead of
-            # dissolving into a lossy summary.
-            if len(saved) == 1:
-                ds_name = f"uploads/{saved[0]['name']}"
-                ds_docs = f"path=uploads/{saved[0]['name']} size={saved[0]['bytes']:,} bytes"
-            else:
-                ds_name = f"uploads/{len(saved)}_files"
-                ds_docs = "\n".join(f"- uploads/{s['name']}  ({s['bytes']:,} bytes)" for s in saved)
-            await store.append(
-                conversation_id,
-                DatasourceEvent(name=ds_name, docs=ds_docs),
-            )
-
-        if not saved and rejected:
-            return JSONResponse({"saved": saved, "rejected": rejected}, status_code=413)
-        return JSONResponse({"saved": saved, "rejected": rejected}, status_code=200)
+        batch = await ingest_uploads(
+            files,
+            conversation_id=conversation_id,
+            store=store,
+            runtime=runtime,
+        )
+        return JSONResponse(batch.payload(), status_code=batch.status_code)
 
 
 def _register_artifact_routes(
-    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+    router: APIRouter,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
 ) -> None:
-    """Register the GET /conversations/{id}/artifacts/{path} download route."""
-
     @router.get("/conversations/{conversation_id}/artifacts/{path:path}")
     async def artifact_file(
         conversation_id: str,
@@ -231,80 +80,28 @@ def _register_artifact_routes(
         request: Request,
         inline: bool = Query(default=False),
     ) -> Response:
-        """Download a generated artifact by its workspace-relative path.
-        Jails: (1) the path must have been DECLARED as an artifact in the event log;
-        (2) extension allowlist (_ARTIFACT_TYPES); (3) traversal-normalized + host-path
-        resolve-jail.  Reads the live sandbox first, falling back to the host
-        ProjectStore snapshot so a FINISHED run (no live session) still serves.
-        404 uniformly on any rejection (no probe).
-
-        C5: ?inline=true returns HTML with Content-Disposition: inline + a strict
-        Content-Security-Policy (sandbox; no allow-same-origin) so an HTML artifact
-        can be embedded in an iframe without granting same-origin access to this
-        instance's APIs.  Only .html is allowed in inline mode — all other extensions
-        still 404 on ?inline=true so the inline allowlist stays minimal.
-        The default (no param) is unchanged: always attachment."""
+        """Download a declared artifact, using sealed bytes after FINISHED."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        norm = posixpath.normpath(path)
-        if posixpath.isabs(norm) or norm.startswith(".."):
-            raise HTTPException(status_code=404)
-        _, ext = posixpath.splitext(norm)
-        media_type = _ARTIFACT_TYPES.get(ext.lower())
-        if media_type is None:
-            raise HTTPException(status_code=404)
-        # C5: inline mode is restricted to .html only — no other type may be inlined.
-        if inline and ext.lower() != ".html":
-            raise HTTPException(status_code=404)
         if runtime is None:
             raise HTTPException(status_code=404)
-        if norm not in await _declared_artifacts(store, conversation_id):
-            raise HTTPException(status_code=404)
-
-        committed_data: bytes | None = None
-        events = await store.get_events(conversation_id)
-        latest_status = next(
-            (event for event in reversed(events) if isinstance(event, StatusEvent)),
-            None,
+        try:
+            artifact = await resolve_artifact(
+                path,
+                inline=inline,
+                conversation_id=conversation_id,
+                store=store,
+                runtime=runtime,
+            )
+        except ArtifactRejected as exc:
+            if exc.detail is None:
+                raise HTTPException(status_code=exc.status_code) from exc
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return _artifact_response(
+            artifact.data,
+            artifact.media_type,
+            artifact.basename,
+            inline,
         )
-        if latest_status is not None and latest_status.status is ConversationStatus.FINISHED:
-            project_store = runtime.project_store()
-            if project_store is None or project_store.status() != StorageStatus.OK:
-                raise HTTPException(status_code=503, detail={"reason": "workspace_unsealed"})
-            try:
-                committed = resolve_committed_workspace(
-                    events,
-                    project_store,
-                    conversation_id,
-                )
-                with project_store.open_verified_version(
-                    conversation_id,
-                    committed.event.version_seq,
-                ) as version:
-                    if norm not in {entry.path for entry in version.files}:
-                        raise HTTPException(status_code=404)
-                    committed_data = version.read_bytes(norm, max_bytes=50 * 1024 * 1024)
-            except WorkspaceCommitUnavailable as exc:
-                raise HTTPException(
-                    status_code=503,
-                    detail={"reason": "workspace_unsealed"},
-                ) from exc
-            except StorageError as exc:
-                raise HTTPException(
-                    status_code=503,
-                    detail={"reason": "workspace_unsealed"},
-                ) from exc
-
-        data = (
-            committed_data
-            if committed_data is not None
-            else await _read_artifact_bytes(runtime, conversation_id, norm)
-        )
-        if data is None:
-            raise HTTPException(status_code=404)
-        if len(data) > 50 * 1024 * 1024:  # 50 MB cap
-            raise HTTPException(status_code=404)
-
-        return _artifact_response(data, media_type, posixpath.basename(norm), inline)
 
 
 def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
@@ -315,9 +112,6 @@ def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | No
 
 
 def _artifact_response(data: bytes, media_type: str, basename: str, inline: bool) -> Response:
-    """Build the artifact download Response. inline=True (C5, .html only) serves
-    with Content-Disposition: inline + a strict CSP so a sandboxed iframe can
-    render it without same-origin; default is an attachment download."""
     disposition = "inline" if inline else "attachment"
     headers = {
         "Content-Disposition": f'{disposition}; filename="{basename}"',
@@ -325,7 +119,5 @@ def _artifact_response(data: bytes, media_type: str, basename: str, inline: bool
         "Cache-Control": "private, no-store",
     }
     if inline:
-        # No allow-same-origin on the caller's iframe sandbox attr → the framed
-        # page cannot reach this instance's APIs even though it runs scripts.
         headers["Content-Security-Policy"] = _INLINE_CSP
     return Response(content=data, media_type=media_type, headers=headers)

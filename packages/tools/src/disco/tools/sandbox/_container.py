@@ -1591,25 +1591,25 @@ class ContainerInstance:
         `_teardown_egress_aux`."""
         if self._destroyed:
             return
-        self._destroyed = True
 
         def _teardown() -> None:
             try:
                 self._container.stop(timeout=self._stop_timeout_s)
             except Exception:  # noqa: BLE001 — best-effort stop; force-remove next
                 pass
-            try:
-                _remove_container(self._container)
-            except Exception:  # noqa: BLE001 — already gone is fine
-                pass
+            if self._loopback_tunnel is not None:
+                self._loopback_tunnel.close()
+            # Successful force removal is the process-termination proof consumed
+            # by SandboxSession and Preview. Never turn a failed removal into a
+            # successful destroy or discard the retryable instance handle.
+            _remove_container(self._container)
             try:
                 _remove_volume(self._workspace_volume)
             except Exception:  # noqa: BLE001 — already gone is fine
                 pass
-            if self._loopback_tunnel is not None:
-                self._loopback_tunnel.close()
 
         await asyncio.to_thread(_teardown)
+        self._destroyed = True
         # Aux AFTER the sandbox: the sandbox is on the internal net; removing the
         # net while the sandbox still references it would error out.
         await asyncio.to_thread(self._teardown_egress_aux)
