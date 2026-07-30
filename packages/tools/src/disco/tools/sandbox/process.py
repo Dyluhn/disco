@@ -711,8 +711,7 @@ class ProcessSandboxInstance:
         proc_root = Path("/proc")
         if not proc_root.is_dir():
             return set()
-        marker = b"DISCO_WORKSPACE=" + str(self._workspace).encode()
-        selected: set[int] = set()
+        marker, selected = b"DISCO_WORKSPACE=" + str(self._workspace).encode(), set[int]()
         for entry in proc_root.iterdir():
             if not entry.name.isdigit():
                 continue
@@ -749,8 +748,7 @@ class ProcessSandboxInstance:
                 os.kill(pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        deadline = asyncio.get_running_loop().time() + 2.0
-        survivors = pids
+        deadline, survivors = asyncio.get_running_loop().time() + 2.0, pids
         while survivors and asyncio.get_running_loop().time() < deadline:
             await asyncio.sleep(0.05)
             survivors &= self._workspace_process_pids()
