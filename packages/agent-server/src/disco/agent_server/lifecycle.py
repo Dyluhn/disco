@@ -1,9 +1,10 @@
 """Sandbox lifecycle — auto-suspend, idle sweep, orphan reconcile, snapshot/
 rehydrate — extracted from `runtime.py`.
 
-God-file decomposition (pure move, zero behavior change). The build-sandbox
-lifecycle machinery moves out of runtime.py into a `LifecycleManager`
-collaborator constructed once in `ConversationRuntime`:
+The build-sandbox lifecycle machinery is owned by ``LifecycleManager`` and its
+cohesive collaborators (``GateReaper``, ``OrphanReconciler``, ``Rehydration``).
+Each collaborator receives explicit typed named owners (ports) — never a
+whole-runtime back-reference, ``Any``, or a service locator.
 
   - auto-suspend (lifecycle G): on_connect / on_disconnect / _suspend_after_grace
     / _suspend / sandbox_state
@@ -12,9 +13,6 @@ collaborator constructed once in `ConversationRuntime`:
     reconcile_orphaned_runs / _sweep_orphan_containers
   - workspace durability: _maybe_rehydrate / _rehydrate_after_recreate /
     _rematerialize_uploads / _maybe_snapshot
-
-`LifecycleManager` and its cohesive collaborators reach live runtime state by
-back-reference. Existing runtime delegates and test seams remain undisturbed.
 """
 
 from __future__ import annotations
@@ -47,8 +45,20 @@ from disco.tools.projects import (
 )
 
 from .lifecycle_command_service import LifecycleCommandService
+from .lifecycle_ports import (
+    LifecycleConnections,
+    LifecycleIdleSweepDeps,
+    LifecycleKernelPins,
+    LifecyclePersistenceNotifier,
+    LifecyclePersistenceOwner,
+    LifecycleRunState,
+    LifecycleSandboxAccess,
+    LifecycleStoreAccess,
+    LifecycleUploads,
+    WorkspaceSealProbe,
+)
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
-from .workspace_persistence import WorkspacePersistence, probe_finish_sealability
+from .workspace_service import WorkspaceCoordinator
 
 _LOG = logging.getLogger(__name__)
 _DEFAULT_IDLE_SWEEP_INTERVAL_S = 60.0
@@ -71,8 +81,19 @@ _GATE_STATES = frozenset(
 class GateReaper:
     """P-C — reap conversations abandoned at an AWAITING_* gate past a long TTL."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        store: LifecycleStoreAccess,
+        run_state: LifecycleRunState,
+        connections: LifecycleConnections,
+        commands: LifecycleCommandService,
+        kernel_pins: LifecycleKernelPins,
+    ) -> None:
+        self._store = store
+        self._run_state = run_state
+        self._connections = connections
+        self._commands = commands
+        self._kernel_pins = kernel_pins
 
     async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         """Reap conversations parked at an AWAITING_* gate that the user never answered."""
@@ -84,12 +105,12 @@ class GateReaper:
         # gate with an active run — e.g. just resumed, a decision being processed,
         # a background step executing — must NEVER be reaped even past the TTL: its
         # last persisted event can be stale while the run is mid-flight.
-        live_run_ids = set(self._rt._run_registry.active_conversation_ids())
+        live_run_ids = set(self._run_state.active_conversation_ids())
         reaped = 0
         cursor: str | None = None
         page = 200
         while True:
-            ids = await self._rt._store.list_conversations(
+            ids = await self._store.list_conversations(
                 owner_id=owner_id, limit=page, cursor=cursor
             )
             if not ids:
@@ -118,12 +139,12 @@ class GateReaper:
         ``_terminalize_crashed``): a newer run can never slip in between them.
         """
         try:
-            state = await self._rt._store.get_state(cid)
+            state = await self._store.get_state(cid)
             if state.execution_status not in _GATE_STATES:
                 return 0
             if cid in live_run_ids:
                 return 0  # a live in-memory run/task is driving it — not abandoned
-            if self._rt._connections.has_connections(cid):
+            if self._connections.has_connections(cid):
                 return 0  # UI attached — not abandoned
             # Capture the conversation's run-generation at the sweep-DECISION
             # point (finding #3, SAME stale-terminalizer race as
@@ -136,10 +157,12 @@ class GateReaper:
             # NEWER run's log nor clears the newer run's pin. A genuinely-
             # abandoned gate with no in-memory run has `None` here (and still
             # `None` at re-read) → terminalizes + unpins as before.
-            captured_generation = self._rt._run_registry.generation(cid)
-            events = await self._rt._store.get_events(
+            captured_generation = self._run_state.generation(cid)
+            events = await self._store.get_events(
                 cid,
-                EventFilter(after_seq=state.last_seq - 1) if state.last_seq > 0 else None,
+                event_filter=EventFilter(after_seq=state.last_seq - 1)
+                if state.last_seq > 0
+                else None,
             )
             if not events:
                 return 0
@@ -154,17 +177,17 @@ class GateReaper:
             # newer run can never slip in between the re-check and the append
             # (mirrors `_terminalize_crashed`). Skip if the conversation no
             # longer presents as an abandoned gate of the captured generation.
-            fresh_state = await self._rt._store.get_state(cid)
+            fresh_state = await self._store.get_state(cid)
             if (
                 fresh_state.execution_status not in _GATE_STATES
-                or cid in self._rt._run_registry.active_conversation_ids()
-                or not self._rt._run_registry.generation_is_current(
+                or cid in self._run_state.active_conversation_ids()
+                or not self._run_state.generation_is_current(
                     cid,
                     captured_generation,
                 )
             ):
                 return 0  # a newer run/generation now owns it — stale, skip
-            transitioned = await self._rt._lifecycle_commands.append_current_run_transition(
+            transitioned = await self._commands.append_current_run_transition(
                 cid,
                 [
                     MessageEvent(
@@ -193,10 +216,9 @@ class GateReaper:
             # leaks its kernel pin forever. Generation-guarded: if a newer run
             # reused the pin during the appends above, leave it — that run owns
             # the pin now (exactly like the crash path's unpin).
-            self._rt._kernel_pins.clear_if_current(
+            self._kernel_pins.clear_if_current(
                 cid,
                 captured_generation,
-                self._rt._run_registry,
             )
             _LOG.info("reaped abandoned gate conversation %s", cid)
             return 1
@@ -208,8 +230,17 @@ class GateReaper:
 class OrphanReconciler:
     """Startup reconciliation of orphaned RUNNING conversations + container sweep."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        store: LifecycleStoreAccess,
+        sandbox: LifecycleSandboxAccess,
+        commands: LifecycleCommandService,
+        persistence: LifecyclePersistenceOwner,
+    ) -> None:
+        self._store = store
+        self._sandbox = sandbox
+        self._commands = commands
+        self._persistence = persistence
 
     async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         """Startup reconciliation. A conversation whose latest status is RUNNING but
@@ -221,7 +252,7 @@ class OrphanReconciler:
 
         Single-owner ('local') today; extend across owners when auth lands.
         """
-        recovered_seals = await self._rt._lifecycle._recover_finalization_journals()
+        recovered_seals = await self._persistence.recover_finalization_journals()
         if recovered_seals:
             _LOG.info("recovered %d interrupted final workspace seal(s)", recovered_seals)
 
@@ -229,7 +260,7 @@ class OrphanReconciler:
         cursor: str | None = None
         page = 200
         while True:
-            ids = await self._rt._store.list_conversations(
+            ids = await self._store.list_conversations(
                 owner_id=owner_id, limit=page, cursor=cursor
             )
             if not ids:
@@ -237,10 +268,9 @@ class OrphanReconciler:
             for cid in ids:
                 # One unreadable conversation must never abort server boot.
                 with contextlib.suppress(Exception):
-                    state = await self._rt._store.get_state(cid)
+                    state = await self._store.get_state(cid)
                     if state.execution_status is ConversationStatus.RUNNING:
-                        command = self._rt._lifecycle_commands
-                        transitioned = await command.append_current_run_transition(
+                        transitioned = await self._commands.append_current_run_transition(
                             cid,
                             [
                                 MessageEvent(
@@ -292,7 +322,7 @@ class OrphanReconciler:
     async def _sweep_orphan_containers(self, *, owner_id: str, terminal_statuses: set) -> int:
         """Destroy containers for conversations that are terminal or suspended.
         Called from reconcile_orphaned_runs at startup. Returns count destroyed."""
-        service = self._rt._sandbox._sandbox_service_now()
+        service = self._sandbox.sandbox_service_now()
         live_cids = await service.list_live_instances()
         # Decision phase (cheap existence/status reads): collect the set of cids to
         # destroy. Kept serial + suppressed per-cid so one unreadable conversation
@@ -302,10 +332,10 @@ class OrphanReconciler:
         to_destroy: list[tuple[str, str | None]] = []
         for cid in live_cids:
             with contextlib.suppress(Exception):
-                if not await self._rt._store.conversation_exists(cid):
+                if not await self._store.conversation_exists(cid):
                     to_destroy.append((cid, None))
                     continue
-                state = await self._rt._store.get_state(cid)
+                state = await self._store.get_state(cid)
                 if state.execution_status in terminal_statuses:
                     to_destroy.append((cid, state.execution_status.value))
 
@@ -353,8 +383,17 @@ class OrphanReconciler:
 class Rehydration:
     """Workspace durability — restore snapshot files + uploads into a live sandbox."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        sandbox: LifecycleSandboxAccess,
+        run_state: LifecycleRunState,
+        notifier: LifecyclePersistenceNotifier,
+        uploads: LifecycleUploads,
+    ) -> None:
+        self._sandbox = sandbox
+        self._run_state = run_state
+        self._notifier = notifier
+        self._uploads = uploads
         self._rehydrated: set[str] = set()
 
     def _mark_rehydrated(self, conversation_id: str) -> None:
@@ -368,7 +407,7 @@ class Rehydration:
         if conversation_id in self._rehydrated:
             return
         self._rehydrated.add(conversation_id)
-        store = self._rt._project_store_now()
+        store = self._sandbox.current_project_store()
         if store is None or store.status() != StorageStatus.OK:
             return
         record = None
@@ -378,14 +417,14 @@ class Rehydration:
             return
         if record is None or record.files_missing:
             return
-        executor = self._rt._run_resources.executor(conversation_id)
+        executor = self._run_state.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return
         try:
             await rehydrate_workspace(session, store.path_for(conversation_id))
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the run
-            await self._rt._persistence_notifier.emit(
+            await self._notifier.emit(
                 conversation_id,
                 f"Could not restore project files: {exc}",
             )
@@ -408,15 +447,15 @@ class Rehydration:
         """[DC-07] Copy server-held uploads back into the fresh sandbox."""
         # We need the session to write files. The executor's session if a loop
         # exists; otherwise the pending session if it's a pre-kick recreation.
-        executor = self._rt._run_resources.executor(conversation_id)
+        executor = self._run_state.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
-            session = self._rt._run_resources.pending_session(conversation_id)
+            session = self._run_state.pending_session(conversation_id)
 
         if session is None:
             return
 
-        uploads_dir = self._rt._uploads.directory(conversation_id)
+        uploads_dir = self._uploads.directory(conversation_id)
         if uploads_dir is None:
             return
 
@@ -446,20 +485,38 @@ class Rehydration:
 
 
 class LifecycleManager:
-    """Sandbox lifecycle logic; live runtime state via the back-ref.
+    """Sandbox lifecycle logic; live state through explicit typed named owners.
 
     Thin orchestrator over the cohesive private collaborators
-    (``WorkspacePersistence``, ``GateReaper``, ``OrphanReconciler``,
+    (``LifecyclePersistenceOwner``, ``GateReaper``, ``OrphanReconciler``,
     ``Rehydration``). Every callable name/signature is preserved as a one-line
     delegate so the runtime/test seams are undisturbed.
     """
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
-        self._persistence = WorkspacePersistence(rt)
-        self._gate_reaper = GateReaper(rt)
-        self._orphan_reconciler = OrphanReconciler(rt)
-        self._rehydration = Rehydration(rt)
+    def __init__(
+        self,
+        persistence: LifecyclePersistenceOwner,
+        gate_reaper: GateReaper,
+        orphan_reconciler: OrphanReconciler,
+        rehydration: Rehydration,
+        store: LifecycleStoreAccess,
+        run_state: LifecycleRunState,
+        connections: LifecycleConnections,
+        sandbox: LifecycleSandboxAccess,
+        idle_sweep_deps: LifecycleIdleSweepDeps,
+        workspace: WorkspaceCoordinator,
+    ) -> None:
+        self._persistence = persistence
+        self._gate_reaper = gate_reaper
+        self._orphan_reconciler = orphan_reconciler
+        self._rehydration = rehydration
+        self._store = store
+        self._run_state = run_state
+        self._connections = connections
+        self._sandbox = sandbox
+        self._idle_sweep_deps = idle_sweep_deps
+        self._workspace = workspace
+        self._seal_probe = WorkspaceSealProbe(run_state.resources_registry())
 
     async def commit_finished_workspace(
         self,
@@ -469,7 +526,7 @@ class LifecycleManager:
         require_inactive_finished_head: bool = False,
     ) -> StatusEvent:
         """Persist FINISHED and its immutable workspace commit as one barrier."""
-        return await self._persistence._do_commit_finished_workspace(
+        return await self._persistence.commit_finished_workspace(
             conversation_id,
             terminal_event,
             require_inactive_finished_head=require_inactive_finished_head,
@@ -483,8 +540,7 @@ class LifecycleManager:
         like ``commit_finished_workspace`` — the probe and the seal share one
         snapshot seam (and one monkeypatch point) by construction.
         """
-        return await probe_finish_sealability(
-            self._rt,
+        return await self._seal_probe.probe(
             conversation_id,
             snapshot_fn=snapshot_workspace,
         )
@@ -496,13 +552,13 @@ class LifecycleManager:
     ) -> StatusEvent:
         """Seal server-owned mirror bytes while the caller holds the workspace lock."""
 
-        return await self._persistence._do_commit_finished_host_mirror_locked(
+        return await self._persistence.commit_finished_host_mirror_locked(
             conversation_id,
             terminal_event,
         )
 
     async def _recover_finalization_journals(self) -> int:
-        return await self._persistence._do_recover_finalization_journals()
+        return await self._persistence.recover_finalization_journals()
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
         """Destroy a conversation's sandbox session (frees the container/port/memory +
@@ -522,9 +578,9 @@ class LifecycleManager:
         #       kill/destroy (the container is reaped by the next teardown / idle TTL anyway) — the
         #       resume-critical invariants (fresh rebuild + rehydrate) always hold.
         # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
-        executor = self._rt._run_resources.pop_executor(conversation_id)
-        pending = self._rt._run_resources.pop_pending_session(conversation_id)
-        self._rt._loop_registry.forget(
+        executor = self._run_state.pop_executor(conversation_id)
+        pending = self._run_state.pop_pending_session(conversation_id)
+        self._run_state.forget(
             conversation_id
         )  # force a fresh sandbox on the next run
         self.clear_session_markers(conversation_id)
@@ -545,7 +601,7 @@ class LifecycleManager:
         # BP-14: drop the capture-pane coalescing cache + locks for this conversation —
         # each cache entry pins up to 100KB of captured output and would otherwise
         # accumulate for the life of the server process.
-        self._rt._connections.clear_session_state(conversation_id)
+        self._connections.clear_session_state(conversation_id)
         # The sandbox (and its files) are gone, so the NEXT run must rehydrate the
         # snapshot into a fresh sandbox. Clear the rehydrate-once flag — otherwise
         # `_maybe_rehydrate` skips it and the continuation runs in an EMPTY workspace,
@@ -564,16 +620,16 @@ class LifecycleManager:
     def on_connect(self, conversation_id: str) -> None:
         """A UI WebSocket connected — track it and cancel any pending idle-suspend
         (the user is back before the grace elapsed, or the WS reconnected)."""
-        self._rt._connections.on_connect(conversation_id)
+        self._connections.on_connect(conversation_id)
 
     def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
         """A UI WebSocket closed. When the LAST connection for a conversation goes,
         schedule an idle-suspend after `grace_s` — long enough that a brief blip (the
         WS-reconnect backoff) reconnects and cancels it before it fires."""
-        self._rt._connections.on_disconnect(conversation_id, grace_s=grace_s)
+        self._connections.on_disconnect(conversation_id, grace_s=grace_s)
 
     async def _suspend_after_grace(self, conversation_id: str, grace_s: float) -> None:
-        await self._rt._connections._suspend_after_grace(conversation_id, grace_s)
+        await self._connections.suspend_after_grace(conversation_id, grace_s)
 
     def _has_active_work(self, conversation_id: str) -> bool:
         """LIFE-3 — True when a suspend would KILL in-flight work even though the
@@ -581,7 +637,7 @@ class LifecycleManager:
         mid-turn / mid-tool-call. (A preview server lives INSIDE the sandbox and is
         restored from the snapshot on resume, so it does not by itself block suspend.)
         Disconnect must never destroy active work."""
-        return self._rt._run_registry.active_task(conversation_id) is not None
+        return self._run_state.active_task(conversation_id) is not None
 
     async def _suspend(self, conversation_id: str) -> None:
         """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
@@ -590,41 +646,41 @@ class LifecycleManager:
         sandbox so nothing is lost), when the loop is actively RUNNING, or when there
         is other in-flight work — a live run task (LIFE-3). Resume (or the next
         message) re-creates the sandbox and rehydrates from the snapshot."""
-        if not self._rt._run_resources.has_executor(conversation_id):
+        if not self._run_state.has_executor(conversation_id):
             return
-        if self._rt._project_store_now().status() != StorageStatus.OK:
+        if self._sandbox.current_project_store().status() != StorageStatus.OK:
             return
-        state = await self._rt._store.get_state(conversation_id)
+        state = await self._store.get_state(conversation_id)
         if state.execution_status is ConversationStatus.RUNNING:
             return
         if self._has_active_work(conversation_id):
             return
         with contextlib.suppress(Exception):
-            async with self._rt.workspace_lock(conversation_id):
-                events = await self._rt._store.get_events(conversation_id)
+            async with self._workspace.lock(conversation_id):
+                events = await self._store.get_events(conversation_id)
                 committed = False
                 if state.execution_status is ConversationStatus.FINISHED:
                     try:
                         resolve_committed_workspace(
                             events,
-                            self._rt._project_store_now(),
+                            self._sandbox.current_project_store(),
                             conversation_id,
                         )
                         committed = True
                     except WorkspaceCommitUnavailable:
                         pass
                 if not committed:
-                    await self._rt._maybe_snapshot(conversation_id, trigger="suspend")
+                    await self._maybe_snapshot(conversation_id, trigger="suspend")
                 # [REL-RC-C] RE-VALIDATE after the snapshot await — it yields, and a
                 # POST /resume (or a new message) can re-kick the cached loop.
-                if not self._rt._run_resources.has_executor(conversation_id):
+                if not self._run_state.has_executor(conversation_id):
                     return
-                state = await self._rt._store.get_state(conversation_id)
+                state = await self._store.get_state(conversation_id)
                 if state.execution_status is ConversationStatus.RUNNING or self._has_active_work(
                     conversation_id
                 ):
                     return
-                await self._rt._teardown_sandbox(conversation_id)
+                await self._teardown_sandbox(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     def sandbox_state(self, conversation_id: str) -> str | None:
@@ -632,11 +688,11 @@ class LifecycleManager:
         conversation_id. Return 'suspended' when a snapshot record exists (the sandbox
         was torn down but is restorable). Return None when no sandbox context exists
         (research surface / no snapshot)."""
-        if self._rt._run_resources.has_executor(
+        if self._run_state.has_executor(
             conversation_id
-        ) or self._rt._run_resources.has_pending_session(conversation_id):
+        ) or self._run_state.has_pending_session(conversation_id):
             return "active"
-        store = self._rt._project_store_now()
+        store = self._sandbox.current_project_store()
         if store is None:
             return None
         try:
@@ -657,10 +713,10 @@ class LifecycleManager:
                 return
             ids.append(sid)
 
-        executor = self._rt._run_resources.executor(conversation_id)
+        executor = self._run_state.executor(conversation_id)
         if executor is not None:
             add(getattr(getattr(executor, "sandbox", None), "id", None))
-        pending = self._rt._run_resources.pending_session(conversation_id)
+        pending = self._run_state.pending_session(conversation_id)
         if pending is not None:
             add(getattr(pending, "id", None))
         return ids
@@ -675,21 +731,23 @@ class LifecycleManager:
         if ttl_env is not None:
             ttl_s = float(ttl_env)
         else:
-            ttl_s = float(self._rt._config_store.load().sandbox.idle_ttl_s)
+            ttl_s = self._idle_sweep_deps.idle_ttl_s()
         suspended = 0
-        for cid in self._rt._run_resources.conversation_ids(executors_only=True):
+        for cid in self._run_state.conversation_ids(executors_only=True):
             with contextlib.suppress(Exception):
-                state = await self._rt._store.get_state(cid)
+                state = await self._store.get_state(cid)
                 if state.execution_status is ConversationStatus.RUNNING:
                     continue
-                if self._rt._connections.has_connections(cid):
+                if self._connections.has_connections(cid):
                     continue
                 if self._has_active_work(cid):  # LIFE-3: never suspend in-flight work
                     continue
                 # Use the last event's timestamp from the store — no parallel clock.
-                events = await self._rt._store.get_events(
+                events = await self._store.get_events(
                     cid,
-                    EventFilter(after_seq=state.last_seq - 1) if state.last_seq > 0 else None,
+                    event_filter=EventFilter(after_seq=state.last_seq - 1)
+                    if state.last_seq > 0
+                    else None,
                 )
                 if not events:
                     continue
@@ -699,7 +757,7 @@ class LifecycleManager:
                 idle_s = (datetime.now(tz=UTC) - last_ts).total_seconds()
                 if idle_s < ttl_s:
                     continue
-                await self._rt._suspend(cid)
+                await self._suspend(cid)
                 _LOG.info("suspended idle sandbox cid=%s idle_s=%.0f", cid, idle_s)
                 suspended += 1
         return suspended
@@ -711,7 +769,7 @@ class LifecycleManager:
         """Keep the background loop alive while making whole-sweep failures visible."""
 
         try:
-            await self._rt.sweep_abandoned_gates_once()
+            await self.sweep_abandoned_gates_once()
         except Exception:
             _LOG.exception("abandoned gate sweep failed")
 
@@ -755,7 +813,7 @@ class LifecycleManager:
             # task (lost done-callback / never re-kicked) so a stall self-heals or
             # becomes visibly STUCK instead of hanging RUNNING forever.
             with contextlib.suppress(Exception):
-                await self._rt._run_sweep.sweep_once()
+                await self._idle_sweep_deps.sweep_stranded_once()
             # P-C: reap conversations abandoned at an AWAITING_* gate past a long TTL
             # so open gates don't accumulate (the idle sweep only frees their sandbox).
             await self._sweep_abandoned_gates_logged()
@@ -792,9 +850,8 @@ class LifecycleManager:
         `<projects_root>/<cid>/` at all: no tree, no versions, no manifest.
 
         The window is already known here: `_suspend` re-validates
-        `conversation_id not in self._rt._executors` immediately AFTER this
-        await, because the executor can vanish across it. The snapshot simply was
-        not given the same protection.
+        `has_executor` immediately AFTER this await, because the executor can
+        vanish across it. The snapshot simply was not given the same protection.
 
         Holding the reference does not keep a dead box alive — capture still
         fails closed when the session is gone, and `_resolve_capture_session`
@@ -816,8 +873,8 @@ class LifecycleManager:
         # redundant capture it exposed.
         try:
             resolve_committed_workspace(
-                await self._rt._store.get_events(conversation_id),
-                self._rt._project_store_now(),
+                await self._store.get_events(conversation_id),
+                self._sandbox.current_project_store(),
                 conversation_id,
             )
         except WorkspaceCommitUnavailable:
@@ -825,7 +882,7 @@ class LifecycleManager:
         else:
             return
 
-        executor = self._rt._run_resources.executor(conversation_id)
+        executor = self._run_state.executor(conversation_id)
         await self._capture_workspace(
             conversation_id,
             trigger=trigger,
@@ -843,13 +900,13 @@ class LifecycleManager:
         pinned_session: Any | None = None,
     ) -> WorkspaceVersionEvent | None:
         """Mirror live bytes and optionally publish a strict immutable seal."""
-        return await self._persistence._do_capture_workspace(
+        return await self._persistence.capture_workspace(
             conversation_id,
             trigger=trigger,
             version_label=version_label,
             seal_fence=seal_fence,
-            pinned_session=pinned_session,
             journal=journal,
+            pinned_session=pinned_session,
             snapshot_fn=snapshot_workspace,
         )
 
@@ -857,11 +914,11 @@ class LifecycleManager:
         self, conversation_id: str, snapshot_dir: Path
     ) -> None:
         """Synthesize an app deliverable for an index.html without a serve event."""
-        return await self._persistence._do_maybe_synthesize_app_deliverable(
+        return await self._persistence.maybe_synthesize_app_deliverable(
             conversation_id, snapshot_dir
         )
 
     @staticmethod
     def _find_snapshot_index(snapshot_dir: Path) -> Path | None:
         """First index.html in the snapshot (root preferred, else shallowest subdir)."""
-        return WorkspacePersistence._find_snapshot_index(snapshot_dir)
+        return LifecyclePersistenceOwner.find_snapshot_index(snapshot_dir)

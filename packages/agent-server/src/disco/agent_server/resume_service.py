@@ -1,19 +1,19 @@
 """Resume reconstruction + trailing-degeneracy condensation — extracted from `runtime.py`.
 
-God-file decomposition (pure move, zero behavior change). The mode-agnostic
-resume path (DC-05b/c, DEFECT-4) — the trailing-degeneracy detector, the
-resume-context reconstruction (synthetic observations + the environment
-reality block), and the `resume_conversation` orchestrator — moves out of
-runtime.py into a `ResumeService` collaborator constructed once in
-`ConversationRuntime`.
+The mode-agnostic resume path (DC-05b/c, DEFECT-4) — the trailing-degeneracy
+detector, the resume-context reconstruction (synthetic observations + the
+environment reality block), and the `resume_conversation` orchestrator — is
+owned by ``ResumeService`` and its cohesive collaborators
+(``_ResumeTaskDrainer``, ``_TrailingDegeneracyCondenser``,
+``_ResumeContextReconstructor``).  Each collaborator receives explicit typed
+named owners (ports) — never a whole-runtime back-reference, ``Any``, or a
+service locator.
 
-`ResumeService` reaches the runtime's live state (`_store`, `_executors`,
-`_cancel_flags`, `kick`, `sessions_snapshot`, `_surface_of`,
-`_project_store_now`, `get_upload_names`) via a back-reference. All three
-methods stay reachable on `ConversationRuntime` as one-line delegators
-because the resume test-suite calls each directly on the runtime
-(`rt._condense_trailing_degeneracy`, `rt._reconstruct_resume_context`,
-`rt.resume_conversation`).
+The run-start trigger is reached through the bounded ``RunStartPort`` boundary,
+breaking the resume-start circularity: ``ResumeService`` no longer reaches back
+to ``ConversationControlService``; the integrator constructs a
+``PinnedRunStart`` adapter after the kernel pins are available and passes it
+to ``ResumeService``.
 """
 
 from __future__ import annotations
@@ -42,6 +42,14 @@ from disco.core.view import effective_plan_progress
 from disco.tools.projects import StorageStatus
 
 from .lifecycle_command_service import LifecycleCommandService
+from .resume_ports import (
+    ResumeEnvironmentProbe,
+    ResumeRunState,
+    ResumeStoreAccess,
+    ResumeSurfaceSettings,
+    ResumeWorkspaceFence,
+    RunStartPort,
+)
 from .runtime_settings import _BUILD_LIKE_SURFACES
 
 _RESUME_DRAIN_TIMEOUT_S = 10.0
@@ -51,8 +59,13 @@ _RESUME_CANCEL_GRACE_S = 0.25
 class _ResumeTaskDrainer:
     """Detach and boundedly drain the exact finishing runtime task."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        workspace: ResumeWorkspaceFence,
+        run_state: ResumeRunState,
+    ) -> None:
+        self._workspace = workspace
+        self._run_state = run_state
 
     # ------------------------------------------------------------------
     # Phase 1 helpers: detach / drain a lingering finishing task
@@ -71,25 +84,25 @@ class _ResumeTaskDrainer:
         registry pop, so this method can never pop a newer run task.
         """
 
-        if not self._rt._workspace.lock(conversation_id).locked():
+        if not self._workspace.lock(conversation_id).locked():
             raise RuntimeError("resume task detach requires the workspace fence")
-        if not self._rt._run_registry.generation_is_current(
+        if not self._run_state.generation_is_current(
             conversation_id,
             observed_generation,
         ):
             return False, None
-        current = self._rt._run_registry.task(conversation_id)
+        current = self._run_state.task(conversation_id)
         if current is not observed_task:
             # The done callback may have removed the exact observed task while
             # the caller awaited durable state. That is completion, not takeover.
             if observed_task is not None and observed_task.done() and current is None:
-                self._rt._workspace.clear_run_claim(conversation_id)
+                self._workspace.clear_run_claim(conversation_id)
                 return True, None
             return False, None
         if current is None:
             return True, None
-        self._rt._run_registry.detach_task_if_owned(conversation_id, current)
-        self._rt._workspace.clear_run_claim(conversation_id)
+        self._run_state.detach_task_if_owned(conversation_id, current)
+        self._workspace.clear_run_claim(conversation_id)
         return True, None if current.done() else current
 
     async def _drain_finishing_task(self, task: asyncio.Task[Any] | None) -> bool:
@@ -286,8 +299,13 @@ class _TrailingDegeneracyCondenser:
 class _ResumeContextReconstructor:
     """Build synthetic observations and current-environment resume context."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        run_state: ResumeRunState,
+        environment: ResumeEnvironmentProbe,
+    ) -> None:
+        self._run_state = run_state
+        self._environment = environment
 
     def _synthesize_dangling_observations(self, events: list) -> list:
         """Synthesize terminal ObservationEvents for dangling (unresolved) actions.
@@ -340,7 +358,7 @@ class _ResumeContextReconstructor:
         # valve (dc-05a actionless/noop breakers) leaves the executor — and its
         # sandbox — alive; only restart/suspend paths reclaim it. Lying about a
         # reclaim would push the model into pointless re-verification.
-        if self._rt._run_resources.has_executor(conversation_id):
+        if self._run_state.has_executor(conversation_id):
             parts.append(
                 "- Your sandbox is still running — existing workspace files and"
                 " shell sessions are intact."
@@ -353,7 +371,7 @@ class _ResumeContextReconstructor:
             )
 
         # Workspace file listing from the project-store snapshot (up to 30 paths).
-        store = self._rt._project_store_now()
+        store = self._environment.current_project_store()
         file_paths: list[str] = []
         if store is not None and store.status() == StorageStatus.OK:
             try:
@@ -370,20 +388,20 @@ class _ResumeContextReconstructor:
             parts.append("- No saved files — the workspace starts empty.")
 
         # DC-07: List uploads held server-side.
-        upload_names = sorted(self._rt._uploads.names(conversation_id))
+        upload_names = sorted(self._environment.upload_names(conversation_id))
         if upload_names:
             # If the sandbox is dead, they are "lost-and-recoverable" until the
             # next action triggers recreation + re-materialization.
             listing = "\n  ".join(f"uploads/{n}" for n in upload_names[:30])
             status = (
                 "intact"
-                if self._rt._run_resources.has_executor(conversation_id)
+                if self._run_state.has_executor(conversation_id)
                 else "held server-side and will be restored"
             )
             parts.append(f"- Uploaded files ({status}):\n  {listing}")
 
         # Session list (degrades gracefully — sessions_snapshot never raises).
-        sessions, _ = await self._rt._sessions.sessions_snapshot(conversation_id)
+        sessions, _ = await self._environment.sessions_snapshot(conversation_id)
         if sessions:
             names = ", ".join(s.name for s in sessions)
             parts.append(f"- Shell sessions: {names}")
@@ -459,14 +477,30 @@ class ResumeService:
     their own fences. Phase 2 (re-entry/recheck + reconstruction + identity
     recheck + flag clearing) and the ingress append share one continuous fence
     acquisition so the tombstone, synthetic results, run intent, and RUNNING
-    flip append atomically. The pinned ``start()`` trigger runs after release.
+    flip append atomically. The pinned ``start()`` trigger runs after release
+    through the bounded ``RunStartPort`` boundary.
     """
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
-        self._task_drainer = _ResumeTaskDrainer(rt)
+    def __init__(
+        self,
+        store: ResumeStoreAccess,
+        run_state: ResumeRunState,
+        workspace: ResumeWorkspaceFence,
+        surface: ResumeSurfaceSettings,
+        commands: LifecycleCommandService,
+        environment: ResumeEnvironmentProbe,
+        run_start: RunStartPort,
+    ) -> None:
+        self._store = store
+        self._run_state = run_state
+        self._workspace = workspace
+        self._surface = surface
+        self._commands = commands
+        self._environment = environment
+        self._run_start = run_start
+        self._task_drainer = _ResumeTaskDrainer(workspace, run_state)
         self._condenser = _TrailingDegeneracyCondenser()
-        self._context_reconstructor = _ResumeContextReconstructor(rt)
+        self._context_reconstructor = _ResumeContextReconstructor(run_state, environment)
 
     def _detach_finishing_task_locked(
         self,
@@ -529,13 +563,13 @@ class ResumeService:
         register a new task without this resume ever popping or cancelling it.
         The detached task is only the old cooperative-stop tail observed here.
         """
-        async with self._rt.workspace_lock(conversation_id):
-            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
-                observed_task = self._rt._run_registry.task(conversation_id)
-                observed_generation = self._rt._run_registry.generation(conversation_id)
-                state = await self._rt._store.get_state(conversation_id)
+        async with self._workspace.lock(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
+                observed_task = self._run_state.task(conversation_id)
+                observed_generation = self._run_state.generation(conversation_id)
+                state = await self._store.get_state(conversation_id)
                 events = agent_view_consistent_events(
-                    await self._rt._store.get_events(conversation_id)
+                    await self._store.get_events(conversation_id)
                 )
                 reason = self._resume_rejection_reason(surface, state.execution_status, events)
                 if reason is not None:
@@ -570,17 +604,17 @@ class ResumeService:
             return None
         # Keep a cancellation-resistant old task visible to kick/suspend
         # guards. Never start a second run while it remains alive.
-        async with self._rt.workspace_lock(conversation_id):
-            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+        async with self._workspace.lock(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
                 superseded = (
-                    not self._rt._run_registry.generation_is_current(
+                    not self._run_state.generation_is_current(
                         conversation_id,
                         observed_generation,
                     )
-                    or self._rt._run_registry.task(conversation_id) is not None
+                    or self._run_state.task(conversation_id) is not None
                 )
                 if not superseded and finishing_task is not None:
-                    restored = self._rt._run_registry.restore_task_if_generation(
+                    restored = self._run_state.restore_task_if_generation(
                         conversation_id,
                         finishing_task,
                         observed_generation,
@@ -608,8 +642,8 @@ class ResumeService:
         conversation; this stale resume must not clear its flags or append
         reconstruction over it.
         """
-        current_task = self._rt._run_registry.task(conversation_id)
-        if not self._rt._run_registry.generation_is_current(
+        current_task = self._run_state.task(conversation_id)
+        if not self._run_state.generation_is_current(
             conversation_id,
             observed_generation,
         ):
@@ -617,8 +651,8 @@ class ResumeService:
         if current_task is not None and not current_task.done():
             return {"ok": False, "reason": "already_running"}
 
-        state = await self._rt._store.get_state(conversation_id)
-        events = agent_view_consistent_events(await self._rt._store.get_events(conversation_id))
+        state = await self._store.get_state(conversation_id)
+        events = agent_view_consistent_events(await self._store.get_events(conversation_id))
         reason = self._resume_rejection_reason(surface, state.execution_status, events)
         if reason is not None:
             return {"ok": False, "reason": reason}
@@ -662,8 +696,8 @@ class ResumeService:
         # before the append-only log append. Volatile flag clearing is
         # deferred to after the append so an append failure leaves local
         # and durable state consistent.
-        current_task = self._rt._run_registry.task(conversation_id)
-        if not self._rt._run_registry.generation_is_current(
+        current_task = self._run_state.task(conversation_id)
+        if not self._run_state.generation_is_current(
             conversation_id,
             observed_generation,
         ):
@@ -681,8 +715,8 @@ class ResumeService:
         durable state consistent. A losing resume never mutates a newer
         loop; this is called only after the append succeeds.
         """
-        self._rt._cancellations.clear(conversation_id)
-        loop = self._rt._loop_registry.loop(conversation_id)
+        self._run_state.clear_cancellation(conversation_id)
+        loop = self._run_state.loop(conversation_id)
         if loop is not None and hasattr(loop, "_pause_requested"):
             loop._pause_requested.clear()
 
@@ -699,11 +733,12 @@ class ResumeService:
         reconstruction-phase identity recheck.
 
         The ``start()`` trigger is NOT fired here — the caller releases the
-        fence first, then routes the resume through the PINNED start path.
-        A bare kick starts a NEW run UNPINNED; ``runtime.start`` resolves +
-        pins the selected kernel (reusing an existing pin from a PAUSED
-        gate-park) and routes through it; for the default ``disco`` kernel
-        ``start`` is a behaviour-identical pass-through to ``kick``.
+        fence first, then routes the resume through the PINNED start path
+        via the ``RunStartPort`` boundary. A bare kick starts a NEW run
+        UNPINNED; the ``RunStartPort`` resolves + pins the selected kernel
+        (reusing an existing pin from a PAUSED gate-park) and routes through
+        it; for the default ``disco`` kernel ``start`` is a behaviour-identical
+        pass-through to ``kick``.
         """
         pending = [*([tombstone] if tombstone is not None else []), *new_events]
         if surface != "deep_research":
@@ -730,7 +765,7 @@ class ResumeService:
             ),
             None,
         )
-        await self._rt._lifecycle_commands.append_transition_batch_locked(
+        await self._commands.append_transition_batch_locked(
             conversation_id,
             pending,
             ingress_intent=ingress_intent,
@@ -757,7 +792,7 @@ class ResumeService:
         the standard task-spawn path (same as send-message). kick() is idempotent — no
         second loop if one is live (a genuinely RUNNING run is rejected up front).
         """
-        surface = self._rt._settings._surface_of(conversation_id)
+        surface = self._surface.surface_of(conversation_id)
 
         # Phase 1: detach the exact observed task under the fence.
         detach = await self._resume_detach_phase(conversation_id, surface)
@@ -772,8 +807,8 @@ class ResumeService:
 
         # Phase 2 + Phase 3 share ONE continuous fence so the tombstone,
         # synthetic results, run intent, and RUNNING flip append atomically.
-        async with self._rt.workspace_lock(conversation_id):
-            async with self._rt._workspace.interprocess_mutation_fence(conversation_id):
+        async with self._workspace.lock(conversation_id):
+            async with self._workspace.interprocess_mutation_fence(conversation_id):
                 reentry = await self._resume_reentry_recheck_locked(
                     conversation_id, observed_generation, surface
                 )
@@ -797,9 +832,9 @@ class ResumeService:
                 self._clear_volatile_resume_flags(conversation_id)
 
         # Route the resume through the PINNED start path (finding #2), NOT a raw
-        # `kick`. A bare kick starts a NEW run UNPINNED. `runtime.start` resolves +
-        # pins the selected kernel (reusing an existing pin from a PAUSED gate-park)
-        # and routes through it; for the default `disco` kernel `start` is a
-        # behaviour-identical pass-through to `kick`.
-        self._rt._conversation_control.start(conversation_id)
+        # `kick`. A bare kick starts a NEW run UNPINNED. The ``RunStartPort``
+        # resolves + pins the selected kernel (reusing an existing pin from a
+        # PAUSED gate-park) and routes through it; for the default `disco` kernel
+        # `start` is a behaviour-identical pass-through to `kick`.
+        self._run_start.start(conversation_id)
         return {"ok": True, "status": "RUNNING"}
