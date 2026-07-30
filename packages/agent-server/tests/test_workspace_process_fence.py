@@ -53,6 +53,8 @@ def test_child_holds_flock_then_killed(tmp_path, monkeypatch):
     finally:
         proc.send_signal(signal.SIGKILL)
         proc.wait(timeout=5)
+        if proc.stdout is not None:
+            proc.stdout.close()
 
     with try_workspace_process_fence(workspace):
         pass
