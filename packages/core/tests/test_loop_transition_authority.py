@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import inspect
 from pathlib import Path
 
 import disco.core.loop.engine as engine_module
@@ -51,6 +52,11 @@ def test_core_loop_has_no_concrete_server_or_locator_dependency() -> None:
             if any(part in target.casefold() for part in _FORBIDDEN_DEPENDENCY_PARTS):
                 offenders.append(f"{path.relative_to(_LOOP_ROOT)}:{target}")
     assert offenders == []
+
+
+def test_agent_loop_facade_stays_below_epic_cap() -> None:
+    source_lines, _ = inspect.getsourcelines(AgentLoop)
+    assert len(source_lines) < 250
 
 
 def test_terminal_success_has_one_persistence_route() -> None:
