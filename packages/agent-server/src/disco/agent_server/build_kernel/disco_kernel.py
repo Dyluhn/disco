@@ -122,12 +122,15 @@ class DiscoKernel:
                             await self._rt._store.get_events(conversation_id)
                         )
                     ):
-                        await self._rt._store.append(
+                        await self._rt._lifecycle_commands.append_transition_batch_locked(
                             conversation_id,
-                            LifecycleCommandService.build_status(
-                                ConversationStatus.RUNNING,
-                                detail="revision_steer_pending",
-                            ),
+                            [
+                                LifecycleCommandService.build_status(
+                                    ConversationStatus.RUNNING,
+                                    detail="revision_steer_pending",
+                                )
+                            ],
+                            bind_current=True,
                         )
                 self._rt.kick(conversation_id, claimed_user_seq=stored.seq)
                 self._rt._workspace.claim_registered_run_locked(conversation_id)

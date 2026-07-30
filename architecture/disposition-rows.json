@@ -4326,7 +4326,7 @@
   {
     "id": "PY-0189",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:DiscoKernel:46-187",
+    "location": "packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:DiscoKernel:46-190",
     "role_category": "python service public methods gt 12 candidate",
     "metrics": "physical=142;logical=103;complexity=n/a;public=14;collaborators=1;fan-in=1;fan-out=10",
     "authority": "policy/composition; authority fixed by package port",
@@ -4395,7 +4395,7 @@
   {
     "id": "PY-0192",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:DeepResearchService:86-1293",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:DeepResearchService:86-1282",
     "role_category": "python class logical gt 350",
     "metrics": "physical=1208;logical=966;complexity=n/a;public=5;collaborators=1;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4441,7 +4441,7 @@
   {
     "id": "PY-0194",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_maybe_run_deep_research:542-626",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_maybe_run_deep_research:542-627",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=85;logical=54;complexity=31;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4464,7 +4464,7 @@
   {
     "id": "PY-0195",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:628-786",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:629-780",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=159;logical=120;complexity=18;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4487,7 +4487,7 @@
   {
     "id": "PY-0196",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:628-786",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:629-780",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=159;logical=120;complexity=18;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4510,7 +4510,7 @@
   {
     "id": "PY-0197",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:788-1068",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:782-1059",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=281;logical=202;complexity=17;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4533,7 +4533,7 @@
   {
     "id": "PY-0198",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:788-1068",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:782-1059",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=281;logical=202;complexity=17;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4556,7 +4556,7 @@
   {
     "id": "PY-0199",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_follow_up_deep_research:1086-1265",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_follow_up_deep_research:1077-1254",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=180;logical=163;complexity=15;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -4579,7 +4579,7 @@
   {
     "id": "PY-0200",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1293",
+    "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1282",
     "role_category": "python or harness module logical gt 700",
     "metrics": "physical=1293;logical=1038;complexity=n/a;public=n/a;collaborators=0;fan-in=3;fan-out=23",
     "authority": "policy/composition; authority fixed by package port",
@@ -6994,7 +6994,7 @@
   {
     "id": "PY-0305",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sync_appkit_live_preview:511-594",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sync_appkit_live_preview:512-595",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=84;logical=73;complexity=20;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7017,7 +7017,7 @@
   {
     "id": "PY-0306",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_probe_live_model:650-746",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_probe_live_model:651-747",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=97;logical=67;complexity=23;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7040,7 +7040,7 @@
   {
     "id": "PY-0307",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:809-5382",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369",
     "role_category": "python class logical gt 350",
     "metrics": "physical=4574;logical=3547;complexity=n/a;public=112;collaborators=11;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7063,7 +7063,7 @@
   {
     "id": "PY-0308",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:809-5382",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369",
     "role_category": "python service public methods gt 12 candidate",
     "metrics": "physical=4574;logical=3547;complexity=n/a;public=112;collaborators=11;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7086,7 +7086,7 @@
   {
     "id": "PY-0309",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:__init__:831-1165",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=335;logical=128;complexity=17;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7109,7 +7109,7 @@
   {
     "id": "PY-0310",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:__init__:831-1165",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:__init__:832-1166",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=335;logical=128;complexity=17;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7132,7 +7132,7 @@
   {
     "id": "PY-0311",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_surface_of:1317-1388",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_surface_of:1318-1389",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=72;logical=61;complexity=16;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7155,7 +7155,7 @@
   {
     "id": "PY-0312",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_resolve_driver_context:1432-1504",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_resolve_driver_context:1433-1505",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=73;logical=67;complexity=16;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7178,7 +7178,7 @@
   {
     "id": "PY-0313",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2230-2675",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2231-2676",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=446;logical=340;complexity=53;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7201,7 +7201,7 @@
   {
     "id": "PY-0314",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2230-2675",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_compose_build_loop:2231-2676",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=446;logical=340;complexity=53;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7224,7 +7224,7 @@
   {
     "id": "PY-0315",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_maybe_auto_resume_actionless_pause:3046-3112",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_maybe_auto_resume_actionless_pause:3047-3113",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=67;logical=66;complexity=16;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7247,7 +7247,7 @@
   {
     "id": "PY-0316",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3142-3280",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3143-3281",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=139;logical=101;complexity=20;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7270,7 +7270,7 @@
   {
     "id": "PY-0317",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3142-3280",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_finalize_clean_return:3143-3281",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=139;logical=101;complexity=20;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7293,7 +7293,7 @@
   {
     "id": "PY-0318",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_preflight_driver:3447-3569",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_preflight_driver:3448-3570",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=123;logical=98;complexity=28;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7316,7 +7316,7 @@
   {
     "id": "PY-0319",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:reconcile_sandbox_backend:3889-3931",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:reconcile_sandbox_backend:3890-3932",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=43;logical=41;complexity=16;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7339,7 +7339,7 @@
   {
     "id": "PY-0320",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_run_with_persistence:3933-4063",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_run_with_persistence:3934-4066",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=131;logical=86;complexity=18;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7362,7 +7362,7 @@
   {
     "id": "PY-0321",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_conversation_setup:4784-4971",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_conversation_setup:4771-4958",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=188;logical=178;complexity=8;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7385,7 +7385,7 @@
   {
     "id": "PY-0322",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4973-5195",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4960-5182",
     "role_category": "python callable logical gt 100",
     "metrics": "physical=223;logical=205;complexity=35;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7408,7 +7408,7 @@
   {
     "id": "PY-0323",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4973-5195",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:_sealed_run_execute:4960-5182",
     "role_category": "python callable ast mccabe gt 15",
     "metrics": "physical=223;logical=205;complexity=35;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -7431,7 +7431,7 @@
   {
     "id": "PY-0324",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:<module>:1-5382",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:<module>:1-5369",
     "role_category": "python or harness module logical gt 700",
     "metrics": "physical=5382;logical=4189;complexity=n/a;public=n/a;collaborators=0;fan-in=41;fan-out=83",
     "authority": "policy/composition; authority fixed by package port",
@@ -8190,7 +8190,7 @@
   {
     "id": "PY-0357",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:123-931",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:135-922",
     "role_category": "python class logical gt 350",
     "metrics": "physical=809;logical=717;complexity=n/a;public=28;collaborators=1;fan-in=3;fan-out=16",
     "authority": "policy/composition; authority fixed by package port",
@@ -8213,7 +8213,7 @@
   {
     "id": "PY-0358",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:123-931",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:WorkspaceCoordinator:135-922",
     "role_category": "python service public methods gt 12 candidate",
     "metrics": "physical=809;logical=717;complexity=n/a;public=28;collaborators=1;fan-in=3;fan-out=16",
     "authority": "policy/composition; authority fixed by package port",
@@ -8236,7 +8236,7 @@
   {
     "id": "PY-0359",
     "disposition": "VIOLATION",
-    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-931",
+    "location": "packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-922",
     "role_category": "python or harness module logical gt 700",
     "metrics": "physical=931;logical=817;complexity=n/a;public=n/a;collaborators=0;fan-in=3;fan-out=16",
     "authority": "policy/composition; authority fixed by package port",
@@ -22289,7 +22289,7 @@
   {
     "id": "DM-001",
     "disposition": "DISTRIBUTED_CONCERN",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:809-5382",
+    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369",
     "role_category": "distributed service locator/shared mutable caches",
     "metrics": "cluster concern; exact constituent metrics are in artifacts 01/02 and scanner JSON",
     "authority": "policy/composition; authority fixed by package port",

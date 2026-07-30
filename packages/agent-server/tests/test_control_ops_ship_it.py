@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server.control_ops import ControlOps, _is_ship_it_intent
+from disco.agent_server.lifecycle_command_service import LifecycleCommandService
 from disco.agent_server.workspace_service import WorkspaceCoordinator
 from disco.core import (
     ConversationStatus,
@@ -71,6 +72,11 @@ class _Runtime:
         self._project_store = project_store
         self._tasks: dict[str, Any] = {}
         self._workspace = WorkspaceCoordinator(self)
+        self._lifecycle_commands = LifecycleCommandService(
+            store=store,
+            fence=self._workspace,
+            terminal_effects=MagicMock(),
+        )
         self.kick = MagicMock()
         self._loop_for = MagicMock()
         self._loop_for.return_value.enter_planning = AsyncMock()

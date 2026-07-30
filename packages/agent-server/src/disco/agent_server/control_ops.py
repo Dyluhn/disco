@@ -235,27 +235,28 @@ class ControlOps:
         local worker happens to hold an in-memory generation counter.
         """
 
-        return await self._rt._lifecycle_commands.resolve_current_authority(
-            conversation_id
-        )
+        return await self._rt._lifecycle_commands.resolve_current_authority(conversation_id)
 
-    @staticmethod
     def _kill_authority_is_current(
+        self,
         events: list,
         authority: tuple[str | None, str | None, bool],
     ) -> bool:
         """Revalidate a captured kill authority against the final fenced head."""
 
-        return LifecycleCommandService.authority_is_current_for_events(events, authority)
+        return self._rt._lifecycle_commands.authority_is_current_for_events(
+            events,
+            authority,
+        )
 
-    @staticmethod
     def _authority_already_killed(
+        self,
         events: list,
         authority: tuple[str | None, str | None, bool],
     ) -> bool:
         """Return whether this exact durable run already landed IDLE/killed."""
 
-        return LifecycleCommandService.authority_already_killed(events, authority)
+        return self._rt._lifecycle_commands.authority_already_killed(events, authority)
 
     async def _cancel_issued_task(self, conversation_id: str) -> None:
         """Cancel and drain only the task already validated by ``kill``."""

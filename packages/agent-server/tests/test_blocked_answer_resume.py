@@ -232,8 +232,17 @@ async def _answer_with_kernel(
             [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
         )
 
+    async def append_transition_batch_locked(
+        conversation_id: str,
+        events: list[Event],
+        **_kwargs,
+    ) -> list[Event]:
+        return await store.append_many(conversation_id, events)
+
     runtime._workspace.interprocess_mutation_fence = process_fence
     runtime._workspace.append_run_ingress_locked = append_run_ingress
+    runtime._lifecycle_commands = MagicMock()
+    runtime._lifecycle_commands.append_transition_batch_locked = append_transition_batch_locked
     await DiscoKernel(runtime).send_user_turn(cid, text, steer=steer)
 
 

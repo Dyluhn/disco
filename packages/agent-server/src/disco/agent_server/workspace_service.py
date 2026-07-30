@@ -32,7 +32,6 @@ from disco.core import (
     StatusEvent,
     WorkspaceMutationEvent,
     WorkspaceRestoredEvent,
-    current_workspace_agent_view_id,
     latest_workspace_run_intent,
 )
 from disco.core.loop import SealabilityProbeResult
@@ -70,6 +69,18 @@ class WorkspaceRestoreStorageError(RuntimeError):
 
 
 _LOG = logging.getLogger(__name__)
+
+
+def _current_lifecycle_task_authority(
+    rt: Any,
+    conversation_id: str,
+) -> tuple[str | None, str | None]:
+    """Return only the exact registered task's captured durable target."""
+
+    task = asyncio.current_task()
+    if task is None or rt._tasks.get(conversation_id) is not task:
+        return None, None
+    return rt._run_task_authorities.get(task, (None, None))
 
 
 async def _apply_restore_to_session(
@@ -248,43 +259,64 @@ class WorkspaceCoordinator:
     def has_run_claim(self, conversation_id: str) -> bool:
         return conversation_id in self._pending_runs or self.has_admitted_run(conversation_id)
 
+    @asynccontextmanager
+    async def _lifecycle_fence(self, conversation_id: str) -> AsyncIterator[None]:
+        """Expose only serialization; lifecycle policy stays in its command service."""
+
+        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+            yield
+            return
+        if self.fence_owned_by_current_task(conversation_id):
+            yield
+            return
+        async with self.lock(conversation_id):
+            async with self.interprocess_mutation_fence(conversation_id):
+                yield
+
+    @asynccontextmanager
+    async def _lifecycle_locked_fence(self, conversation_id: str) -> AsyncIterator[None]:
+        """Extend a caller-owned local lock across the process fence."""
+
+        if not self.lock(conversation_id).locked():
+            raise RuntimeError("locked lifecycle transition requires the workspace fence")
+        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+            yield
+            return
+        if self.fence_owned_by_current_task(conversation_id):
+            yield
+            return
+        async with self.interprocess_mutation_fence(conversation_id):
+            yield
+
+    def _require_lifecycle_fence(self, conversation_id: str) -> None:
+        """Fail closed unless a Build transition owns both workspace fences."""
+
+        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+            return
+        if not self.lock(conversation_id).locked():
+            raise RuntimeError("locked status append requires the workspace fence")
+        self._require_process_fence_locked(conversation_id)
+
     async def append_status(
         self,
         conversation_id: str,
         event: StatusEvent,
     ) -> StatusEvent:
-        """Serialize every Build status transition with host mutations."""
+        """Compatibility delegate; the lifecycle service owns authorization."""
 
-        if self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES:
-            if self.fence_owned_by_current_task(conversation_id):
-                return await self.append_status_locked(conversation_id, event)
-            async with self.lock(conversation_id):
-                async with self.interprocess_mutation_fence(conversation_id):
-                    return await self._append_status_unlocked(conversation_id, event)
-        return await self._append_status_unlocked(conversation_id, event)
-
-    async def _append_status_unlocked(
-        self,
-        conversation_id: str,
-        event: StatusEvent,
-    ) -> StatusEvent:
-        stored = await self._rt._store.append(conversation_id, event)
-        if not isinstance(stored, StatusEvent):
-            raise RuntimeError("event store returned wrong status event type")
-        return stored
+        return await self._rt._lifecycle_commands.append_status(conversation_id, event)
 
     async def append_status_locked(
         self,
         conversation_id: str,
         event: StatusEvent,
     ) -> StatusEvent:
-        """Append after a caller-owned fence and its last-moment policy checks."""
+        """Compatibility delegate; the lifecycle service owns authorization."""
 
-        if not self.lock(conversation_id).locked():
-            raise RuntimeError("locked status append requires the workspace fence")
-        if self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES:
-            self._require_process_fence_locked(conversation_id)
-        return await self._append_status_unlocked(conversation_id, event)
+        return await self._rt._lifecycle_commands.append_status_locked(
+            conversation_id,
+            event,
+        )
 
     async def run_authority_is_current(
         self,
@@ -293,17 +325,13 @@ class WorkspaceCoordinator:
         agent_view_id: str | None,
         run_intent_id: str | None,
     ) -> bool:
-        """Check one task's durable authority under the cross-process fence."""
+        """Compatibility delegate for durable lifecycle authority."""
 
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
-            return True
-        async with self.lock(conversation_id):
-            async with self.interprocess_mutation_fence(conversation_id):
-                return await self._run_authority_is_current_locked(
-                    conversation_id,
-                    agent_view_id=agent_view_id,
-                    run_intent_id=run_intent_id,
-                )
+        return await self._rt._lifecycle_commands.authority_is_current(
+            conversation_id,
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
+        )
 
     async def _run_authority_is_current_locked(
         self,
@@ -312,17 +340,10 @@ class WorkspaceCoordinator:
         agent_view_id: str | None,
         run_intent_id: str | None,
     ) -> bool:
-        self._require_process_fence_locked(conversation_id)
-        events = await self._rt._store.get_events(conversation_id)
-        latest_intent = latest_workspace_run_intent(events)
-        current_view = current_workspace_agent_view_id(events)
-        if agent_view_id is not None:
-            return current_view == agent_view_id
-        return (
-            run_intent_id is not None
-            and latest_intent is not None
-            and latest_intent.id == run_intent_id
-            and current_view is None
+        return await self._rt._lifecycle_commands._authority_is_current_locked(
+            conversation_id,
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
         )
 
     async def append_run_status_if_current(
@@ -333,31 +354,14 @@ class WorkspaceCoordinator:
         agent_view_id: str | None,
         run_intent_id: str | None,
     ) -> StatusEvent | None:
-        """Conditionally append a task-caused status with typed run authority.
+        """Compatibility delegate for an atomic task transition."""
 
-        The recheck and append share the local and OS workspace fence.  A stale
-        worker therefore remains visible in raw audit history only if it had
-        already committed a status before the newer ingress; it can never
-        overwrite that newer run's semantic state.
-        """
-
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
-            return await self.append_status(conversation_id, event)
-        async with self.lock(conversation_id):
-            async with self.interprocess_mutation_fence(conversation_id):
-                if not await self._run_authority_is_current_locked(
-                    conversation_id,
-                    agent_view_id=agent_view_id,
-                    run_intent_id=run_intent_id,
-                ):
-                    return None
-                owned = event.model_copy(
-                    update={
-                        "agent_view_id": agent_view_id,
-                        "run_intent_id": None if agent_view_id is not None else run_intent_id,
-                    }
-                )
-                return await self.append_status_locked(conversation_id, owned)
+        return await self._rt._lifecycle_commands.append_task_status_if_current(
+            conversation_id,
+            event,
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
+        )
 
     async def append_current_run_transition(
         self,
@@ -367,46 +371,14 @@ class WorkspaceCoordinator:
         *,
         expected_statuses: frozenset[ConversationStatus],
     ) -> list[Event] | None:
-        """Atomically apply a host lifecycle decision to the current run.
+        """Compatibility delegate for a host lifecycle decision."""
 
-        Startup reconciliation and abandoned-gate reaping are host decisions,
-        but they still conclude one exact durable run. Bind the transition to
-        that run's view (or its pre-admission intent) and re-check the expected
-        state under both fences. This keeps the explanatory message and status
-        together and prevents a delayed lifecycle worker from poisoning a
-        newer ingress.
-        """
-
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
-            state = await self._rt._store.get_state(conversation_id)
-            if state.execution_status not in expected_statuses:
-                return None
-            return await self._rt._store.append_many(
-                conversation_id,
-                [*events, status],
-            )
-        async with self.lock(conversation_id):
-            async with self.interprocess_mutation_fence(conversation_id):
-                state = await self._rt._store.get_state(conversation_id)
-                if state.execution_status not in expected_statuses:
-                    return None
-                history = await self._rt._store.get_events(conversation_id)
-                latest_intent = latest_workspace_run_intent(history)
-                current_view = current_workspace_agent_view_id(history)
-                owned = status.model_copy(
-                    update={
-                        "agent_view_id": current_view,
-                        "run_intent_id": (
-                            None
-                            if current_view is not None or latest_intent is None
-                            else latest_intent.id
-                        ),
-                    }
-                )
-                return await self._rt._store.append_many(
-                    conversation_id,
-                    [*events, owned],
-                )
+        return await self._rt._lifecycle_commands.append_current_run_transition(
+            conversation_id,
+            events,
+            status,
+            expected_statuses=expected_statuses,
+        )
 
     @asynccontextmanager
     async def mutation(
@@ -548,7 +520,32 @@ class WorkspaceCoordinator:
             )
         elif intent is not None:
             raise ValueError("preconstructed run intent requires a Build-like surface")
-        return await self._rt._store.append_many(conversation_id, pending)
+        return await self._append_ingress_events_locked(conversation_id, pending)
+
+    async def _append_ingress_events_locked(
+        self,
+        conversation_id: str,
+        pending: list[Event],
+    ) -> list[Event]:
+        """Persist an ingress batch through lifecycle only when it has status."""
+
+        if not any(isinstance(event, StatusEvent) for event in pending):
+            return await self._rt._store.append_many(conversation_id, pending)
+        ingress_intent = next(
+            (
+                event
+                for event in pending
+                if isinstance(event, WorkspaceMutationEvent)
+                and event.run_protocol_version == 1
+                and event.operation.startswith("agent.run-intent.")
+            ),
+            None,
+        )
+        return await self._rt._lifecycle_commands.append_transition_batch_locked(
+            conversation_id,
+            pending,
+            ingress_intent=ingress_intent,
+        )
 
     async def rekick_stranded_followup(
         self,
@@ -578,19 +575,12 @@ class WorkspaceCoordinator:
         self,
         conversation_id: str,
     ) -> Callable[[StatusEvent], Awaitable[StatusEvent]]:
-        """Bind one loop while preserving the lifecycle monkeypatch seam."""
+        """Compatibility delegate for Core's private lifecycle sink."""
 
-        async def commit(event: StatusEvent) -> StatusEvent:
-            if event.status is ConversationStatus.FINISHED:
-                return await self._rt._lifecycle.commit_finished_workspace(
-                    conversation_id,
-                    event,
-                )
-            if self.fence_owned_by_current_task(conversation_id):
-                return await self.append_status_locked(conversation_id, event)
-            return await self.append_status(conversation_id, event)
-
-        return commit
+        return self._rt._lifecycle_commands.terminal_commit_hook(
+            conversation_id,
+            authority_provider=lambda: _current_lifecycle_task_authority(self._rt, conversation_id),
+        )
 
     async def _host_mutation_authority(
         self,
@@ -630,7 +620,7 @@ class WorkspaceCoordinator:
         """Seal an inactive FINISHED host edit by recapturing its sandbox."""
 
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
-        await self._rt._lifecycle.commit_finished_workspace(
+        await self._rt._lifecycle_commands.commit_finished_workspace(
             conversation_id,
             LifecycleCommandService.build_status(
                 ConversationStatus.FINISHED,
@@ -657,7 +647,7 @@ class WorkspaceCoordinator:
         if not self.lock(conversation_id).locked():
             raise RuntimeError("host-mirror finalization requires the conversation lock")
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
-        await self._rt._lifecycle.commit_finished_host_mirror_locked(
+        await self._rt._lifecycle_commands._commit_finished_host_mirror_locked(
             conversation_id,
             LifecycleCommandService.build_status(
                 ConversationStatus.FINISHED,

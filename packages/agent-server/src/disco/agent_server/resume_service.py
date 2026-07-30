@@ -34,6 +34,7 @@ from disco.core import (
     ObservationEvent,
     PlanEvent,
     ToolResult,
+    WorkspaceMutationEvent,
     agent_view_consistent_events,
 )
 from disco.core.loop.engine import _BOOKKEEPING_TOOLS
@@ -689,8 +690,6 @@ class ResumeService:
         pending = [*([tombstone] if tombstone is not None else []), *new_events]
         if surface != "deep_research":
             if surface in self._rt._BUILD_LIKE_SURFACES:
-                from disco.core import WorkspaceMutationEvent
-
                 pending.append(
                     WorkspaceMutationEvent(
                         operation="agent.run-intent.resume",
@@ -703,7 +702,21 @@ class ResumeService:
                     detail="resumed",
                 )
             )
-        await self._rt._store.append_many(conversation_id, pending)
+        ingress_intent = next(
+            (
+                event
+                for event in pending
+                if isinstance(event, WorkspaceMutationEvent)
+                and event.run_protocol_version == 1
+                and event.operation == "agent.run-intent.resume"
+            ),
+            None,
+        )
+        await self._rt._lifecycle_commands.append_transition_batch_locked(
+            conversation_id,
+            pending,
+            ingress_intent=ingress_intent,
+        )
 
     async def resume_conversation(self, conversation_id: str) -> dict:
         """Mode-agnostic, event-log-driven resume. Legal from PAUSED, a terminal

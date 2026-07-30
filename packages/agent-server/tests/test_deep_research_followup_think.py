@@ -4,7 +4,8 @@ from typing import Any
 
 import pytest
 from disco.agent_server.deep_research_service import DeepResearchService
-from disco.core import EventSource, LLMMessage, MessageEvent, ReportEvent
+from disco.agent_server.lifecycle_command_service import LifecycleCommandService
+from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, ReportEvent
 
 
 class _Resp:
@@ -33,6 +34,22 @@ class _Runtime:
     def __init__(self, text: str) -> None:
         self._store = _Store()
         self._router = _Router(text)
+
+        store = self._store
+
+        class _LifecycleCommands:
+            async def append_status(
+                self,
+                conversation_id: str,
+                event: Any,
+                *,
+                detail: str | None = None,
+            ) -> Any:
+                if isinstance(event, ConversationStatus):
+                    event = LifecycleCommandService.build_status(event, detail=detail)
+                return await store.append(conversation_id, event)
+
+        self._lifecycle_commands = _LifecycleCommands()
 
     def _router_now(self) -> _Router:
         return self._router

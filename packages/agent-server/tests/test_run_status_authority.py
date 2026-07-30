@@ -4,6 +4,11 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+from disco.agent_server.lifecycle_command_service import (
+    LifecycleCommandService,
+    LifecycleTransitionRejected,
+)
 from disco.agent_server.workspace_service import WorkspaceCoordinator
 from disco.core import (
     ConversationStatus,
@@ -33,15 +38,31 @@ class _Runtime:
         return self._project_store
 
 
+class _TerminalEffects:
+    async def commit_finished_workspace(self, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("terminal effects are outside this authority test")
+
+    async def commit_finished_host_mirror_locked(self, *args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("terminal effects are outside this authority test")
+
+
 def _coordinator_pair(
     store: SqliteEventStore,
     tmp_path: Path,
 ) -> tuple[WorkspaceCoordinator, WorkspaceCoordinator]:
     project_store = ProjectStore(str(tmp_path / "projects"))
-    return (
-        WorkspaceCoordinator(_Runtime(store, project_store)),
-        WorkspaceCoordinator(_Runtime(store, project_store)),
-    )
+
+    def build() -> WorkspaceCoordinator:
+        runtime = _Runtime(store, project_store)
+        coordinator = WorkspaceCoordinator(runtime)
+        runtime._lifecycle_commands = LifecycleCommandService(  # type: ignore[attr-defined]
+            store=store,
+            fence=coordinator,
+            terminal_effects=_TerminalEffects(),
+        )
+        return coordinator
+
+    return build(), build()
 
 
 async def _seed_view(store: SqliteEventStore, *, view_id: str) -> WorkspaceMutationEvent:
@@ -167,6 +188,36 @@ async def test_peer_ingress_wins_before_stale_status_and_rejects_it(
         store.close()
 
 
+async def test_untyped_direct_status_is_rejected_for_strict_run(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
+    store = SqliteEventStore(":memory:")
+    try:
+        coordinator, _peer = _coordinator_pair(store, tmp_path)
+        await _seed_view(store, view_id="view-current")
+
+        with pytest.raises(
+            LifecycleTransitionRejected,
+            match="requires durable run authority",
+        ):
+            await coordinator._rt._lifecycle_commands.append_status(
+                CID,
+                StatusEvent(
+                    status=ConversationStatus.ERROR,
+                    detail="unauthorized direct append",
+                ),
+            )
+
+        assert not any(
+            isinstance(event, StatusEvent) and event.detail == "unauthorized direct append"
+            for event in await store.get_events(CID)
+        )
+    finally:
+        store.close()
+
+
 async def test_status_and_peer_ingress_are_serialized_without_a_poisoned_head(
     tmp_path: Path,
     monkeypatch: Any,
@@ -178,7 +229,8 @@ async def test_status_and_peer_ingress_are_serialized_without_a_poisoned_head(
         await _seed_view(store, view_id="view-old")
         checked = asyncio.Event()
         release = asyncio.Event()
-        original = old_worker._run_authority_is_current_locked
+        commands = old_worker._rt._lifecycle_commands
+        original = commands._authority_is_current_locked
 
         async def checked_then_blocked(*args: Any, **kwargs: Any) -> bool:
             result = await original(*args, **kwargs)
@@ -187,8 +239,8 @@ async def test_status_and_peer_ingress_are_serialized_without_a_poisoned_head(
             return result
 
         monkeypatch.setattr(
-            old_worker,
-            "_run_authority_is_current_locked",
+            commands,
+            "_authority_is_current_locked",
             checked_then_blocked,
         )
         old_status = asyncio.create_task(

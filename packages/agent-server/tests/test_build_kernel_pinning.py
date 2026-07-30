@@ -12,6 +12,7 @@ import asyncio
 import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -60,8 +61,17 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
             [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
         )
 
+    async def append_transition_batch_locked(
+        conversation_id: str,
+        events: list[Event],
+        **_kwargs: Any,
+    ) -> list[Event]:
+        return await store.append_many(conversation_id, events)
+
     fake._workspace.interprocess_mutation_fence = process_fence
     fake._workspace.append_run_ingress_locked = append_run_ingress
+    fake._lifecycle_commands = MagicMock()
+    fake._lifecycle_commands.append_transition_batch_locked = append_transition_batch_locked
     fake._emit_toolscope_audit_summary = MagicMock()
     fake.kick = MagicMock()
     # CONTRACT-ACTIVATE: send_user_turn declares the contract from the brief
@@ -262,6 +272,17 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
         await store.append(conversation_id, event)
 
     fake._workspace = types.SimpleNamespace(append_status=_append_status)
+
+    async def _append_task_status_if_current(
+        conversation_id: str,
+        event: Event,
+        **_kwargs: Any,
+    ) -> Event:
+        return await store.append(conversation_id, event)
+
+    fake._lifecycle_commands = types.SimpleNamespace(
+        append_task_status_if_current=_append_task_status_if_current
+    )
     for attr in (
         "_CONCLUDED_STATUSES",
         "_RUN_PARKED_STATUSES",

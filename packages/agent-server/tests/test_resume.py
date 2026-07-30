@@ -14,6 +14,7 @@ import contextlib
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import (
     ActionEvent,
@@ -556,6 +557,44 @@ async def test_resume_appends_environment_message_exactly_once():
         and "Resumed by user." in e.message.content
     ]
     assert len(resume_msgs_after) == 1
+
+
+async def test_resume_append_failure_preserves_volatile_pause_flags(monkeypatch):
+    """A failed durable transition must not mutate the still-paused local loop."""
+
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local")
+    rt = _runtime(store)
+    rt.set_surface(CID, "build")
+    await store.append(CID, _user("build it"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
+    monkeypatch.setattr(rt, "start", MagicMock())
+
+    cancel_flag = asyncio.Event()
+    cancel_flag.set()
+    pause_flag = asyncio.Event()
+    pause_flag.set()
+    loop = MagicMock()
+    loop._pause_requested = pause_flag
+    rt._cancel_flags[CID] = cancel_flag
+    rt._loops[CID] = loop
+
+    async def fail_append(*args, **kwargs):
+        raise RuntimeError("append failed")
+
+    monkeypatch.setattr(
+        rt._lifecycle_commands,
+        "append_transition_batch_locked",
+        fail_append,
+    )
+
+    with pytest.raises(RuntimeError, match="append failed"):
+        await rt.resume_conversation(CID)
+
+    assert rt._cancel_flags[CID] is cancel_flag
+    assert cancel_flag.is_set()
+    assert pause_flag.is_set()
+    rt.start.assert_not_called()
 
 
 # ---- double-resume race -------------------------------------------------------

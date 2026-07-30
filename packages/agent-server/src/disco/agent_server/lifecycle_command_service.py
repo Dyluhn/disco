@@ -1,127 +1,181 @@
-"""LifecycleCommandService — the sole agent-server lifecycle transition service.
-
-PKG-06-LIFECYCLE: one bounded, typed application service that decides
-lifecycle transition legality and idempotency, constructs lifecycle
-``StatusEvent`` values, validates durable ``agent_view_id``/``run_intent_id``
-under the final workspace fence, and orders transition persistence with
-lifecycle effects.
-
-EventStore remains the persistence/sequence port and WorkspaceCoordinator
-remains the lock/process-fence port; neither decides transitions.  The
-service reaches them through narrow Protocol types — no ``Any`` runtime
-back-references, service locators, dynamic imports, compatibility aliases,
-or a generic dependency bag.
-
-The existing status-transition sites (ControlOps, ResumeService,
-LifecycleManager collaborators, ConversationRuntime supervisors/preflight,
-DeepResearchService, WorkspaceCoordinator terminal paths, and DiscoKernel)
-route through this service.  Domain facts continue through their existing
-ports; this service does not centralize non-status events.
-
-Routes and public runtime/BuildKernel method signatures remain exact.  Core
-remains target-neutral: the injected private status sink/store adapter is
-consumed at Core's existing emit boundary
-(``engine_contracts._route_event`` via ``terminal_commit_hook``) without
-changing the accepted AgentLoop public surface.
-"""
+"""Single authorization boundary for Agent Server lifecycle transitions."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from collections.abc import Awaitable, Callable, Iterable
+from contextlib import AbstractAsyncContextManager
+from typing import TYPE_CHECKING, Protocol, cast
 
 from disco.core import (
     ConversationStatus,
     Event,
     EventSource,
+    EventStore,
     StatusEvent,
+    WorkspaceMutationEvent,
     current_workspace_agent_view_id,
     latest_workspace_run_intent,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from .lifecycle import LifecycleManager
+
+LifecycleAuthority = tuple[str | None, str | None, bool]
 
 
-@runtime_checkable
-class LifecycleEventSink(Protocol):
-    """Persistence/sequence port for lifecycle status transitions.
-
-    EventStore remains the persistence/sequence port; it does not decide
-    transitions.  The service appends constructed ``StatusEvent`` values
-    through this narrow seam.
-    """
-
-    async def append_status(self, conversation_id: str, event: StatusEvent) -> StatusEvent:
-        """Append one status event and return the stored envelope."""
-        ...
+class LifecycleTransitionRejected(RuntimeError):
+    """The requested transition does not own the durable run head."""
 
 
-@runtime_checkable
+def _authority_already_killed(
+    events: Iterable[Event],
+    authority: LifecycleAuthority,
+) -> bool:
+    latest_status = next(
+        (event for event in reversed(list(events)) if isinstance(event, StatusEvent)),
+        None,
+    )
+    if (
+        latest_status is None
+        or latest_status.status is not ConversationStatus.IDLE
+        or latest_status.detail != "killed"
+    ):
+        return False
+    agent_view_id, run_intent_id, strict = authority
+    if not strict:
+        return True
+    if agent_view_id is not None:
+        return latest_status.agent_view_id == agent_view_id
+    return run_intent_id is not None and latest_status.run_intent_id == run_intent_id
+
+
+def _authority_is_current_for_events(
+    events: Iterable[Event],
+    authority: LifecycleAuthority,
+) -> bool:
+    history = list(events)
+    agent_view_id, run_intent_id, strict = authority
+    if not strict:
+        return True
+    if agent_view_id is None and run_intent_id is None:
+        return False
+    latest_intent = latest_workspace_run_intent(history)
+    if run_intent_id is not None and (latest_intent is None or latest_intent.id != run_intent_id):
+        return False
+    current_view_id = current_workspace_agent_view_id(history)
+    if agent_view_id is not None:
+        return current_view_id == agent_view_id
+    return current_view_id is None
+
+
 class LifecycleFence(Protocol):
-    """Lock/process-fence port for lifecycle transitions.
+    """The lock/process-fence port; it contains no transition policy."""
 
-    WorkspaceCoordinator remains the lock/process-fence port; it does not
-    decide transitions.  The service validates durable authority under this
-    fence and appends through it when the caller does not already hold it.
-    """
-
-    def lock(self, conversation_id: str) -> object:
-        """Return the per-conversation lock (the coordinator's lock)."""
-        ...
-
-    async def run_authority_is_current(
+    def _lifecycle_fence(
         self,
         conversation_id: str,
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    def _lifecycle_locked_fence(
+        self,
+        conversation_id: str,
+    ) -> AbstractAsyncContextManager[None]: ...
+
+    def _require_lifecycle_fence(self, conversation_id: str) -> None: ...
+
+
+class LifecycleTerminalEffectPort(Protocol):
+    """Workspace effects performed only after lifecycle authorization."""
+
+    async def commit_finished_workspace(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
         *,
-        agent_view_id: str | None,
-        run_intent_id: str | None,
-    ) -> bool:
-        """Check one task's durable authority under the cross-process fence."""
-        ...
+        require_inactive_finished_head: bool = False,
+    ) -> StatusEvent: ...
 
-    async def append_status_locked(
+    async def commit_finished_host_mirror_locked(
         self,
         conversation_id: str,
-        event: StatusEvent,
-    ) -> StatusEvent:
-        """Append after a caller-owned fence and its last-moment policy checks."""
-        ...
+        terminal_event: StatusEvent,
+    ) -> StatusEvent: ...
 
 
-@runtime_checkable
-class LifecycleEventReader(Protocol):
-    """Read-only event history port for durable authority validation."""
+class LifecyclePersistence(Protocol):
+    """Narrow already-fenced workspace persistence operation."""
 
-    async def get_events(self, conversation_id: str) -> list[Event]:
-        """Return the current event history for a conversation."""
-        ...
+    async def _commit_finished_workspace_locked(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+        *,
+        require_inactive_finished_head: bool,
+        host_mirror: bool,
+        snapshot_fn: Callable[..., object] | None,
+    ) -> StatusEvent: ...
 
 
-class LifecycleCommandService:
-    """Sole agent-server application service for lifecycle transitions.
+class LifecycleCompositionRoot(Protocol):
+    """Runtime dependencies used only at composition."""
 
-    Decides transition legality and idempotency, constructs ``StatusEvent``
-    values, validates durable ``agent_view_id``/``run_intent_id`` under the
-    final workspace fence, and orders transition persistence with lifecycle
-    effects.  EventStore remains the persistence/sequence port and
-    WorkspaceCoordinator remains the lock/process-fence port; neither decides
-    transitions.
-    """
+    _store: EventStore
+    _workspace: LifecycleFence
+
+
+class WorkspaceLifecycleTerminalEffects:
+    """Adapt workspace persistence after the command service authorizes."""
 
     def __init__(
         self,
-        sink: LifecycleEventSink,
-        fence: LifecycleFence,
-        reader: LifecycleEventReader,
+        persistence: LifecyclePersistence,
+        snapshot_provider: Callable[[], Callable[..., object]],
     ) -> None:
-        self._sink = sink
-        self._fence = fence
-        self._reader = reader
+        self._persistence = persistence
+        self._snapshot_provider = snapshot_provider
 
-    # ------------------------------------------------------------------
-    # StatusEvent construction — the sole construction site for lifecycle
-    # status values that route through this service.
-    # ------------------------------------------------------------------
+    async def commit_finished_workspace(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+        *,
+        require_inactive_finished_head: bool = False,
+    ) -> StatusEvent:
+        return await self._persistence._commit_finished_workspace_locked(
+            conversation_id,
+            terminal_event,
+            require_inactive_finished_head=require_inactive_finished_head,
+            host_mirror=False,
+            snapshot_fn=self._snapshot_provider(),
+        )
+
+    async def commit_finished_host_mirror_locked(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+    ) -> StatusEvent:
+        return await self._persistence._commit_finished_workspace_locked(
+            conversation_id,
+            terminal_event,
+            require_inactive_finished_head=True,
+            host_mirror=True,
+            snapshot_fn=None,
+        )
+
+
+class LifecycleCommandService:
+    """Authorize, sequence, and persist every Agent Server status transition."""
+
+    def __init__(
+        self,
+        *,
+        store: EventStore,
+        fence: LifecycleFence,
+        terminal_effects: LifecycleTerminalEffectPort,
+    ) -> None:
+        self._store = store
+        self._fence = fence
+        self._terminal_effects = terminal_effects
 
     @staticmethod
     def build_status(
@@ -133,13 +187,8 @@ class LifecycleCommandService:
         host_mutation_id: str | None = None,
         source: EventSource = EventSource.SYSTEM,
     ) -> StatusEvent:
-        """Construct a lifecycle ``StatusEvent`` with one terminal authority.
+        """Construct the one lifecycle event shape used by Agent Server."""
 
-        A status event carries at most one of agent-view, host-mutation, or
-        run-intent authority (enforced by ``StatusEvent._one_terminal_authority``).
-        This constructor is the sole site that builds status values for
-        transitions routed through the service.
-        """
         return StatusEvent(
             source=source,
             status=status,
@@ -149,9 +198,55 @@ class LifecycleCommandService:
             host_mutation_id=host_mutation_id,
         )
 
-    # ------------------------------------------------------------------
-    # Durable authority validation under the final workspace fence.
-    # ------------------------------------------------------------------
+    @staticmethod
+    def _resolved_authority(events: Iterable[Event]) -> LifecycleAuthority:
+        history = list(events)
+        latest_intent = latest_workspace_run_intent(history)
+        strict = latest_intent is not None and latest_intent.run_protocol_version == 1
+        if strict and latest_intent is not None:
+            return current_workspace_agent_view_id(history), latest_intent.id, True
+        return None, None, False
+
+    async def resolve_current_authority(
+        self,
+        conversation_id: str,
+    ) -> LifecycleAuthority:
+        """Capture the durable run head under the final workspace fence."""
+
+        async with self._fence._lifecycle_fence(conversation_id):
+            return self._resolved_authority(await self._store.get_events(conversation_id))
+
+    def authority_already_killed(
+        self,
+        events: Iterable[Event],
+        authority: LifecycleAuthority,
+    ) -> bool:
+        """Return whether this exact durable run already landed IDLE/killed."""
+
+        return _authority_already_killed(events, authority)
+
+    def authority_is_current_for_events(
+        self,
+        events: Iterable[Event],
+        authority: LifecycleAuthority,
+    ) -> bool:
+        """Validate captured authority against one fenced event head."""
+
+        return _authority_is_current_for_events(events, authority)
+
+    async def _authority_is_current_locked(
+        self,
+        conversation_id: str,
+        *,
+        agent_view_id: str | None,
+        run_intent_id: str | None,
+    ) -> bool:
+        self._fence._require_lifecycle_fence(conversation_id)
+        events = await self._store.get_events(conversation_id)
+        return self.authority_is_current_for_events(
+            events,
+            (agent_view_id, run_intent_id, True),
+        )
 
     async def authority_is_current(
         self,
@@ -160,116 +255,100 @@ class LifecycleCommandService:
         agent_view_id: str | None,
         run_intent_id: str | None,
     ) -> bool:
-        """Validate durable authority under the cross-process fence.
+        """Atomically validate a durable task target."""
 
-        Local generation is diagnostic only.  Durable
-        ``{agent_view_id, run_intent_id}``, re-read under the final fence, is
-        the authorization decision and must accept a current durable target
-        even when local generation is absent/stale.  A stale durable target
-        must fail.
-        """
         if agent_view_id is None and run_intent_id is None:
             return True
-        return await self._fence.run_authority_is_current(
-            conversation_id,
-            agent_view_id=agent_view_id,
-            run_intent_id=run_intent_id,
+        async with self._fence._lifecycle_fence(conversation_id):
+            return await self._authority_is_current_locked(
+                conversation_id,
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            )
+
+    @staticmethod
+    def _authorize_status(
+        events: list[Event],
+        event: StatusEvent,
+        *,
+        bind_current: bool,
+    ) -> StatusEvent:
+        """Bind or validate one status against the exact fenced durable head."""
+
+        if event.host_mutation_id is not None:
+            return event
+        current_view, current_intent, strict = LifecycleCommandService._resolved_authority(events)
+        if not strict:
+            return event
+        if event.agent_view_id is not None:
+            if event.agent_view_id != current_view:
+                raise LifecycleTransitionRejected("stale agent view lifecycle transition")
+            return event
+        if event.run_intent_id is not None:
+            if event.run_intent_id != current_intent or current_view is not None:
+                raise LifecycleTransitionRejected("stale run intent lifecycle transition")
+            return event
+        if not bind_current:
+            raise LifecycleTransitionRejected(
+                "strict lifecycle transition requires durable run authority"
+            )
+        return event.model_copy(
+            update={
+                "agent_view_id": current_view,
+                "run_intent_id": None if current_view is not None else current_intent,
+            }
         )
 
-    async def resolve_current_authority(
+    async def _append_authorized_locked(
         self,
         conversation_id: str,
-    ) -> tuple[str | None, str | None, bool]:
-        """Resolve the durable authority at the current fenced head.
-
-        Returns ``(agent_view_id, run_intent_id, strict)`` where ``strict`` is
-        True when a v1 run intent exists.  A strict authority binds the
-        transition to the exact admitted view (or its pre-admission intent).
-        """
-        events = await self._reader.get_events(conversation_id)
-        latest_intent = latest_workspace_run_intent(events)
-        strict = latest_intent is not None and latest_intent.run_protocol_version == 1
-        if strict and latest_intent is not None:
-            return (
-                current_workspace_agent_view_id(events),
-                latest_intent.id,
-                True,
-            )
-        return None, None, False
-
-    @staticmethod
-    def authority_already_killed(
-        events: Iterable[Event],
-        authority: tuple[str | None, str | None, bool],
-    ) -> bool:
-        """Return whether this exact durable run already landed IDLE/killed."""
-        latest_status = next(
-            (event for event in reversed(list(events)) if isinstance(event, StatusEvent)),
-            None,
+        event: StatusEvent,
+        *,
+        bind_current: bool,
+    ) -> StatusEvent:
+        self._fence._require_lifecycle_fence(conversation_id)
+        authorized = self._authorize_status(
+            await self._store.get_events(conversation_id),
+            event,
+            bind_current=bind_current,
         )
-        if (
-            latest_status is None
-            or latest_status.status is not ConversationStatus.IDLE
-            or latest_status.detail != "killed"
-        ):
-            return False
-        agent_view_id, run_intent_id, strict = authority
-        if not strict:
-            return True
-        if agent_view_id is not None:
-            return latest_status.agent_view_id == agent_view_id
-        return run_intent_id is not None and latest_status.run_intent_id == run_intent_id
-
-    @staticmethod
-    def authority_is_current_for_events(
-        events: Iterable[Event],
-        authority: tuple[str | None, str | None, bool],
-    ) -> bool:
-        """Revalidate a captured authority against the final fenced head."""
-        agent_view_id, run_intent_id, strict = authority
-        if not strict:
-            return True
-        if agent_view_id is None and run_intent_id is None:
-            return False
-        latest_intent = latest_workspace_run_intent(events)
-        if run_intent_id is not None and (
-            latest_intent is None or latest_intent.id != run_intent_id
-        ):
-            return False
-        current_view_id = current_workspace_agent_view_id(events)
-        if agent_view_id is not None:
-            return current_view_id == agent_view_id
-        # A post-capture winning view may belong to a peer and was never cancelled.
-        return current_view_id is None
-
-    # ------------------------------------------------------------------
-    # Transition persistence — ordered with lifecycle effects.
-    # ------------------------------------------------------------------
+        stored = await self._store.append(conversation_id, authorized)
+        if not isinstance(stored, StatusEvent):
+            raise RuntimeError("event store returned wrong status event type")
+        return stored
 
     async def append_status(
         self,
         conversation_id: str,
-        event: StatusEvent,
+        event: StatusEvent | ConversationStatus,
+        *,
+        detail: str | None = None,
     ) -> StatusEvent:
-        """Append one lifecycle status through the persistence port.
+        """Append a pre-authorized transition under one final fence."""
 
-        The caller may or may not already hold the workspace fence; the sink
-        serializes Build status transitions with host mutations.
-        """
-        return await self._sink.append_status(conversation_id, event)
+        if isinstance(event, ConversationStatus):
+            event = self.build_status(event, detail=detail)
+        elif detail is not None:
+            raise ValueError("detail is valid only when constructing a status")
+        async with self._fence._lifecycle_fence(conversation_id):
+            return await self._append_authorized_locked(
+                conversation_id,
+                event,
+                bind_current=False,
+            )
 
     async def append_status_locked(
         self,
         conversation_id: str,
         event: StatusEvent,
     ) -> StatusEvent:
-        """Append one lifecycle status after a caller-owned fence.
+        """Append a pre-authorized transition while the caller owns the fence."""
 
-        The caller MUST already hold the workspace lock and (for Build-like
-        surfaces) the interprocess mutation fence.  The fence port performs
-        the last-moment policy checks.
-        """
-        return await self._fence.append_status_locked(conversation_id, event)
+        return await self._append_authorized_locked(
+            conversation_id,
+            event,
+            bind_current=False,
+        )
 
     async def append_task_status_if_current(
         self,
@@ -278,27 +357,188 @@ class LifecycleCommandService:
         *,
         agent_view_id: str | None,
         run_intent_id: str | None,
+        prefix_events: list[Event] | None = None,
     ) -> StatusEvent | None:
-        """Append a task-caused status only for its durable run.
+        """Validate and append a task transition in one indivisible fence."""
 
-        Historical and non-Build callers do not have strict run authority and
-        retain the legacy behavior.  Registered Build tasks always capture at
-        least the ingress intent; after materialization they prefer the exact
-        view id.  The fence performs the last-moment recheck and append under
-        the local plus process workspace fence.
-        """
-        if agent_view_id is None and run_intent_id is None:
-            return await self._sink.append_status(conversation_id, event)
-        if not await self.authority_is_current(
-            conversation_id,
-            agent_view_id=agent_view_id,
-            run_intent_id=run_intent_id,
-        ):
-            return None
-        owned = event.model_copy(
-            update={
-                "agent_view_id": agent_view_id,
-                "run_intent_id": None if agent_view_id is not None else run_intent_id,
-            }
-        )
-        return await self._fence.append_status_locked(conversation_id, owned)
+        async with self._fence._lifecycle_fence(conversation_id):
+            if (
+                agent_view_id is not None or run_intent_id is not None
+            ) and not await self._authority_is_current_locked(
+                conversation_id,
+                agent_view_id=agent_view_id,
+                run_intent_id=run_intent_id,
+            ):
+                return None
+            history = await self._store.get_events(conversation_id)
+            owned = event.model_copy(
+                update={
+                    "agent_view_id": agent_view_id,
+                    "run_intent_id": None if agent_view_id is not None else run_intent_id,
+                }
+            )
+            authorized = self._authorize_status(history, owned, bind_current=False)
+            if prefix_events:
+                stored_events = await self._store.append_many(
+                    conversation_id,
+                    [*prefix_events, authorized],
+                )
+                stored = stored_events[-1]
+            else:
+                stored = await self._store.append(conversation_id, authorized)
+            if not isinstance(stored, StatusEvent):
+                raise RuntimeError("event store returned wrong status event type")
+            return stored
+
+    async def append_transition_batch_locked(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        *,
+        bind_current: bool = False,
+        ingress_intent: WorkspaceMutationEvent | None = None,
+    ) -> list[Event]:
+        """Atomically persist domain facts with their one authorized transition."""
+
+        self._fence._require_lifecycle_fence(conversation_id)
+        statuses = [event for event in events if isinstance(event, StatusEvent)]
+        if len(statuses) != 1:
+            raise ValueError("lifecycle transition batch requires exactly one status event")
+        status = statuses[0]
+        if ingress_intent is not None:
+            if ingress_intent.run_protocol_version != 1 or not ingress_intent.operation.startswith(
+                "agent.run-intent."
+            ):
+                raise ValueError("lifecycle ingress requires a v1 run intent")
+            if status.agent_view_id is not None or (
+                status.run_intent_id is not None and status.run_intent_id != ingress_intent.id
+            ):
+                raise LifecycleTransitionRejected("ingress status has conflicting authority")
+            authorized = status.model_copy(
+                update={"agent_view_id": None, "run_intent_id": ingress_intent.id}
+            )
+        else:
+            authorized = self._authorize_status(
+                await self._store.get_events(conversation_id),
+                status,
+                bind_current=bind_current,
+            )
+        pending = [authorized if event is status else event for event in events]
+        return await self._store.append_many(conversation_id, pending)
+
+    async def append_current_run_transition(
+        self,
+        conversation_id: str,
+        events: list[Event],
+        status: StatusEvent,
+        *,
+        expected_statuses: frozenset[ConversationStatus],
+    ) -> list[Event] | None:
+        """Apply a host lifecycle decision only to its fenced current state."""
+
+        async with self._fence._lifecycle_fence(conversation_id):
+            state = await self._store.get_state(conversation_id)
+            if state.execution_status not in expected_statuses:
+                return None
+            return await self.append_transition_batch_locked(
+                conversation_id,
+                [*events, status],
+                bind_current=True,
+            )
+
+    def terminal_commit_hook(
+        self,
+        conversation_id: str,
+        *,
+        authority_provider: Callable[[], tuple[str | None, str | None]] | None = None,
+    ) -> Callable[[StatusEvent], Awaitable[StatusEvent]]:
+        """Bind Core's existing private status-emission boundary."""
+
+        async def commit(event: StatusEvent) -> StatusEvent:
+            if (
+                event.agent_view_id is None
+                and event.run_intent_id is None
+                and authority_provider is not None
+            ):
+                agent_view_id, run_intent_id = authority_provider()
+                event = event.model_copy(
+                    update={
+                        "agent_view_id": agent_view_id,
+                        "run_intent_id": (None if agent_view_id is not None else run_intent_id),
+                    }
+                )
+            if event.status is not ConversationStatus.FINISHED:
+                return await self.append_status(conversation_id, event)
+            async with self._fence._lifecycle_fence(conversation_id):
+                authorized = self._authorize_status(
+                    await self._store.get_events(conversation_id),
+                    event,
+                    bind_current=False,
+                )
+                return await self._terminal_effects.commit_finished_workspace(
+                    conversation_id,
+                    authorized,
+                )
+
+        return commit
+
+    async def commit_finished_workspace(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+        *,
+        require_inactive_finished_head: bool = False,
+    ) -> StatusEvent:
+        """Authorize a FINISHED command before invoking workspace effects."""
+
+        if terminal_event.status is not ConversationStatus.FINISHED:
+            raise ValueError("terminal workspace commit requires FINISHED")
+        async with self._fence._lifecycle_fence(conversation_id):
+            authorized = self._authorize_status(
+                await self._store.get_events(conversation_id),
+                terminal_event,
+                bind_current=False,
+            )
+            return await self._terminal_effects.commit_finished_workspace(
+                conversation_id,
+                authorized,
+                require_inactive_finished_head=require_inactive_finished_head,
+            )
+
+    async def _commit_finished_host_mirror_locked(
+        self,
+        conversation_id: str,
+        terminal_event: StatusEvent,
+    ) -> StatusEvent:
+        if terminal_event.status is not ConversationStatus.FINISHED:
+            raise ValueError("terminal workspace commit requires FINISHED")
+        async with self._fence._lifecycle_locked_fence(conversation_id):
+            authorized = self._authorize_status(
+                await self._store.get_events(conversation_id),
+                terminal_event,
+                bind_current=False,
+            )
+            return await self._terminal_effects.commit_finished_host_mirror_locked(
+                conversation_id,
+                authorized,
+            )
+
+
+def compose_lifecycle_service(
+    root: object,
+) -> tuple[LifecycleManager, LifecycleCommandService]:
+    """Build the lifecycle boundary outside the runtime's size-constrained class."""
+
+    from . import lifecycle as lifecycle_module
+
+    runtime = cast(LifecycleCompositionRoot, root)
+    manager = lifecycle_module.LifecycleManager(runtime)
+    service = LifecycleCommandService(
+        store=runtime._store,
+        fence=runtime._workspace,
+        terminal_effects=WorkspaceLifecycleTerminalEffects(
+            manager._persistence,
+            snapshot_provider=lambda: lifecycle_module.snapshot_workspace,
+        ),
+    )
+    return manager, service

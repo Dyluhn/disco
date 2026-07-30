@@ -178,8 +178,8 @@ from .driver_context import (
     DriverContextResolver,
     ResolvedDriverContext,
 )
-from .lifecycle import _GATE_STATES, LifecycleManager
-from .lifecycle_command_service import LifecycleCommandService
+from .lifecycle import _GATE_STATES
+from .lifecycle_command_service import LifecycleCommandService, compose_lifecycle_service
 from .mcp_manager import McpManager
 from .preview_manager import PreviewManager
 from .preview_service import PreviewService
@@ -1098,20 +1098,7 @@ class ConversationRuntime:
         self._resume = ResumeService(self)
         # Permanent workspace locks shared by lifecycle delegates.
         self._workspace = WorkspaceCoordinator(self)
-        # PKG-06-LIFECYCLE: the sole agent-server application service that
-        # decides lifecycle transition legality and idempotency, constructs
-        # lifecycle StatusEvent values, validates durable agent_view_id/
-        # run_intent_id under the final workspace fence, and orders transition
-        # persistence with lifecycle effects. EventStore remains the
-        # persistence/sequence port and WorkspaceCoordinator remains the
-        # lock/process-fence port; neither decides transitions. See
-        # lifecycle_command_service.py.
-        self._lifecycle_commands = LifecycleCommandService(
-            sink=self._workspace,
-            fence=self._workspace,
-            reader=self._store,
-        )
-        self._lifecycle = LifecycleManager(self)
+        self._lifecycle, self._lifecycle_commands = compose_lifecycle_service(self)
         # Deep Research surface (plan→iterate→report) + live research stream.
         # _depth / _research_* cache / _cancel_flags stay on the runtime
         # (_cancel_flags is shared with kill/cancel/resume); the service reaches
@@ -3411,10 +3398,7 @@ class ConversationRuntime:
             logger.error("run task for %s crashed: %s", conversation_id, detail, exc_info=exc)
             stored = await self._append_task_status_if_current(
                 conversation_id,
-                LifecycleCommandService.build_status(
-                    ConversationStatus.ERROR,
-                    detail=detail,
-                ),
+                LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=detail),
                 agent_view_id=agent_view_id,
                 run_intent_id=run_intent_id,
             )
@@ -3985,10 +3969,7 @@ class ConversationRuntime:
         if reason is not None:
             stored = await self._append_task_status_if_current(
                 conversation_id,
-                LifecycleCommandService.build_status(
-                    ConversationStatus.ERROR,
-                    detail=reason[:200],
-                ),
+                LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=reason[:200]),
                 agent_view_id=None,
                 run_intent_id=run_intent_id,
             )
@@ -4014,8 +3995,7 @@ class ConversationRuntime:
                 stored = await self._append_task_status_if_current(
                     conversation_id,
                     LifecycleCommandService.build_status(
-                        ConversationStatus.ERROR,
-                        detail=sandbox_reason[:200],
+                        ConversationStatus.ERROR, detail=sandbox_reason[:200]
                     ),
                     agent_view_id=None,
                     run_intent_id=run_intent_id,
@@ -4777,35 +4757,16 @@ class ConversationRuntime:
                 source=EventSource.AGENT,
                 message=LLMMessage(role="assistant", content=explanation),
             ),
-            LifecycleCommandService.build_status(
-                ConversationStatus.ERROR,
-                detail=detail,
-            ),
+            LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=detail),
         ]
-        has_authority = agent_view_id is not None or run_intent_id is not None
-        if not has_authority:
-            await self._store.append_many(conversation_id, events)
-            return True
-
-        # Strict v1 projection quarantines an untyped terminal status.  Publish
-        # the explanation and terminal marker atomically only while this exact
-        # task still owns the durable intent/view head.
-        async with self.workspace_lock(conversation_id):
-            async with self._workspace.interprocess_mutation_fence(conversation_id):
-                if not await self._workspace._run_authority_is_current_locked(
-                    conversation_id,
-                    agent_view_id=agent_view_id,
-                    run_intent_id=run_intent_id,
-                ):
-                    return False
-                status = cast(StatusEvent, events[-1]).model_copy(
-                    update={
-                        "agent_view_id": agent_view_id,
-                        "run_intent_id": (None if agent_view_id is not None else run_intent_id),
-                    }
-                )
-                await self._store.append_many(conversation_id, [*events[:-1], status])
-                return True
+        stored = await self._lifecycle_commands.append_task_status_if_current(
+            conversation_id,
+            cast(StatusEvent, events[-1]),
+            agent_view_id=agent_view_id,
+            run_intent_id=run_intent_id,
+            prefix_events=events[:-1],
+        )
+        return stored is not None
 
     async def _sealed_run_conversation_setup(
         self,

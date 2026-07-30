@@ -69,7 +69,7 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
         trace.append("actions.close")
         return await close_actions(conversation_id, authority)
 
-    append_status = rt._workspace.append_status_locked
+    append_status = rt._lifecycle_commands.append_status_locked
 
     async def _append(conversation_id: str, event: StatusEvent):
         assert rt.workspace_lock(conversation_id).locked()
@@ -78,7 +78,7 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
         return await append_status(conversation_id, event)
 
     monkeypatch.setattr(rt, "_close_dangling_actions_for_kill_locked", _close)
-    monkeypatch.setattr(rt._workspace, "append_status_locked", _append)
+    monkeypatch.setattr(rt._lifecycle_commands, "append_status_locked", _append)
 
     await rt.kill(CID)
     await rt.kill(CID)
@@ -110,7 +110,7 @@ async def test_direct_locked_status_append_without_fence_is_rejected() -> None:
         RuntimeError,
         match="locked status append requires the workspace fence",
     ):
-        await rt._workspace.append_status_locked(
+        await rt._lifecycle_commands.append_status_locked(
             CID,
             StatusEvent(status=ConversationStatus.IDLE, detail="unauthorized"),
         )

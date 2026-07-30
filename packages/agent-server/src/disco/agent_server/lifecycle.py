@@ -13,15 +13,8 @@ collaborator constructed once in `ConversationRuntime`:
   - workspace durability: _maybe_rehydrate / _rehydrate_after_recreate /
     _rematerialize_uploads / _maybe_snapshot
 
-`LifecycleManager` reaches the runtime's live state (`_connections`,
-`_suspend_tasks`, `_executors`, `_pending_sessions`, `_loops`, `_store`,
-`_config_store`, `_uploads_base`, `_rehydrated`, the session-view caches, and
-the `_project_store_now` / `_sandbox_service_now` / `_emit_persistence_reminder`
-resolvers) via a back-reference. Every externally-called method stays reachable
-on `ConversationRuntime` as a one-line delegator. The cohesive private
-collaborators (`GateReaper`, `OrphanReconciler`, `Rehydration`) hold the runtime
-back-reference exactly like `WorkspacePersistence`; `LifecycleManager` retains
-thin one-line delegates so the existing runtime/test seams are undisturbed.
+`LifecycleManager` and its cohesive collaborators reach live runtime state by
+back-reference. Existing runtime delegates and test seams remain undisturbed.
 """
 
 from __future__ import annotations
@@ -168,7 +161,7 @@ class GateReaper:
                 or self._rt._run_generation.get(cid) != captured_generation
             ):
                 return 0  # a newer run/generation now owns it — stale, skip
-            transitioned = await self._rt._workspace.append_current_run_transition(
+            transitioned = await self._rt._lifecycle_commands.append_current_run_transition(
                 cid,
                 [
                     MessageEvent(
@@ -239,7 +232,8 @@ class OrphanReconciler:
                 with contextlib.suppress(Exception):
                     state = await self._rt._store.get_state(cid)
                     if state.execution_status is ConversationStatus.RUNNING:
-                        transitioned = await self._rt._workspace.append_current_run_transition(
+                        command = self._rt._lifecycle_commands
+                        transitioned = await command.append_current_run_transition(
                             cid,
                             [
                                 MessageEvent(

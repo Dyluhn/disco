@@ -17,6 +17,7 @@ import asyncio
 import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -79,8 +80,17 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
             [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
         )
 
+    async def append_transition_batch_locked(
+        conversation_id: str,
+        events: list[Event],
+        **_kwargs: Any,
+    ) -> list[Event]:
+        return await store.append_many(conversation_id, events)
+
     fake._workspace.interprocess_mutation_fence = process_fence
     fake._workspace.append_run_ingress_locked = append_run_ingress
+    fake._lifecycle_commands = MagicMock()
+    fake._lifecycle_commands.append_transition_batch_locked = append_transition_batch_locked
 
     control = MagicMock()
     control.confirm = AsyncMock()
