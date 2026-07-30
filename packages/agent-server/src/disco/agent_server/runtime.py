@@ -65,17 +65,15 @@ from disco.core.contract import (
     ScopeDecision,
 )
 from disco.core.env import disco_env
-from disco.core.inspect import inspect_enabled, routing_sink_for
+from disco.core.inspect import inspect_enabled
 from disco.core.inspect import install as install_inspect
 from disco.core.llm import (
-    CapabilityProfile,
     ConfigStore,
     DefaultLLMRouter,
     ModelExecutionPolicy,
     ModelRole,
     OperatingMode,
     RouterSummarizer,
-    RoutingDecision,
     SandboxSettings,
     SecretStore,
     ToolSpec,
@@ -841,7 +839,7 @@ class ConversationRuntime:
             secret_store=self._secret_store,
             skill_store=self._skill_store,
             prompt_state=RuntimeDriverPromptState(build_executors),
-            selections=RuntimeDriverSelections(self._settings, self._driver_contexts),
+            selections=RuntimeDriverSelections(self._settings),
             probes=RuntimeDriverProbeSeams(),
             contexts=self._driver_contexts,
             injected_router=router,
@@ -1218,18 +1216,18 @@ class ConversationRuntime:
         self._settings.set_assist(conversation_id, value)
 
     def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
-        return self._drivers.effective_policy(conversation_id)
+        return self._settings._effective_policy(conversation_id)
 
     def _effective_driver_endpoint(
         self, conversation_id: str
     ) -> tuple[str, str, str | None] | None:
-        return self._drivers.effective_endpoint(conversation_id)
+        return self._settings._effective_driver_endpoint(conversation_id)
 
     def _effective_assist(self, conversation_id: str) -> bool:
-        return self._drivers.effective_policy(conversation_id).assist
+        return self._settings._effective_policy(conversation_id).assist
 
     def is_assist(self, conversation_id: str) -> bool:
-        return self._drivers.effective_policy(conversation_id).assist
+        return self._settings._effective_policy(conversation_id).assist
 
     async def apply_settings_change(
         self,
@@ -2997,30 +2995,6 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("crash terminalization failed for %s", conversation_id)
 
-    # W-35: how long a SUCCESSFUL driver pre-flight is trusted before re-probing.
-    _DRIVER_PREFLIGHT_TTL_S = 60.0
-    # W-35 P1-1: HARD wall-clock bound on a SINGLE pre-flight probe. The whole
-    # point of pre-flight is to FAIL FAST — so it must NOT inherit the router's 5
-    # same-model transient retries (routing.py _MAX_ATTEMPTS) × the provider's
-    # 180s timeout (openai_provider.py). A black-holed driver would otherwise
-    # stall kick()/research_stream() for MINUTES before any error. We cap the
-    # entire probe (including any internal retries) at this deadline via
-    # asyncio.wait_for; a timeout is ITSELF an "unreachable" verdict.
-    _DRIVER_PREFLIGHT_TIMEOUT_S = 10.0
-    # W-35 (resilience): a slow remote reasoning model can miss a SINGLE probe yet
-    # be perfectly reachable (other calls succeed seconds before/after). Retry the
-    # probe a few times with a short escalating backoff before declaring the driver
-    # unreachable, so a momentary latency blip does not hard-fail a working run. The
-    # total stays bounded (ATTEMPTS × TIMEOUT + backoffs) so a genuinely-dead driver
-    # still fails reasonably fast. Only TRANSIENT verdicts (timeout / LLMTransientError)
-    # are retried; a hard verdict (auth / misconfig / unavailable) fails immediately.
-    _DRIVER_PREFLIGHT_ATTEMPTS = 3
-    _DRIVER_PREFLIGHT_BACKOFF_S = 0.5
-    # A completed failure remains shareable just long enough for callers that
-    # arrived in the same cold-start burst to receive the same bounded verdict.
-    # A later independent kick re-probes rather than caching an outage.
-    _DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 2.0
-
     async def _preflight_driver(
         self,
         conversation_id: str | None,
@@ -3032,87 +3006,6 @@ class ConversationRuntime:
             conversation_id,
             override=override,
             role=role,
-        )
-
-    def _complete_driver_preflight_slot(
-        self,
-        key: str,
-        task: asyncio.Task[tuple[str | None, bool]],
-    ) -> None:
-        self._driver_preflight._complete(key, task)
-
-    def _expire_driver_preflight_slot(
-        self,
-        key: str,
-        task: asyncio.Task[tuple[str | None, bool]],
-        completed_at: float,
-    ) -> None:
-        self._driver_preflight._expire(key, task, completed_at)
-
-    async def _probe_driver(
-        self,
-        conversation_id: str,
-        *,
-        key: str,
-        override: str | None,
-        role: ModelRole,
-    ) -> tuple[str | None, bool]:
-        return await self._driver_preflight._probe(
-            conversation_id,
-            key=key,
-            override=override,
-            role=role,
-        )
-
-    @staticmethod
-    def _record_shared_driver_preflight_success(
-        conversation_id: str,
-        cfg: Any,
-        key: str,
-        override: str | None,
-        role: ModelRole,
-        source: str,
-    ) -> None:
-        """Attach the model/provider readiness proof consumed by this caller."""
-
-        sink = routing_sink_for(conversation_id)
-        if sink is None:
-            return
-        entry = getattr(cfg, "models", {}).get(key)
-        sink.record(
-            RoutingDecision(
-                profile=CapabilityProfile(role=role),
-                chosen_model=str(getattr(entry, "model_id", key)),
-                provider=str(getattr(entry, "provider", "")),
-                path="manual" if override is not None else "pinned",
-                reason=f"{source} driver preflight success",
-                overflow_triggers=["driver_preflight"],
-            )
-        )
-
-    @staticmethod
-    def _record_shared_driver_preflight_failure(
-        conversation_id: str,
-        cfg: Any,
-        key: str,
-        override: str | None,
-        role: ModelRole,
-    ) -> None:
-        """Attach fail-closed routing proof to every single-flight waiter."""
-
-        sink = routing_sink_for(conversation_id)
-        if sink is None:
-            return
-        entry = getattr(cfg, "models", {}).get(key)
-        sink.record(
-            RoutingDecision(
-                profile=CapabilityProfile(role=role),
-                chosen_model=str(getattr(entry, "model_id", key)),
-                provider=str(getattr(entry, "provider", "")),
-                path="manual" if override is not None else "pinned",
-                reason="terminal failure: shared driver preflight",
-                overflow_triggers=["driver_preflight"],
-            )
         )
 
     # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like

@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 from disco.tools import AppKitPhase, DefaultToolExecutor
 
-from .driver_context_state import DriverContextState
 from .driver_runtime import LiveModelProbe
 
 
 class DriverSettingsState(Protocol):
     def _get_model_override(self, conversation_id: str) -> str | None: ...
-
-    def assist_override(self, conversation_id: str) -> bool | None: ...
 
 
 class DriverExecutorLookup(Protocol):
@@ -26,19 +23,11 @@ class RuntimeDriverSelections:
     def __init__(
         self,
         settings: DriverSettingsState,
-        contexts: DriverContextState,
     ) -> None:
         self._settings = settings
-        self._contexts = contexts
 
     def model_override(self, conversation_id: str) -> str | None:
         return self._settings._get_model_override(conversation_id)
-
-    def assist_override(self, conversation_id: str) -> bool | None:
-        return self._settings.assist_override(conversation_id)
-
-    def compose_model_key(self, conversation_id: str) -> str | None:
-        return self._contexts.compose_model_key(conversation_id)
 
 
 class RuntimeDriverPromptState:
@@ -74,7 +63,10 @@ class RuntimeDriverProbeSeams:
     ) -> LiveModelProbe:
         from . import runtime as runtime_module
 
-        return runtime_module._probe_live_model(base_url, api_key, model_id)
+        return cast(
+            LiveModelProbe,
+            runtime_module._probe_live_model(base_url, api_key, model_id),
+        )
 
     def do_live_model_probe(
         self,
@@ -84,7 +76,10 @@ class RuntimeDriverProbeSeams:
     ) -> LiveModelProbe:
         from . import runtime as runtime_module
 
-        return runtime_module._do_live_model_probe(base_url, api_key, model_id)
+        return cast(
+            LiveModelProbe,
+            runtime_module._do_live_model_probe(base_url, api_key, model_id),
+        )
 
     def model_label(self, model_id: str) -> str:
         from . import runtime as runtime_module

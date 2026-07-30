@@ -29,14 +29,12 @@ from disco.core.llm import (
     LLMProviderUnavailable,
     LLMTransientError,
     ModelEntry,
-    ModelExecutionPolicy,
     ModelRole,
     NoEligibleModel,
     Requirement,
     RouterConfig,
     RoutingDecision,
     SecretStore,
-    resolve_policy,
 )
 from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
 from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
@@ -84,10 +82,6 @@ class DriverSelections(Protocol):
     """The settings-owned inputs used for one conversation's driver."""
 
     def model_override(self, conversation_id: str) -> str | None: ...
-
-    def assist_override(self, conversation_id: str) -> bool | None: ...
-
-    def compose_model_key(self, conversation_id: str) -> str | None: ...
 
 
 class DriverPromptState(Protocol):
@@ -160,11 +154,7 @@ class DriverRuntime:
         skills_block = render_skills_for_prompt(self._skill_store.enabled(), surface=surface)
         flavor = "agent" if surface == "agent" else "build"
         workflow_active: Callable[[], bool] | None = None
-        if (
-            self._prompt_state.workflow_router_enabled()
-            and surface == "agent"
-            and conversation_id
-        ):
+        if self._prompt_state.workflow_router_enabled() and surface == "agent" and conversation_id:
             cid = conversation_id
 
             def _workflow_active() -> bool:
@@ -332,47 +322,6 @@ class DriverRuntime:
             default = None
         selected = default if any(model["id"] == default for model in models) else None
         return {"models": models, "default": selected}
-
-    def effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
-        override = self._effective_model_key(conversation_id)
-        config = self.config_now()
-        key = config.model_for(ModelRole.AGENT_DRIVER, override=override)
-        entry = config.models.get(key)
-        anchored = entry is not None and Requirement.ANCHORED_EDIT in entry.capabilities
-        return resolve_policy(
-            assist_override=self._selections.assist_override(conversation_id),
-            entry_tier=getattr(entry, "tier", None),
-            hosting_weak_default=False,
-            anchored_edit=anchored,
-        )
-
-    def effective_endpoint(
-        self,
-        conversation_id: str,
-    ) -> tuple[str, str, str | None] | None:
-        config = self.config_now()
-        key = config.model_for(
-            ModelRole.AGENT_DRIVER,
-            override=self._effective_model_key(conversation_id),
-        )
-        entry = config.models.get(key)
-        if entry is None or not entry.base_url:
-            return None
-        if not self._origin_approved(
-            entry.base_url,
-            f"model:{entry.provider}",
-            entry.api_key_env,
-        ):
-            return None
-        if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
-            return None
-        return (entry.base_url, entry.model_id, entry.api_key_env)
-
-    def _effective_model_key(self, conversation_id: str) -> str | None:
-        compose_key = self._selections.compose_model_key(conversation_id)
-        if compose_key is not None:
-            return compose_key
-        return self._selections.model_override(conversation_id)
 
     def _selected_entry(
         self,

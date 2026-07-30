@@ -14,6 +14,7 @@ class _FakeRuntime:
     def __init__(self, root: Path) -> None:
         self._project_store = ProjectStore(str(root))
         self._vector_store = DiskVectorStore(JsonSpaceStore(root).vectors_dir)
+        self._spaces = self
 
     def project_store(self) -> ProjectStore:
         return self._project_store

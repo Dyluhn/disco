@@ -57,7 +57,7 @@ def test_driver_models_exposes_pricing_mode_and_honest_free(tmp_path):
     # base_factory (no on-disk disco-config.json shadowing the test fixture).
     store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
     rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
-    rt._origin_approved = lambda *_args: True
+    rt._drivers._origin_approved = lambda *_args: True
     out = rt.driver_models()
     by_id = {m["id"]: m for m in out["models"]}
 
@@ -114,8 +114,8 @@ def test_driver_models_excludes_models_the_live_router_cannot_wire(tmp_path):
     )
     store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
     rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
-    rt._origin_approved = lambda url, *_args: "unapproved" not in url
-    rt._resolve_secret = lambda ref: "decrypted" if ref == "provider_ready" else None
+    rt._drivers._origin_approved = lambda url, *_args: "unapproved" not in url
+    rt._drivers._resolve_secret = lambda ref: "decrypted" if ref == "provider_ready" else None
 
     out = rt.driver_models()
 

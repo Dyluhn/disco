@@ -482,8 +482,8 @@ class TestConversationRuntimeDriverContextSeams:
         loop = rt._loop_for_resolved(cid, snapshot)
         assert loop._driver_context_window_value == 24576
         assert loop.agent._driver_context_window == 24576
-        assert rt._resolved_driver_contexts[cid] is snapshot
-        assert cid not in rt._resolved_context_for_compose
+        assert rt._driver_contexts.resolved_snapshot(cid) is snapshot
+        assert rt._driver_contexts.compose_snapshot(cid) is None
 
     @pytest.mark.asyncio
     async def test_deep_research_loop_and_agent_share_resolved_context(self) -> None:

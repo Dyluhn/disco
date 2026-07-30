@@ -269,7 +269,7 @@ async def test_connected_session_not_swept():
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
     rt._executors[cid] = fake_executor
-    rt._connections[cid] = 1  # simulate a live connection
+    rt._connections.on_connect(cid)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()

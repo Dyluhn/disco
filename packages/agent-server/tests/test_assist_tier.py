@@ -217,7 +217,7 @@ def test_root5_effective_driver_endpoint_honors_override():
     )
     config.model_for.return_value = "or-deepseek"
     config.models = {"or-deepseek": entry}
-    rt._origin_approved = MagicMock(return_value=True)
+    rt._settings._routing.origin_approved = MagicMock(return_value=True)
 
     ep = rt._effective_driver_endpoint("c1")
     assert ep == ("https://openrouter.ai/api/v1", "deepseek/deepseek-v4-pro", "OPENROUTER_API_KEY")

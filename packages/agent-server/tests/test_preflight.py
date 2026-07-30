@@ -95,7 +95,7 @@ async def test_preflight_driver_blocks_on_auth_error():
         async def complete(self, req, *, context=None):
             raise LLMAuthError("invalid api key", provider="x")
 
-    rt._router_now = lambda **kw: _DeadRouter()
+    rt._drivers.router = lambda **kw: _DeadRouter()
     reason = await rt._preflight_driver("c1")
     assert reason is not None
     assert "rejected the API key" in reason
@@ -110,7 +110,7 @@ async def test_preflight_driver_blocks_on_connect_error():
         async def complete(self, req, *, context=None):
             raise LLMTransientError("connection error: refused", provider="x")
 
-    rt._router_now = lambda **kw: _UnreachableRouter()
+    rt._drivers.router = lambda **kw: _UnreachableRouter()
     reason = await rt._preflight_driver("c1")
     assert reason is not None and "unreachable" in reason
 
@@ -133,7 +133,7 @@ async def test_preflight_driver_passes_and_caches_success(monkeypatch):
             self.calls += 1
 
     ok = _OkRouter()
-    rt._router_now = lambda **kw: ok
+    rt._drivers.router = lambda **kw: ok
     assert await rt._preflight_driver("c1") is None
     assert await rt._preflight_driver("c1") is None
     assert ok.calls == 1  # second call served from the short-TTL success cache
@@ -162,13 +162,13 @@ async def test_concurrent_cold_preflights_singleflight_per_model(monkeypatch):
             await asyncio.sleep(0.05)
 
     router = _SlowOkRouter()
-    rt._router_now = lambda **kw: router
+    rt._drivers.router = lambda **kw: router
 
     results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
 
     assert results == [None] * 6
     assert router.calls == 1
-    assert {key[0] for key in rt._driver_proven} == {f"c{i}" for i in range(6)}
+    assert {key[0] for key in rt._driver_preflight._proven} == {f"c{i}" for i in range(6)}
     # The creator's real DefaultLLMRouter records its own successful route in
     # production (this fake router has no sink). Every waiter receives one exact
     # synthetic record for the shared readiness verdict it consumed.
@@ -201,8 +201,8 @@ async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_t
             raise LLMAuthError("invalid api key", provider="x")
 
     router = _DeadRouter()
-    rt._router_now = lambda **kw: router
-    rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 0.01
+    rt._drivers.router = lambda **kw: router
+    rt._driver_preflight._SHARED_RESULT_TTL_S = 0.01
 
     results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
 
@@ -221,17 +221,17 @@ async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_t
 
     # The probe itself took longer than the sharing TTL, but the TTL begins at
     # completion: a trailing caller still consumes the just-finished verdict.
-    model_key = next(iter(rt._driver_preflight_inflight))
-    completed_task, completed_at = rt._driver_preflight_inflight[model_key]
+    model_key = next(iter(rt._driver_preflight._inflight))
+    completed_task, completed_at = rt._driver_preflight._inflight[model_key]
     assert completed_at is not None
     assert await rt._preflight_driver("trailing") is not None
     assert router.calls == 1
-    assert rt._driver_preflight_inflight[model_key] == (completed_task, completed_at)
+    assert rt._driver_preflight._inflight[model_key] == (completed_task, completed_at)
 
     # The shared failure is a burst result, not a sticky outage cache.
-    rt._driver_preflight_inflight[model_key] = (
+    rt._driver_preflight._inflight[model_key] = (
         completed_task,
-        completed_at - rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S - 1,
+        completed_at - rt._driver_preflight._SHARED_RESULT_TTL_S - 1,
     )
     assert await rt._preflight_driver("later") is not None
     assert router.calls == 2
@@ -240,18 +240,18 @@ async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_t
 async def test_shared_preflight_failure_expires_without_a_later_caller():
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._DRIVER_PREFLIGHT_SHARED_RESULT_TTL_S = 0.01
+    rt._driver_preflight._SHARED_RESULT_TTL_S = 0.01
 
     class _DeadRouter:
         async def complete(self, req, *, context=None):
             raise LLMAuthError("invalid api key", provider="x")
 
-    rt._router_now = lambda **kw: _DeadRouter()
+    rt._drivers.router = lambda **kw: _DeadRouter()
     assert await rt._preflight_driver("c1") is not None
-    assert rt._driver_preflight_inflight
+    assert rt._driver_preflight._inflight
 
     await asyncio.sleep(0.03)
-    assert rt._driver_preflight_inflight == {}
+    assert rt._driver_preflight._inflight == {}
 
 
 async def test_aclose_cancels_and_drains_orphaned_shared_preflight():
@@ -264,18 +264,18 @@ async def test_aclose_cancels_and_drains_orphaned_shared_preflight():
             started.set()
             await asyncio.sleep(60)
 
-    rt._router_now = lambda **kw: _SlowRouter()
+    rt._drivers.router = lambda **kw: _SlowRouter()
     waiter = asyncio.create_task(rt._preflight_driver("c1"))
     await started.wait()
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
 
-    shared_task = next(iter(rt._driver_preflight_inflight.values()))[0]
+    shared_task = next(iter(rt._driver_preflight._inflight.values()))[0]
     assert not shared_task.done()
     await rt.aclose()
     assert shared_task.done() and shared_task.cancelled()
-    assert rt._driver_preflight_inflight == {}
+    assert rt._driver_preflight._inflight == {}
 
 
 async def test_preflight_driver_is_wall_bounded_on_black_hole():
@@ -291,8 +291,8 @@ async def test_preflight_driver_is_wall_bounded_on_black_hole():
         async def complete(self, req, *, context=None):
             await asyncio.sleep(60)  # endpoint accepted but never answers
 
-    rt._router_now = lambda **kw: _BlackHoleRouter()
-    rt._DRIVER_PREFLIGHT_TIMEOUT_S = 0.1  # tiny bound for the test
+    rt._drivers.router = lambda **kw: _BlackHoleRouter()
+    rt._driver_preflight._TIMEOUT_S = 0.1  # tiny bound for the test
 
     t0 = time.monotonic()
     reason = await rt._preflight_driver("c1")
@@ -309,7 +309,7 @@ async def test_preflight_driver_retries_then_proceeds_on_transient_timeout():
     pre-flight retries and returns None (the run PROCEEDS, no terminal reason)."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)  # no injected router → real preflight path
-    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0  # keep the test fast
+    rt._driver_preflight._BACKOFF_S = 0.0  # keep the test fast
 
     class _FlakyRouter:
         def __init__(self):
@@ -322,7 +322,7 @@ async def test_preflight_driver_retries_then_proceeds_on_transient_timeout():
             return  # answered on the retry
 
     flaky = _FlakyRouter()
-    rt._router_now = lambda **kw: flaky
+    rt._drivers.router = lambda **kw: flaky
     assert await rt._preflight_driver("c1") is None  # proceeds, not terminal
     assert flaky.calls == 2  # one miss, then a successful re-probe
 
@@ -334,7 +334,7 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
     will surface a genuine error if the driver is truly down)."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
+    rt._driver_preflight._BACKOFF_S = 0.0
 
     class _SwitchRouter:
         def __init__(self):
@@ -348,14 +348,16 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
             return  # healthy
 
     router = _SwitchRouter()
-    rt._router_now = lambda **kw: router
+    rt._drivers.router = lambda **kw: router
 
     # First kick: the driver is healthy → THIS (conversation, role, model) is proven.
     assert await rt._preflight_driver("c1") is None
-    assert any(k[0] == "c1" and k[1] == ModelRole.AGENT_DRIVER for k in rt._driver_proven)
+    assert any(
+        k[0] == "c1" and k[1] == ModelRole.AGENT_DRIVER for k in rt._driver_preflight._proven
+    )
 
     # Simulate a later kick after the success cache's TTL has lapsed (30 turns in):
-    rt._driver_preflight_ok.clear()  # force a real re-probe
+    rt._driver_preflight._ok.clear()  # force a real re-probe
     router.fail = True  # the remote model is now transiently slow on every probe
 
     # Soft-degrade: a proven conversation PROCEEDS despite the transient timeout.
@@ -378,10 +380,10 @@ async def test_preflight_driver_never_soft_degrades_hard_auth_failure_after_succ
                 raise LLMAuthError("invalid api key", provider="x")
 
     router = _SwitchRouter()
-    rt._router_now = lambda **kw: router
+    rt._drivers.router = lambda **kw: router
     assert await rt._preflight_driver("c1") is None
 
-    rt._driver_preflight_ok.clear()
+    rt._driver_preflight._ok.clear()
     router.reject = True
     reason = await rt._preflight_driver("c1")
 
@@ -395,7 +397,7 @@ async def test_preflight_driver_still_terminal_when_genuinely_unreachable():
     after the bounded retries, not on the first miss, and not forever."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
+    rt._driver_preflight._BACKOFF_S = 0.0
 
     class _DeadRouter:
         def __init__(self):
@@ -406,12 +408,12 @@ async def test_preflight_driver_still_terminal_when_genuinely_unreachable():
             raise TimeoutError  # black hole: never answers
 
     dead = _DeadRouter()
-    rt._router_now = lambda **kw: dead
+    rt._drivers.router = lambda **kw: dead
     reason = await rt._preflight_driver("c2")  # never proven
     assert reason is not None
     assert "timed out" in reason and "unreachable" in reason
-    assert dead.calls == rt._DRIVER_PREFLIGHT_ATTEMPTS  # retried, still bounded
-    assert not any(k[0] == "c2" for k in rt._driver_proven)
+    assert dead.calls == rt._driver_preflight._ATTEMPTS  # retried, still bounded
+    assert not any(k[0] == "c2" for k in rt._driver_preflight._proven)
 
 
 async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
@@ -440,17 +442,17 @@ async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
 
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._DRIVER_PREFLIGHT_BACKOFF_S = 0.0
-    rt._config_store = _RoleStore()  # type: ignore[assignment]
+    rt._driver_preflight._BACKOFF_S = 0.0
+    rt._drivers._config_store = _RoleStore()  # type: ignore[assignment]
 
     # Driver A (AGENT_DRIVER / model-a) is healthy → proves THAT driver only.
     class _OkRouter:
         async def complete(self, req, *, context=None):
             return
 
-    rt._router_now = lambda **kw: _OkRouter()
+    rt._drivers.router = lambda **kw: _OkRouter()
     assert await rt._preflight_driver("c1", role=ModelRole.AGENT_DRIVER) is None
-    assert ("c1", ModelRole.AGENT_DRIVER, "model-a") in rt._driver_proven
+    assert ("c1", ModelRole.AGENT_DRIVER, "model-a") in rt._driver_preflight._proven
 
     # Driver B (RAG_ANSWERER / model-b) is genuinely unreachable in the SAME
     # conversation. The conversation is "proven" — but for a DIFFERENT driver — so
@@ -464,11 +466,15 @@ async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
             raise TimeoutError
 
     dead = _DeadRouter()
-    rt._router_now = lambda **kw: dead
+    rt._drivers.router = lambda **kw: dead
     reason = await rt._preflight_driver("c1", role=ModelRole.RAG_ANSWERER)
     assert reason is not None and "timed out" in reason and "unreachable" in reason
-    assert dead.calls == rt._DRIVER_PREFLIGHT_ATTEMPTS  # actually probed, not masked
-    assert ("c1", ModelRole.RAG_ANSWERER, "model-b") not in rt._driver_proven
+    assert dead.calls == rt._driver_preflight._ATTEMPTS  # actually probed, not masked
+    assert (
+        "c1",
+        ModelRole.RAG_ANSWERER,
+        "model-b",
+    ) not in rt._driver_preflight._proven
 
 
 async def test_deep_research_kick_blocks_on_dead_driver():

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import pytest
 from disco.agent_server import runtime as rt
+from disco.agent_server import runtime_model_probe as probe_mod
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +37,7 @@ def test_fresh_entry_is_served_from_cache(monkeypatch):
     seed_ts = 1000.0
     rt._LIVE_MODEL_PROBE_CACHE[base_url] = (cached, seed_ts)
 
-    monkeypatch.setattr(rt.time, "monotonic", lambda: seed_ts + 30.0)
+    monkeypatch.setattr(probe_mod.time, "monotonic", lambda: seed_ts + 30.0)
 
     calls = []
 
@@ -62,14 +63,14 @@ def test_stale_entry_triggers_reprobe(monkeypatch):
     rt._LIVE_MODEL_PROBE_CACHE[base_url] = (stale_value, seed_ts)
 
     now = seed_ts + 90.0
-    monkeypatch.setattr(rt.time, "monotonic", lambda: now)
+    monkeypatch.setattr(probe_mod.time, "monotonic", lambda: now)
 
     new_value = {"model_id": "hot-swapped", "n_ctx": 16384}
     calls = []
 
     def fake_probe(u, k):
         calls.append((u, k))
-        rt._LIVE_MODEL_PROBE_CACHE[u] = (new_value, rt.time.monotonic())
+        rt._LIVE_MODEL_PROBE_CACHE[u] = (new_value, probe_mod.time.monotonic())
         return new_value
 
     monkeypatch.setattr(rt, "_do_live_model_probe", fake_probe)
@@ -99,7 +100,7 @@ def test_ttl_boundary_exactly_at_limit_is_still_fresh(monkeypatch):
     seed_ts = 5000.0
     rt._LIVE_MODEL_PROBE_CACHE[base_url] = (cached, seed_ts)
 
-    monkeypatch.setattr(rt.time, "monotonic", lambda: seed_ts + 60.0)
+    monkeypatch.setattr(probe_mod.time, "monotonic", lambda: seed_ts + 60.0)
     monkeypatch.setattr(rt, "_do_live_model_probe", lambda u, k: pytest.fail("should not probe"))
     assert rt._probe_live_model(base_url, None) == cached
 
@@ -108,11 +109,11 @@ def test_ttl_boundary_exactly_at_limit_is_still_fresh(monkeypatch):
     def fake_probe(u, k):
         seen.append((u, k))
         fresh = {"model_id": "boundary-fresh", "n_ctx": 2048}
-        rt._LIVE_MODEL_PROBE_CACHE[u] = (fresh, rt.time.monotonic())
+        rt._LIVE_MODEL_PROBE_CACHE[u] = (fresh, probe_mod.time.monotonic())
         return fresh
 
     monkeypatch.setattr(rt, "_do_live_model_probe", fake_probe)
-    monkeypatch.setattr(rt.time, "monotonic", lambda: seed_ts + 60.001)
+    monkeypatch.setattr(probe_mod.time, "monotonic", lambda: seed_ts + 60.001)
 
     out = rt._probe_live_model(base_url, None)
     assert seen == [(base_url, None)]
