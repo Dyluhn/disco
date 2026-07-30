@@ -298,8 +298,65 @@ class _AgentLoopRuntimeCompatibility:
         return self._runtime._harvest_prose_plan(events)
 
 
-class AgentLoop(_AgentLoopRuntimeCompatibility):
+class AgentLoop:
     """[CONTRACT] The orchestrator and stable compatibility surface."""
+
+    _compat = _AgentLoopRuntimeCompatibility
+    _STREAMING_WRITE_TOOLS = _compat._STREAMING_WRITE_TOOLS
+    _STREAM_FLUSH_CHARS = _compat._STREAM_FLUSH_CHARS
+    _MEMORY_PATH = _compat._MEMORY_PATH
+    _LEGACY_MEMORY_PATH = _compat._LEGACY_MEMORY_PATH
+    _has_unprocessed_user_message = staticmethod(signals.has_unprocessed_user_message)
+    _current_agent_view_id = staticmethod(_compat._current_agent_view_id)
+    _plan_verification_predicates = staticmethod(_compat._plan_verification_predicates)
+    _assist = _compat._assist
+    _driver_context_window = _compat._driver_context_window
+    _build_stream_hook = _compat._build_stream_hook
+    _events = _compat._events
+    _prepare_executor = _compat._prepare_executor
+    _assert_current_agent_view = _compat._assert_current_agent_view
+    _event_by_id = _compat._event_by_id
+    _recent = _compat._recent
+    _workflow_router_phase_active = _compat._workflow_router_phase_active
+    _effective_mode = _compat._effective_mode
+    _reconcile_mode_from_events = _compat._reconcile_mode_from_events
+    _readonly_tool_names = _compat._readonly_tool_names
+    _tools_for_step = _compat._tools_for_step
+    _plan_from_args = _compat._plan_from_args
+    _alternatives_from_args = _compat._alternatives_from_args
+    _workspace_snapshot_message = _compat._workspace_snapshot_message
+    _recitation_signature = _compat._recitation_signature
+    _should_emit_recitation = _compat._should_emit_recitation
+    _gate_recitation = _compat._gate_recitation
+    _should_emit_reground = _compat._should_emit_reground
+    _maybe_emit_reground = _compat._maybe_emit_reground
+    _materialize_view = _compat._materialize_view
+    _materialize_current_view = _compat._materialize_current_view
+    _f8_shrink_file_write_args = _compat._f8_shrink_file_write_args
+    _hard_reset = _compat._hard_reset
+    _write_pmx_memory_fact = _compat._write_pmx_memory_fact
+    _execute_and_observe = _compat._execute_and_observe
+    _run_fanout = _compat._run_fanout
+    _maybe_emit_plan_step_done_condition_note = (
+        _compat._maybe_emit_plan_step_done_condition_note
+    )
+    _finish_dod_gate_passed = _compat._finish_dod_gate_passed
+    _stop_allowed = _compat._stop_allowed
+    _post_noop_valve = _compat._post_noop_valve
+    _maybe_apply_read_churn_valve = _compat._maybe_apply_read_churn_valve
+    _land_blocked = _compat._land_blocked
+    _maybe_synthesize_finish_after_actionless_pauses = (
+        _compat._maybe_synthesize_finish_after_actionless_pauses
+    )
+    _route_plan_approval_gate = _compat._route_plan_approval_gate
+    _harvest_prose_plan = _compat._harvest_prose_plan
+    _runtime: _LoopRuntime
+    _planning_gates: _PlanningGateController
+    _transition: _TransitionCoordinator
+    _conversation_controls: _ConversationControls
+    _plan_controls: _PlanApprovalController
+    _replanning: _ReplanningController
+    del _compat
 
     def __init__(
         self,
