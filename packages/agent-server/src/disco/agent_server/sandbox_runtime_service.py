@@ -140,6 +140,13 @@ class SandboxRuntimeService:
             return "process"
         return service_from_config(cfg).name
 
+    def backend_name(self) -> str | None:
+        """Return the active backend name without making a read path fatal."""
+        try:
+            return self._sandbox_service_now().name
+        except Exception:
+            return None
+
     async def probe_active_sandbox(self) -> tuple[bool, str, str]:
         """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
         agent-server, because this is the process that actually runs sandboxes (it owns
