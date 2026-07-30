@@ -30,13 +30,13 @@ from disco.core import (
     ConversationState,
     ConversationStatus,
     MessageEvent,
-    StatusEvent,
     active_verification_requirements_event,
 )
 from disco.core.appkit import BuildBrief
 from disco.core.verification import VerificationRequirementsDirective
 
 from ..build_messages import _build_brief_message, _context_message, _user_message
+from ..lifecycle_command_service import LifecycleCommandService
 from .base import KernelEvent
 
 if TYPE_CHECKING:
@@ -124,8 +124,8 @@ class DiscoKernel:
                     ):
                         await self._rt._store.append(
                             conversation_id,
-                            StatusEvent(
-                                status=ConversationStatus.RUNNING,
+                            LifecycleCommandService.build_status(
+                                ConversationStatus.RUNNING,
                                 detail="revision_steer_pending",
                             ),
                         )

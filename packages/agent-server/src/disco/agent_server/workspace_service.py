@@ -44,6 +44,7 @@ from disco.tools.projects import (
 )
 from disco.tools.sandbox._container import PREVIEW_PORT
 
+from .lifecycle_command_service import LifecycleCommandService
 from .workspace_commit import (
     CommittedWorkspaceView,
     WorkspaceCommitUnavailable,
@@ -631,8 +632,8 @@ class WorkspaceCoordinator:
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
         await self._rt._lifecycle.commit_finished_workspace(
             conversation_id,
-            StatusEvent(
-                status=ConversationStatus.FINISHED,
+            LifecycleCommandService.build_status(
+                ConversationStatus.FINISHED,
                 detail=f"host_revision:{operation}",
                 host_mutation_id=mutation_id,
             ),
@@ -658,8 +659,8 @@ class WorkspaceCoordinator:
         mutation_id = await self._host_mutation_authority(conversation_id, operation)
         await self._rt._lifecycle.commit_finished_host_mirror_locked(
             conversation_id,
-            StatusEvent(
-                status=ConversationStatus.FINISHED,
+            LifecycleCommandService.build_status(
+                ConversationStatus.FINISHED,
                 detail=f"host_mirror_revision:{operation}",
                 host_mutation_id=mutation_id,
             ),

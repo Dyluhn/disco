@@ -26,10 +26,9 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
-    StatusEvent,
-    current_workspace_agent_view_id,
-    latest_workspace_run_intent,
 )
+
+from .lifecycle_command_service import LifecycleCommandService
 
 # ---- F-3: conservative "stop, accept as-is" intent list ----------------------
 # Matched case-insensitively against the full (stripped) user text.
@@ -160,7 +159,12 @@ class ControlOps:
                 # the instruction and v1 run intent. A worker can therefore see
                 # either the old execution state or the complete planning
                 # ingress, never the new instruction under the old tool scope.
-                pending.append(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
+                pending.append(
+                    LifecycleCommandService.build_status(
+                        ConversationStatus.RUNNING,
+                        detail="planning",
+                    )
+                )
                 await self._rt._workspace.append_run_ingress_locked(
                     conversation_id,
                     pending,
@@ -231,16 +235,9 @@ class ControlOps:
         local worker happens to hold an in-memory generation counter.
         """
 
-        events = await self._rt._store.get_events(conversation_id)
-        latest_intent = latest_workspace_run_intent(events)
-        strict = latest_intent is not None and latest_intent.run_protocol_version == 1
-        if strict and latest_intent is not None:
-            return (
-                current_workspace_agent_view_id(events),
-                latest_intent.id,
-                True,
-            )
-        return None, None, False
+        return await self._rt._lifecycle_commands.resolve_current_authority(
+            conversation_id
+        )
 
     @staticmethod
     def _kill_authority_is_current(
@@ -249,21 +246,7 @@ class ControlOps:
     ) -> bool:
         """Revalidate a captured kill authority against the final fenced head."""
 
-        agent_view_id, run_intent_id, strict = authority
-        if not strict:
-            return True
-        if agent_view_id is None and run_intent_id is None:
-            return False
-        latest_intent = latest_workspace_run_intent(events)
-        if run_intent_id is not None and (
-            latest_intent is None or latest_intent.id != run_intent_id
-        ):
-            return False
-        current_view_id = current_workspace_agent_view_id(events)
-        if agent_view_id is not None:
-            return current_view_id == agent_view_id
-        # A post-capture winning view may belong to a peer and was never cancelled.
-        return current_view_id is None
+        return LifecycleCommandService.authority_is_current_for_events(events, authority)
 
     @staticmethod
     def _authority_already_killed(
@@ -271,22 +254,8 @@ class ControlOps:
         authority: tuple[str | None, str | None, bool],
     ) -> bool:
         """Return whether this exact durable run already landed IDLE/killed."""
-        latest_status = next(
-            (event for event in reversed(events) if isinstance(event, StatusEvent)),
-            None,
-        )
-        if (
-            latest_status is None
-            or latest_status.status is not ConversationStatus.IDLE
-            or latest_status.detail != "killed"
-        ):
-            return False
-        agent_view_id, run_intent_id, strict = authority
-        if not strict:
-            return True
-        if agent_view_id is not None:
-            return latest_status.agent_view_id == agent_view_id
-        return run_intent_id is not None and latest_status.run_intent_id == run_intent_id
+
+        return LifecycleCommandService.authority_already_killed(events, authority)
 
     async def _cancel_issued_task(self, conversation_id: str) -> None:
         """Cancel and drain only the task already validated by ``kill``."""
@@ -338,11 +307,10 @@ class ControlOps:
         if self._authority_already_killed(events, authority):
             return
         agent_view_id, run_intent_id, strict = authority
-        await self._rt._workspace.append_status_locked(
+        await self._rt._lifecycle_commands.append_status_locked(
             conversation_id,
-            StatusEvent(
-                source=EventSource.SYSTEM,
-                status=ConversationStatus.IDLE,
+            LifecycleCommandService.build_status(
+                ConversationStatus.IDLE,
                 detail="killed",
                 agent_view_id=agent_view_id if strict else None,
                 run_intent_id=(run_intent_id if strict and agent_view_id is None else None),
