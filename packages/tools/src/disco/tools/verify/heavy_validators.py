@@ -37,11 +37,45 @@ from .verification_validators._opc_integrity import (  # noqa: F401 — re-expor
     _ZIP_LOCAL_SIGNATURE,
     _ForbiddenXmlDeclaration,
     _member_stream_problem,
-    _opc_integrity_problems,
+    _OpcLimits,
     _relationship_xml_root,
 )
+from .verification_validators._opc_integrity import (
+    _opc_integrity_problems as _scan_opc_integrity,
+)
 from .verification_validators._pdf_render import validate_pdf_renders
-from .verification_validators._pptx_render import validate_pptx_renders
+from .verification_validators._pptx_render import (
+    validate_pptx_renders as _validate_pptx_renders,
+)
+
+
+def _current_opc_limits() -> _OpcLimits:
+    return _OpcLimits(
+        archive_bytes=_MAX_OPC_ARCHIVE_BYTES,
+        members=_MAX_OPC_MEMBERS,
+        member_bytes=_MAX_OPC_MEMBER_BYTES,
+        total_bytes=_MAX_OPC_TOTAL_BYTES,
+        compression_ratio=_MAX_OPC_COMPRESSION_RATIO,
+        relationship_bytes=_MAX_OPC_RELATIONSHIP_BYTES,
+        relationships=_MAX_OPC_RELATIONSHIPS,
+        target_chars=_MAX_OPC_TARGET_CHARS,
+        name_chars=_MAX_OPC_NAME_CHARS,
+        problems=_MAX_OPC_PROBLEMS,
+    )
+
+
+def _opc_integrity_problems(path: str) -> list[str]:
+    return _scan_opc_integrity(path, limits=_current_opc_limits())
+
+
+def validate_pptx_renders(
+    path: str, *, workdir: str | None = None
+) -> list[str]:
+    return _validate_pptx_renders(
+        path,
+        workdir=workdir,
+        opc_integrity=_opc_integrity_problems,
+    )
 
 __all__ = [
     "validate_pdf_renders",

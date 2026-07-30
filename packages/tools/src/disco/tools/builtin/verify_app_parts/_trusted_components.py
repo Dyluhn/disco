@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import shlex
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -28,6 +29,7 @@ from disco.core.trusted_components.lockfile import (
     dump_lock,
     parse_lock,
 )
+from disco.core.trusted_components.registry import TrustedComponentRegistry
 from disco.core.trusted_components.verify import (
     PROBE_TIMEOUT_S,
     ProbeVerdict,
@@ -38,9 +40,15 @@ from disco.core.trusted_components.verify import (
 
 from ...anatomy import ToolContext
 
+RegistryFactory = Callable[[], TrustedComponentRegistry]
+
 
 async def _fold_trusted_components(
-    ctx: ToolContext, verdict: dict[str, Any], *, probes_allowed: bool
+    ctx: ToolContext,
+    verdict: dict[str, Any],
+    *,
+    probes_allowed: bool,
+    registry_factory: RegistryFactory,
 ) -> dict[str, Any]:
     """WO-TC3 — append component_integrity/deps/probe checks to the W-45
     verdict. No lockfile → verdict unchanged (zero cost for ordinary builds).
@@ -82,7 +90,12 @@ async def _fold_trusted_components(
 
     try:
         return await _fold_checks(
-            ctx, verdict, lock, checks_out, probes_allowed=probes_allowed
+            ctx,
+            verdict,
+            lock,
+            checks_out,
+            probes_allowed=probes_allowed,
+            registry_factory=registry_factory,
         )
     except Exception as exc:  # noqa: BLE001 — a broken component verifier must
         # never silently PASS a build that carries a lockfile (fail-closed).
@@ -103,28 +116,10 @@ async def _fold_checks(
     checks_out: list[dict[str, str]],
     *,
     probes_allowed: bool,
+    registry_factory: RegistryFactory,
 ) -> dict[str, Any]:
-    sandbox = ctx.sandbox
-    assert sandbox is not None
-    # Read TrustedComponentRegistry through the facade so a test that
-    # monkeypatches verify_app.TrustedComponentRegistry is in effect.
-    from disco.tools.builtin import verify_app as _facade
-
-    registry = _facade.TrustedComponentRegistry.default()
-
-    file_bytes: dict[str, bytes | None] = {}
-    for name, entry in lock.components.items():
-        if entry.ejected:
-            continue
-        comp = registry.get(name, entry.version)
-        if comp is None:
-            continue  # verify() records the registry-version-missing eject
-        for relpath in comp.manifest.files:
-            target = install_path(name, relpath)
-            file_bytes[target] = (
-                await sandbox.read_file(target) if await sandbox.file_exists(target) else None
-            )
-
+    registry = registry_factory()
+    file_bytes = await _component_file_bytes(ctx, lock, registry)
     base_url = str(verdict.get("url") or "")
     run_probe = (
         _make_probe_runner(ctx, base_url, lock, registry)
@@ -138,35 +133,58 @@ async def _fold_checks(
         run_probe=run_probe,
         now_iso=datetime.now(UTC).isoformat(),
     )
+    await _persist_component_state(ctx, lock, result)
+    checks_out.extend(
+        {"name": c.name, "status": c.status, "evidence": c.evidence}
+        for c in result.checks
+    )
+    blocking = bool(result.failing) or (
+        probes_allowed and bool(result.skipped_probes)
+    )
+    if checks_out:
+        material = (
+            verdict.get("failure_fingerprint") or ""
+        ) + result.fingerprint_material()
+        verdict["failure_fingerprint"] = hashlib.sha256(
+            material.encode("utf-8")
+        ).hexdigest()[:16]
+    return _merge_component_checks(verdict, checks_out, blocking=blocking)
 
+
+async def _component_file_bytes(
+    ctx: ToolContext, lock: Any, registry: TrustedComponentRegistry
+) -> dict[str, bytes | None]:
+    sandbox = ctx.sandbox
+    assert sandbox is not None
+    file_bytes: dict[str, bytes | None] = {}
+    for name, entry in lock.components.items():
+        if entry.ejected:
+            continue
+        component = registry.get(name, entry.version)
+        if component is None:
+            continue
+        for relpath in component.manifest.files:
+            target = install_path(name, relpath)
+            file_bytes[target] = (
+                await sandbox.read_file(target)
+                if await sandbox.file_exists(target)
+                else None
+            )
+    return file_bytes
+
+
+async def _persist_component_state(ctx: ToolContext, lock: Any, result: Any) -> None:
     if result.newly_ejected and result.lock is not None:
         from disco.tools.builtin.files import _atomic_write
 
+        sandbox = ctx.sandbox
+        assert sandbox is not None
         await _atomic_write(sandbox, LOCKFILE_RELPATH, dump_lock(result.lock))
-    # Re-assert the eject banner for EVERY ejected component (idempotent), not
-    # only the newly-ejected ones. A banner removed by a revert-from-source or
-    # a failed reinstall would otherwise never come back — leaving an ejected
-    # component's GUIDE looking trusted, a false affordance. _append_eject_banner
-    # is a no-op when the banner is already present.
     banner_lock = result.lock if result.lock is not None else lock
     if banner_lock is not None:
-        for nm, entry in banner_lock.components.items():
+        for name, entry in banner_lock.components.items():
             if entry.ejected:
-                await _append_eject_banner(ctx, banner_lock, nm)
-
-    checks_out.extend(
-        {"name": c.name, "status": c.status, "evidence": c.evidence} for c in result.checks
-    )
-    # Skipped probes BLOCK on the finish-path verdict (fail-closed) whenever
-    # probes were supposed to be runnable; on a probes-not-allowed call the
-    # skip is honest and non-blocking (the render verdict already failed).
-    blocking = bool(result.failing) or (probes_allowed and bool(result.skipped_probes))
-    if checks_out:
-        material = (verdict.get("failure_fingerprint") or "") + result.fingerprint_material()
-        verdict["failure_fingerprint"] = hashlib.sha256(material.encode("utf-8")).hexdigest()[
-            :16
-        ]
-    return _merge_component_checks(verdict, checks_out, blocking=blocking)
+                await _append_eject_banner(ctx, banner_lock, name)
 
 
 def _merge_component_checks(

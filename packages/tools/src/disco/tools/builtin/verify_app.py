@@ -128,143 +128,173 @@ class VerifyWebAppTool:
     async def run(self, args: VerifyWebAppArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         try:
-            explicit = (args.url or "").strip()
-            if explicit:
-                # An agent-supplied url must pass the SAME backend-aware rule as
-                # auto-detect (Bug 7 explicit-url bypass): on a shared host it is only
-                # honored if it is the conversation's OWN served port — never a
-                # reserved control/UI port (8000/8800/5173) or a sibling's. Otherwise
-                # it is NOT this build's preview → not-serving/undetectable (→ honest
-                # path), never a false PASS against the wrong app.
-                if not await self._explicit_url_allowed(explicit, ctx):
-                    return self._rejected_explicit_outcome(explicit)
-                url = explicit
-            else:
-                url = await self._detect_preview_url(ctx)
+            url, rejected = await self._resolve_url(args, ctx)
+            if rejected is not None:
+                return rejected
             reachable, http_status = await self._probe_http(ctx, url)
-
             structured: dict[str, Any] | None = None
             if reachable:
-                # Server is up — drive the headless browser for the render/console/
-                # network evidence (REUSE the browser tool + its daemon capture).
-                browser_args = (
-                    BrowserArgs(
-                        action="navigate",
-                        url=url,
-                        viewport_width=390,
-                        viewport_height=844,
-                    )
-                    if args.medium == "mobile"
-                    else BrowserArgs(action="navigate", url=url)
+                structured, terminal = await self._collect_browser_evidence(
+                    args, ctx, url, http_status
                 )
-                browser_outcome = await BrowserTool().run(browser_args, ctx)
-                if browser_outcome.success and browser_outcome.structured:
-                    structured = browser_outcome.structured
-                    if args.medium == "game":
-                        structured = await self._capture_game_interaction(ctx, structured)
-                elif (browser_outcome.structured or {}).get("browser_unavailable"):
-                    # ROOT-3 — no browser daemon on this backend. The server IS
-                    # reachable (HTTP probe passed); we simply cannot run the
-                    # render/console checks here. Return a TERMINAL verdict the agent
-                    # treats as done-with-verification, NOT a misleading blank-render
-                    # DEGRADED that it would try to "fix" forever.
-                    unverifiable = {
-                        "verdict": "unverifiable",
-                        "passed": False,
-                        "url": url,
-                        "http_status": http_status,
-                        "browser_unavailable": True,
-                        "failure_fingerprint": "browser_unavailable",
-                        "summary": (
-                            f"server reachable at {url} (HTTP {http_status}); "
-                            f"{BROWSER_UNAVAILABLE_MSG}"
-                        ),
-                        "next_action": "",
-                    }
-                    startup_diagnostic = (browser_outcome.structured or {}).get(
-                        "startup_diagnostic"
-                    )
-                    if startup_diagnostic:
-                        unverifiable["startup_diagnostic"] = startup_diagnostic
-                    # WO-TC3: the render checks can't run here, but the component
-                    # checks CAN (integrity/deps need only bytes; probes are
-                    # HTTP-level and the server IS reachable) — never skip them.
-                    unverifiable = await self._fold_trusted_components(
-                        ctx, unverifiable, probes_allowed=True
-                    )
-                    return ToolOutcome(
-                        success=True,
-                        content=(
-                            "VERIFY_WEB_APP: " + ("UNVERIFIABLE (server reachable)") + "\n"
-                            f"url: {url}  http_status: {http_status}\n"
-                            f"summary: {unverifiable['summary']}"
-                            + (
-                                f"\nnext_action: {unverifiable['next_action']}"
-                                if unverifiable["next_action"]
-                                else ""
-                            )
-                        ),
-                        structured=unverifiable,
-                    )
-                else:
-                    # The HTTP server answered, but the render infrastructure did
-                    # not produce browser evidence.  ``structured=None`` is not an
-                    # empty DOM: feeding it to compute_verdict fabricated a
-                    # DEGRADED "blank page" finding and sent the model chasing its
-                    # healthy app.  Preserve the infrastructure failure as a failed
-                    # tool outcome, with an explicit machine-readable distinction.
-                    detail = (
-                        browser_outcome.error
-                        or browser_outcome.content
-                        or "browser returned no diagnostic"
-                    )
-                    return fail_outcome(
-                        (
-                            f"verify_web_app render probe failed after HTTP {http_status}: "
-                            f"{detail}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
-                        ),
-                        structured={
-                            "verdict": "unverifiable",
-                            "passed": False,
-                            "url": url,
-                            "http_status": http_status,
-                            "render_probe_failed": True,
-                            "browser_error": detail,
-                        },
-                    )
-
-            meaningful = self._meaningful(structured)
-            if args.medium == "game":
-                meaningful = meaningful or bool((structured or {}).get("canvas_count"))
-            verdict = compute_verdict(
-                url=url,
-                reachable=reachable,
-                http_status=http_status,
-                structured=structured,
-                meaningful=meaningful,
-            )
-            if args.medium == "game" and structured is not None:
-                verdict["game_interaction"] = structured.get("game_interaction") or {}
-            if args.medium != "web":
-                verdict["medium"] = args.medium
-            # WO-TC3: fold the trusted-component checks into THIS verdict — the
-            # finish gate consumes it, so components are enforced at every finish
-            # with zero gate changes. Probes only run against a reachable server.
-            verdict = await self._fold_trusted_components(ctx, verdict, probes_allowed=reachable)
-            return ToolOutcome(
-                success=True,  # the verdict ran; pass/fail lives in structured
-                content=_render(verdict),
-                structured=verdict,
+                if terminal is not None:
+                    return terminal
+            return await self._verdict_outcome(
+                args, ctx, url, reachable, http_status, structured
             )
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
             return fail_outcome(f"verify_web_app error: {e}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}")
+
+    async def _resolve_url(
+        self, args: VerifyWebAppArgs, ctx: ToolContext
+    ) -> tuple[str, ToolOutcome | None]:
+        explicit = (args.url or "").strip()
+        if not explicit:
+            return await self._detect_preview_url(ctx), None
+        # An agent-supplied URL must pass the same backend-aware ownership rule
+        # as auto-detection. A reserved or sibling port is never accepted.
+        if not await self._explicit_url_allowed(explicit, ctx):
+            return explicit, self._rejected_explicit_outcome(explicit)
+        return explicit, None
+
+    async def _collect_browser_evidence(
+        self,
+        args: VerifyWebAppArgs,
+        ctx: ToolContext,
+        url: str,
+        http_status: int,
+    ) -> tuple[dict[str, Any] | None, ToolOutcome | None]:
+        browser_outcome = await BrowserTool().run(self._browser_args(args, url), ctx)
+        if browser_outcome.success and browser_outcome.structured:
+            structured = browser_outcome.structured
+            if args.medium == "game":
+                structured = await self._capture_game_interaction(ctx, structured)
+            return structured, None
+        browser_details = browser_outcome.structured or {}
+        if browser_details.get("browser_unavailable"):
+            return None, await self._browser_unavailable_outcome(
+                ctx, url, http_status, browser_details
+            )
+        detail = (
+            browser_outcome.error
+            or browser_outcome.content
+            or "browser returned no diagnostic"
+        )
+        return None, self._render_probe_failure(url, http_status, detail)
+
+    @staticmethod
+    def _browser_args(args: VerifyWebAppArgs, url: str) -> BrowserArgs:
+        if args.medium == "mobile":
+            return BrowserArgs(
+                action="navigate",
+                url=url,
+                viewport_width=390,
+                viewport_height=844,
+            )
+        return BrowserArgs(action="navigate", url=url)
+
+    async def _browser_unavailable_outcome(
+        self,
+        ctx: ToolContext,
+        url: str,
+        http_status: int,
+        browser_details: dict[str, Any],
+    ) -> ToolOutcome:
+        unverifiable: dict[str, Any] = {
+            "verdict": "unverifiable",
+            "passed": False,
+            "url": url,
+            "http_status": http_status,
+            "browser_unavailable": True,
+            "failure_fingerprint": "browser_unavailable",
+            "summary": (
+                f"server reachable at {url} (HTTP {http_status}); "
+                f"{BROWSER_UNAVAILABLE_MSG}"
+            ),
+            "next_action": "",
+        }
+        startup_diagnostic = browser_details.get("startup_diagnostic")
+        if startup_diagnostic:
+            unverifiable["startup_diagnostic"] = startup_diagnostic
+        # Integrity/dependency/HTTP probes remain available without rendering.
+        unverifiable = await self._fold_trusted_components(
+            ctx, unverifiable, probes_allowed=True
+        )
+        return ToolOutcome(
+            success=True,
+            content=(
+                "VERIFY_WEB_APP: UNVERIFIABLE (server reachable)\n"
+                f"url: {url}  http_status: {http_status}\n"
+                f"summary: {unverifiable['summary']}"
+                + (
+                    f"\nnext_action: {unverifiable['next_action']}"
+                    if unverifiable["next_action"]
+                    else ""
+                )
+            ),
+            structured=unverifiable,
+        )
+
+    @staticmethod
+    def _render_probe_failure(url: str, http_status: int, detail: str) -> ToolOutcome:
+        return fail_outcome(
+            (
+                f"verify_web_app render probe failed after HTTP {http_status}: "
+                f"{detail}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
+            ),
+            structured={
+                "verdict": "unverifiable",
+                "passed": False,
+                "url": url,
+                "http_status": http_status,
+                "render_probe_failed": True,
+                "browser_error": detail,
+            },
+        )
+
+    async def _verdict_outcome(
+        self,
+        args: VerifyWebAppArgs,
+        ctx: ToolContext,
+        url: str,
+        reachable: bool,
+        http_status: int,
+        structured: dict[str, Any] | None,
+    ) -> ToolOutcome:
+        meaningful = self._meaningful(structured)
+        if args.medium == "game":
+            meaningful = meaningful or bool((structured or {}).get("canvas_count"))
+        verdict = compute_verdict(
+            url=url,
+            reachable=reachable,
+            http_status=http_status,
+            structured=structured,
+            meaningful=meaningful,
+        )
+        if args.medium == "game" and structured is not None:
+            verdict["game_interaction"] = structured.get("game_interaction") or {}
+        if args.medium != "web":
+            verdict["medium"] = args.medium
+        verdict = await self._fold_trusted_components(
+            ctx, verdict, probes_allowed=reachable
+        )
+        return ToolOutcome(
+            success=True,
+            content=_render(verdict),
+            structured=verdict,
+        )
 
     # ---- trusted-component folding (delegates to verify_app_parts._trusted_components) ----
 
     async def _fold_trusted_components(
         self, ctx: ToolContext, verdict: dict[str, Any], *, probes_allowed: bool
     ) -> dict[str, Any]:
-        return await _fold_trusted_components(ctx, verdict, probes_allowed=probes_allowed)
+        return await _fold_trusted_components(
+            ctx,
+            verdict,
+            probes_allowed=probes_allowed,
+            registry_factory=TrustedComponentRegistry.default,
+        )
 
     async def _fold_checks(
         self,
@@ -275,7 +305,14 @@ class VerifyWebAppTool:
         *,
         probes_allowed: bool,
     ) -> dict[str, Any]:
-        return await _fold_checks(ctx, verdict, lock, checks_out, probes_allowed=probes_allowed)
+        return await _fold_checks(
+            ctx,
+            verdict,
+            lock,
+            checks_out,
+            probes_allowed=probes_allowed,
+            registry_factory=TrustedComponentRegistry.default,
+        )
 
     @staticmethod
     def _merge_component_checks(

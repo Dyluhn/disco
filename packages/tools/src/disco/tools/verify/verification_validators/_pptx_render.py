@@ -30,6 +30,7 @@ import subprocess
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Callable
 
 from ._opc_integrity import _opc_integrity_problems
 
@@ -38,7 +39,12 @@ def _missing(tool: str) -> bool:
     return shutil.which(tool) is None
 
 
-def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]:
+def validate_pptx_renders(
+    path: str,
+    *,
+    workdir: str | None = None,
+    opc_integrity: Callable[[str], list[str]] = _opc_integrity_problems,
+) -> list[str]:
     """Render a ``.pptx`` to PDF with headless LibreOffice — proves the deck actually opens
     and lays out AS A PRESENTATION, then reuses the cheap PDF checks on the result.
 
@@ -65,7 +71,7 @@ def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]
     # The structural OPC pre-check needs no renderer, so it runs FIRST — corruption is
     # detected identically on the PR gate and the VM host, and a corrupt package never
     # depends on LibreOffice being present to be rejected.
-    structural = _opc_integrity_problems(path)
+    structural = opc_integrity(path)
     if structural:
         return structural
     # LibreOffice is deliberately permissive: corrupt/plaintext bytes carrying a .pptx
