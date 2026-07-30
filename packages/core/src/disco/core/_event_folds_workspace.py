@@ -374,7 +374,9 @@ class AgentViewProjection:
         return not stale
 
 
-def agent_view_consistent_events(events: Iterable[Event]) -> list[Event]:
+def agent_view_consistent_events[EventT: Event](
+    events: Iterable[EventT],
+) -> list[EventT]:
     """Keep audit history while quarantining output that lost a later view race."""
 
     projection = AgentViewProjection()

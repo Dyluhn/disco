@@ -76,7 +76,6 @@ from ._event_folds_workspace import (
     AgentViewProjection,
     _strict_workspace_actions_are_closed,
     _workspace_run_intent_state,
-    agent_view_consistent_events,
     current_workspace_agent_view_id,
     current_workspace_agent_view_seq,
     derive_final_workspace_fence,
@@ -222,6 +221,13 @@ Event = Annotated[
 # namespace to the sole canonical union once it exists.
 _platform_folds.Event = Event
 _workspace_folds.Event = Event
+
+
+def agent_view_consistent_events(events: Iterable[Event]) -> list[Event]:
+    """Keep audit history while quarantining output that lost a later view race."""
+
+    return _workspace_folds.agent_view_consistent_events(events)
+
 
 # Single shared validator/serializer for the union. Consumers parse arbitrary
 # event dicts (post-migration) through this; the `kind` field selects the
