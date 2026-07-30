@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b7d2cad9c433712965653a5875ad0eac443b3a80",
+  "source_identity": "6c4529bf4cc2385c2f7caac47b45d111565780e2",
   "collected": {
     "counts": {
-      "packages": 9832,
+      "packages": 9843,
       "harness": 1236,
       "integrations": 9,
       "tests": 328
     },
-    "total": 11405,
+    "total": 11416,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1866,6 +1866,14 @@
         "packages/agent-server/tests/test_preview_manifest_target.py::test_later_revision_and_historical_version_keep_their_own_entries",
         "packages/agent-server/tests/test_preview_manifest_target.py::test_missing_selected_entry_never_falls_back_and_traversal_stays_closed",
         "packages/agent-server/tests/test_preview_manifest_target.py::test_unchanged_finish_reuses_version_but_commits_latest_app_entry",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_runtime_accepts_the_exact_still_live_generation",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_new_committed_revision_revokes_the_stale_resource_binding",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_none_and_unavailable_states_never_fabricate_a_resource_url",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_owned_preview_sandbox_is_destroyed_exactly_once",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_rebinding_selection_keeps_one_canonical_authority",
+        "packages/agent-server/tests/test_preview_resource_contract.py::test_sealed_rebind_closes_old_resource_before_materializing_isolated_bytes",
         "packages/agent-server/tests/test_preview_wake.py::test_port_app_proxies_when_upstream_is_live",
         "packages/agent-server/tests/test_preview_wake.py::test_port_app_unknown_port_404_before_wake",
         "packages/agent-server/tests/test_preview_wake.py::test_port_app_user_port_calls_wake_for_preview",
@@ -9120,6 +9128,7 @@
         "packages/tools/tests/test_safe_write_file.py::test_syntax_introducing_write_rejected_no_change",
         "packages/tools/tests/test_sandbox.py::test_backend_swap_identical_results_process_vs_fake",
         "packages/tools/tests/test_sandbox.py::test_container_backend_kill_path_unchanged",
+        "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
         "packages/tools/tests/test_sandbox.py::test_file_round_trip_and_escape_rejection",
         "packages/tools/tests/test_sandbox.py::test_h342_bounded_shell_argv_pins_non_login_bash",
         "packages/tools/tests/test_sandbox.py::test_h342_process_shell_runs_bash_process_substitution",
@@ -9140,6 +9149,8 @@
         "packages/tools/tests/test_sandbox.py::test_process_shell_resolves_workspace_prefix",
         "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_path_built_from_a_shell_variable_resolves",
         "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_rewrite_rejects_traversal_escape",
+        "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+        "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds",
         "packages/tools/tests/test_sandbox.py::test_session_destroy_shuts_down_cached_kernel",
         "packages/tools/tests/test_sandbox.py::test_session_file_exists_delegates_to_instance",
         "packages/tools/tests/test_sandbox.py::test_session_no_hook_recreate_still_works",
@@ -11426,9 +11437,9 @@
     }
   },
   "mapping_static": {
-    "identity": "b7d2cad9c433712965653a5875ad0eac443b3a80",
-    "python_test_file_count": 767,
-    "python_static_test_id_count": 9298,
+    "identity": "6c4529bf4cc2385c2f7caac47b45d111565780e2",
+    "python_test_file_count": 771,
+    "python_static_test_id_count": 9309,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11490,6 +11501,9 @@
       "harness/tests/test_replay_runner.py",
       "harness/tests/test_sandbox_replay.py",
       "integrations/messaging/test_disco_bot.py",
+      "packages/agent-server/tests/_preview_manager_fakes.py",
+      "packages/agent-server/tests/_static_preview_capability_support.py",
+      "packages/agent-server/tests/_workspace_commit_fakes.py",
       "packages/agent-server/tests/conftest.py",
       "packages/agent-server/tests/export_track1_closeout/conftest.py",
       "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py",
@@ -11620,6 +11634,7 @@
       "packages/agent-server/tests/test_preview_lease_lifecycle.py",
       "packages/agent-server/tests/test_preview_manager.py",
       "packages/agent-server/tests/test_preview_manifest_target.py",
+      "packages/agent-server/tests/test_preview_resource_contract.py",
       "packages/agent-server/tests/test_preview_wake.py",
       "packages/agent-server/tests/test_probe_ttl.py",
       "packages/agent-server/tests/test_probes_route.py",
@@ -14595,6 +14610,14 @@
       "packages/agent-server/tests/test_preview_manifest_target.py::test_later_revision_and_historical_version_keep_their_own_entries",
       "packages/agent-server/tests/test_preview_manifest_target.py::test_missing_selected_entry_never_falls_back_and_traversal_stays_closed",
       "packages/agent-server/tests/test_preview_manifest_target.py::test_unchanged_finish_reuses_version_but_commits_latest_app_entry",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_runtime_accepts_the_exact_still_live_generation",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_new_committed_revision_revokes_the_stale_resource_binding",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_none_and_unavailable_states_never_fabricate_a_resource_url",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_owned_preview_sandbox_is_destroyed_exactly_once",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_rebinding_selection_keeps_one_canonical_authority",
+      "packages/agent-server/tests/test_preview_resource_contract.py::test_sealed_rebind_closes_old_resource_before_materializing_isolated_bytes",
       "packages/agent-server/tests/test_preview_wake.py::test_port_app_proxies_when_upstream_is_live",
       "packages/agent-server/tests/test_preview_wake.py::test_port_app_unknown_port_404_before_wake",
       "packages/agent-server/tests/test_preview_wake.py::test_port_app_user_port_calls_wake_for_preview",
@@ -20602,6 +20625,7 @@
       "packages/tools/tests/test_safe_write_file.py::test_syntax_introducing_write_rejected_no_change",
       "packages/tools/tests/test_sandbox.py::test_backend_swap_identical_results_process_vs_fake",
       "packages/tools/tests/test_sandbox.py::test_container_backend_kill_path_unchanged",
+      "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
       "packages/tools/tests/test_sandbox.py::test_file_round_trip_and_escape_rejection",
       "packages/tools/tests/test_sandbox.py::test_h342_bounded_shell_argv_pins_non_login_bash",
       "packages/tools/tests/test_sandbox.py::test_h342_process_shell_runs_bash_process_substitution",
@@ -20622,6 +20646,8 @@
       "packages/tools/tests/test_sandbox.py::test_process_shell_resolves_workspace_prefix",
       "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_path_built_from_a_shell_variable_resolves",
       "packages/tools/tests/test_sandbox.py::test_process_shell_workspace_rewrite_rejects_traversal_escape",
+      "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+      "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds",
       "packages/tools/tests/test_sandbox.py::test_session_destroy_shuts_down_cached_kernel",
       "packages/tools/tests/test_sandbox.py::test_session_file_exists_delegates_to_instance",
       "packages/tools/tests/test_sandbox.py::test_session_no_hook_recreate_still_works",
@@ -24067,13 +24093,6 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/agent-server/tests/test_preview_manager.py",
-        "line": 1651,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"kernel did not exhibit a TIME_WAIT ghost\")"
-      },
-      {
-        "framework": "pytest",
         "path": "packages/core/tests/test_records_primitive.py",
         "line": 172,
         "marker": "pytest.skip",
@@ -24127,6 +24146,13 @@
         "line": 255,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"zoneinfo not available\")"
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/agent-server/tests/_preview_manager_fakes.py",
+        "line": 257,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"kernel did not exhibit a TIME_WAIT ghost\")"
       },
       {
         "framework": "pytest",
@@ -26451,6 +26477,55 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-07-PREVIEW",
+      "root": "packages",
+      "source_identity_before": "b7d2cad9c433712965653a5875ad0eac443b3a80",
+      "source_identity_after": "6c4529bf4cc2385c2f7caac47b45d111565780e2",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9832,
+          "after_count": 9843,
+          "added_ids": [
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_runtime_accepts_the_exact_still_live_generation",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_new_committed_revision_revokes_the_stale_resource_binding",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_none_and_unavailable_states_never_fabricate_a_resource_url",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_owned_preview_sandbox_is_destroyed_exactly_once",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_rebinding_selection_keeps_one_canonical_authority",
+            "packages/agent-server/tests/test_preview_resource_contract.py::test_sealed_rebind_closes_old_resource_before_materializing_isolated_bytes",
+            "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
+            "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+            "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/_preview_manager_fakes.py",
+          "packages/agent-server/tests/_static_preview_capability_support.py",
+          "packages/agent-server/tests/_workspace_commit_fakes.py",
+          "packages/agent-server/tests/test_preview_resource_contract.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_owned_sandbox_destroy_keeps_resource_and_lease_owned",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_failed_process_termination_keeps_resource_owned_and_port_leased",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_finished_runtime_accepts_the_exact_still_live_generation",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_new_committed_revision_revokes_the_stale_resource_binding",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_none_and_unavailable_states_never_fabricate_a_resource_url",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_owned_preview_sandbox_is_destroyed_exactly_once",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_rebinding_selection_keeps_one_canonical_authority",
+          "packages/agent-server/tests/test_preview_resource_contract.py::test_sealed_rebind_closes_old_resource_before_materializing_isolated_bytes",
+          "packages/tools/tests/test_sandbox.py::test_container_destroy_failure_remains_retryable",
+          "packages/tools/tests/test_sandbox.py::test_process_termination_refuses_success_while_owned_pid_survives",
+          "packages/tools/tests/test_sandbox.py::test_session_destroy_retains_retryable_owners_until_teardown_succeeds"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
       }
     },
     {
