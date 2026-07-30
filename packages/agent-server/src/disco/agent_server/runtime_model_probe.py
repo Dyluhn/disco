@@ -1,25 +1,22 @@
-"""Live model-label + /props probe helpers — extracted from `runtime.py`.
+"""Live model identity and context-window probe ownership.
 
-Extracted from `runtime.py` (god-file decomposition, pure move). Two pure
-helpers — `_model_label` (string cleanup of a model_id for UI display) and
-`_do_live_model_probe` (the blocking llama.cpp /props probe that fills the
-shared cache `_probe_live_model` reads from) — moved here so the runtime
-god-file shrinks without changing any behavior. `_probe_live_model` itself
-stays in runtime.py: the probe tests (`test_live_probe_nonblocking`,
-`test_probe_ttl`) `monkeypatch.setattr(rt, "_do_live_model_probe", ...)` and
-then call `rt._probe_live_model(...)`, which resolves the patched name in
-runtime.py's module globals. The shared cache `_LIVE_MODEL_PROBE_CACHE` also
-stays in runtime.py for the same reason — the tests do `rt._LIVE_MODEL_PROBE_CACHE
-.clear()` / `[base_url] = ...` directly. The new module reaches it via a
-function-local import (late-bound) to avoid a circular-import error at module
-load time: runtime.py imports this module, so we cannot `from .runtime import
-_LIVE_MODEL_PROBE_CACHE` at the top here.
+This module owns both probe caches and the nonblocking cache/probe algorithm.
+``runtime.py`` re-exports the cache objects and supplies its probe-body alias to
+the thin compatibility wrapper, preserving the established monkeypatch seam
+without retaining probe policy in the composition facade.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
+from collections.abc import Callable
 from typing import Any
+
+_LIVE_MODEL_PROBE_CACHE: dict[str, tuple[dict[str, Any], float] | dict[str, Any]] = {}
+_PROBE_TTL_S: float = 60.0
+_LIVE_MODEL_PROBE_INFLIGHT: set[str] = set()
+_MODELS_CTX_CACHE: dict[str, tuple[dict[str, int], float]] = {}
 
 
 def _model_label(model_id: str) -> str:
@@ -45,8 +42,6 @@ def _do_live_model_probe(
         served from `_MODELS_CTX_CACHE` (keyed by base_url, looked up by model_id).
         It is NEVER folded into the base_url-keyed props cache: that would pin one
         model's window onto every model at the same base_url (the codex P1 bug)."""
-    from .runtime import _LIVE_MODEL_PROBE_CACHE  # late-bound: shared cache with _probe_live_model
-
     out: dict[str, Any] = {"model_id": None, "n_ctx": None}
     try:
         import httpx
@@ -107,8 +102,6 @@ def _models_context_length(base_url: str, api_key: str | None, model_id: str | N
     fetch is cached even when the map is empty / lacks this model (negative cache:
     MiniMax stops re-probing within the TTL); only a transport failure is left
     uncached so it self-heals. Never raises."""
-    from .runtime import _MODELS_CTX_CACHE, _PROBE_TTL_S  # late-bound: shared cache
-
     if not base_url or not model_id:
         return None
     cached = _MODELS_CTX_CACHE.get(base_url)
@@ -156,3 +149,102 @@ def _models_context_length(base_url: str, api_key: str | None, model_id: str | N
     if fetched:
         _MODELS_CTX_CACHE[base_url] = (cmap, time.monotonic())
     return cmap.get(model_id)
+
+
+def _probe_live_model(
+    base_url: str | None,
+    api_key: str | None = None,
+    model_id: str | None = None,
+    *,
+    probe_body: Callable[..., dict[str, Any]] = _do_live_model_probe,
+) -> dict[str, Any]:
+    """Return the cached live model identity/window without blocking an event loop."""
+    if not base_url:
+        return {"model_id": None, "n_ctx": None}
+
+    props = _fresh_props(base_url)
+    models_map = _fresh_model_windows(base_url, model_id)
+    cached_result = _cached_result(props, models_map, model_id)
+    if cached_result is not None:
+        return cached_result
+
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is None:
+        return _run_probe(probe_body, base_url, api_key, model_id)
+    _schedule_probe(running, probe_body, base_url, api_key, model_id)
+    return {"model_id": None, "n_ctx": None}
+
+
+def _fresh_props(base_url: str) -> dict[str, Any] | None:
+    cached = _LIVE_MODEL_PROBE_CACHE.get(base_url)
+    if cached is None:
+        return None
+    if isinstance(cached, tuple) and len(cached) == 2:
+        value, timestamp = cached
+        return value if (time.monotonic() - timestamp) <= _PROBE_TTL_S else None
+    return cached
+
+
+def _fresh_model_windows(
+    base_url: str,
+    model_id: str | None,
+) -> dict[str, int] | None:
+    if model_id is None:
+        return None
+    cached = _MODELS_CTX_CACHE.get(base_url)
+    if not (isinstance(cached, tuple) and len(cached) == 2):
+        return None
+    windows, timestamp = cached
+    return windows if (time.monotonic() - timestamp) <= _PROBE_TTL_S else None
+
+
+def _cached_result(
+    props: dict[str, Any] | None,
+    model_windows: dict[str, int] | None,
+    model_id: str | None,
+) -> dict[str, Any] | None:
+    if model_id is None:
+        return props
+    if (props is None or props.get("n_ctx") is None) and model_windows is None:
+        return None
+    n_ctx = props["n_ctx"] if props is not None else None
+    if n_ctx is None and model_windows is not None:
+        n_ctx = model_windows.get(model_id)
+    return {
+        "model_id": props["model_id"] if props is not None else None,
+        "n_ctx": n_ctx,
+    }
+
+
+def _run_probe(
+    probe_body: Callable[..., dict[str, Any]],
+    base_url: str,
+    api_key: str | None,
+    model_id: str | None,
+) -> dict[str, Any]:
+    if model_id is None:
+        return probe_body(base_url, api_key)
+    return probe_body(base_url, api_key, model_id)
+
+
+def _schedule_probe(
+    loop: asyncio.AbstractEventLoop,
+    probe_body: Callable[..., dict[str, Any]],
+    base_url: str,
+    api_key: str | None,
+    model_id: str | None,
+) -> None:
+    if base_url in _LIVE_MODEL_PROBE_INFLIGHT:
+        return
+    _LIVE_MODEL_PROBE_INFLIGHT.add(base_url)
+
+    def probe_then_clear() -> None:
+        try:
+            _run_probe(probe_body, base_url, api_key, model_id)
+        finally:
+            _LIVE_MODEL_PROBE_INFLIGHT.discard(base_url)
+
+    loop.run_in_executor(None, probe_then_clear)

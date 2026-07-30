@@ -184,7 +184,14 @@ from .mcp_manager import McpManager
 from .preview_manager import PreviewManager
 from .preview_service import PreviewService
 from .resume_service import ResumeService
-from .runtime_model_probe import _do_live_model_probe, _model_label
+from .runtime_model_probe import (
+    _LIVE_MODEL_PROBE_CACHE,
+    _MODELS_CTX_CACHE,
+    _PROBE_TTL_S,
+    _do_live_model_probe,
+    _model_label,
+)
+from .runtime_model_probe import _probe_live_model as _owned_probe_live_model
 from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
 from .security_live_verifier import make_security_live_verifier
@@ -620,131 +627,16 @@ from .sandbox_runtime_service import (  # noqa: E402
     effective_local_runtime as effective_local_runtime,
 )
 
-# Live model-server probe: derive the ACTUALLY-SERVED model name + context window
-# from the backend, rather than trusting the static ModelEntry — which drifts (a
-# config still saying "Qwen3.6-27B @131072" while llama.cpp serves gemma-4-E4B at
-# whatever -c it was launched with). Same ground-truth-over-declaration principle
-# as the build loop's live workspace snapshot: read the truth, don't assume it.
-# Best-effort + cached per base_url; ANY failure falls back to the static config.
-# Each entry is (result, monotonic_ts) so a model hot-swap (the driver is
-# restarted with a different served model / n_ctx) is re-probed once the
-# cached entry ages past _PROBE_TTL_S. Bare-dict entries are tolerated as a
-# legacy / test-only direct-set form and are always served fresh.
-_LIVE_MODEL_PROBE_CACHE: dict[str, tuple[dict[str, Any], float] | dict[str, Any]] = {}
-# 60s is long enough that an idle agent-server isn't re-probing on every
-# /models or /health hit, and short enough that a llama.cpp restart with a
-# different served model is picked up within a minute.
-_PROBE_TTL_S: float = 60.0
-# base_urls with a probe thread currently in flight — so N concurrent on-loop
-# callers (a /models + /health + first kick arriving together) schedule at most ONE
-# worker thread per url instead of one each.
-_LIVE_MODEL_PROBE_INFLIGHT: set[str] = set()
-# CW-1: MODEL-SPECIFIC context windows derived from the OpenAI-compatible /models
-# listing (OpenRouter `context_length`), kept SEPARATE from the base_url-keyed
-# _LIVE_MODEL_PROBE_CACHE: one /models fetch covers every model at a base_url, but
-# the value is per-model, so it is cached as a {model_id: context_length} MAP and
-# looked up by model_id. Same _PROBE_TTL_S + non-blocking off-loop fill as /props.
-# Written by _models_context_length (runtime_model_probe.py, via late-bound import).
-_MODELS_CTX_CACHE: dict[str, tuple[dict[str, int], float]] = {}
-
-
 def _probe_live_model(
     base_url: str | None, api_key: str | None = None, model_id: str | None = None
 ) -> dict[str, Any]:
-    """Return {"model_id": str|None, "n_ctx": int|None} for a llama.cpp /
-    OpenAI-compatible server, from cached probes. NEVER blocks a running event loop —
-    that was the North Star #25 wedge: /props (and now /models) can hang the full 2s
-    when the backend is slow/down, and this is reached from async routes (/models,
-    /health) AND from kick()'s synchronous loop composition, all on the loop. When a
-    loop is running, the blocking probe is offloaded to the default threadpool
-    (fire-and-forget — it fills the caches) and THIS call returns the static fallback;
-    the next call is served live from cache. Off the loop (CLI / worker thread) it
-    blocks directly. Best-effort: Nones on any miss → caller uses the static config.
-
-    Two cache sources (CW-1): the SERVER-WIDE /props n_ctx (base_url-keyed) and, when
-    /props yields no n_ctx and a `model_id` is given, the MODEL-SPECIFIC /models
-    context_length served from the separate `_MODELS_CTX_CACHE` map (looked up by
-    model_id — never pinned base_url-wide)."""
-    if not base_url:
-        return {"model_id": None, "n_ctx": None}
-
-    # Server-wide /props value (cached by base_url, TTL-guarded). `props` is the cached
-    # {model_id, n_ctx} dict if a FRESH entry exists, else None (miss/stale → re-probe).
-    props: dict[str, Any] | None = None
-    cached = _LIVE_MODEL_PROBE_CACHE.get(base_url)
-    if cached is not None:
-        # Canonical form: (result, monotonic_ts). Within _PROBE_TTL_S the cached value
-        # is served as-is. Past the TTL we treat it as a miss so a model hot-swap
-        # (driver restarted with a different served model / n_ctx) is observed within a
-        # minute (T6/E2).
-        if isinstance(cached, tuple) and len(cached) == 2:
-            value, ts = cached
-            if (time.monotonic() - ts) <= _PROBE_TTL_S:
-                props = value
-        else:
-            # Legacy / test-only direct-set: bare dict, no ts. Treat as fresh —
-            # preserves the existing non-blocking test that simulates a worker thread
-            # filling the cache directly.
-            props = cached
-
-    # Model-specific /models map (cached by base_url, TTL-guarded), looked up by
-    # model_id. A FRESH entry — even an empty map (negative cache: this backend's
-    # /models has no context_length, e.g. MiniMax) — is an answer and suppresses a
-    # re-probe within the TTL.
-    models_map: dict[str, int] | None = None
-    if model_id:
-        mcached = _MODELS_CTX_CACHE.get(base_url)
-        if isinstance(mcached, tuple) and len(mcached) == 2:
-            cmap, mts = mcached
-            if (time.monotonic() - mts) <= _PROBE_TTL_S:
-                models_map = cmap
-
-    if model_id:
-        # The window can come from EITHER source; if either cache is fresh we can
-        # answer (props n_ctx wins; else the model's /models context_length).
-        if (props is not None and props.get("n_ctx") is not None) or models_map is not None:
-            n_ctx = props["n_ctx"] if props is not None else None
-            if n_ctx is None and models_map is not None:
-                n_ctx = models_map.get(model_id)
-            return {
-                "model_id": props["model_id"] if props is not None else None,
-                "n_ctx": n_ctx,
-            }
-    elif props is not None:
-        return props
-
-    try:
-        running = asyncio.get_running_loop()
-    except RuntimeError:
-        running = None
-    if running is not None:
-        # Don't block the loop. Schedule ONE probe thread per base_url; concurrent
-        # callers that arrive before the cache fills skip (in-flight) rather than each
-        # spawning a redundant thread. The wrapper clears the in-flight marker in a
-        # finally, so a FAILED probe (cache stays empty) can be retried on a later
-        # call. The in-flight check runs only on the single-threaded loop, so the
-        # check-then-add is race-free; the worker thread only discards.
-        if base_url not in _LIVE_MODEL_PROBE_INFLIGHT:
-            _LIVE_MODEL_PROBE_INFLIGHT.add(base_url)
-
-            def _probe_then_clear(
-                u: str = base_url, k: str | None = api_key, mid: str | None = model_id
-            ) -> None:
-                try:
-                    # Pass model_id only when present so the legacy 2-arg probe
-                    # contract (existing monkeypatched test fakes) keeps working.
-                    if mid is None:
-                        _do_live_model_probe(u, k)
-                    else:
-                        _do_live_model_probe(u, k, mid)
-                finally:
-                    _LIVE_MODEL_PROBE_INFLIGHT.discard(u)
-
-            running.run_in_executor(None, _probe_then_clear)
-        return {"model_id": None, "n_ctx": None}
-    if model_id is None:
-        return _do_live_model_probe(base_url, api_key)
-    return _do_live_model_probe(base_url, api_key, model_id)
+    """Compatibility seam for callers and tests that import from ``runtime``."""
+    return _owned_probe_live_model(
+        base_url,
+        api_key,
+        model_id,
+        probe_body=_do_live_model_probe,
+    )
 
 
 class _NoToolExecutor:
