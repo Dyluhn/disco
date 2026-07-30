@@ -219,6 +219,35 @@ class SkillStore:
         )
 
 
+def _skill_in_scope(s: Skill, paths: list[str]) -> bool:
+    """Return True when an enabled skill should render its full body.
+
+    Unscoped skills always render in full (back-compat). A scoped skill (with a
+    `scope` glob) renders in full only when one of `paths` matches its glob.
+    """
+    import fnmatch
+
+    if not s.scope:
+        return True  # unscoped → always full
+    return any(fnmatch.fnmatch(p, s.scope) for p in paths)
+
+
+def _skill_header(s: Skill) -> str:
+    header = f"## Skill: {s.name}"
+    if s.description:
+        header += f"\n_{s.description}_"
+    return header
+
+
+def _skill_manifest_line(s: Skill) -> str:
+    line = f"  • {s.name}"
+    if s.description:
+        line += f" — {s.description}"
+    if s.scope:
+        line += f"  (applies to {s.scope})"
+    return line
+
+
 def render_skills_for_prompt(
     skills: list[Skill], *, surface: str | None = None, active_paths: list[str] | None = None
 ) -> str:
@@ -237,37 +266,22 @@ def render_skills_for_prompt(
     (back-compat). `active_paths` is the set of workspace paths the agent is
     currently touching; None/empty → only unscoped skills render in full.
     """
-    import fnmatch
-
     enabled = [s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)]
     if not enabled:
         return ""
     paths = active_paths or []
 
-    def in_scope(s: Skill) -> bool:
-        if not s.scope:
-            return True  # unscoped → always full
-        return any(fnmatch.fnmatch(p, s.scope) for p in paths)
-
-    full = [s for s in enabled if in_scope(s)]
-    manifest_only = [s for s in enabled if not in_scope(s)]
+    full = [s for s in enabled if _skill_in_scope(s, paths)]
+    manifest_only = [s for s in enabled if not _skill_in_scope(s, paths)]
 
     parts = [
         "The user has configured these SKILLS — reusable instructions you should "
         "follow when relevant to the task. Treat them as standing guidance:",
     ]
     for s in full:
-        header = f"## Skill: {s.name}"
-        if s.description:
-            header += f"\n_{s.description}_"
-        parts.append(f"{header}\n\n{s.body.strip()}")
+        parts.append(f"{_skill_header(s)}\n\n{s.body.strip()}")
     if manifest_only:
-        lines = [
-            f"  • {s.name}"
-            + (f" — {s.description}" if s.description else "")
-            + (f"  (applies to {s.scope})" if s.scope else "")
-            for s in manifest_only
-        ]
+        lines = [_skill_manifest_line(s) for s in manifest_only]
         parts.append(
             "Other skills available (their detail loads when you work on a matching "
             "file):\n" + "\n".join(lines)

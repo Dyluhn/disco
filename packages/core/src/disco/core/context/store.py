@@ -9,17 +9,76 @@ MISSING vs CORRUPT (the durability contract):
   • a file the FS refuses to read (absent) → SAFE DEFAULT (None / empty), no error;
   • a file that is PRESENT but unparseable → ``ContextRecoveryError`` on the direct
     read path, captured as a ``RecoveryNote`` (with safe default) in ``reconstruct``.
+
+The markdown, structured, and recovery collaborators live in the allowlisted
+private modules (``_store_markdown``, ``_store_structured``, ``_store_recovery``).
+This module keeps ``ArtifactMemoryStore`` with ``class ArtifactMemoryStore()``
+(no visible base class) and preserves its exact public method signatures.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import re
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict
 
+from ._store_markdown import (
+    read_design_direction_tokens as _read_tokens_fn,
+)
+from ._store_markdown import (
+    read_markdown_kind as _read_md_fn,
+)
+from ._store_markdown import (
+    write_design_direction_tokens as _write_tokens_fn,
+)
+from ._store_markdown import (
+    write_markdown_kind as _write_md_fn,
+)
+from ._store_markdown import (
+    write_summary as _write_summary_fn,
+)
+from ._store_recovery import reconstruct_ledger as _reconstruct_fn
+from ._store_structured import (
+    read_artifacts as _read_artifacts_fn,
+)
+from ._store_structured import (
+    read_comments as _read_comments_fn,
+)
+from ._store_structured import (
+    read_direct_edits as _read_edits_fn,
+)
+from ._store_structured import (
+    read_json_raw as _read_json_fn,
+)
+from ._store_structured import (
+    read_resources as _read_resources_fn,
+)
+from ._store_structured import (
+    read_source_priority as _read_sp_fn,
+)
+from ._store_structured import (
+    read_verifier_failures as _read_failures_fn,
+)
+from ._store_structured import (
+    record_artifacts as _record_artifacts_fn,
+)
+from ._store_structured import (
+    record_comments as _record_comments_fn,
+)
+from ._store_structured import (
+    record_direct_edits as _record_edits_fn,
+)
+from ._store_structured import (
+    record_resources as _record_resources_fn,
+)
+from ._store_structured import (
+    record_verifier_failures as _record_failures_fn,
+)
+from ._store_structured import (
+    write_source_priority as _write_sp_fn,
+)
 from .artifact_memory import ArtifactMemoryKind, ArtifactMemoryRef
 from .ledger import (
     ArtifactRecord,
@@ -30,10 +89,7 @@ from .ledger import (
 )
 from .source_priority import SourcePriority
 
-# --- Durable kind matrix (codified so it cannot silently drift) ----------------
-# 11 durable SINGLETONS (exactly one canonical file each). SUMMARY is intentionally
-# NOT here: it is a multi-instance, on-demand kind (per-resolved-range summaries
-# created in CXT-3, referenced by ArtifactMemoryRef.rel_path).
+# --- Durable kind matrix ---
 _MD_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
     {
         ArtifactMemoryKind.GOAL,
@@ -50,16 +106,10 @@ _JSON_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
         ArtifactMemoryKind.UNRESOLVED_COMMENTS,
         ArtifactMemoryKind.SOURCE_PRIORITY,
         ArtifactMemoryKind.VERIFIER_FAILURES,
-        ArtifactMemoryKind.ARTIFACT_MANIFEST,  # [REL-2a] per-artifact runtime manifest
+        ArtifactMemoryKind.ARTIFACT_MANIFEST,
     }
 )
 _SINGLETON_KINDS: frozenset[ArtifactMemoryKind] = _MD_KINDS | _JSON_KINDS
-
-_RESOURCE_ADAPTER = TypeAdapter(list[ResourceRef])
-_ARTIFACT_ADAPTER = TypeAdapter(list[ArtifactRecord])  # [REL-2a] per-artifact runtime manifest
-_DIRECT_EDIT_ADAPTER = TypeAdapter(list[DirectEditRef])
-_FAILURE_ADAPTER = TypeAdapter(list[VerifierFailureRef])
-_COMMENTS_ADAPTER = TypeAdapter(list[str])
 
 
 @runtime_checkable
@@ -102,12 +152,6 @@ class ReconstructResult(BaseModel):
 class ArtifactMemoryStore:
     """Reads/writes the durable ``.disco/context/*`` files over a WorkspaceFS."""
 
-    # [REL-2a] Per-conversation manifest mutation locks. The store is constructed FRESH at each call
-    # site (finish/engine/context_memory), so a per-INSTANCE lock would not mutually-exclude the
-    # concurrent writers of one cid's artifact_manifest (the observe fold runs OUTSIDE the loop
-    # _lock; edge writers run in API handlers). This class-level dict, keyed by conversation_id,
-    # gives cross-instance per-cid exclusion within the single agent-server event loop. (Codex-
-    # approved placement: core can't reach the runtime lock — layering — and the store is per-call.)
     _manifest_locks: ClassVar[dict[str, asyncio.Lock]] = {}
 
     def __init__(self, fs: WorkspaceFS, *, base: str = ".disco/context") -> None:
@@ -115,9 +159,6 @@ class ArtifactMemoryStore:
         self._base = base.rstrip("/")
 
     def _manifest_lock(self) -> asyncio.Lock:
-        """The asyncio.Lock guarding artifact_manifest RMW for THIS store's conversation. Keyed by
-        the fs's conversation_id (empty string for non-build/test paths — they share one lock,
-        which is harmless since they don't contend)."""
         cid = str(getattr(self._fs, "conversation_id", "") or "")
         lock = self._manifest_locks.get(cid)
         if lock is None:
@@ -126,9 +167,6 @@ class ArtifactMemoryStore:
         return lock
 
     async def upsert_artifact(self, record: ArtifactRecord) -> ArtifactMemoryRef:
-        """[REL-2a] Insert-or-replace one ArtifactRecord (matched by `path`) in the per-artifact
-        manifest, as an atomic read-modify-write UNDER the per-cid lock so two concurrent writers
-        can never lose each other's update. Returns the manifest ref."""
         async with self._manifest_lock():
             current = list(await self.read_artifacts())
             replaced = False
@@ -141,7 +179,6 @@ class ArtifactMemoryStore:
                 current.append(record)
             return await self.record_artifacts(tuple(current))
 
-    # --- paths -----------------------------------------------------------------
     def path_for(self, kind: ArtifactMemoryKind) -> str:
         if kind not in _SINGLETON_KINDS:
             raise ValueError(f"{kind.value} is not a durable singleton kind")
@@ -152,215 +189,43 @@ class ArtifactMemoryStore:
     def _ref(kind: ArtifactMemoryKind, rel_path: str) -> ArtifactMemoryRef:
         return ArtifactMemoryRef(kind=kind, rel_path=rel_path)
 
-    # --- low-level read --------------------------------------------------------
     async def _read_opt(self, path: str) -> bytes | None:
-        """Return file bytes, or None if the file is absent/unreadable (the FS
-        raises on a missing path; that is treated as 'absent' → safe default)."""
         try:
             return await self._fs.read_file(path)
         except Exception:
             return None
 
-    # --- markdown (narrative) kinds -------------------------------------------
-    async def write_markdown(self, kind: ArtifactMemoryKind, text: str) -> ArtifactMemoryRef:
-        if kind not in _MD_KINDS:
-            raise ValueError(f"{kind.value} is not a markdown kind")
-        path = self.path_for(kind)
-        body = text if text.endswith("\n") else text + "\n"
-        await self._fs.write_file(path, body.encode("utf-8"))
-        return self._ref(kind, path)
-
-    async def read_markdown(self, kind: ArtifactMemoryKind) -> str | None:
-        if kind not in _MD_KINDS:
-            raise ValueError(f"{kind.value} is not a markdown kind")
-        data = await self._read_opt(self.path_for(kind))
-        if data is None:
-            return None
-        text = data.decode("utf-8", errors="replace").rstrip("\n")
-        return text or None
-
-    async def write_goal(self, text: str) -> ArtifactMemoryRef:
-        return await self.write_markdown(ArtifactMemoryKind.GOAL, text)
-
-    async def read_goal(self) -> str | None:
-        return await self.read_markdown(ArtifactMemoryKind.GOAL)
-
-    async def seed_todo(self, markdown: str) -> ArtifactMemoryRef:
-        return await self.write_markdown(ArtifactMemoryKind.TODO, markdown)
-
-    async def read_todo(self) -> str | None:
-        return await self.read_markdown(ArtifactMemoryKind.TODO)
-
-    async def write_design_direction(self, markdown: str) -> ArtifactMemoryRef:
-        return await self.write_markdown(ArtifactMemoryKind.DESIGN_DIRECTION, markdown)
-
-    async def read_design_direction(self) -> str | None:
-        return await self.read_markdown(ArtifactMemoryKind.DESIGN_DIRECTION)
-
-    async def write_design_direction_tokens(self, css: str) -> ArtifactMemoryRef:
-        """Write the mechanical tokens.css emitted from the committed direction next
-        to ``design_direction.md`` (``.disco/context/direction_tokens.css``). Advisory
-        companion artifact — NOT a durable singleton kind — so the model can import
-        ready-made CSS variables instead of hand-picking values."""
-        path = f"{self._base}/direction_tokens.css"
-        body = css if css.endswith("\n") else css + "\n"
-        await self._fs.write_file(path, body.encode("utf-8"))
-        return self._ref(ArtifactMemoryKind.DESIGN_DIRECTION, path)
-
-    async def read_design_direction_tokens(self) -> str | None:
-        """Return the committed direction's mechanical CSS companion, if present."""
-
-        data = await self._read_opt(f"{self._base}/direction_tokens.css")
-        if data is None:
-            return None
-        text = data.decode("utf-8", errors="replace")
-        return text if text else None
-
-    async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
-        """Write a per-range durable summary under ``.disco/context/summary``."""
-        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", range_id).strip("._")
-        if not safe_id:
-            raise ValueError("range_id must contain at least one safe path character")
-        path = f"{self._base}/summary/{safe_id}.md"
-        body = summary if summary.endswith("\n") else summary + "\n"
-        await self._fs.write_file(path, body.encode("utf-8"))
-        return self._ref(ArtifactMemoryKind.SUMMARY, path)
-
-    # --- json (structured) kinds ----------------------------------------------
     async def _write_json(self, kind: ArtifactMemoryKind, payload: object) -> ArtifactMemoryRef:
         path = self.path_for(kind)
         body = json.dumps(payload, indent=2) + "\n"
         await self._fs.write_file(path, body.encode("utf-8"))
         return self._ref(kind, path)
 
+    # --- core markdown/json methods (direct defs) ------------------------------
+    async def write_markdown(self, kind: ArtifactMemoryKind, text: str) -> ArtifactMemoryRef:
+        return await _write_md_fn(self._fs, kind, text, _MD_KINDS, self.path_for, self._ref)
+
+    async def read_markdown(self, kind: ArtifactMemoryKind) -> str | None:
+        return await _read_md_fn(kind, _MD_KINDS, self.path_for, self._read_opt)
+
     async def read_json_raw(self, kind: ArtifactMemoryKind) -> object | None:
-        """Parsed JSON, None if absent, ContextRecoveryError if present-but-corrupt."""
-        if kind not in _JSON_KINDS:
-            raise ValueError(f"{kind.value} is not a json kind")
-        path = self.path_for(kind)
-        data = await self._read_opt(path)
-        if data is None:
-            return None
-        try:
-            return json.loads(data)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ContextRecoveryError(kind, path, f"invalid JSON: {exc}") from exc
+        return await _read_json_fn(
+            kind, _JSON_KINDS, self.path_for, self._read_opt, ContextRecoveryError
+        )
 
     async def record_resources(self, resources: tuple[ResourceRef, ...]) -> ArtifactMemoryRef:
-        return await self._write_json(
-            ArtifactMemoryKind.RESOURCE_MANIFEST, [r.model_dump(mode="json") for r in resources]
-        )
+        return await _record_resources_fn(resources, self._write_json)
 
     async def read_resources(self) -> tuple[ResourceRef, ...]:
-        raw = await self.read_json_raw(ArtifactMemoryKind.RESOURCE_MANIFEST)
-        if raw is None:
-            return ()
-        try:
-            return tuple(_RESOURCE_ADAPTER.validate_python(raw))
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.RESOURCE_MANIFEST,
-                self.path_for(ArtifactMemoryKind.RESOURCE_MANIFEST),
-                f"schema mismatch: {exc}",
-            ) from exc
+        return await _read_resources_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
 
     async def record_artifacts(self, artifacts: tuple[ArtifactRecord, ...]) -> ArtifactMemoryRef:
-        """[REL-2a] Persist the full per-artifact runtime manifest. The caller does the
-        read-modify-write upsert UNDER the per-cid manifest lock (the file write here is atomic
-        per-file via _write_json's tmp+rename, but the RMW guard is the caller's lock)."""
-        return await self._write_json(
-            ArtifactMemoryKind.ARTIFACT_MANIFEST, [a.model_dump(mode="json") for a in artifacts]
-        )
+        return await _record_artifacts_fn(artifacts, self._write_json)
 
     async def read_artifacts(self) -> tuple[ArtifactRecord, ...]:
-        raw = await self.read_json_raw(ArtifactMemoryKind.ARTIFACT_MANIFEST)
-        if raw is None:
-            return ()
-        try:
-            return tuple(_ARTIFACT_ADAPTER.validate_python(raw))
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.ARTIFACT_MANIFEST,
-                self.path_for(ArtifactMemoryKind.ARTIFACT_MANIFEST),
-                f"schema mismatch: {exc}",
-            ) from exc
+        return await _read_artifacts_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
 
-    async def record_direct_edits(self, edits: tuple[DirectEditRef, ...]) -> ArtifactMemoryRef:
-        return await self._write_json(
-            ArtifactMemoryKind.DIRECT_EDITS, [e.model_dump(mode="json") for e in edits]
-        )
-
-    async def read_direct_edits(self) -> tuple[DirectEditRef, ...]:
-        raw = await self.read_json_raw(ArtifactMemoryKind.DIRECT_EDITS)
-        if raw is None:
-            return ()
-        try:
-            return tuple(_DIRECT_EDIT_ADAPTER.validate_python(raw))
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.DIRECT_EDITS,
-                self.path_for(ArtifactMemoryKind.DIRECT_EDITS),
-                f"schema mismatch: {exc}",
-            ) from exc
-
-    async def record_verifier_failures(
-        self, failures: tuple[VerifierFailureRef, ...]
-    ) -> ArtifactMemoryRef:
-        return await self._write_json(
-            ArtifactMemoryKind.VERIFIER_FAILURES, [f.model_dump(mode="json") for f in failures]
-        )
-
-    async def read_verifier_failures(self) -> tuple[VerifierFailureRef, ...]:
-        raw = await self.read_json_raw(ArtifactMemoryKind.VERIFIER_FAILURES)
-        if raw is None:
-            return ()
-        try:
-            return tuple(_FAILURE_ADAPTER.validate_python(raw))
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.VERIFIER_FAILURES,
-                self.path_for(ArtifactMemoryKind.VERIFIER_FAILURES),
-                f"schema mismatch: {exc}",
-            ) from exc
-
-    async def record_comments(self, comments: tuple[str, ...]) -> ArtifactMemoryRef:
-        return await self._write_json(ArtifactMemoryKind.UNRESOLVED_COMMENTS, list(comments))
-
-    async def read_comments(self) -> tuple[str, ...]:
-        raw = await self.read_json_raw(ArtifactMemoryKind.UNRESOLVED_COMMENTS)
-        if raw is None:
-            return ()
-        try:
-            return tuple(_COMMENTS_ADAPTER.validate_python(raw))
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.UNRESOLVED_COMMENTS,
-                self.path_for(ArtifactMemoryKind.UNRESOLVED_COMMENTS),
-                f"schema mismatch: {exc}",
-            ) from exc
-
-    async def write_source_priority(self, sp: SourcePriority) -> ArtifactMemoryRef:
-        return await self._write_json(
-            ArtifactMemoryKind.SOURCE_PRIORITY, sp.model_dump(mode="json")
-        )
-
-    async def read_source_priority(self) -> SourcePriority:
-        raw = await self.read_json_raw(ArtifactMemoryKind.SOURCE_PRIORITY)
-        if raw is None:
-            return SourcePriority.default()
-        try:
-            return SourcePriority.model_validate(raw)
-        except ValidationError as exc:
-            raise ContextRecoveryError(
-                ArtifactMemoryKind.SOURCE_PRIORITY,
-                self.path_for(ArtifactMemoryKind.SOURCE_PRIORITY),
-                f"schema mismatch: {exc}",
-            ) from exc
-
-    # --- lifecycle -------------------------------------------------------------
     async def ensure_initialized(self) -> None:
-        """Create any of the 11 durable singleton files that are absent, with safe
-        defaults. Existing files are left untouched."""
         for kind in sorted(_MD_KINDS, key=lambda k: k.value):
             if await self._read_opt(self.path_for(kind)) is None:
                 await self.write_markdown(kind, "")
@@ -375,72 +240,127 @@ class ArtifactMemoryStore:
         if await self._read_opt(self.path_for(ArtifactMemoryKind.SOURCE_PRIORITY)) is None:
             await self.write_source_priority(SourcePriority.default())
         if await self._read_opt(self.path_for(ArtifactMemoryKind.ARTIFACT_MANIFEST)) is None:
-            await self.record_artifacts(())  # [REL-2a]
+            await self.record_artifacts(())
 
     async def reconstruct(
         self, conversation_id: str, workspace_root: str | None = None
     ) -> ReconstructResult:
-        """Rebuild a ContextLedger from the durable files. Corrupt files degrade to
-        a safe default + a RecoveryNote; absent files are silently the default."""
-        notes: list[RecoveryNote] = []
-
-        async def _safe_failures() -> tuple[VerifierFailureRef, ...]:
-            try:
-                return await self.read_verifier_failures()
-            except ContextRecoveryError as exc:
-                notes.append(RecoveryNote(kind=exc.kind, rel_path=exc.rel_path, detail=exc.detail))
-                return ()
-
-        async def _safe_resources() -> tuple[ResourceRef, ...]:
-            try:
-                return await self.read_resources()
-            except ContextRecoveryError as exc:
-                notes.append(RecoveryNote(kind=exc.kind, rel_path=exc.rel_path, detail=exc.detail))
-                return ()
-
-        async def _safe_edits() -> tuple[DirectEditRef, ...]:
-            try:
-                return await self.read_direct_edits()
-            except ContextRecoveryError as exc:
-                notes.append(RecoveryNote(kind=exc.kind, rel_path=exc.rel_path, detail=exc.detail))
-                return ()
-
-        async def _safe_comments() -> tuple[str, ...]:
-            try:
-                return await self.read_comments()
-            except ContextRecoveryError as exc:
-                notes.append(RecoveryNote(kind=exc.kind, rel_path=exc.rel_path, detail=exc.detail))
-                return ()
-
-        goal = await self.read_goal()
-        todo = await self.read_todo()
-        failures = await _safe_failures()
-        resources = await _safe_resources()
-        edits = await _safe_edits()
-        comments = await _safe_comments()
-
-        # decisions/assumptions have no scalar ledger field — they reconstruct as
-        # recoverable refs the assembler (CXT-4) can surface.
-        retained: list[ArtifactMemoryRef] = []
-        for kind in (ArtifactMemoryKind.DECISIONS, ArtifactMemoryKind.ASSUMPTIONS):
-            if await self.read_markdown(kind) is not None:
-                retained.append(self._ref(kind, self.path_for(kind)))
-
-        todo_ref = (
-            self._ref(ArtifactMemoryKind.TODO, self.path_for(ArtifactMemoryKind.TODO))
-            if todo is not None
-            else None
+        return await _reconstruct_fn(
+            self,
+            conversation_id,
+            workspace_root,
+            recovery_error_cls=ContextRecoveryError,
+            reconstruct_result_cls=ReconstructResult,
+            recovery_note_cls=RecoveryNote,
         )
 
-        ledger = ContextLedger(
-            conversation_id=conversation_id,
-            workspace_root=workspace_root,
-            active_goal=goal,
-            todo_ref=todo_ref,
-            retained_refs=tuple(retained),
-            latest_verifier_failures=failures,
-            unresolved_comments=comments,
-            direct_edits=edits,
-            resource_manifest=resources,
-        )
-        return ReconstructResult(ledger=ledger, recovery_errors=tuple(notes))
+    # --- convenience methods (TYPE_CHECKING stubs + runtime bindings) ----------
+    if TYPE_CHECKING:
+
+        async def write_goal(self, text: str) -> ArtifactMemoryRef: ...
+        async def read_goal(self) -> str | None: ...
+        async def seed_todo(self, markdown: str) -> ArtifactMemoryRef: ...
+        async def read_todo(self) -> str | None: ...
+        async def write_design_direction(self, markdown: str) -> ArtifactMemoryRef: ...
+        async def read_design_direction(self) -> str | None: ...
+        async def write_design_direction_tokens(self, css: str) -> ArtifactMemoryRef: ...
+        async def read_design_direction_tokens(self) -> str | None: ...
+        async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef: ...
+        async def record_direct_edits(
+            self, edits: tuple[DirectEditRef, ...]
+        ) -> ArtifactMemoryRef: ...
+        async def read_direct_edits(self) -> tuple[DirectEditRef, ...]: ...
+        async def record_verifier_failures(
+            self, failures: tuple[VerifierFailureRef, ...]
+        ) -> ArtifactMemoryRef: ...
+        async def read_verifier_failures(self) -> tuple[VerifierFailureRef, ...]: ...
+        async def record_comments(self, comments: tuple[str, ...]) -> ArtifactMemoryRef: ...
+        async def read_comments(self) -> tuple[str, ...]: ...
+        async def write_source_priority(self, sp: SourcePriority) -> ArtifactMemoryRef: ...
+        async def read_source_priority(self) -> SourcePriority: ...
+    else:
+
+        async def _write_goal(self, text: str) -> ArtifactMemoryRef:
+            return await self.write_markdown(ArtifactMemoryKind.GOAL, text)
+
+        write_goal = _write_goal
+
+        async def _read_goal(self) -> str | None:
+            return await self.read_markdown(ArtifactMemoryKind.GOAL)
+
+        read_goal = _read_goal
+
+        async def _seed_todo(self, markdown: str) -> ArtifactMemoryRef:
+            return await self.write_markdown(ArtifactMemoryKind.TODO, markdown)
+
+        seed_todo = _seed_todo
+
+        async def _read_todo(self) -> str | None:
+            return await self.read_markdown(ArtifactMemoryKind.TODO)
+
+        read_todo = _read_todo
+
+        async def _write_design_direction(self, markdown: str) -> ArtifactMemoryRef:
+            return await self.write_markdown(ArtifactMemoryKind.DESIGN_DIRECTION, markdown)
+
+        write_design_direction = _write_design_direction
+
+        async def _read_design_direction(self) -> str | None:
+            return await self.read_markdown(ArtifactMemoryKind.DESIGN_DIRECTION)
+
+        read_design_direction = _read_design_direction
+
+        async def _write_ddt(self, css: str) -> ArtifactMemoryRef:
+            return await _write_tokens_fn(self._fs, self._base, css, self._ref)
+
+        write_design_direction_tokens = _write_ddt
+
+        async def _read_ddt(self) -> str | None:
+            return await _read_tokens_fn(self._base, self._read_opt)
+
+        read_design_direction_tokens = _read_ddt
+
+        async def _write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
+            return await _write_summary_fn(self._fs, self._base, range_id, summary, self._ref)
+
+        write_summary = _write_summary
+
+        async def _record_de(self, edits: tuple[DirectEditRef, ...]) -> ArtifactMemoryRef:
+            return await _record_edits_fn(edits, self._write_json)
+
+        record_direct_edits = _record_de
+
+        async def _read_de(self) -> tuple[DirectEditRef, ...]:
+            return await _read_edits_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
+
+        read_direct_edits = _read_de
+
+        async def _record_vf(self, failures: tuple[VerifierFailureRef, ...]) -> ArtifactMemoryRef:
+            return await _record_failures_fn(failures, self._write_json)
+
+        record_verifier_failures = _record_vf
+
+        async def _read_vf(self) -> tuple[VerifierFailureRef, ...]:
+            return await _read_failures_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
+
+        read_verifier_failures = _read_vf
+
+        async def _record_c(self, comments: tuple[str, ...]) -> ArtifactMemoryRef:
+            return await _record_comments_fn(comments, self._write_json)
+
+        record_comments = _record_c
+
+        async def _read_c(self) -> tuple[str, ...]:
+            return await _read_comments_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
+
+        read_comments = _read_c
+
+        async def _write_sp(self, sp: SourcePriority) -> ArtifactMemoryRef:
+            return await _write_sp_fn(sp, self._write_json)
+
+        write_source_priority = _write_sp
+
+        async def _read_sp(self) -> SourcePriority:
+            return await _read_sp_fn(self.read_json_raw, self.path_for, ContextRecoveryError)
+
+        read_source_priority = _read_sp

@@ -19,7 +19,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 from collections.abc import Callable, Mapping
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -190,6 +190,62 @@ async def probe_all_vision_with_approvals(
     return results
 
 
+def _model_purpose(provider: str) -> str:
+    return f"model:{provider or 'unknown'}"
+
+
+def _provider_origin_approved(
+    base_url: str,
+    subject: str,
+    api_key_env: str | None,
+    approved: Callable[[str, str, str | None], bool],
+    *,
+    purpose: str,
+) -> bool:
+    """Return True only when origin and secret-ref are operator-approved."""
+    if not approved(base_url, purpose, api_key_env):
+        _LOG.warning("%s origin is not operator-approved; skipping", subject)
+        return False
+    if not secret_ref_allowed_for_origin(api_key_env, base_url):
+        _LOG.warning("%s secret_ref is not allowed for this origin; skipping", subject)
+        return False
+    return True
+
+
+def _build_role_fallback_provider(
+    fallback: Any,
+    *,
+    secret_store: SecretStore,
+    approved: Callable[[str, str, str | None], bool],
+    enable_thinking: bool | None,
+) -> tuple[str, ModelProvider] | None:
+    """Build the role-fallback provider entry, or None if disabled/skipped."""
+    if not (fallback.enabled and fallback.base_url.strip()):
+        return None
+    base_url = fallback.base_url.strip()
+    api_key_env = fallback.api_key_env.strip()
+    if not _provider_origin_approved(
+        base_url,
+        "role fallback",
+        api_key_env,
+        approved,
+        purpose="role_fallback",
+    ):
+        return None
+    api_key = resolve_provider_secret(api_key_env, secret_store)
+    if api_key_env and not api_key:
+        _LOG.warning("role fallback secret_ref is not decryptable; skipping")
+        return None
+    provider = OpenAIProvider(
+        base_url,
+        name="role_fallback",
+        api_key=api_key,
+        capabilities=frozenset({Requirement.JSON_MODE}),
+        enable_thinking=enable_thinking,
+    )
+    return (ROLE_FALLBACK_PROVIDER_KEY, provider)
+
+
 def build_providers(
     config: RouterConfig,
     *,
@@ -209,14 +265,13 @@ def build_providers(
         if entry.base_url is None or entry.provider in providers:
             continue
         purpose = _model_purpose(entry.provider)
-        if not approved(entry.base_url, purpose, entry.api_key_env):
-            _LOG.warning("provider %s origin is not operator-approved; skipping", entry.provider)
-            continue
-        if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
-            _LOG.warning(
-                "provider %s secret_ref is not allowed for this origin; skipping",
-                entry.provider,
-            )
+        if not _provider_origin_approved(
+            entry.base_url,
+            f"provider {entry.provider}",
+            entry.api_key_env,
+            approved,
+            purpose=purpose,
+        ):
             continue
         # advisory capability union across all models on this endpoint
         caps = set().union(
@@ -233,29 +288,13 @@ def build_providers(
             capabilities=caps,
             enable_thinking=enable_thinking,
         )
-    fallback = config.role_fallback
-    if fallback.enabled and fallback.base_url.strip():
-        if not approved(fallback.base_url.strip(), "role_fallback", fallback.api_key_env.strip()):
-            _LOG.warning("role fallback origin is not operator-approved; skipping")
-            return providers
-        if not secret_ref_allowed_for_origin(
-            fallback.api_key_env.strip(), fallback.base_url.strip()
-        ):
-            _LOG.warning("role fallback secret_ref is not allowed for this origin; skipping")
-            return providers
-        api_key = resolve_provider_secret(fallback.api_key_env.strip(), secret_store)
-        if fallback.api_key_env.strip() and not api_key:
-            _LOG.warning("role fallback secret_ref is not decryptable; skipping")
-            return providers
-        providers[ROLE_FALLBACK_PROVIDER_KEY] = OpenAIProvider(
-            fallback.base_url.strip(),
-            name="role_fallback",
-            api_key=api_key,
-            capabilities=frozenset({Requirement.JSON_MODE}),
-            enable_thinking=enable_thinking,
-        )
+    fallback_pair = _build_role_fallback_provider(
+        config.role_fallback,
+        secret_store=secret_store,
+        approved=approved,
+        enable_thinking=enable_thinking,
+    )
+    if fallback_pair is not None:
+        key, provider = fallback_pair
+        providers[key] = provider
     return providers
-
-
-def _model_purpose(provider: str) -> str:
-    return f"model:{provider or 'unknown'}"

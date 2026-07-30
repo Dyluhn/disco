@@ -95,6 +95,40 @@ def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start <= b_end and b_start <= a_end
 
 
+def _range_already_covered(s: int, t: int, ranges: list[tuple[int, int]]) -> bool:
+    """True when [s, t] overlaps any range in ``ranges``."""
+    return any(_overlaps(s, t, a, b) for a, b in ranges)
+
+
+def _compactable_resolved_event(
+    ev: ContextResolvedEvent,
+    *,
+    summaries: dict[str, str],
+    protected_seqs: frozenset[int],
+    already: list[tuple[int, int]],
+    emitted: list[tuple[int, int]],
+) -> str | None:
+    """Return the durable summary if ``ev`` may be compacted now, else None.
+
+    Encodes the four compaction preconditions:
+      1. a non-empty summary exists for its range_id (durability precondition);
+      2. its [start, end] does not overlap any protected seq;
+      3. its range is not already covered by an existing CondensationEvent nor
+         by a range emitted earlier in this pass;
+    """
+    summary = summaries.get(ev.range_id)
+    if not summary:  # (1) durability precondition
+        return None
+    s, t = ev.forgotten_start_seq, ev.forgotten_end_seq
+    if any(s <= ps <= t for ps in protected_seqs):  # (2) protected seqs
+        return None
+    if _range_already_covered(s, t, already):  # (3a) already forgotten
+        return None
+    if _range_already_covered(s, t, emitted):  # (3b) overlap within this pass
+        return None
+    return summary
+
+
 def context_compact_if_needed(
     events: Sequence[Event],
     policy: CompactionPolicy,
@@ -136,16 +170,16 @@ def context_compact_if_needed(
     out: list[CondensationEvent] = []
     emitted: list[tuple[int, int]] = []
     for ev in sorted(pending, key=lambda e: (e.forgotten_start_seq, e.range_id)):
+        summary = _compactable_resolved_event(
+            ev,
+            summaries=summaries,
+            protected_seqs=protected_seqs,
+            already=already,
+            emitted=emitted,
+        )
+        if summary is None:
+            continue
         s, t = ev.forgotten_start_seq, ev.forgotten_end_seq
-        summary = summaries.get(ev.range_id)
-        if not summary:  # (1) durability precondition
-            continue
-        if any(s <= ps <= t for ps in protected_seqs):  # (2) protected seqs
-            continue
-        if any(_overlaps(s, t, a, b) for a, b in already):  # (3a) already forgotten
-            continue
-        if any(_overlaps(s, t, a, b) for a, b in emitted):  # (3b) overlap within this pass
-            continue
         out.append(
             CondensationEvent(
                 forgotten_start_seq=s, forgotten_end_seq=t, summary=summary, reason="request"

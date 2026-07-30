@@ -1,171 +1,20 @@
-"""Per-run driver model context-window resolution.
+"""Per-run driver model context-window resolution — compatibility facade.
 
-A ``DriverContextResolver`` probes a live model server once per
-(base_url, model_id) (singleflight bounded), resolves a positive
-context_window, and returns a frozen ``ResolvedDriverContext`` that the
-runtime threads through router, condenser, file-read caps, executor, and
-``AgentLoop`` composition.
+The generic implementation lives in ``disco.core.driver_context`` (target-
+neutral Core). This module re-exports the public symbols so existing import
+paths under ``disco.agent_server.driver_context`` remain stable.
 """
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from disco.core.driver_context import (
+    DriverContextResolutionError,
+    DriverContextResolver,
+    ResolvedDriverContext,
+)
 
-
-class DriverContextResolutionError(Exception):
-    """A positive driver context window could not be determined."""
-
-    def __init__(self, model_key: str, provider: str, reason: str) -> None:
-        self.model_key = model_key
-        self.provider = provider
-        self.reason = reason
-        super().__init__(f"Driver '{model_key}' ({provider}): {reason}")
-
-
-@dataclass(frozen=True)
-class ResolvedDriverContext:
-    """An immutable snapshot of a single run's effective driver model and its
-    resolved context window.
-
-    All fields are log-safe — no secrets, keys, or request bodies.
-    """
-
-    model_key: str
-    provider: str
-    model_id: str
-    context_window: int
-    source: str
-    resolved_at: datetime
-
-    def __post_init__(self) -> None:
-        if type(self.context_window) is not int or self.context_window <= 0:
-            raise ValueError(f"context_window must be positive, got {self.context_window}")
-
-
-class DriverContextResolver:
-    """Resolve a model's context window with singleflight-bounded live probing.
-
-    Only one probe runs per (base_url, model_id) at a time. Every caller has
-    its own bounded wait over the shielded shared probe, so one timeout or
-    cancellation cannot cancel the work or strand another caller. Clean-up is
-    identity-safe: a done-callback removes the task only when ``_in_flight``
-    still holds the same task object.
-    """
-
-    def __init__(self, timeout_s: float = 5.0) -> None:
-        self._timeout_s = timeout_s
-        self._in_flight: dict[tuple[str, str], asyncio.Task[dict[str, Any]]] = {}
-        self._lock = asyncio.Lock()
-
-    # ------------------------------------------------------------------
-    # public
-    # ------------------------------------------------------------------
-
-    async def resolve(
-        self,
-        model_key: str,
-        entry: Any,  # ModelEntry
-        probe: Callable[[], Awaitable[dict[str, Any]]] | None,
-        unavailable_source: str | None,
-    ) -> ResolvedDriverContext:
-        configured_window: int = entry.context_window
-
-        if probe is None:
-            if configured_window <= 0:
-                raise DriverContextResolutionError(
-                    model_key=model_key,
-                    provider=entry.provider,
-                    reason=(
-                        "no probe is available and the configured context_window "
-                        f"is non-positive ({configured_window})"
-                    ),
-                )
-            source = (
-                unavailable_source if unavailable_source is not None else "configured_unavailable"
-            )
-            return self._make_context(model_key, entry, configured_window, source)
-
-        base_url: str = getattr(entry, "base_url", None) or ""
-        model_id: str = entry.model_id
-        key = (base_url, model_id)
-
-        async with self._lock:
-            shared = self._in_flight.get(key)
-            if shared is None or shared.done():
-                if shared is not None:
-                    del self._in_flight[key]
-                shared = asyncio.ensure_future(probe())
-                self._in_flight[key] = shared
-                shared.add_done_callback(lambda t, _k=key: self._cleanup(_k, t))
-
-        try:
-            probe_result = await asyncio.wait_for(asyncio.shield(shared), timeout=self._timeout_s)
-        except TimeoutError:
-            return self._fallback_configured(
-                model_key, entry, configured_window, "configured_timeout"
-            )
-        except Exception:  # noqa: BLE001 — any probe error deteriorates gracefully
-            return self._fallback_configured(
-                model_key, entry, configured_window, "configured_error"
-            )
-
-        n_ctx: Any = probe_result.get("n_ctx", 0) if isinstance(probe_result, dict) else 0
-        if type(n_ctx) is int and n_ctx > 0:
-            return self._make_context(model_key, entry, n_ctx, "live")
-
-        probe_miss = "n_ctx" not in probe_result if isinstance(probe_result, dict) else True
-        zero_miss = type(n_ctx) is int and n_ctx == 0
-        return self._fallback_configured(
-            model_key,
-            entry,
-            configured_window,
-            "configured_miss" if probe_miss or zero_miss else "configured_error",
-        )
-
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
-
-    def _make_context(
-        self,
-        model_key: str,
-        entry: Any,
-        window: int,
-        source: str,
-    ) -> ResolvedDriverContext:
-        return ResolvedDriverContext(
-            model_key=model_key,
-            provider=entry.provider,
-            model_id=entry.model_id,
-            context_window=window,
-            source=source,
-            resolved_at=datetime.now(UTC),
-        )
-
-    def _fallback_configured(
-        self,
-        model_key: str,
-        entry: Any,
-        configured_window: int,
-        source: str,
-    ) -> ResolvedDriverContext:
-        if configured_window <= 0:
-            raise DriverContextResolutionError(
-                model_key=model_key,
-                provider=entry.provider,
-                reason=(
-                    f"probe yielded no positive n_ctx ({source}) and the configured "
-                    f"context_window is non-positive ({configured_window})"
-                ),
-            )
-        return self._make_context(model_key, entry, configured_window, source)
-
-    def _cleanup(self, key: tuple[str, str], task: asyncio.Task[Any]) -> None:
-        """Identity-safe done-callback: remove only the exact task that completed."""
-        current = self._in_flight.get(key)
-        if current is task:
-            del self._in_flight[key]
+__all__ = [
+    "DriverContextResolutionError",
+    "DriverContextResolver",
+    "ResolvedDriverContext",
+]

@@ -31,7 +31,8 @@ unaffected.
 
 from __future__ import annotations
 
-import asyncio
+# Compatibility facade: retry constants remain historical monkeypatch seams.
+# ruff: noqa: F401
 import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -40,6 +41,17 @@ from typing import Literal, Protocol, cast, runtime_checkable
 from pydantic import BaseModel, ConfigDict
 
 from ..events import LLMMessage
+from ._router_execution import (
+    _AUTH_RETRY_DELAY_S,
+    _MAX_ATTEMPTS,
+    _ROLE_FALLBACK_MAX_ATTEMPTS,
+)
+from ._router_execution import (
+    execute_complete as _execute_complete,
+)
+from ._router_execution import (
+    execute_stream_complete as _execute_stream_complete,
+)
 from .config import ROLE_FALLBACK_PROVIDER_KEY, ModelEntry, RouterConfig
 from .errors import (
     BudgetExceeded,
@@ -68,12 +80,6 @@ from .types import (
     StreamChunk,
 )
 
-# Cap on same-model transient retries within a single call. The loop's
-# max_iterations ceiling (event contract) is the ultimate backstop. v1.2: this is
-# pure resilience (retry the SAME assigned model), never model escalation.
-_MAX_ATTEMPTS = 5
-_ROLE_FALLBACK_MAX_ATTEMPTS = 2
-_AUTH_RETRY_DELAY_S = 2.0
 _LOG = logging.getLogger(__name__)
 
 # The routing paths. v1.2 emits "pinned"/"manual"; "local"/"overflow" are kept in
@@ -423,93 +429,23 @@ class DefaultLLMRouter:
         self._enforce_hard_budget(req, entry, path, ctx)
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
         provider = self._provider_for(entry)
-        model_id = entry.model_id
-        provider_name = entry.provider
-        active_path = path
-        active_reason = reason
-        active_triggers = list(overflow_triggers)
-        max_attempts = _MAX_ATTEMPTS
-        used_fallback = False
-        auth_retry_used = False
-
-        attempt = 1
-        while True:
-            try:
-                resp = await provider.complete(exec_req, model=model_id)
-            except LLMAuthError as exc:
-                if not auth_retry_used:
-                    auth_retry_used = True
-                    _LOG.warning("transient auth failure, retrying once: %s", exc)
-                    await asyncio.sleep(_AUTH_RETRY_DELAY_S)
-                    attempt += 1
-                    continue
-                self._record_failure(
-                    req,
-                    entry,
-                    active_path,
-                    active_reason,
-                    exc,
-                    chosen_model=model_id,
-                    provider_name=provider_name,
-                )
-                raise
-            except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
-                # Terminal: no retry, no escalation. Emit one decision, propagate.
-                self._record_failure(
-                    req,
-                    entry,
-                    active_path,
-                    active_reason,
-                    exc,
-                    chosen_model=model_id,
-                    provider_name=provider_name,
-                )
-                raise
-            except LLMTransientError:
-                if attempt >= max_attempts:
-                    fallback = (
-                        None
-                        if used_fallback
-                        else self._role_fallback_target(
-                            req.profile.role,
-                            requirements=self._effective_requirements(req),
-                        )
-                    )
-                    if fallback is not None:
-                        provider, model_id = fallback
-                        provider_name = provider.name
-                        active_path = "role_fallback"
-                        active_reason = f"role_fallback after {entry.model_id}"
-                        active_triggers = [f"original_model:{entry.model_id}"]
-                        max_attempts = _ROLE_FALLBACK_MAX_ATTEMPTS
-                        used_fallback = True
-                        attempt = 1
-                        continue
-                    self._record_failure(
-                        req,
-                        entry,
-                        active_path,
-                        active_reason,
-                        None,
-                        chosen_model=model_id,
-                        provider_name=provider_name,
-                    )
-                    raise
-                attempt += 1
-                continue
-            else:
-                decision = RoutingDecision(
-                    profile=req.profile,
-                    chosen_model=model_id,
-                    provider=provider_name,
-                    path=active_path,
-                    reason=active_reason,
-                    overflow_triggers=active_triggers,
-                    attempt=attempt,
-                )
-                self._sink.record(decision)
-                self._cost.add(resp.usage.cost_usd, ctx.conversation_id)
-                return resp.model_copy(update={"routing": decision})
+        return await _execute_complete(
+            self,
+            provider=provider,
+            exec_req=exec_req,
+            model_id=entry.model_id,
+            provider_name=entry.provider,
+            entry=entry,
+            active_path=path,
+            active_reason=reason,
+            active_triggers=list(overflow_triggers),
+            overflow_triggers=overflow_triggers,
+            req=req,
+            ctx=ctx,
+            max_attempts=_MAX_ATTEMPTS,
+            fallback_max_attempts=_ROLE_FALLBACK_MAX_ATTEMPTS,
+            auth_retry_delay_s=_AUTH_RETRY_DELAY_S,
+        )
 
     # -- stream (§3.2) — single resolved route, no mid-stream escalation ------
 
@@ -520,120 +456,24 @@ class DefaultLLMRouter:
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._provider_for(entry)
-        model_id = entry.model_id
-        provider_name = entry.provider
-        active_path = path
-        active_reason = reason
-        active_triggers = list(overflow_triggers)
-        max_attempts = _MAX_ATTEMPTS
-        used_fallback = False
-        auth_retry_used = False
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
-
-        # Same-model transient retry as `complete` — but GUARDED: a stream can only
-        # be restarted while NOTHING has reached the consumer yet. Once a chunk is
-        # yielded downstream (the watch-it-write body lands in the UI) we cannot
-        # un-emit it, so replaying would duplicate content. A transient that fires
-        # before the first chunk → retry; mid-stream → propagate (the loop surfaces
-        # it as an AgentErrorEvent and the model retries the action on its next turn).
-        attempt = 1
-        while True:
-            decision = RoutingDecision(
-                profile=req.profile,
-                chosen_model=model_id,
-                provider=provider_name,
-                path=active_path,
-                reason=active_reason,
-                overflow_triggers=active_triggers,
-                attempt=attempt,
-            )
-            yielded_any = False
-            recorded = False
-            try:
-                async for chunk in provider.stream_complete(exec_req, model=model_id):
-                    if chunk.done and chunk.final is not None:
-                        final = chunk.final.model_copy(update={"routing": decision})
-                        if not recorded:
-                            self._sink.record(decision)
-                            self._cost.add(final.usage.cost_usd, ctx.conversation_id)
-                            recorded = True
-                        yielded_any = True
-                        yield chunk.model_copy(update={"final": final})
-                    else:
-                        yielded_any = True
-                        yield chunk
-                return  # stream completed cleanly
-            except LLMAuthError as exc:
-                if not yielded_any and not auth_retry_used:
-                    auth_retry_used = True
-                    _LOG.warning("transient auth failure, retrying once: %s", exc)
-                    await asyncio.sleep(_AUTH_RETRY_DELAY_S)
-                    attempt += 1
-                    continue
-                self._record_failure(
-                    req,
-                    entry,
-                    active_path,
-                    active_reason,
-                    exc,
-                    chosen_model=model_id,
-                    provider_name=provider_name,
-                )
-                raise
-            except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
-                self._record_failure(
-                    req,
-                    entry,
-                    active_path,
-                    active_reason,
-                    exc,
-                    chosen_model=model_id,
-                    provider_name=provider_name,
-                )
-                raise
-            except LLMTransientError:
-                if yielded_any:
-                    self._record_failure(
-                        req,
-                        entry,
-                        active_path,
-                        active_reason,
-                        None,
-                        chosen_model=model_id,
-                        provider_name=provider_name,
-                    )
-                    raise
-                if attempt >= max_attempts:
-                    fallback = (
-                        None
-                        if used_fallback
-                        else self._role_fallback_target(
-                            req.profile.role,
-                            requirements=self._effective_requirements(req),
-                        )
-                    )
-                    if fallback is not None:
-                        provider, model_id = fallback
-                        provider_name = provider.name
-                        active_path = "role_fallback"
-                        active_reason = f"role_fallback after {entry.model_id}"
-                        active_triggers = [f"original_model:{entry.model_id}"]
-                        max_attempts = _ROLE_FALLBACK_MAX_ATTEMPTS
-                        used_fallback = True
-                        attempt = 1
-                        continue
-                    self._record_failure(
-                        req,
-                        entry,
-                        active_path,
-                        active_reason,
-                        None,
-                        chosen_model=model_id,
-                        provider_name=provider_name,
-                    )
-                    raise
-                attempt += 1
-                continue
+        async for chunk in _execute_stream_complete(
+            self,
+            provider=provider,
+            exec_req=exec_req,
+            model_id=entry.model_id,
+            provider_name=entry.provider,
+            entry=entry,
+            active_path=path,
+            active_reason=reason,
+            active_triggers=list(overflow_triggers),
+            req=req,
+            ctx=ctx,
+            max_attempts=_MAX_ATTEMPTS,
+            fallback_max_attempts=_ROLE_FALLBACK_MAX_ATTEMPTS,
+            auth_retry_delay_s=_AUTH_RETRY_DELAY_S,
+        ):
+            yield chunk
 
     # -- helpers --------------------------------------------------------------
 
@@ -650,20 +490,17 @@ class DefaultLLMRouter:
         *,
         requirements: frozenset[Requirement] = frozenset(),
     ) -> tuple[ModelProvider, str] | None:
-        settings = self._config.role_fallback
-        if role in DRIVER_ROLES or role not in FALLBACK_ELIGIBLE_ROLES:
-            return None
-        # The auxiliary fallback endpoint is configured as JSON/text-only.  It
-        # must never receive image-backed or otherwise capability-specific work;
-        # doing so could turn an unavailable visual claim into fabricated prose.
-        if not requirements.issubset({Requirement.JSON_MODE}):
-            return None
-        if not settings.enabled or not settings.model.strip():
-            return None
-        provider = self._providers.get(ROLE_FALLBACK_PROVIDER_KEY)
-        if provider is None:
-            return None
-        return provider, settings.model.strip()
+        from ._router_execution import _role_fallback_target as _rft
+
+        return _rft(
+            self._config,
+            self._providers,
+            role,
+            requirements=requirements,
+            role_fallback_provider_key=ROLE_FALLBACK_PROVIDER_KEY,
+            driver_roles=DRIVER_ROLES,
+            fallback_eligible_roles=FALLBACK_ELIGIBLE_ROLES,
+        )
 
     def _record_failure(
         self,
@@ -676,16 +513,17 @@ class DefaultLLMRouter:
         chosen_model: str | None = None,
         provider_name: str | None = None,
     ) -> None:
-        kind = type(exc).__name__ if exc else "retries exhausted"
-        self._sink.record(
-            RoutingDecision(
-                profile=req.profile,
-                chosen_model=chosen_model or (entry.model_id if entry else ""),
-                provider=provider_name or (entry.provider if entry else ""),
-                path=path,
-                reason=f"terminal failure: {kind} ({reason})",
-                overflow_triggers=[],
-            )
+        from ._router_execution import _record_failure as _rf
+
+        _rf(
+            self._sink,
+            req,
+            entry,
+            path,
+            reason,
+            exc,
+            chosen_model=chosen_model,
+            provider_name=provider_name,
         )
 
 

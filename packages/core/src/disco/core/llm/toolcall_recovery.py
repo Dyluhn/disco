@@ -39,6 +39,13 @@ def _fix_trailing_comma(text: str) -> str:
     return text
 
 
+def _tool_call_from_name_args(name: Any, args: Any) -> ProposedToolCall | None:
+    """Build a ProposedToolCall when ``name`` is a str and ``args`` is a dict."""
+    if isinstance(name, str) and isinstance(args, dict):
+        return ProposedToolCall(tool_name=name, arguments=args)
+    return None
+
+
 def _parse_tool_json(data: Any) -> list[ProposedToolCall]:
     if isinstance(data, list):
         calls = []
@@ -50,33 +57,24 @@ def _parse_tool_json(data: Any) -> list[ProposedToolCall]:
         return []
 
     # {"name": "foo", "arguments": {"x": 1}}
-    if (
-        "name" in data
-        and "arguments" in data
-        and isinstance(data["name"], str)
-        and isinstance(data["arguments"], dict)
-    ):
-        return [ProposedToolCall(tool_name=data["name"], arguments=data["arguments"])]
+    if "name" in data and "arguments" in data:
+        call = _tool_call_from_name_args(data["name"], data["arguments"])
+        if call is not None:
+            return [call]
 
     # {"function": {"name": "foo", "arguments": {"x": 1}}}
     if "function" in data and isinstance(data["function"], dict):
         f = data["function"]
-        if (
-            "name" in f
-            and "arguments" in f
-            and isinstance(f["name"], str)
-            and isinstance(f["arguments"], dict)
-        ):
-            return [ProposedToolCall(tool_name=f["name"], arguments=f["arguments"])]
+        if "name" in f and "arguments" in f:
+            call = _tool_call_from_name_args(f["name"], f["arguments"])
+            if call is not None:
+                return [call]
 
     # {"tool": "foo", "args": {"x": 1}}
-    if (
-        "tool" in data
-        and "args" in data
-        and isinstance(data["tool"], str)
-        and isinstance(data["args"], dict)
-    ):
-        return [ProposedToolCall(tool_name=data["tool"], arguments=data["args"])]
+    if "tool" in data and "args" in data:
+        call = _tool_call_from_name_args(data["tool"], data["args"])
+        if call is not None:
+            return [call]
 
     return []
 

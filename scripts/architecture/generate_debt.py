@@ -67,6 +67,37 @@ PKG04_STORES_RESOLVED_IDS = frozenset(
     }
 )
 PKG04_IDENTITY_RESOLVED_IDS = frozenset({"PY-0661"})
+PKG05_CONTEXT_RESOLVED_IDS = frozenset(
+    {
+        "PY-0201",
+        "PY-0435",
+        "PY-0436",
+        "PY-0437",
+        "PY-0461",
+        "PY-0462",
+        "PY-0463",
+        "PY-0464",
+        "PY-0465",
+        "PY-0466",
+        "PY-0467",
+        "PY-0468",
+        "PY-0469",
+        "PY-0470",
+        "PY-0471",
+        "PY-0472",
+        "PY-0474",
+        "PY-0475",
+        "PY-0662",
+        "PY-0692",
+        "PY-0693",
+        "PY-0694",
+        "PY-0695",
+        "PY-0696",
+        "PY-0697",
+        "PY-0698",
+        "PY-0703",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -75,8 +106,9 @@ RESOLVED_IDS = (
     | PKG04_EVENTS_RESOLVED_IDS
     | PKG04_STORES_RESOLVED_IDS
     | PKG04_IDENTITY_RESOLVED_IDS
+    | PKG05_CONTEXT_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 784
+EXPECTED_ACTIVE_DEBT_ROWS = 757
 EXPECTED_OBSERVATIONS = 19
 LOCATION_OVERRIDES = {
     "DM-012": (
