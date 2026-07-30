@@ -578,6 +578,18 @@ def test_legacy_untyped_admission_required_and_pending():
 # --- agent_view_consistent_events ----------------------------------------------
 
 
+def test_agent_view_consistent_preserves_concrete_input_instances():
+    """The typed facade projection returns the same concrete event objects."""
+
+    message = _user("preserve the canonical event type")
+    events: list[MessageEvent] = [message]
+
+    visible = agent_view_consistent_events(events)
+
+    assert visible == events
+    assert visible[0] is message
+
+
 def test_agent_view_consistent_keeps_matching_untagged_in_legacy():
     """agent_view_consistent_events must NOT strip untagged agent events when
     no strict v1 view-admission has been seen."""
