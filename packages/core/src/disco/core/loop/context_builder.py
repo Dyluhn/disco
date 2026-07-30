@@ -1,10 +1,14 @@
-"""CXT-4 — the ContextPack assembler + renderer.
+"""CXT-4 — the ContextPack assembler + renderer (compatibility facade).
 
-Builds a compact, structured ContextPack from the event log (overlaying the
-durable ledger from CXT-2) and renders it as a deterministic, byte-stable
-`<context-pack>` block — the model-facing context that replaces feeding raw event
-history. PURE functions: no loop/runtime/IO. Live prompt wiring (and unifying with
-the existing C6 `<current-objective>` recitation) is CXT-7.
+This module remains the historical import path for the ContextPack assembler
+(``build_context_pack``) and the deterministic renderers
+(``render_context_pack``, ``render_plan_as_todo_markdown``).  The rendering
+implementation now lives in :mod:`context_rendering`, the single bounded owner;
+this facade re-exports every public/private name, signature, and rendered byte
+so consumers are unchanged.
+
+PURE functions: no loop/runtime/IO. Live prompt wiring (and unifying with
+the existing C6 ``<current-objective>`` recitation) is CXT-7.
 """
 
 from __future__ import annotations
@@ -15,16 +19,37 @@ from ..context import (
     CompactionPolicy,
     ContextLedger,
     ContextPack,
-    SourceKind,
-    SourcePriority,
     VerifierFailureRef,
+)
+from ..context import (
+    SourceKind as SourceKind,
+)
+from ..context import (
+    SourcePriority as SourcePriority,
 )
 from ..context.compaction import resolved_ranges_from_events
 from ..events import Event, EventSource, MessageEvent, PlanEvent
-
-_BLOCK_OPEN = "<context-pack>"
-_BLOCK_CLOSE = "</context-pack>"
-_DISCO_PATH_TOKENS = (".disco/", ".disco")
+from .context_rendering import (
+    _BLOCK_CLOSE as _BLOCK_CLOSE,
+)
+from .context_rendering import (
+    _BLOCK_OPEN as _BLOCK_OPEN,
+)
+from .context_rendering import (
+    _DISCO_PATH_TOKENS as _DISCO_PATH_TOKENS,
+)
+from .context_rendering import (
+    _failure_line as _failure_line,
+)
+from .context_rendering import (
+    _sanitize_todo_seed_text as _sanitize_todo_seed_text,
+)
+from .context_rendering import (
+    render_context_pack as render_context_pack,
+)
+from .context_rendering import (
+    render_plan_as_todo_markdown as render_plan_as_todo_markdown,
+)
 
 
 def _latest_plan(events: Sequence[Event]) -> PlanEvent | None:
@@ -89,99 +114,3 @@ def build_context_pack(
         design_direction=design_direction,
         allowed_next_actions=allowed_next_actions,
     )
-
-
-def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
-    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
-    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
-    execution memory the agent reads/updates (via context_memory) as it works."""
-    lines: list[str] = [f"# {_sanitize_todo_seed_text(plan.summary)}"]
-    context = (plan.context or "").strip()
-    if context:
-        lines += ["", _sanitize_todo_seed_text(context)]
-    lines += ["", "## Steps"]
-    for i, step in enumerate(plan.steps, start=1):
-        lines.append(f"- [ ] {i}. {_sanitize_todo_seed_text(step.title)}")
-        detail = (getattr(step, "detail", "") or "").strip()
-        if detail:
-            lines.append(f"  {_sanitize_todo_seed_text(detail)}")
-    return "\n".join(lines) + "\n"
-
-
-def _sanitize_todo_seed_text(text: object) -> str:
-    raw = "" if text is None else str(text)
-    if not any(token in raw for token in _DISCO_PATH_TOKENS):
-        return raw
-    lowered = raw.lower()
-    if "todo" in lowered and any(verb in lowered for verb in ("mark", "update", "edit", "check")):
-        return "Mark progress via update_plan_progress"
-    words: list[str] = []
-    for word in raw.split():
-        if ".disco" in word:
-            words.append("harness-managed bookkeeping")
-        else:
-            words.append(word)
-    return " ".join(words)
-
-
-def _failure_line(f: VerifierFailureRef) -> str:
-    loc = f" ({f.rel_path})" if f.rel_path else ""
-    return f"- [{f.severity.value}] {f.kind}: {f.message}{loc}"
-
-
-def render_context_pack(pack: ContextPack, *, priority: SourcePriority | None = None) -> str:
-    """Render the pack as a deterministic, byte-stable `<context-pack>` block.
-
-    Sections are emitted in SourcePriority order; empty sections are omitted. No
-    event history / raw tool chatter — only the structured anchors. Stable across
-    turns for identical input (KV-cache-friendly prefix)."""
-    order = (priority or SourcePriority.default()).order
-    sections: dict[SourceKind, list[str]] = {}
-
-    if pack.active_goal:
-        head = f"Goal (v{pack.current_version}): {pack.active_goal}"
-        sections[SourceKind.GOAL] = [head]
-    if pack.active_contract:
-        sections[SourceKind.CONTRACT] = [f"Contract: {pack.active_contract}"]
-    if pack.design_direction:
-        sections[SourceKind.DESIGN_DIRECTION] = pack.design_direction.splitlines()
-    if pack.current_todo:
-        sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
-    if pack.latest_failures:
-        sections[SourceKind.VERIFIER_FAILURE] = [
-            "Unresolved verifier failures:",
-            *[_failure_line(f) for f in pack.latest_failures],
-        ]
-    if pack.direct_edits_summary:
-        sections[SourceKind.DIRECT_EDIT] = [
-            "User direct edits:",
-            *[
-                f"- {e.rel_path}: {e.kind.value}{(' — ' + e.summary) if e.summary else ''}"
-                for e in pack.direct_edits_summary
-            ],
-        ]
-    if pack.unresolved_comments:
-        sections[SourceKind.COMMENT] = [
-            "Unresolved comments:",
-            *[f"- {c}" for c in pack.unresolved_comments],
-        ]
-    if pack.resource_refs:
-        sections[SourceKind.RESOURCE] = [
-            "Resources:",
-            *[f"- {r.rel_path}" for r in pack.resource_refs],
-        ]
-    if pack.recoverable_refs:
-        sections[SourceKind.RECOVERABLE_REF] = [
-            "Recoverable references (read on demand):",
-            *[f"- {r.kind.value}: {r.rel_path}" for r in pack.recoverable_refs],
-        ]
-
-    lines: list[str] = [_BLOCK_OPEN]
-    for kind in order:
-        block = sections.get(kind)
-        if block:
-            lines.extend(block)
-    if pack.allowed_next_actions:
-        lines.append(f"Allowed next actions: {', '.join(pack.allowed_next_actions)}")
-    lines.append(_BLOCK_CLOSE)
-    return "\n".join(lines)
