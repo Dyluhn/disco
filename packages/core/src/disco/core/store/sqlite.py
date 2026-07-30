@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..events import (
+    BaseEvent,
     Event,
     EventAdapter,
     WorkspaceVersionEvent,
@@ -261,6 +262,16 @@ CREATE TABLE IF NOT EXISTS dod_specs (
 def _row_to_event(payload: str) -> Event:
     """Deserialize a stored payload: JSON -> migrate -> validate (§4)."""
     return EventAdapter.validate_python(migrate_event(json.loads(payload)))
+
+
+def _require_concrete_event(event: object) -> Event:
+    """Reject untyped or envelope-only values before a persistence transaction."""
+    if not isinstance(event, BaseEvent) or type(event) is BaseEvent:
+        raise TypeError("event store append requires a concrete Event instance")
+    try:
+        return EventAdapter.validate_python(event)
+    except ValueError as exc:
+        raise TypeError("event store append requires a concrete Event instance") from exc
 
 
 def _persist_one(store: SqliteEventStore, conversation_id: str, event: Event) -> tuple[Event, bool]:
@@ -802,6 +813,7 @@ class SqliteEventStore(_ClosableSqliteStore):
             self._eph_subscribers[conversation_id].discard(queue)
 
     async def append(self, conversation_id: str, event: Event) -> Event:
+        event = _require_concrete_event(event)
         async with self._write_lock:
             with self._conn:
                 stored, is_new = self._store_one(conversation_id, event)
@@ -810,6 +822,7 @@ class SqliteEventStore(_ClosableSqliteStore):
         return stored
 
     async def append_many(self, conversation_id: str, events: list[Event]) -> list[Event]:
+        events = [_require_concrete_event(event) for event in events]
         stored_new: list[Event] = []
         results: list[Event] = []
         async with self._write_lock:

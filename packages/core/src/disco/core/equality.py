@@ -54,6 +54,36 @@ def _normalized_content(content: str) -> str:
     return content
 
 
+def _action_content_eq(
+    a: ActionEvent,
+    b: ActionEvent,
+    *,
+    ignore_thought: bool,
+) -> bool:
+    return (
+        (ignore_thought or a.thought == b.thought)
+        and a.tool_call.tool_name == b.tool_call.tool_name
+        and a.tool_call.arguments == b.tool_call.arguments
+    )
+
+
+def _observation_content_eq(
+    a: ObservationEvent,
+    b: ObservationEvent,
+    *,
+    ignore_volatile_content: bool,
+) -> bool:
+    content_a, content_b = a.tool_result.content, b.tool_result.content
+    if ignore_volatile_content:
+        content_a = _normalized_content(content_a)
+        content_b = _normalized_content(content_b)
+    return (
+        a.tool_result.tool_name == b.tool_result.tool_name
+        and content_a == content_b
+        and a.tool_result.success == b.tool_result.success
+    )
+
+
 def event_content_eq(
     a: Event,
     b: Event,
@@ -78,19 +108,16 @@ def event_content_eq(
         return False
 
     if isinstance(a, ActionEvent) and isinstance(b, ActionEvent):
-        return (
-            (ignore_thought or a.thought == b.thought)
-            and a.tool_call.tool_name == b.tool_call.tool_name
-            and a.tool_call.arguments == b.tool_call.arguments
+        return _action_content_eq(
+            a,
+            b,
+            ignore_thought=ignore_thought,
         )
     if isinstance(a, ObservationEvent) and isinstance(b, ObservationEvent):
-        content_a, content_b = a.tool_result.content, b.tool_result.content
-        if ignore_volatile_content:
-            content_a, content_b = _normalized_content(content_a), _normalized_content(content_b)
-        return (
-            a.tool_result.tool_name == b.tool_result.tool_name
-            and content_a == content_b
-            and a.tool_result.success == b.tool_result.success
+        return _observation_content_eq(
+            a,
+            b,
+            ignore_volatile_content=ignore_volatile_content,
         )
     if isinstance(a, AgentErrorEvent) and isinstance(b, AgentErrorEvent):
         return a.error == b.error
