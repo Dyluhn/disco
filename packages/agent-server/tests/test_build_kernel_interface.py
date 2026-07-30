@@ -37,6 +37,7 @@ from disco.agent_server.run_registry import (
     RunRegistry,
 )
 from disco.agent_server.run_supervision_ports import DiscoKernelSelector
+from disco.agent_server.runtime import ConversationRuntime
 from disco.core import Event, EventSource, SqliteEventStore, WorkspaceMutationEvent
 from disco.core.verification import (
     VerificationClaimKind,
@@ -349,11 +350,29 @@ def test_kernel_pin_registry_resolves_disco(store: SqliteEventStore) -> None:
     assert rt.pins.ensure(CID) is rt.kernel
 
 
+async def test_runtime_kernel_for_resolves_disco_by_default(
+    store: SqliteEventStore,
+) -> None:
+    runtime = ConversationRuntime(store)
+    runtime.start(CID)
+    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
+
+
 @pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
 def test_legacy_selection_values_pin_disco(legacy: str, store: SqliteEventStore) -> None:
     rt = _kernel_harness(store)
     selected = select_kernel(None, disco=rt.kernel, selected=legacy)
     assert selected is rt.kernel
+
+
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+async def test_runtime_kernel_for_resolves_legacy_values_to_disco(
+    legacy: str,
+    store: SqliteEventStore,
+) -> None:
+    runtime = ConversationRuntime(store)
+    selected = select_kernel(runtime, disco=runtime._disco_kernel, selected=legacy)
+    assert selected is runtime._disco_kernel
 
 
 async def test_conversation_control_ops_route_through_disco_kernel(
@@ -374,3 +393,24 @@ async def test_conversation_control_ops_route_through_disco_kernel(
     await rt.control.request_plan(CID, "replan please")
     rt.controls.request_plan.assert_awaited_once_with(CID, "replan please")
     assert rt.pins.current(CID) is rt.kernel
+
+
+async def test_runtime_control_ops_route_through_disco_kernel(
+    store: SqliteEventStore,
+) -> None:
+    """The public compatibility facade preserves control routing and arguments."""
+    runtime = ConversationRuntime(store)
+    runtime._control.confirm = AsyncMock()
+    runtime._control.reject = AsyncMock()
+    runtime._control.approve_plan = AsyncMock()
+    runtime._control.request_plan = AsyncMock()
+
+    await runtime.confirm(CID)
+    runtime._control.confirm.assert_awaited_once_with(CID)
+    await runtime.reject(CID, "denied")
+    runtime._control.reject.assert_awaited_once_with(CID, "denied")
+    await runtime.approve_plan(CID)
+    runtime._control.approve_plan.assert_awaited_once_with(CID)
+    await runtime.request_plan(CID, "replan please")
+    runtime._control.request_plan.assert_awaited_once_with(CID, "replan please")
+    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel

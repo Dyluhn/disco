@@ -310,6 +310,44 @@ async def test_kill_accepts_current_durable_target_despite_stale_local_generatio
     assert _killed_detail_present(await store.get_events(CID))
 
 
+async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    rt = _runtime(store)
+    rt._settings._set_surface(CID, "build")
+    assert _advance_generation(rt) == 1
+    lock = rt._workspace.lock(CID)
+    await lock.acquire()
+
+    killing = asyncio.create_task(rt._control.kill(CID, generation=1))
+    await asyncio.sleep(0)
+    assert not killing.done()
+
+    intent = await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await store.append(
+        CID,
+        WorkspaceMutationEvent(
+            operation="agent.view-admitted",
+            run_intent_id=intent.id,
+            agent_view_id="view-replacement",
+            run_protocol_version=1,
+        ),
+    )
+    replacement = MagicMock()
+    replacement.done.return_value = False
+    assert rt._run_registry.register_task(CID, replacement) == 2
+    lock.release()
+
+    await killing
+    assert not _killed_detail_present(await store.get_events(CID))
+
+
 @pytest.mark.asyncio
 async def test_kill_closes_dangling_action_with_cancelled_agent_error() -> None:
     store = SqliteEventStore(":memory:")

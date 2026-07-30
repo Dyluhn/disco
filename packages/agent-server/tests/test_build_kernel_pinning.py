@@ -71,6 +71,12 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     return runtime
 
 
+def _set_legacy_kernel_value(runtime: ConversationRuntime, value: str) -> None:
+    config_store = MagicMock()
+    config_store.load.return_value.build_kernel = value
+    runtime._config_store = config_store
+
+
 async def test_send_user_turn_appends_and_kicks_and_returns_stored(
     store: SqliteEventStore,
 ) -> None:
@@ -118,6 +124,30 @@ async def test_midrun_steer_reuses_pin(store: SqliteEventStore) -> None:
     assert runtime._kernel_pins.current(CID) is pinned
     messages = [event for event in await store.get_events(CID) if hasattr(event, "message")]
     assert messages[-1].meta == {"steer": True}
+
+
+async def test_pin_survives_midrun_config_change(store: SqliteEventStore) -> None:
+    runtime = _runtime(store)
+    await runtime.send_user_turn(CID, "first")
+    pinned = runtime._kernel_pins.current(CID)
+
+    _set_legacy_kernel_value(runtime, "pi_experimental")
+    await runtime._conversation_control.confirm(CID)
+
+    assert runtime._kernel_pins.current(CID) is pinned is runtime._disco_kernel
+
+
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+def test_legacy_kernel_values_pin_disco(
+    legacy: str,
+    store: SqliteEventStore,
+) -> None:
+    runtime = _runtime(store)
+    _set_legacy_kernel_value(runtime, legacy)
+
+    runtime.start(CID)
+
+    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
 
 
 async def test_every_control_op_pins_when_no_pin_exists(store: SqliteEventStore) -> None:
@@ -191,6 +221,18 @@ def test_selector_change_does_not_replace_pin_until_clear() -> None:
 
     pins.clear(CID)
     assert pins.ensure(CID) is second
+
+
+def test_clear_pin_lets_next_run_reresolve_to_disco(store: SqliteEventStore) -> None:
+    runtime = _runtime(store)
+    runtime.start(CID)
+    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
+
+    runtime._kernel_pins.clear(CID)
+    _set_legacy_kernel_value(runtime, "pi_experimental")
+    runtime.start(CID)
+
+    assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
 
 
 async def test_kill_clears_pin(store: SqliteEventStore) -> None:
