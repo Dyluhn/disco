@@ -542,30 +542,15 @@ class RouterConfig(BaseModel):
         return self.models[key]
 
 
-def default_config() -> RouterConfig:
-    """The starting catalogue + assignments, wired to the real LAN endpoints
-    ([VERIFY] — discovered at build: see api-endpoints.md / the live-wiring build).
-
-    Each `provider` is the endpoint KEY (one OpenAIProvider per distinct backend);
-    `base_url` is its OpenAI-compatible URL. Roles: AGENT_DRIVER + RAG_ANSWERER →
-    Qwen 27B (.231); QUERY_REWRITER + SUMMARIZER → Gemma E2B (.81, needs a key in
-    $PMX_GEMMA_API_KEY); NLI_VERIFIER → the cross-encoder sidecar (not a chat model,
-    handled by the grounding NLIVerifier, no base_url). "driver-overflow" stays as a
-    dormant, assignable OpenRouter slot (no key → fails loud if assigned).
-    """
-    _QWEN = "http://192.168.1.231:18080/v1"
-    _GEMMA = "http://192.168.1.81:8087/v1"
-    # [BP-00] Vision gate: the driver is vision-capable ONLY if enabled via env.
-    driver_caps = {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
-    if disco_env("DRIVER_VISION") == "1":
-        driver_caps.add(Requirement.VISION)
-
-    models = {
+def _local_default_models(driver_caps: set[Requirement]) -> dict[str, ModelEntry]:
+    qwen = "http://192.168.1.231:18080/v1"
+    gemma = "http://192.168.1.81:8087/v1"
+    return {
         # AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (reasoning, 128K ctx).
         "driver-local": ModelEntry(
             model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
             provider="qwen",
-            base_url=_QWEN,
+            base_url=qwen,
             context_window=131_072,
             capabilities=frozenset(driver_caps),
             quantization="Q5_K_XL",
@@ -574,7 +559,7 @@ def default_config() -> RouterConfig:
         "rag-local": ModelEntry(
             model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
             provider="qwen",
-            base_url=_QWEN,
+            base_url=qwen,
             context_window=131_072,
             capabilities=frozenset(
                 {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
@@ -588,7 +573,7 @@ def default_config() -> RouterConfig:
         "rewriter-local": ModelEntry(
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
-            base_url=_GEMMA,
+            base_url=gemma,
             api_key_env="gemma",
             context_window=32_768,
             capabilities=frozenset({Requirement.JSON_MODE}),
@@ -597,7 +582,7 @@ def default_config() -> RouterConfig:
         "summarizer-local": ModelEntry(
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
-            base_url=_GEMMA,
+            base_url=gemma,
             api_key_env="gemma",
             context_window=32_768,
             family="gemma",
@@ -610,6 +595,11 @@ def default_config() -> RouterConfig:
             context_window=512,
             family="deberta",
         ),
+    }
+
+
+def _remote_default_models() -> dict[str, ModelEntry]:
+    return {
         # Dormant, assignable OpenRouter overflow (no key → fails loud if assigned).
         # W4 (§10.8): claude-3.5-sonnet benchmarks well on anchored diff edits
         # → ANCHORED_EDIT enabled; local/unknown models default to whole-file writes.
@@ -675,6 +665,18 @@ def default_config() -> RouterConfig:
             price_out_per_m=0.30,
         ),
     }
+
+
+def default_config() -> RouterConfig:
+    """Return the version-zero seed catalogue and deterministic assignments."""
+    driver_caps = {
+        Requirement.TOOL_CALLING,
+        Requirement.JSON_MODE,
+        Requirement.LONG_CONTEXT,
+    }
+    if disco_env("DRIVER_VISION") == "1":
+        driver_caps.add(Requirement.VISION)
+    models = {**_local_default_models(driver_caps), **_remote_default_models()}
     assignments = {
         # AGENT_DRIVER intentionally omitted: it resolves to `default_model`.
         ModelRole.RAG_ANSWERER: "rag-local",

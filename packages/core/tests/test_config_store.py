@@ -9,10 +9,20 @@ overlay is still honored. CRUD validates keys and refuses to remove a model in u
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from disco.core.llm import ConfigStore, ModelRole, Requirement, default_config
-from disco.core.llm.config import ExtractionSettings, ModelEntry, SearchSettings
+from disco.core.llm.config import (
+    ExtractionSettings,
+    ModelEntry,
+    ProviderSettings,
+    SearchSettings,
+)
+from disco.core.llm.config_repository import (
+    ConfigRepositoryCorruptionError,
+    UnsupportedConfigVersionError,
+)
 
 
 def _entry(**kw) -> ModelEntry:
@@ -301,3 +311,78 @@ def test_full_config_save_normalizes_legacy_build_kernel(tmp_path):
     written = json.loads((tmp_path / "cfg.json").read_text())
     assert written["build_kernel"] == "disco"
     assert store.load().build_kernel == "disco"
+
+
+def test_versioned_domain_repositories_are_independent_and_rollback_readable(tmp_path):
+    store = _store(tmp_path)
+    provider = ProviderSettings(
+        id="custom",
+        label="Custom",
+        base_url="https://provider.example/v1",
+        kind="openai-compat",
+        secret_name="provider_custom",
+    )
+    store.save_providers({"custom": provider})
+    provider_path = tmp_path / "config.providers.json"
+    provider_bytes = provider_path.read_bytes()
+
+    store.save_search(SearchSettings(provider="searxng", base_url="https://search.example"))
+
+    assert provider_path.read_bytes() == provider_bytes
+    assert json.loads(provider_bytes)["schema_version"] == 1
+    settings = json.loads((tmp_path / "config.settings.json").read_text())
+    assert settings["schema_version"] == 1
+    assert settings["settings"]["search"]["provider"] == "searxng"
+
+    aggregate = json.loads((tmp_path / "config.json").read_text())
+    assert aggregate["schema_version"] == 1
+    assert aggregate["providers"]["custom"]["secret_name"] == "provider_custom"
+    # A pre-package reader ignores the extra version key and sees the complete snapshot.
+    rollback = default_config().__class__.model_validate(aggregate)
+    assert rollback.providers["custom"].base_url == "https://provider.example/v1"
+    assert rollback.search.provider == "searxng"
+
+
+def test_corrupt_authoritative_settings_sidecar_fails_explicitly(tmp_path):
+    store = _store(tmp_path)
+    store.save_search(SearchSettings(provider="searxng", base_url="https://search.example"))
+    (tmp_path / "config.settings.json").write_text("{broken")
+
+    with pytest.raises(ConfigRepositoryCorruptionError, match="cannot decode"):
+        _store(tmp_path).load()
+
+
+def test_future_provider_repository_version_fails_closed(tmp_path):
+    (tmp_path / "config.providers.json").write_text(
+        json.dumps({"schema_version": 99, "providers": {}})
+    )
+
+    with pytest.raises(UnsupportedConfigVersionError, match="schema_version 99"):
+        _store(tmp_path).load()
+
+
+def test_concurrent_domain_writes_preserve_both_records(tmp_path):
+    general = _store(tmp_path)
+    providers = _store(tmp_path)
+    provider = ProviderSettings(
+        id="parallel",
+        label="Parallel",
+        base_url="https://parallel.example/v1",
+        kind="openai-compat",
+        secret_name="provider_parallel",
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writes = (
+            executor.submit(
+                general.save_search,
+                SearchSettings(provider="searxng", base_url="https://search.example"),
+            ),
+            executor.submit(providers.save_providers, {"parallel": provider}),
+        )
+        for write in writes:
+            write.result()
+
+    restarted = _store(tmp_path).load()
+    assert restarted.search.base_url == "https://search.example"
+    assert restarted.providers["parallel"].secret_name == "provider_parallel"

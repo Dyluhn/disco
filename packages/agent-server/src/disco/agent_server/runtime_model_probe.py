@@ -42,6 +42,16 @@ def _do_live_model_probe(
         served from `_MODELS_CTX_CACHE` (keyed by base_url, looked up by model_id).
         It is NEVER folded into the base_url-keyed props cache: that would pin one
         model's window onto every model at the same base_url (the codex P1 bug)."""
+    out = _probe_props(base_url, api_key)
+    props_n_ctx = out["n_ctx"]
+    if out["model_id"] is not None or props_n_ctx is not None:
+        _LIVE_MODEL_PROBE_CACHE[base_url] = (dict(out), time.monotonic())
+    if props_n_ctx is None and model_id:
+        out["n_ctx"] = _models_context_length(base_url, api_key, model_id)
+    return out
+
+
+def _probe_props(base_url: str, api_key: str | None) -> dict[str, Any]:
     out: dict[str, Any] = {"model_id": None, "n_ctx": None}
     try:
         import httpx
@@ -70,23 +80,6 @@ def _do_live_model_probe(
                 out["model_id"] = mp
     except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
         pass
-    # Cache only a SUCCESSFUL /props probe — so a server that was down at first call
-    # is picked up once it comes online (self-healing), instead of being pinned to
-    # the static fallback for the agent-server's whole lifetime. Store the monotonic
-    # ts alongside the value so _probe_live_model can apply a TTL and re-probe on a
-    # model hot-swap (T6/E2). Cache a COPY of the SERVER-WIDE props fields only: `out`
-    # may be augmented with a model-specific /models n_ctx below, which must not leak
-    # into this base_url-keyed cache.
-    props_n_ctx = out["n_ctx"]
-    if out["model_id"] is not None or props_n_ctx is not None:
-        _LIVE_MODEL_PROBE_CACHE[base_url] = (
-            {"model_id": out["model_id"], "n_ctx": props_n_ctx},
-            time.monotonic(),
-        )
-    # No server-wide n_ctx from /props → fall back to the model-specific /models
-    # context_length (fills _MODELS_CTX_CACHE; the lookup is by model_id).
-    if props_n_ctx is None and model_id:
-        out["n_ctx"] = _models_context_length(base_url, api_key, model_id)
     return out
 
 
@@ -104,19 +97,33 @@ def _models_context_length(base_url: str, api_key: str | None, model_id: str | N
     uncached so it self-heals. Never raises."""
     if not base_url or not model_id:
         return None
+    cached = _fresh_context_length(base_url, model_id)
+    if isinstance(cached, int) or cached is None:
+        return cached
+    cmap = _fetch_model_windows(base_url, api_key)
+    if cmap is not None:
+        _MODELS_CTX_CACHE[base_url] = (cmap, time.monotonic())
+        return cmap.get(model_id)
+    return None
+
+
+_CACHE_MISS = object()
+
+
+def _fresh_context_length(base_url: str, model_id: str) -> int | None | object:
     cached = _MODELS_CTX_CACHE.get(base_url)
-    if isinstance(cached, tuple) and len(cached) == 2:
-        cmap, ts = cached
-        if (time.monotonic() - ts) <= _PROBE_TTL_S:
-            return cmap.get(model_id)
-    cmap: dict[str, int] = {}
-    fetched = False
+    if not (isinstance(cached, tuple) and len(cached) == 2):
+        return _CACHE_MISS
+    context_by_model, timestamp = cached
+    if (time.monotonic() - timestamp) > _PROBE_TTL_S:
+        return _CACHE_MISS
+    return context_by_model.get(model_id)
+
+
+def _fetch_model_windows(base_url: str, api_key: str | None) -> dict[str, int] | None:
     try:
         import httpx
 
-        # /models is the OpenAI-compatible listing under the same base (NOT root —
-        # unlike /props, do NOT strip a trailing /v1): OpenRouter serves it at
-        # /api/v1/models, llama.cpp + MiniMax at /v1/models.
         root = base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         r = httpx.get(
@@ -126,29 +133,28 @@ def _models_context_length(base_url: str, api_key: str | None, model_id: str | N
             follow_redirects=False,
             trust_env=False,
         )
-        if r.status_code == 200:
-            fetched = True
-            d = r.json()
-            entries = d.get("data") if isinstance(d, dict) else d
-            if isinstance(entries, list):
-                for e in entries:
-                    if not isinstance(e, dict):
-                        continue
-                    mid = e.get("id")
-                    cl = e.get("context_length")
-                    # bool is an int subclass — exclude it (see /props above).
-                    if (
-                        isinstance(mid, str)
-                        and isinstance(cl, int)
-                        and not isinstance(cl, bool)
-                        and cl > 0
-                    ):
-                        cmap[mid] = cl
+        if r.status_code != 200:
+            return None
+        data = r.json()
     except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
-        pass
-    if fetched:
-        _MODELS_CTX_CACHE[base_url] = (cmap, time.monotonic())
-    return cmap.get(model_id)
+        return None
+    entries = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(entries, list):
+        return {}
+    windows: dict[str, int] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        context_length = entry.get("context_length")
+        if (
+            isinstance(model_id, str)
+            and isinstance(context_length, int)
+            and not isinstance(context_length, bool)
+            and context_length > 0
+        ):
+            windows[model_id] = context_length
+    return windows
 
 
 def _probe_live_model(

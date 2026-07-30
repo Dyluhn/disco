@@ -8,7 +8,7 @@ chokepoints. ConfigState retains the public/private API as thin delegators.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from disco.core.llm import ConfigStore, SecretStore
 from disco.core.llm.config import ProviderSettings
@@ -32,6 +32,50 @@ class ProviderInUseError(Exception):
     def __init__(self, model_names: list[str]) -> None:
         super().__init__(", ".join(model_names))
         self.model_names = model_names
+
+
+def _provider_context_window(
+    body: ProviderEnableBody,
+    catalogue_model: ProviderCatalogueModelDTO | None,
+    provider_label: str,
+) -> int:
+    context_window = body.context_window
+    if context_window is None and catalogue_model is not None:
+        context_window = catalogue_model.context_window
+    if context_window is None:
+        raise ValueError(
+            f"context window required: {provider_label} does not report context "
+            "windows — pass context_window with the model's real limit"
+        )
+    return context_window
+
+
+def _provider_capabilities(
+    context_window: int,
+    catalogue_model: ProviderCatalogueModelDTO | None,
+) -> list[str]:
+    capabilities = list(catalogue_model.capabilities) if catalogue_model else []
+    if capabilities:
+        return capabilities
+    defaults = ["tool_calling", "json_mode"]
+    if context_window >= 65536:
+        defaults.append("long_context")
+    return defaults
+
+
+def _provider_prices(
+    catalogue_model: ProviderCatalogueModelDTO | None,
+) -> tuple[Literal["metered", "unknown"], float, float]:
+    if catalogue_model is None:
+        return ("unknown", 0.0, 0.0)
+    known = (
+        catalogue_model.price_in_per_m is not None or catalogue_model.price_out_per_m is not None
+    )
+    return (
+        "metered" if known else "unknown",
+        catalogue_model.price_in_per_m or 0.0,
+        catalogue_model.price_out_per_m or 0.0,
+    )
 
 
 class ProviderConfigService:
@@ -61,8 +105,7 @@ class ProviderConfigService:
         )
 
     def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
-        cfg = self._store.load()
-        self._store.save(cfg.model_copy(update={"providers": providers}))
+        self._store.save_providers(providers)
 
     def providers(self) -> list[ProviderDTO]:
         return [self._provider_dto(p) for p in self._store.load().providers.values()]
@@ -120,9 +163,7 @@ class ProviderConfigService:
             kind=body.kind,
             secret_name=secret_name,
         )
-        self._store.save(
-            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: provider}})
-        )
+        self._store.save_providers({**cfg.providers, provider_id: provider})
         _origin_wiring.approve_provider_origin(self._store, self._secrets, provider)
         return self._provider_dto(provider)
 
@@ -161,9 +202,7 @@ class ProviderConfigService:
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
         updated = provider.model_copy(update=updates)
-        self._store.save(
-            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
-        )
+        self._store.save_providers({**cfg.providers, provider_id: updated})
         # A base-URL save or explicit key rotation is the operator approval
         # gesture. Cosmetic edits never bless a previously unapproved origin.
         if patch.base_url is not None or patch.api_key is not None:
@@ -183,7 +222,7 @@ class ProviderConfigService:
         if refs:
             raise ProviderInUseError(refs)
         providers = {k: v for k, v in cfg.providers.items() if k != provider_id}
-        self._store.save(cfg.model_copy(update={"providers": providers}))
+        self._store.save_providers(providers)
         self._secrets.clear_secret(provider.secret_name)
 
     def _unique_provider_catalogue_id(
@@ -221,39 +260,9 @@ class ProviderConfigService:
             model_id,
             body.label or (catalogue_model.label if catalogue_model else None),
         )
-        # Context: NEVER silently default — context_window drives the engine's
-        # context budgeting, so a wrong-low guess (the old 8192) over-snips every
-        # build on a big model. The caller must supply it when the provider's
-        # catalogue doesn't report one.
-        context_window = (
-            body.context_window
-            if body.context_window is not None
-            else (catalogue_model.context_window if catalogue_model else None)
-        )
-        if context_window is None:
-            raise ValueError(
-                f"context window required: {provider.label} does not report context "
-                "windows — pass context_window with the model's real limit"
-            )
-        # Pricing: only claim a pay model the catalogue actually reported.
-        # Absent pricing → "unknown" (rendered as such), never a fake Free.
-        prices_known = catalogue_model is not None and (
-            catalogue_model.price_in_per_m is not None
-            or catalogue_model.price_out_per_m is not None
-        )
-        # Capabilities: provider catalogues rarely report them (Go reports none),
-        # and an EMPTY set silently disqualifies the model from the Build/agent
-        # driver pickers (tool-calling gate) — the enable "works" but the model
-        # only surfaces in capability-agnostic roles, which reads as broken.
-        # Default modern-serving table stakes (tool_calling + json_mode; +
-        # long_context per its >~64k semantics); a genuinely tool-less model
-        # fails loudly at run time, which is diagnosable — invisibility is not.
-        # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
-        capabilities = catalogue_model.capabilities if catalogue_model else []
-        if not capabilities:
-            capabilities = ["tool_calling", "json_mode"] + (
-                ["long_context"] if context_window >= 65536 else []
-            )
+        context_window = _provider_context_window(body, catalogue_model, provider.label)
+        capabilities = _provider_capabilities(context_window, catalogue_model)
+        pricing_mode, price_in_per_m, price_out_per_m = _provider_prices(catalogue_model)
         upsert = ModelUpsert(
             id=catalogue_id,
             model_id=model_id,
@@ -266,17 +275,9 @@ class ProviderConfigService:
                 else (catalogue_model.max_output_tokens if catalogue_model else None)
             ),
             capabilities=capabilities,
-            price_in_per_m=(
-                catalogue_model.price_in_per_m
-                if catalogue_model is not None and catalogue_model.price_in_per_m is not None
-                else 0.0
-            ),
-            price_out_per_m=(
-                catalogue_model.price_out_per_m
-                if catalogue_model is not None and catalogue_model.price_out_per_m is not None
-                else 0.0
-            ),
-            pricing_mode="metered" if prices_known else "unknown",
+            price_in_per_m=price_in_per_m,
+            price_out_per_m=price_out_per_m,
+            pricing_mode=pricing_mode,
         )
         return self._add_model(upsert)
 
