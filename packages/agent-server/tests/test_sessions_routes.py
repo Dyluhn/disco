@@ -231,14 +231,14 @@ def test_view_coalescing_single_exec() -> None:
     cid = "conv_coalesce_test"
     # Inject a fake executor with the fake session
     fake_executor = MagicMock()
-    fake_executor._sandbox = fake_session
-    runtime._executors[cid] = fake_executor
+    fake_executor.sandbox = fake_session
+    runtime._run_resources.set_executor(cid, fake_executor)
 
     async def run():
         # Fire two concurrent view calls — they should coalesce.
         results = await asyncio.gather(
-            runtime.session_view(cid, "dev", 10_000),
-            runtime.session_view(cid, "dev", 10_000),
+            runtime._sessions.session_view(cid, "dev", 10_000),
+            runtime._sessions.session_view(cid, "dev", 10_000),
         )
         return results
 

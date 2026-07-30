@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 from disco.agent_server.mcp_manager import McpManager
@@ -20,15 +19,14 @@ def _server(name: str) -> McpServerConfig:
     )
 
 
-def _manager() -> tuple[McpManager, SimpleNamespace]:
-    runtime = SimpleNamespace(_mcp_http_status={}, _mcp_http_clients={})
-    return McpManager(runtime), runtime
+def _manager() -> McpManager:
+    return McpManager(MagicMock(), MagicMock(), MagicMock())
 
 
 async def test_mixed_reachable_and_unreachable_http_servers_degrade_independently(
     monkeypatch,
 ) -> None:
-    manager, runtime = _manager()
+    manager = _manager()
     reachable = _server("reachable")
     unreachable = _server("unreachable")
     attempts: Counter[str] = Counter()
@@ -52,10 +50,10 @@ async def test_mixed_reachable_and_unreachable_http_servers_degrade_independentl
     )
 
     assert attempts == Counter(reachable=1, unreachable=3)
-    assert runtime._mcp_http_status["reachable"] == {
+    assert manager._http_status["reachable"] == {
         "status": "connected",
     }
-    assert runtime._mcp_http_status["unreachable"] == {
+    assert manager._http_status["unreachable"] == {
         "status": "degraded",
         "diagnostic": {
             "code": "mcp_connection_failed",
@@ -63,12 +61,12 @@ async def test_mixed_reachable_and_unreachable_http_servers_degrade_independentl
             "exception_type": "ConnectionError",
         },
     }
-    assert "credential-shaped" not in repr(runtime._mcp_http_status)
+    assert "credential-shaped" not in repr(manager._http_status)
     assert [call.args[0] for call in sleep.await_args_list] == [0.25, 1.0]
 
 
 async def test_http_server_recovers_within_bounded_retry_ladder(monkeypatch) -> None:
-    manager, runtime = _manager()
+    manager = _manager()
     recovering = _server("recovering")
     attempts = 0
 
@@ -90,14 +88,14 @@ async def test_http_server_recovers_within_bounded_retry_ladder(monkeypatch) -> 
     )
 
     assert attempts == 2
-    assert runtime._mcp_http_status["recovering"] == {"status": "connected"}
+    assert manager._http_status["recovering"] == {"status": "connected"}
     sleep.assert_awaited_once_with(0.25)
 
 
 async def test_http_degraded_status_unwraps_exception_group_without_message_leak(
     monkeypatch,
 ) -> None:
-    manager, runtime = _manager()
+    manager = _manager()
     server = _server("grouped")
     grouped = ExceptionGroup(
         "SDK task group",
@@ -114,7 +112,7 @@ async def test_http_degraded_status_unwraps_exception_group_without_message_leak
     )
 
     assert manager._connect_http.await_count == 3
-    assert runtime._mcp_http_status["grouped"] == {
+    assert manager._http_status["grouped"] == {
         "status": "degraded",
         "diagnostic": {
             "code": "mcp_connection_failed",
@@ -122,11 +120,11 @@ async def test_http_degraded_status_unwraps_exception_group_without_message_leak
             "exception_type": "ConnectError",
         },
     }
-    assert "credential-shaped" not in repr(runtime._mcp_http_status)
+    assert "credential-shaped" not in repr(manager._http_status)
 
 
 def test_server_normalization_accepts_typed_and_raw_without_echoing_secrets() -> None:
-    manager, _runtime = _manager()
+    manager = _manager()
     typed = _server("typed")
     raw = {
         "transport": "streamable_http",

@@ -505,7 +505,7 @@ class _CommittedWorkspaceGate:
 
     async def require_locked(self, conversation_id: str) -> CommittedWorkspaceView:
         try:
-            return await self.runtime_required().require_committed_host_mirror_locked(
+            return await self.runtime_required()._workspace.require_committed_host_mirror_locked(
                 conversation_id
             )
         except (WorkspaceCommitUnavailable, RuntimeError) as exc:
@@ -580,14 +580,14 @@ async def _execute_committed_deploy(
 
                 async def begin_mutation() -> None:
                     await gate.require_locked(cid)
-                    await runtime.record_workspace_mutation_locked(
+                    await runtime._workspace.record_mutation_locked(
                         cid,
                         "cloudflare.deploy-record",
                         paths=(".disco/cloudflare/deployments",),
                     )
 
                 async def finish_mutation() -> None:
-                    await runtime.finalize_host_mirror_change_locked(
+                    await runtime._workspace.finalize_host_mirror_change_locked(
                         cid, "cloudflare.deploy-record"
                     )
 

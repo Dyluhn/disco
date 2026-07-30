@@ -23,6 +23,9 @@ from typing import Any
 
 from disco.core import DEFAULT_OWNER_ID, ConversationState, Event, EventFilter
 
+_IMPORT_MAX_EVENTS = 20_000
+_VALID_SURFACES = frozenset({"research", "build", "agent", "deep_research"})
+
 
 class ShareService:
     """Stateless share-surface logic, wired with the store + runtime resolvers."""
@@ -154,11 +157,6 @@ class ShareService:
 
         from .redaction import redact_event_payload
 
-        # The surface allow-set + import cap stay on ConversationRuntime (also
-        # used by set_surface / _surface_of) — single source of truth, reached
-        # late-bound to avoid a module-load circular import.
-        from .runtime import ConversationRuntime
-
         if not isinstance(bundle, dict):
             return {"ok": False, "reason": "bundle_not_an_object"}
         if bundle.get("bundle_version") != 1:
@@ -166,13 +164,13 @@ class ShareService:
         raw_events = bundle.get("events")
         if not isinstance(raw_events, list) or not raw_events:
             return {"ok": False, "reason": "bundle_has_no_events"}
-        if len(raw_events) > ConversationRuntime._IMPORT_MAX_EVENTS:
+        if len(raw_events) > _IMPORT_MAX_EVENTS:
             return {"ok": False, "reason": "bundle_too_large"}
 
         # Surface coerced into the known set (an attacker-set surface can't pick an
         # unhandled code path); title is text, truncated (React escapes it on render).
         surface = bundle.get("surface")
-        if surface not in ConversationRuntime._VALID_SURFACES:
+        if surface not in _VALID_SURFACES:
             surface = "build"
         raw_title = bundle.get("title")
         title = (raw_title[:200] if isinstance(raw_title, str) else None) or "(imported)"

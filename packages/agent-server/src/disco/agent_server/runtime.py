@@ -1,182 +1,74 @@
-"""The conversation runtime — runs the agent loop with real inference (Stage 2).
+"""Agent-server composition facade.
 
-Phase 0 only appended events. This wires `AgentLoop` (core) + a real Qwen-backed
-router into the request path: a user message KICKS the loop, which runs in the
-background, calls the model via the OpenAI adapter, and appends events — which the
-store already publishes to the WebSocket the UI consumes (history-then-live).
-
-The Research surface defaults: `NeverConfirm` (no human gate) + no tools (the
-model answers directly). The grounded research pipeline (Stage 4) is exposed
-separately via `research_stream()` — it is NOT the agent loop; it is the
-rewrite→search→extract→rerank→generate→verify pipeline streamed as the UI's
-grounded-answer frames. The Build surface's `BlastRadiusConfirm` stays dormant.
+``ConversationRuntime`` wires named owners and retains only the narrow ingress
+surface shared by transports. Domain policy and mutable collections live on
+their owning services.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import contextvars
-import hashlib
-import logging
+import ctypes
+import ctypes.util
+import gc
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
-from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
-    ActionEvent,
-    AgentErrorEvent,
     ConversationStatus,
-    Event,
-    EventSource,
-    LLMMessage,
-    LLMSummarizingCondenser,
     MessageEvent,
-    NoOpCondenser,
-    ObservationEvent,
     PlanEvent,
-    ReportEvent,
-    SecurityRisk,
     SkillStore,
     StatusEvent,
-    ToolCall,
-    ToolResult,
-    VerifierVerdictEvent,
-    WorkspaceMutationEvent,
-    agent_view_consistent_events,
-    current_workspace_agent_view_id,
-    latest_workspace_run_intent,
-    workspace_run_intent_admission_required,
 )
 from disco.core.appkit import BuildBrief
-from disco.core.context.artifact_projection import (
-    artifact_paths_from_events,
-    manifest_path_divergence,
-)
-from disco.core.context.ledger import ArtifactRecord
-from disco.core.context.store import ArtifactMemoryStore
-from disco.core.contract import (
-    BuildContract,
-    BuildPhaseTracker,
-    ContractScopeGuard,
-    Phase,
-    ScopeDecision,
-)
 from disco.core.env import disco_env
-from disco.core.inspect import inspect_enabled
-from disco.core.inspect import install as install_inspect
 from disco.core.llm import (
     ConfigStore,
     DefaultLLMRouter,
-    ModelExecutionPolicy,
     ModelRole,
     OperatingMode,
-    RouterSummarizer,
-    SandboxSettings,
     SecretStore,
-    ToolSpec,
 )
 from disco.core.llm.config import RouterConfig
 from disco.core.llm.secret_refs import resolve_provider_secret
-from disco.core.loop import (
-    AgentLoop,
-    AgentViewSuperseded,
-    BlastRadiusConfirm,
-    BuildAgent,
-    NeverConfirm,
-    ResearchAgent,
-    RouterAgent,
-    host_verify_authoritative_enabled,
-    signals,
-)
-from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
-from disco.core.release.spec import ReleaseIntent
-from disco.core.security import RuleBasedAnalyzer
+from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.verification import VerificationRequirementsDirective
-from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
-from disco.retrieval.deep_research import (
-    DepthTier,
-)
-from disco.retrieval.wiring import retrieval_capability_handlers
-from disco.tools import (
-    WORKFLOW_ROUTER_ALLOWED_TOOLS,
-    AppKitPhase,
-    AppKitPhaseState,
-    AppKitToolExecutor,
-    Capability,
-    CapabilityBroker,
-    DefaultToolExecutor,
-    SandboxService,
-    SandboxSession,
-    SandboxSpec,
-    ScopedPhaseExecutor,
-    ToolDef,
-    ToolRegistry,
-    ToolScope,
-    WorkflowPhase,
-    WorkflowPhaseState,
-    agent_scope,
-    artifact_scope,
-    build_default_registry,
-    workflow_effective_scope,
-)
+from disco.core.workflow import WorkflowRun
+from disco.tools import SandboxService, SandboxSession, SandboxSpec
 from disco.tools.builtin.verify_appkit_app import (
-    APPKIT_LIVE_PREVIEW_NAME,
-    APPKIT_VITE_PACKAGE_SHA_RELPATH,
+    APPKIT_LIVE_PREVIEW_NAME as APPKIT_LIVE_PREVIEW_NAME,
 )
-from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore, workflow_router_tools
+from disco.tools.projects import ProjectStore
 
-# MCP client pool (RP-05 rung A) — built once at start, snapshotted per conversation.
-from disco.tools.mcp import McpPool
-from disco.tools.projects import (
-    ProjectStore,
-    StorageError,
-    StorageStatus,
-    VersionRecord,
+from .build_contract_service import (
+    _AUDIT_KIND_TERMS,
 )
-from disco.tools.release_intent import ReleaseIntentWriteError
-from disco.tools.sandbox import (
-    SandboxInstance,
-    SandboxUnavailableError,
+from .build_contract_service import (
+    host_verify_canary_enabled as host_verify_canary_enabled,
 )
-from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
-
-from .appkit_ejection import AppKitEjectionService
-from .build_composition_ports import (
-    BuildExecutorAccess,
-    BuildSurfacePolicy,
-    CurrentProjectStore,
-    WorkspaceRevisionCapture,
+from .build_loop_components import (
+    _apply_mcp_scope as _apply_mcp_scope,
 )
-from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
-from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
-from .build_platform_shadow import (
-    build_platform_shadow_enabled,
-    observe_legacy_build,
+from .build_loop_components import (
+    _mcp_base_risk_by_tool as _mcp_base_risk_by_tool,
 )
-from .connection_tracker import ConnectionTracker, LifecycleSuspender
-from .control_ops import ControlOps
-from .deep_research_service import DeepResearchService
+from .build_loop_components import (
+    _MCPToolWrapper as _MCPToolWrapper,
+)
+from .build_loop_components import (
+    _sync_appkit_live_preview as _sync_appkit_live_preview,
+)
+from .build_loop_components import (
+    toolscope_audit_enabled as toolscope_audit_enabled,
+)
+from .build_loop_components import (
+    workflow_router_enabled as workflow_router_enabled,
+)
 from .driver_context import ResolvedDriverContext
-from .driver_context_state import DriverContextState
-from .driver_runtime import (
-    DriverPreflight,
-    DriverRuntime,
-)
-from .driver_runtime_ports import (
-    RuntimeDriverProbeSeams,
-    RuntimeDriverPromptState,
-    RuntimeDriverSelections,
-)
-from .lifecycle import _GATE_STATES
-from .lifecycle_command_service import LifecycleCommandService, compose_lifecycle_service
-from .mcp_manager import McpManager
-from .preview_manager import PreviewManager
-from .preview_service import PreviewService
-from .resume_service import ResumeService
+from .runtime_composition import wire_runtime
 from .runtime_model_probe import (
     _LIVE_MODEL_PROBE_CACHE as _LIVE_MODEL_PROBE_CACHE,
 )
@@ -189,47 +81,14 @@ from .runtime_model_probe import (
 from .runtime_model_probe import (
     _PROBE_TTL_S as _PROBE_TTL_S,
 )
-from .runtime_model_probe import (
-    _do_live_model_probe,
+from .runtime_model_probe import _do_live_model_probe
+from .runtime_model_probe import _model_label as _model_label
+from .runtime_model_probe import _probe_live_model as _owned_probe_live_model
+from .sandbox_runtime_service import (
+    build_sandbox_service as build_sandbox_service,
 )
-from .runtime_model_probe import (
-    _model_label as _model_label,
-)
-from .runtime_model_probe import (
-    _probe_live_model as _owned_probe_live_model,
-)
-from .runtime_settings import (
-    RuntimeSettings,
-    _RuntimeModelBindings,
-    _RuntimeSettingsRouting,
-)
-from .schedule_service import (
-    RecurringScheduleControl,
-    ScheduleService,
-    WorkflowConversationSettings,
-    WorkflowLoopFactory,
-    WorkflowModelAccess,
-    WorkflowProjectAccess,
-    WorkflowRunControl,
-)
-from .security_live_verifier import make_security_live_verifier
-from .sessions_service import SessionsService
-from .share_service import ShareService
-from .space_service import ConfiguredProjectRoot, SpaceService
-from .suggestion_service import SuggestionService
-from .title_service import TitleService
-from .verify.dispatcher import HostVerifierDispatcher
-from .verify.host import HostWebAppVerifier
-from .verify.model_verifier import ModelVerifier
-from .workflow_events import handle_workflow_tool_event
-from .workflow_run_service import WorkflowRunService
-from .workspace_commit import (
-    CommittedWorkspaceView,
-    WorkspaceRunSuperseded,
-    pending_workspace_run_intent,
-)
-from .workspace_service import (
-    WorkspaceCoordinator,
+from .sandbox_runtime_service import (
+    effective_local_runtime as effective_local_runtime,
 )
 from .workspace_service import (
     WorkspaceRestoreConflict as WorkspaceRestoreConflict,
@@ -241,386 +100,77 @@ from .workspace_service import (
     WorkspaceVersionNotFound as WorkspaceVersionNotFound,
 )
 
-logger = logging.getLogger(__name__)
-
-_TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
-_WORKFLOW_ROUTER_FLAG = "WORKFLOW_ROUTER"
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-
-
-def toolscope_audit_enabled() -> bool:
-    """True iff DISCO_TOOLSCOPE_AUDIT is truthy (default OFF)."""
-    return str(disco_env(_TOOLSCOPE_AUDIT_FLAG) or "").strip().lower() in _TRUTHY
-
-
-def workflow_router_enabled() -> bool:
-    """True iff DISCO_WORKFLOW_ROUTER is truthy (default OFF)."""
-    return str(disco_env(_WORKFLOW_ROUTER_FLAG) or "").strip().lower() in _TRUTHY
-
-
-from .build_contract_service import (  # noqa: E402
-    _AUDIT_KIND_TERMS,
-    BuildContractService,
-    _ToolScopeAuditRecorder,
-    host_verify_canary_enabled,
-)
-from .sandbox_runtime_service import SandboxRuntimeService  # noqa: E402
-
-_ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
-_ACTIONLESS_AUTO_RESUME_NUDGE = (
-    "<system-reminder>\n"
-    f"{_ACTIONLESS_AUTO_RESUME_MARKER}: host is resuming this autonomous build "
-    "once after an actionless pause. Continue from the first unfinished plan "
-    "step now: call a concrete tool that changes or verifies the deliverable, "
-    "or call `finish` if the work is genuinely complete. Do not wait for a "
-    "human response.\n"
-    "</system-reminder>"
-)
-
-
-class _MCPToolWrapper:
-    """Thin Tool-protocol wrapper that adapts an MCP ToolDef for the registry.
-    MCP tools run through the pool's per-server client (routed by qualified name),
-    not through the default executor's sandbox path. The definition is the ToolDef
-    built at pool start; run() invokes the real tool via the pool."""
-
-    def __init__(self, tdef: Any, pool: McpPool) -> None:
-        self.definition = tdef
-        self._pool = pool
-
-    async def run(self, args: Any, ctx: Any) -> Any:
-        from disco.tools.anatomy import ToolOutcome
-        from disco.tools.mcp import fence_mcp_result
-        from disco.tools.mcp.naming import split_qualified_name
-
-        qn = self.definition.name
-        parts = split_qualified_name(qn)
-        if parts is None:
-            return ToolOutcome(
-                success=False,
-                content=f"MCP tool {qn!r}: not a valid qualified name",
-                error="invalid qualified name",
-            )
-        server, tool = parts
-        try:
-            # Convert validated pydantic model back to plain dict
-            if hasattr(args, "model_dump"):
-                raw_args = args.model_dump()
-            else:
-                raw_args = dict(args)
-            result = await self._pool.call_tool(server, tool, raw_args)
-            # RP-05b §4: MCP output is UNTRUSTED — every MCP channel is injectable
-            # (CyberArk/MCPTox). Fence the raw result so the model sees it as data,
-            # not instruction; the fenced block is appended as text and is NEVER fed
-            # back into the tool-call parser. THIS is the production call site for
-            # fence_mcp_result — the fence is dead unless it wraps output here.
-            content = fence_mcp_result(server, tool, result)
-            return ToolOutcome(
-                success=not result.get("isError", False),
-                content=content,
-            )
-        except Exception as exc:
-            return ToolOutcome(
-                success=False,
-                content=f"MCP tool {qn!r} call failed: {exc}",
-                error=str(exc),
-            )
-
-
-class _MetaToolSearchWrapper:
-    """Wraps the tool_search meta-tool with the full MCP tool list for searching.
-
-    The LLM calls this when the pool is over the schema cap. It runs an
-    orchestrator-side keyword search over ALL MCP tools (including those hidden
-    from the advertised set) and returns qualified names + descriptions. The
-    active schema set is never mutated — discovery only.
-    """
-
-    def __init__(self, tdef: Any, all_tool_descs: list[dict]) -> None:
-        self.definition = tdef
-        self._all_tool_descs = all_tool_descs
-
-    async def run(self, args: Any, ctx: Any) -> Any:
-        import json
-
-        from disco.tools.anatomy import ToolOutcome
-        from disco.tools.mcp.tool_search import _tool_search_handler
-
-        results = await _tool_search_handler(
-            query=args.query,
-            limit=args.limit,
-            all_tools=self._all_tool_descs,
-        )
-        content = json.dumps(results, indent=2) if results else "No matching tools found."
-        return ToolOutcome(success=True, content=content, structured={"results": results})
-
-
-def _mcp_base_risk_by_tool(tools: list[ToolDef]) -> dict[str, SecurityRisk]:
-    """Project operator-configured MCP risk tiers into the live analyzer map.
-
-    Keeping this as a named seam makes H5 testable and prevents a future MCP
-    registry refactor from silently falling back to name-based risk inference.
-    """
-    risks: dict[str, SecurityRisk] = {}
-    for tool in tools:
-        risk = getattr(tool, "base_risk", None)
-        if isinstance(risk, SecurityRisk):
-            risks[tool.name] = risk
-    return risks
-
-
-def _apply_mcp_scope(
-    executor: DefaultToolExecutor,
-    all_mcp_tools: list,
-    call_target: Any,
-    *,
-    max_active_schemas: int = 20,
-) -> None:
-    """Register MCP tools in the executor and apply the §6 advertised/callable split.
-
-    All MCP tools are registered as callable (added to allowed_tools). Over the
-    cap, only non-MCP tools + tool_search are advertised to the LLM; under the
-    cap, advertised_tools stays None so all allowed tools are shown (unchanged
-    behavior). The planner-safety readonly_tool_names backstop always keys off
-    allowed_tools, not the advertised subset.
-    """
-    if not all_mcp_tools:
-        return
-
-    mcp_names = frozenset(t.name for t in all_mcp_tools)
-    non_mcp_allowed = executor._scope.allowed_tools
-    # Preserve any pre-existing advertise/callable split (e.g. scaffold_starter
-    # withheld when no starter kit resolves — codex four-fix review defect #1):
-    # the over-cap advertised rebuild below must start from what was ADVERTISED,
-    # not from the wider allowed set, or it silently re-advertises withheld tools.
-    non_mcp_advertised = (
-        executor._scope.advertised_tools
-        if executor._scope.advertised_tools is not None
-        else non_mcp_allowed
+if TYPE_CHECKING:
+    from .appkit_ejection import AppKitEjectionService
+    from .artifact_manifest_shadow import ArtifactManifestShadow
+    from .build_contract_service import BuildContractService
+    from .build_kernel import DiscoKernel
+    from .build_loop_assembler import BuildShadowLedger
+    from .build_loop_factory import BuildLoopFactory
+    from .build_platform_runtime import AppKitEjectionLedger, BuildPlatformRuntime
+    from .build_retrieval import BuildRetrievalCapabilities
+    from .connection_tracker import ConnectionTracker
+    from .control_ops import ControlOps
+    from .conversation_control_service import ConversationControlService
+    from .deep_research_service import DeepResearchService
+    from .deep_research_state import DeepResearchState
+    from .driver_context_state import DriverContextState
+    from .driver_runtime import DriverPreflight, DriverRuntime
+    from .lifecycle import LifecycleManager
+    from .lifecycle_command_service import LifecycleCommandService
+    from .mcp_manager import McpManager
+    from .persistence_notifier import PersistenceNotifier
+    from .preview_service import PreviewService
+    from .project_runtime_service import ProjectRuntimeService
+    from .resume_service import ResumeService
+    from .run_controller import RunController
+    from .run_kill_service import RunKillService
+    from .run_registry import (
+        CancellationRegistry,
+        KernelPinRegistry,
+        LoopRegistry,
+        RunAuthorityLedger,
+        RunIngressLedger,
+        RunRecoveryLedger,
+        RunRegistry,
+        RunResourceRegistry,
     )
-
-    # Extend the security allowlist: ALL MCP tools are callable by qualified name.
-    # When a pre-existing advertise split is in place, extend IT too — under the
-    # cap every MCP tool is meant to be visible, and an untouched explicit
-    # advertised set would silently hide them all (complement of defect #1).
-    scope_update: dict[str, Any] = {"allowed_tools": non_mcp_allowed | mcp_names}
-    if executor._scope.advertised_tools is not None:
-        scope_update["advertised_tools"] = non_mcp_advertised | mcp_names
-    executor._scope = executor._scope.model_copy(update=scope_update)
-    for tdef in all_mcp_tools:
-        executor._registry.register(_MCPToolWrapper(tdef, call_target))
-
-    # §6 cap: over the limit, restrict the ADVERTISED set to non-MCP + tool_search.
-    if len(all_mcp_tools) > max_active_schemas:
-        from disco.tools.mcp.tool_search import meta_tool_search
-
-        ts_def = meta_tool_search()
-        all_tool_descs = [{"name": t.name, "description": t.description} for t in all_mcp_tools]
-        executor._registry.register(_MetaToolSearchWrapper(ts_def, all_tool_descs))
-        # tool_search must be in allowed_tools (callable) and advertised_tools (visible).
-        executor._scope = executor._scope.model_copy(
-            update={
-                "allowed_tools": executor._scope.allowed_tools | {"tool_search"},
-                "advertised_tools": non_mcp_advertised | {"tool_search"},
-            }
-        )
-    elif executor._scope.advertised_tools is not None:
-        # Under cap but advertised_tools was already explicitly set (e.g. W4 weak-tier
-        # withholding). Extend it with the MCP tool names so they appear in the LLM's
-        # tool list. If advertised_tools is None (show-all), leave it None — no change.
-        executor._scope = executor._scope.model_copy(
-            update={"advertised_tools": executor._scope.advertised_tools | mcp_names}
-        )
-
-
-def _freeform_ejection_tool_specs(
-    base_scope: ToolScope,
-    all_mcp_tools: list[ToolDef],
-    call_target: Any,
-    *,
-    max_active_schemas: int,
-) -> tuple[ToolSpec, ...]:
-    """Resolve the ordinary post-ejection catalog without widening the live executor."""
-
-    preview = DefaultToolExecutor(build_default_registry(), base_scope)
-    _apply_mcp_scope(
-        preview,
-        all_mcp_tools,
-        call_target,
-        max_active_schemas=max_active_schemas,
+    from .run_stranded_sweep import RunStrandedSweep
+    from .run_supervisor import (
+        RunFinalizer,
+        RunPersistenceSupervisor,
+        RunSupervisor,
     )
-    return tuple(preview.available_tools())
+    from .runtime_settings import RuntimeSettings
+    from .sandbox_resource_reconciler import SandboxResourceReconciler
+    from .sandbox_runtime_service import SandboxRuntimeService
+    from .schedule_service import ScheduleService
+    from .sessions_service import SessionsService
+    from .share_service import ShareService
+    from .space_service import SpaceService
+    from .suggestion_service import SuggestionService
+    from .title_service import TitleService
+    from .upload_store import UploadStore
+    from .workspace_service import WorkspaceCoordinator
 
 
-def _mcp_composition_inputs(runtime: Any) -> tuple[list[ToolDef], int]:
-    """Snapshot one loop's MCP catalog and configured visibility ceiling."""
-
-    tools: list[ToolDef] = []
-    if runtime._mcp_pool is not None and runtime._mcp_pool.started:
-        tools.extend(runtime._mcp_pool.snapshot())
-    if runtime._mcp_http_tools:
-        tools.extend(runtime._mcp_http_tools.values())
-    config = runtime._config_store.load()
-    return tools, config.mcp.max_active_schemas if config.mcp else 20
-
-
-def _bind_ejection(
-    runtime: Any,
-    conversation_id: str,
-    executor: AppKitToolExecutor,
-    base_scope: ToolScope,
-    mcp_tools: list[ToolDef],
-    max_active_schemas: int,
-) -> None:
-    specs = _freeform_ejection_tool_specs(
-        base_scope,
-        mcp_tools,
-        runtime._mcp_call_target,
-        max_active_schemas=max_active_schemas,
-    )
-    executor.set_ejection_callback(
-        lambda call: runtime._appkit_ejection.eject(
-            conversation_id,
-            call,
-            tool_specs=specs,
-        )
-    )
-
-
-def _build_appkit_registry() -> ToolRegistry:
-    """Default registry plus AppKit-only tools for strict AppKit executors."""
-    from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
-    from disco.tools.builtin.design_lint import DesignLintTool
-    from disco.tools.builtin.request_custom_build import RequestCustomBuildTool
-    from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppTool
-
-    registry = build_default_registry()
-    for tool_cls in (
-        *APPKIT_V2_TOOLS,
-        DesignLintTool,
-        RequestCustomBuildTool,
-        VerifyAppKitAppTool,
-    ):
-        registry.register(tool_cls())
-    return registry
-
-
-async def _sync_appkit_live_preview(session: SandboxSession) -> None:
-    """Keep strict AppKit on one real, platform-managed Vite development server.
-
-    ``app_create`` and every later semantic mutation regenerate the Vite source
-    tree.  Dependency installation and preview lifecycle are platform work: the
-    strict driving model never receives shell or preview controls.  Repeated calls
-    are cheap (exact package digest + live manager start are idempotent), while a
-    dependency/start failure remains visible as the managed lifecycle's CRASHED
-    state rather than falling back to raw source bytes.
-    """
-
-    manager = getattr(session, "_preview_manager", None)
-    if manager is None:
-        manager = PreviewManager(session)
-        session._preview_manager = manager
-
-    install_failure = ""
-    package_changed = False
-    dependencies_refreshed = False
-    try:
-        package_bytes = await session.read_file("package.json")
-        package_digest = hashlib.sha256(package_bytes).hexdigest()
-        try:
-            await session.list_dir("node_modules")
-            has_modules = True
-        except Exception:  # noqa: BLE001 - absence is the expected first-run state
-            has_modules = False
-        try:
-            marker = (await session.read_file(APPKIT_VITE_PACKAGE_SHA_RELPATH)).decode().strip()
-        except Exception:  # noqa: BLE001 - missing cache marker requires npm ci
-            marker = ""
-        package_changed = marker != package_digest
-        if not has_modules or marker != package_digest:
-            if not await session.file_exists("package-lock.json"):
-                install_failure = "AppKit preview requires its generated package-lock.json."
-            else:
-                installed = await session.exec_shell(
-                    "npm ci --no-audit --no-fund",
-                    timeout_s=300,
-                )
-                if getattr(installed, "exit_code", 1) != 0 or bool(
-                    getattr(installed, "timed_out", False)
-                ):
-                    detail = str(
-                        getattr(installed, "stderr", "")
-                        or getattr(installed, "stdout", "")
-                        or "npm ci failed"
-                    ).strip()
-                    install_failure = f"AppKit preview dependency setup failed: {detail[-1200:]}"
-                else:
-                    dependencies_refreshed = True
-                    await session.write_file(
-                        APPKIT_VITE_PACKAGE_SHA_RELPATH,
-                        (package_digest + "\n").encode(),
-                    )
-    except Exception as exc:  # noqa: BLE001 - lifecycle must remain visible, not break mutation
-        install_failure = f"AppKit preview preparation failed: {exc}"
-
-    try:
-        current = manager.canonical_lifecycle_session()
-        if (
-            install_failure
-            and current is not None
-            and getattr(getattr(current, "status", None), "value", "") in {"running", "unavailable"}
-        ):
-            # Preserve the user's last valid interactive frame. The lifecycle
-            # detail records why the newest dependency graph is not yet active.
-            current.update_error = install_failure
-            return
-        if package_changed and dependencies_refreshed and current is not None:
-            # Vite HMR handles content/design writes. A dependency graph change
-            # is the narrower process boundary that genuinely needs re-exec.
-            await manager.stop(current.name)
-        preview = await manager.start(
-            framework="vite",
-            name=APPKIT_LIVE_PREVIEW_NAME,
-            supervise=True,
-        )
-        # A stale/partial dependency tree can still let Vite answer health after
-        # ``npm ci`` failed. Keep that update failure visible even when the old
-        # runtime reaches RUNNING; health is not proof the requested graph landed.
-        preview.update_error = install_failure or None
-    except Exception:  # noqa: BLE001 - the manager/status endpoint reports honest unavailability
-        logger.warning("AppKit managed preview could not start", exc_info=True)
-
-
-_LOG = logging.getLogger(__name__)
-
-
-def _has_unfinished_plan(events: list) -> bool:
-    """True when an approved plan exists but FINISHED was never recorded — the
-    conversation was interrupted mid-execution (server crash, manual cancel)."""
-    has_plan = any(isinstance(e, PlanEvent) for e in events)
-    if not has_plan:
-        return False
+def _has_unfinished_plan(events: list[Any]) -> bool:
+    has_plan = any(isinstance(event, PlanEvent) for event in events)
     has_finished = any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
+        isinstance(event, StatusEvent)
+        and event.status is ConversationStatus.FINISHED
+        for event in events
     )
-    return not has_finished
-
-
-# effective_local_runtime + build_sandbox_service live in sandbox_runtime_service (pulled
-# out with the rest of the sandbox resolution path). Re-export so callers that import
-# from disco.agent_server.runtime (__main__ + tests) keep working unchanged.
-from .sandbox_runtime_service import (  # noqa: E402, F811
-    build_sandbox_service as build_sandbox_service,
-)
-from .sandbox_runtime_service import (  # noqa: E402
-    effective_local_runtime as effective_local_runtime,
-)
+    return has_plan and not has_finished
 
 
 def _probe_live_model(
-    base_url: str | None, api_key: str | None = None, model_id: str | None = None
+    base_url: str | None,
+    api_key: str | None = None,
+    model_id: str | None = None,
 ) -> dict[str, Any]:
-    """Compatibility seam for callers and tests that import from ``runtime``."""
+    """Compatibility seam for existing imports and probe monkeypatches."""
+
     return _owned_probe_live_model(
         base_url,
         api_key,
@@ -629,87 +179,97 @@ def _probe_live_model(
     )
 
 
-class _NoToolExecutor:
-    """A read-only surface with no tools: the model answers directly. Any tool the
-    model hallucinates fails loudly as an observation (it has none to call)."""
-
-    def available_tools(self) -> list:
-        return []
-
-    async def execute(self, call) -> ToolResult:
-        return ToolResult(
-            call_id=call.call_id,
-            tool_name=call.tool_name,
-            success=False,
-            content="",
-            error="no tools are available on this surface",
-        )
-
-
 def _release_process_memory() -> None:
-    """Hand freed heap pages back to the OS after a memory-heavy run.
-
-    Python frees objects, but glibc's allocator keeps the arenas instead of
-    `munmap`-ing them — so after a bursty Deep Research run (concurrent legs
-    fetching full pages + stacking ONNX batches) the process RSS stays pinned at
-    the peak high-water mark forever, leaving a long-lived agent-server bloated
-    and the next heavy op with less headroom. `gc.collect()` drops any lingering
-    cycle-held buffers; `malloc_trim(0)` then returns the now-free arena pages.
-
-    This is the retention half of the OOM root cause — its companion is the
-    gather-leg concurrency cap that bounds the PEAK in the first place. Best
-    effort: a non-glibc libc (musl / macOS) simply has no `malloc_trim`, and the
-    gc pass still ran. Set `DISCO_DR_MALLOC_TRIM=0` to disable.
-    """
-    import gc
+    """Best-effort release of freed glibc arenas after memory-heavy runs."""
 
     gc.collect()
-    if (os.environ.get("DISCO_DR_MALLOC_TRIM") or "1").strip().lower() in (
+    if (os.environ.get("DISCO_DR_MALLOC_TRIM") or "1").strip().lower() in {
         "0",
         "off",
         "false",
         "none",
-    ):
+    }:
         return
     try:
-        import ctypes
-        import ctypes.util
-
-        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+        libc = ctypes.CDLL(
+            ctypes.util.find_library("c") or "libc.so.6",
+            use_errno=True,
+        )
         trim = getattr(libc, "malloc_trim", None)
         if trim is not None:
             trim(0)
-    except (OSError, AttributeError, ValueError):  # non-glibc / unavailable
+    except (OSError, AttributeError, ValueError):
         pass
 
 
-def _default_in_catalog(default: str | None, models: list[dict[str, object]]) -> str | None:
-    """Only highlight a default the returned catalog actually contains — a stale
-    assignment (model removed/renamed) must not point the UI at a ghost entry."""
-    return default if any(m["id"] == default for m in models) else None
+def _default_in_catalog(
+    default: str | None,
+    models: list[dict[str, object]],
+) -> str | None:
+    return default if any(model["id"] == default for model in models) else None
 
 
 class ConversationRuntime:
-    """Builds a router from the CURRENT persisted config per request, plus one
-    AgentLoop per conversation. `kick(cid)` schedules the loop in the background.
-
-    Model assignments live in a shared ConfigStore (PMX_CONFIG) that the Settings
-    UI writes; `_router_now()` reloads it each request, so reassigning a role takes
-    effect on the next research call / new conversation without a restart."""
+    """Wiring-only root plus the transport-stable conversation ingress facade."""
 
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
 
-    def _build_sandbox_service_from_config(self, settings: SandboxSettings) -> SandboxService:
-        return build_sandbox_service(settings)
-
-    def _host_verify_flags_enabled(self) -> bool:
-        return host_verify_canary_enabled() or host_verify_authoritative_enabled()
-
-    def _init_mcp_http_state(self) -> None:
-        """Initialize remote-MCP caches and their sanitized status boundary."""
-        self._mcp_http_clients: dict[str, Any] = {}
-        self._mcp_http_tools: dict[str, ToolDef] = {}
-        self._mcp_http_status: dict[str, dict[str, Any]] = {}
+    _store: SqliteEventStore
+    _skill_store: SkillStore
+    _uploads: UploadStore
+    _secret_store: SecretStore
+    _injected_router: DefaultLLMRouter | None
+    _enable_thinking: bool
+    _config_store: ConfigStore
+    _sandbox: SandboxRuntimeService
+    _projects: ProjectRuntimeService
+    _mode: OperatingMode
+    _loop_registry: LoopRegistry
+    _run_registry: RunRegistry
+    _run_authorities: RunAuthorityLedger
+    _run_ingress: RunIngressLedger
+    _run_resources: RunResourceRegistry
+    _run_recovery: RunRecoveryLedger
+    _driver_contexts: DriverContextState
+    _appkit_ejections: AppKitEjectionLedger
+    _settings: RuntimeSettings
+    _drivers: DriverRuntime
+    _driver_preflight: DriverPreflight
+    _cancellations: CancellationRegistry
+    _mcp: McpManager
+    _title_service: TitleService
+    _suggestion_service: SuggestionService
+    _share: ShareService
+    _resume: ResumeService
+    _workspace: WorkspaceCoordinator
+    _persistence_notifier: PersistenceNotifier
+    _contract: BuildContractService
+    _build_platform: BuildPlatformRuntime
+    _lifecycle: LifecycleManager
+    _lifecycle_commands: LifecycleCommandService
+    _connections: ConnectionTracker
+    _appkit_ejection: AppKitEjectionService
+    _research_state: DeepResearchState
+    _dr: DeepResearchService
+    _spaces: SpaceService
+    _build_retrieval: BuildRetrievalCapabilities
+    _build_shadows: BuildShadowLedger
+    _artifact_manifest_shadow: ArtifactManifestShadow
+    _loop_factory: BuildLoopFactory
+    _schedule: ScheduleService
+    _sessions: SessionsService
+    _preview: PreviewService
+    _sandbox_resources: SandboxResourceReconciler
+    _run_supervisor: RunSupervisor
+    _run_controller: RunController
+    _run_kills: RunKillService
+    _control: ControlOps
+    _disco_kernel: DiscoKernel
+    _kernel_pins: KernelPinRegistry
+    _conversation_control: ConversationControlService
+    _run_finalizer: RunFinalizer
+    _run_sweep: RunStrandedSweep
+    _run_execution: RunPersistenceSupervisor
 
     def __init__(
         self,
@@ -726,315 +286,38 @@ class ConversationRuntime:
         sandbox_spec: SandboxSpec | None = None,
         skill_store: SkillStore | None = None,
     ) -> None:
-        self._store = store
-        # The user's reusable instruction modules (.md skills). Read per-request
-        # so a skill toggled in Settings affects the next conversation without a
-        # restart — same live-reload model as the config + sandbox stores.
-        self._skill_store = skill_store or SkillStore()
-        # Sandbox backend: injected override (tests / DISCO_SANDBOX) or persisted
-        # SandboxSettings per request (see SandboxRuntimeService).
-        self._injected_sandbox = sandbox_service
-        self._sandbox_spec = sandbox_spec or SandboxSpec()
-        self._sandbox = SandboxRuntimeService(self)
-        # per-conversation driver model override (the Build chat model picker → the
-        # AGENT_DRIVER for that conversation; RouterAgent applies it).
-        # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
-        # every conversation's picked model to the default. Persisted to a JSON sidecar
-        # next to the event DB (PMX_DB) so a resumed conversation keeps its model.
         db_path = disco_env("DB", "") or getattr(store, "db_path", "")
-        if not db_path:
-            logger.warning(
-                "B0 sidecar persistence DISABLED (no DISCO_DB and the store has no "
-                "file path) — per-conversation override/surface/autonomous flags "
-                "will NOT survive a restart"
-            )
-        # Auto-titling: derive a short display title from the first user message so
-        # History/Projects show real names, not a wall of "(untitled)". Fire-and-forget
-        # from kick(); uses the cheap SUMMARIZER role; idempotent + non-blocking.
-        self._title_service = TitleService(self._store, self._router_now)
-        self._suggestion_service = SuggestionService(
-            self._router_now, lambda: self._project_store_now().root or ""
-        )
-        # Phase-3 Build Platform Core observer. Records are diagnostics only:
-        # legacy loop/executor/preview/verifier/export/finish authority never reads them.
-        self._build_platform_shadow_records: dict[str, Any] = {}
-        # Per-conversation server-side uploads sidecar directory (B0 pattern).
-        # DC-07 (2026-06-11): uploads survive sandbox recreation.
-        self._uploads_base = f"{db_path}.uploads" if db_path else ""
-        self._executors: dict[str, DefaultToolExecutor] = {}
-        self._pending_sessions: dict[str, SandboxSession] = {}
-        self._cap_handlers: dict[str, Any] | None = None
-        # per-conversation Deep Research depth tier (set at submit time).
-        self._depth: dict[str, str] = {}
-        # The encrypted-at-rest secret store (OpenRouter key). Its decrypted key is
-        # overlaid into the provider env per request; if it's locked/empty the env
-        # value (if any) is used instead.
-        self._secret_store = secret_store or SecretStore()
-        # The live retrieval/grounding providers for research_stream(). Injected
-        # in tests (hermetic fakes); else lazily built from env on first use so
-        # importing the runtime doesn't pull httpx until research is actually run.
-        self._injected_research_providers = research_providers  # test fake (or None)
-        self._research_providers: dict[str, Any] | None = None  # lazy cache (non-test)
-        # the (remote, reranker_url, embedder_url, nli_url) tuple the cache was built
-        # for — rebuild when the mode OR any endpoint URL changes.
-        self._research_encoders_key: tuple | None = None
-        # A statically-injected router (test seam) pins routing; otherwise the
-        # router is rebuilt per request from the shared, persisted config store so
-        # Settings assignments are actually honored.
-        self._injected_router = router
-        self._enable_thinking = enable_thinking
-        if config_store is not None:
-            self._config_store = config_store
-        elif config is not None:
-            self._config_store = ConfigStore(base_factory=lambda: config)
-            # P4 footgun guard: a passed `config=` is only the SEED — ConfigStore.load()
-            # prefers an on-disk config file (DISCO_CONFIG / disco-config.json) and
-            # silently shadows the in-process object. Warn once so this doesn't cost
-            # debugging time (it cost a live driver-acceptance debug on 2026-06-18).
-            if self._config_store.path.exists():
-                _LOG.warning(
-                    "ConversationRuntime(config=...) is shadowed by the on-disk config "
-                    "at %s — _router_now reloads from disk per request. Pass config_store= "
-                    "or point DISCO_CONFIG at your file to override routing.",
-                    self._config_store.path,
-                )
-        else:
-            self._config_store = ConfigStore()
-        self._mode = mode
-        # DISCO_INSPECT: attach the span-capture handler once, at construction, so
-        # both the live server and any test that builds a runtime get per-request
-        # traces. Idempotent + no-op when the flag is off.
-        if inspect_enabled():
-            install_inspect()
-        self._loops: dict[str, AgentLoop] = {}
-        self._tasks: dict[str, asyncio.Task] = {}
-        self._driver_contexts = DriverContextState(timeout_s=5.0)
-        build_executors = BuildExecutorAccess(self._executors)
-        self._appkit_ejections = AppKitEjectionLedger()
-        # Persisted settings own their collections and sidecar paths. Named,
-        # cohesive ports expose only routing metadata and model-binding cache
-        # operations; RuntimeSettings never receives this runtime or callables.
-        settings_routing = _RuntimeSettingsRouting(
-            self._config_store,
-            self._secret_store,
-            router,
-        )
-        model_bindings = _RuntimeModelBindings(
-            loops=self._loops,
-            tasks=self._tasks,
-            contexts=self._driver_contexts,
-            executors=self._executors,
-            pending_sessions=self._pending_sessions,
-        )
-        self._settings = RuntimeSettings(
+        wire_runtime(
+            self,
+            store,
             db_path=db_path,
-            store=self._store,
-            config_store=self._config_store,
-            routing=settings_routing,
-            model_bindings=model_bindings,
-            appkit_ejections=self._appkit_ejections,
-        )
-        self._drivers = DriverRuntime(
-            config_store=self._config_store,
-            secret_store=self._secret_store,
-            skill_store=self._skill_store,
-            prompt_state=RuntimeDriverPromptState(build_executors),
-            selections=RuntimeDriverSelections(self._settings),
-            probes=RuntimeDriverProbeSeams(),
-            contexts=self._driver_contexts,
-            injected_router=router,
+            config=config,
+            config_store=config_store,
+            secret_store=secret_store,
+            router=router,
             enable_thinking=enable_thinking,
+            mode=mode,
+            research_providers=research_providers,
+            sandbox_service=sandbox_service,
+            sandbox_spec=sandbox_spec,
+            skill_store=skill_store,
         )
-        self._driver_preflight = DriverPreflight(self._drivers)
-        # Durable authority captured by each registered Build task.  The
-        # in-memory generation remains useful for local lifecycle cleanup, but
-        # it cannot arbitrate another Agent-server process.  These ids are
-        # copied from the append-only intent/view protocol and threaded into
-        # supervisor statuses after the task completes.
-        self._run_task_authorities: dict[asyncio.Task[Any], tuple[str | None, str | None]] = {}
-        # W11 (silent RUNNING-stall recovery): bounded re-kick budget per cid. When
-        # loop.run() RETURNS while the conversation is still RUNNING — a dropped /
-        # unparseable model response ended the turn with no terminal StatusEvent, so
-        # the loop's `return await self.get_state()` carries RUNNING straight out (the
-        # silent hang Dylan hit on the MiniMax builds) — we re-kick ONCE to recover a
-        # transient drop, then terminalize honestly to STUCK so a wedged build is
-        # VISIBLE, never RUNNING forever. Reset whenever a run reaches a real status.
-        self._nonterminal_rekicks: dict[str, int] = {}
-        # Progress watermark for the non-terminal re-kick budget: the highest
-        # seq of a SUCCESSFUL PRODUCTIVE action we'd seen at the last non-terminal
-        # return. A long, working iteration ends non-terminal across many turn
-        # boundaries; only a NO-PROGRESS wedge should terminalize to STUCK, so a
-        # new productive action since the last re-kick resets the budget.
-        self._last_rekick_progress_seq: dict[str, int] = {}
-        # [W-48 P1] Last status a run task ENDED at, per cid (in-process). The sync
-        # `_evict_stale_backend` (called at kick) can't await the store, so it reads
-        # this to SKIP a conversation PARKED at a gate — evicting a gated conv on a
-        # backend change would discard its mid-gate workspace. Sound because eviction
-        # only ever touches an IN-PROCESS cached session, and the only way to reach a
-        # gate with such a session is a run that ended here (→ _finalize_clean_return,
-        # which records it). After a restart the caches are empty → nothing to evict.
-        self._last_status: dict[str, ConversationStatus] = {}
-        # Cooperative-cancellation flags for Deep Research (whose engine isn't an
-        # AgentLoop and can't be soft-cancelled the loop's way). Stop sets the flag;
-        # the engine polls it at each sub-question/section boundary and halts,
-        # keeping the partial report (resumable). See _execute_deep_research.
-        self._cancel_flags: dict[str, asyncio.Event] = {}
-        # G1/DR-4: per-conversation upload corpus (text files ingested at upload
-        # time → citable Passages for both basic research and DR runs).
-        # Keyed by conversation_id; value is a flat list of Passage objects.
-        # In-process only (cleared on restart); the sandbox sidecar holds the
-        # raw bytes for persistence (the corpus is re-ingested lazily on demand
-        # in a future persistence upgrade).
-        self._upload_passages: dict[str, list[Any]] = {}  # list[Passage]
-        # RP-05 rung A: MCP client pool — built once at start from RouterConfig.mcp.
-        self._mcp_pool: McpPool | None = None
-        # Servers that need re-approval (ApprovalRequired at startup). Emitted to
-        # WS clients as mcp_approval_required frames.
-        self._mcp_approval_pending: dict[str, dict] = {}
-        # Remote MCP lifecycle/cache state is separate from the stdio pool.
-        self._init_mcp_http_state()
-        # RP-05 rung B: retrieval-tier MCP providers (search/extract Protocol wrappers).
-        self._mcp_retrieval_searches: list = []
-        self._mcp_retrieval_extractions: list = []
-        # MCP lifecycle logic (pool start/stop, HTTP clients, retrieval-tier,
-        # egress/proxy posture, approval drift). The state above stays on the
-        # runtime (tests + _compose_build_loop read it); the manager reaches it
-        # via a back-reference. See mcp_manager.py.
-        self._mcp = McpManager(self)
-        # Share surface (RP-06): scrubbed bundle export/import + revocable
-        # share-link issuance. Stateless; wired with the store + resolvers.
-        self._share = ShareService(self._store, self._surface_of, self._project_store_now)
-        # Resume path (DC-05b/c): trailing-degeneracy condensation + resume-context
-        # reconstruction + the resume_conversation orchestrator. Reaches live
-        # runtime state via a back-reference. See resume_service.py.
-        self._resume = ResumeService(self)
-        # Permanent workspace locks shared by lifecycle delegates.
-        self._workspace = WorkspaceCoordinator(self)
-        self._contract = BuildContractService(
-            self._store,
-            self._settings,
-            build_executors,
-        )
-        self._build_platform = BuildPlatformRuntime(
-            store=self._store,
-            workspace=self._workspace,
-            surfaces=BuildSurfacePolicy(self._settings),
-            rollback=build_executors,
-            ejections=self._appkit_ejections,
-        )
-        self._lifecycle, self._lifecycle_commands = compose_lifecycle_service(self)
-        self._connections = ConnectionTracker(LifecycleSuspender(self._lifecycle))
-        self._appkit_ejection = AppKitEjectionService(
-            event_store=self._store,
-            workspace=self._workspace,
-            revision_capture=WorkspaceRevisionCapture(self._lifecycle),
-            project_stores=CurrentProjectStore(self._config_store),
-            sandboxes=build_executors,
-            transitions=self._build_platform,
-        )
-        # Deep Research surface (plan→iterate→report) + live research stream.
-        # _depth / _research_* cache / _cancel_flags stay on the runtime
-        # (_cancel_flags is shared with kill/cancel/resume); the service reaches
-        # state via a back-ref. See deep_research_service.py.
-        self._dr = DeepResearchService(self)
-        self._spaces = SpaceService(ConfiguredProjectRoot(self._config_store), self._dr)
-        # ScheduleService owns sealed workflow execution and the temporary typed
-        # compatibility port for the legacy ScheduleManager.
-        self._schedule = ScheduleService(
-            self._store,
-            workflow_runs=WorkflowRunService(
-                self._store,
-                lifecycle_commands=self._lifecycle_commands,
-                workspace=self._workspace,
-                project_access=cast(WorkflowProjectAccess, self),
-                settings=cast(WorkflowConversationSettings, self),
-                model_access=cast(WorkflowModelAccess, self),
-                loop_factory=cast(WorkflowLoopFactory, self),
-                run_control=cast(WorkflowRunControl, self),
-            ),
-            project_access=cast(WorkflowProjectAccess, self),
-            recurring_control=cast(RecurringScheduleControl, self),
-        )
-        # Shell-session reads + upload write-through. The caches + tuning
-        # constants stay on the runtime; the service reaches them + live_session
-        # via a back-ref. See sessions_service.py.
-        self._sessions = SessionsService(self)
-        # Live-preview proxy + suspended-sandbox wake. Stateless; reaches
-        # _executors / _wake_locks / _store + the loop/rehydrate resolvers via a
-        # back-ref. See preview_service.py.
-        self._preview = PreviewService(self)
-        # Conversation control ops (the confirmation gate + kill switch). Stateless;
-        # reaches _loops / _tasks / _executors / _pending_sessions / _cancel_flags /
-        # _store + _loop_for / kick via a back-ref. See control_ops.py.
-        self._control = ControlOps(self)
-        # Build kernel seam. The current loop runs through
-        # `DiscoKernel` (a thin pass-through to _control / kick / _store, ZERO behavior
-        # change); the public plan/action-gate methods route through `_kernel_for`, so a
-        # stable `BuildKernel` protocol remains between runtime controls and the loop.
-        self._disco_kernel = DiscoKernel(self)
-        # The kernel PINNED to each conversation's in-flight run (codex finding #1).
-        # A run resolves its kernel ONCE, at the turn that starts it (via
-        # `_ensure_kernel_pinned`), and every later op (gate resume, steer, control
-        # op) reuses the pinned instance — so a mid-run Settings/flag change can
-        # never split a run across kernels (half-disco/half-pi). Cleared when the
-        # run reaches a terminal status (FINISHED/ERROR/STUCK) or is killed, so the
-        # NEXT turn re-resolves the current selection. A pause/gate-park keeps it.
-        self._pinned_kernels: dict[str, BuildKernel] = {}
-        # Per-conversation RUN-GENERATION counter (finding #3, the pin set/clear race).
-        # `kick` bumps it every time it spawns a NEW run task; the done-callback closes
-        # over the generation it was spawned under and `_finalize_clean_return` only
-        # CLEARS the pin if that generation is STILL current. So a finalizer that runs
-        # AFTER a new turn already reused the pin (the async-finalize race) cannot clear
-        # the pin out from under the newer run. A steer (kick early-returns over a live
-        # task) does NOT bump it — same run, same generation, same pin.
-        #
-        # TERMINALIZER AUDIT — every path that appends a terminal status / clears the pin
-        # AFTER an await (where a newer run can reuse the conversation) must be guarded by
-        # this generation, re-checking it with NO await between the guard and the append:
-        #   - `_finalize_clean_return`  (clean STUCK)  — guarded [#3]
-        #   - `_terminalize_crashed`    (crash ERROR)  — guarded [#3]
-        #   - `sweep_abandoned_gates_once` (gate STUCK) — guarded [#3, lifecycle.py]
-        #   - `kill` / `ControlOps.kill` (IDLE 'killed') — guarded [#4]: captures the
-        #     generation at entry, threads it through, and skips teardown + the terminal
-        #     IDLE append (guard A after `await task`, guard B before the append) if a
-        #     newer run has taken over the conversation in the teardown-await window.
-        self._run_generation: dict[str, int] = {}
-        # Engine-rekick fix: latest USER seq that last triggered a POST-TERMINAL
-        # re-kick, per cid. A follow-up appended while a run finalizes is stranded
-        # (kick() is a no-op on the live task; the done-callback finalizers don't
-        # re-kick). `_maybe_rekick_for_stranded_followup` re-kicks at every terminal
-        # conclusion when the (now-correct) work-gate is open, and records the
-        # follow-up's seq here so it re-kicks ONCE per new follow-up: a stalled
-        # same-seq segment (no real progress) never loops, a clean no-follow-up
-        # finish never re-kicks. SEPARATE from `_nonterminal_rekicks` (the W11
-        # RUNNING-stall budget) — this guards the terminal-conclusion path only.
-        self._post_terminal_rekick_seq: dict[str, int] = {}
-        self._run_claimed_user_seq: dict[str, int] = {}
-
-    # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
-    # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
-    # LLM would break verification, so it always follows its own assignment.
-    _GENERATIVE_ROLES: tuple[ModelRole, ...] = (
-        ModelRole.AGENT_DRIVER,
-        ModelRole.RAG_ANSWERER,
-        ModelRole.QUERY_REWRITER,
-        ModelRole.SUMMARIZER,
-    )
 
     def _resolve_secret(self, name: str | None) -> str | None:
-        """Resolve a provider key by secret-ref id from SecretStore only."""
         return resolve_provider_secret(name, self._secret_store)
 
-    def _origin_approved(self, url: str, purpose: str, secret_ref: str | None = "") -> bool:
+    def _origin_approved(
+        self,
+        url: str,
+        purpose: str,
+        secret_ref: str | None = "",
+    ) -> bool:
         return self._config_store.origin_approved(
-            url, purpose, secret_ref, secret_store=self._secret_store
+            url,
+            purpose,
+            secret_ref,
+            secret_store=self._secret_store,
         )
-
-    def _workflow_router_prompt_active(self, conversation_id: str) -> bool:
-        return self._drivers._prompt_state.workflow_router_active(conversation_id)
-
-    def _routing_config_now(self) -> RouterConfig:
-        return self._drivers.config_now()
 
     def _router_now(
         self,
@@ -1055,583 +338,14 @@ class ConversationRuntime:
             appkit_mode=appkit_mode,
         )
 
-    # Four surfaces: research (single-pass /ws/research stream), build (agent +
-    # tools + plan gate, framed for software), agent (the SAME agent machinery
-    # framed as a general task agent), deep_research (long-horizon plan → iterate
-    # → report). "agent" is a framing copy of "build" — identical loop/tools/
-    # sandbox/persistence — so it travels with build through every surface branch.
-    _VALID_SURFACES: frozenset[str] = frozenset({"research", "build", "agent", "deep_research"})
-    # The surfaces that compose the build agent loop (tools + sandbox + gate +
-    # workspace snapshot/rehydrate). "build" and "agent" are behaviorally identical;
-    # they differ only in frontend framing + entry. Branch on this set, never on the
-    # bare string, so a new build-like surface can't silently miss a call site.
-    _BUILD_LIKE_SURFACES: frozenset[str] = frozenset({"build", "agent"})
-    # Surfaces that have a PLAN GATE the autonomous flag should auto-approve.
-    # deep_research is NOT build-like (no build tools/sandbox) but its
-    # plan→iterate→report flow DOES halt at AWAITING_PLAN_APPROVAL — so a
-    # headless/autonomous DR run must auto-approve here too, or it stalls
-    # forever. (research has no plan gate, so it stays excluded.)
-    _AUTONOMOUS_SURFACES: frozenset[str] = frozenset({"build", "agent", "deep_research"})
-
-    def set_surface(self, conversation_id: str, surface: str) -> None:
-        self._settings._set_surface(conversation_id, surface)
-
     def _surface_of(self, conversation_id: str) -> str:
         return self._settings._surface_of(conversation_id)
-
-    def _sandbox_service_now(self) -> SandboxService:
-        return self._sandbox._sandbox_service_now()
-
-    async def probe_active_sandbox(self) -> tuple[bool, str, str]:
-        return await self._sandbox.probe_active_sandbox()
-
-    async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]:
-        return await self._sandbox.probe_sandbox_config(settings)
-
-    def _driver_context_window(self, conversation_id: str | None = None) -> int | None:
-        return self._drivers.context_window(conversation_id)
-
-    async def _resolve_driver_context(self, conversation_id: str) -> ResolvedDriverContext:
-        return await self._drivers.resolve_context(conversation_id)
-
-    async def prewarm_model_probe(self) -> None:
-        await self._drivers.prewarm_model_probe()
-
-    async def prewarm_vision_probe(self) -> None:
-        await self._drivers.prewarm_vision_probe()
-
-    # ---- persisted settings (B0) — delegators to RuntimeSettings ------------
-
-    @property
-    def _model_override(self) -> dict[str, str]:
-        return self._settings._model_overrides
-
-    @_model_override.setter
-    def _model_override(self, value: dict[str, str]) -> None:
-        self._settings._model_overrides = value
-
-    @property
-    def _surface(self) -> dict[str, str]:
-        return self._settings._surface_settings._surfaces
-
-    @property
-    def _autonomous(self) -> dict[str, bool]:
-        return self._settings._autonomous
-
-    @property
-    def _assist(self) -> dict[str, bool]:
-        return self._settings._assist
-
-    @property
-    def _quiet(self) -> dict[str, bool]:
-        return self._settings._quiet
-
-    @property
-    def _artifact_mode(self) -> dict[str, bool]:
-        return self._settings._mode_settings._artifact_mode
-
-    @property
-    def _appkit_mode(self) -> dict[str, bool]:
-        return self._settings._mode_settings._appkit_mode
-
-    @property
-    def _override_path(self) -> str:
-        return self._settings._override_path
-
-    @property
-    def _surface_path(self) -> str:
-        return self._settings._surface_settings._path
-
-    @property
-    def _autonomous_path(self) -> str:
-        return self._settings._autonomous_path
-
-    @property
-    def _assist_path(self) -> str:
-        return self._settings._assist_path
-
-    @property
-    def _quiet_path(self) -> str:
-        return self._settings._quiet_path
-
-    @property
-    def _last_model_path(self) -> str:
-        return self._settings._last_model_path
-
-    def _load_overrides(self) -> dict[str, str]:
-        return self._settings._load_overrides()
-
-    def _save_overrides(self) -> None:
-        self._settings._save_overrides()
-
-    def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
-        self._settings.set_model_override(conversation_id, model_id)
-
-    def _load_surfaces(self) -> dict[str, str]:
-        return self._settings._load_surfaces()
-
-    def _save_surfaces(self) -> None:
-        self._settings._save_surfaces()
-
-    def _load_autonomous(self) -> dict[str, bool]:
-        return self._settings._load_autonomous()
-
-    def _save_autonomous(self) -> None:
-        self._settings._save_autonomous()
-
-    def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
-        self._settings.set_autonomous(conversation_id, value)
 
     def _effective_autonomous(self, conversation_id: str) -> bool:
         return self._settings._effective_autonomous(conversation_id)
 
-    def is_autonomous(self, conversation_id: str) -> bool:
-        return self._settings.is_autonomous(conversation_id)
-
-    def _load_quiet(self) -> dict[str, bool]:
-        return self._settings._load_quiet()
-
-    def _save_quiet(self) -> None:
-        self._settings._save_quiet()
-
-    def set_quiet(self, conversation_id: str, value: bool = True) -> None:
-        self._settings.set_quiet(conversation_id, value)
-
-    def _effective_quiet(self, conversation_id: str) -> bool:
-        return self._settings._effective_quiet(conversation_id)
-
-    def is_quiet(self, conversation_id: str) -> bool:
-        return self._settings.is_quiet(conversation_id)
-
-    def _is_small_assist_default(self, entry: Any) -> bool:
-        return self._settings._is_small_assist_default(entry)
-
-    def _load_assist(self) -> dict[str, bool]:
-        return self._settings._load_assist()
-
-    def _save_assist(self) -> None:
-        self._settings._save_assist()
-
-    def set_assist(self, conversation_id: str, value: bool = True) -> None:
-        self._settings.set_assist(conversation_id, value)
-
-    def _effective_policy(self, conversation_id: str) -> ModelExecutionPolicy:
-        return self._settings._effective_policy(conversation_id)
-
-    def _effective_driver_endpoint(
-        self, conversation_id: str
-    ) -> tuple[str, str, str | None] | None:
-        return self._settings._effective_driver_endpoint(conversation_id)
-
-    def _effective_assist(self, conversation_id: str) -> bool:
-        return self._settings._effective_policy(conversation_id).assist
-
-    def is_assist(self, conversation_id: str) -> bool:
-        return self._settings._effective_policy(conversation_id).assist
-
-    async def apply_settings_change(
-        self,
-        conversation_id: str,
-        *,
-        model_override: str | None = None,
-        assist: bool | None = None,
-        model_provided: bool | None = None,
-    ) -> bool:
-        """Delegator: atomically apply pre-kick / terminal-state settings under the per-cid
-        lock. `model_provided` distinguishes an explicit null (reset-to-default) from an
-        omitted field. Returns True if settable and applied; False → caller should 409."""
-        return await self._settings.apply_settings_change(
-            conversation_id,
-            model_override=model_override,
-            assist=assist,
-            model_provided=model_provided,
-        )
-
-    # ---- artifact_mode (C6) ------------------------------------------------
-
-    def set_artifact_mode(self, conversation_id: str, on: bool) -> None:
-        self._settings.set_artifact_mode(conversation_id, on)
-
-    def _effective_artifact_mode(self, conversation_id: str) -> bool:
-        return self._settings._effective_artifact_mode(conversation_id)
-
-    # ---- appkit_mode (EPIC F) ----------------------------------------------
-
-    def set_appkit_mode(self, conversation_id: str, on: bool) -> None:
-        self._settings.set_appkit_mode(conversation_id, on)
-
-    def _effective_appkit_mode(self, conversation_id: str) -> bool:
-        return self._settings._effective_appkit_mode(conversation_id)
-
-    def set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
-        self._settings.set_research_sources(conversation_id, sources)
-
-    def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
-        return self._settings.get_research_sources(conversation_id)
-
-    # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
-
-    @property
-    def _build_kind(self) -> dict[str, str]:
-        return self._contract._build_kind
-
-    @property
-    def _build_trackers(self) -> dict[str, tuple[BuildContract, BuildPhaseTracker]]:
-        return self._contract._build_trackers
-
-    @property
-    def _contract_fold_attempted(self) -> set[str]:
-        return self._contract._contract_fold_attempted
-
-    @property
-    def _build_audit_trackers(self) -> dict[str, tuple[BuildContract, BuildPhaseTracker]]:
-        return self._contract._build_audit_trackers
-
-    @property
-    def _toolscope_audits(self) -> dict[str, _ToolScopeAuditRecorder]:
-        return self._contract._toolscope_audits
-
-    def activate_contract_for_brief(
-        self, conversation_id: str, build_brief: BuildBrief | None
-    ) -> None:
-        return self._contract.activate_contract_for_brief(conversation_id, build_brief)
-
-    async def _fold_contract_from_history(self, conversation_id: str) -> None:
-        return await self._contract._fold_contract_from_history(conversation_id)
-
-    def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
-        return self._contract.set_build_kind(conversation_id, kind)
-
-    def expected_delivery_mode(self, conversation_id: str) -> str | None:
-        return self._contract.expected_delivery_mode(conversation_id)
-
-    def _starter_kit_for(self, conversation_id: str) -> str | None:
-        return self._contract._starter_kit_for(conversation_id)
-
-    def _finalizer_alias_for(self, conversation_id: str) -> str | None:
-        return self._contract._finalizer_alias_for(conversation_id)
-
-    def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None:
-        return self._contract.note_build_verify_result(conversation_id, passed=passed)
-
-    def _host_verify_canary_hook_for(
-        self, conversation_id: str
-    ) -> Callable[[VerifierVerdictEvent], Awaitable[None]] | None:
-        return self._contract._host_verify_canary_hook_for(
-            conversation_id,
-            self.note_build_verify_result,
-        )
-
-    async def _record_host_verify_canary(
-        self, conversation_id: str, event: VerifierVerdictEvent
-    ) -> None:
-        return await self._contract._record_host_verify_canary(
-            conversation_id,
-            event,
-            self.note_build_verify_result,
-        )
-
-    def _conversation_user_text_sync(self, conversation_id: str) -> str:
-        return self._contract._conversation_user_text_sync(conversation_id)
-
-    def _classify_build_kind_for_audit(self, conversation_id: str) -> str | None:
-        return self._contract._classify_build_kind_for_audit(conversation_id)
-
-    def _build_contract_for(
-        self, conversation_id: str, *, classify_default: bool = False
-    ) -> BuildContract:
-        return self._contract._build_contract_for(
-            conversation_id, classify_default=classify_default
-        )
-
-    def _toolscope_audit_recorder(self, conversation_id: str) -> _ToolScopeAuditRecorder:
-        return self._contract._toolscope_audit_recorder(conversation_id)
-
-    def _build_scope_audit_guard(
-        self, conversation_id: str
-    ) -> tuple[ContractScopeGuard, Callable[[str], None]]:
-        return self._contract._build_scope_audit_guard(conversation_id)
-
-    def _emit_toolscope_audit_summary(
-        self, conversation_id: str, status: ConversationStatus
-    ) -> None:
-        return self._contract._emit_toolscope_audit_summary(conversation_id, status)
-
-    def _build_scope_guard(
-        self,
-        conversation_id: str,
-        *,
-        observer: Callable[[str, Phase, ScopeDecision], None] | None = None,
-    ) -> tuple[ContractScopeGuard | None, Callable[[str], None] | None]:
-        return self._contract._build_scope_guard(conversation_id, observer=observer)
-
-    # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
-
-    def get_last_selected_model(self) -> str | None:
-        """The globally-persisted last-picked driver model (P3). Used by
-        conversation-create routes to seed a new conversation's model when no
-        explicit override is provided. None = no pick ever made."""
-        return self._settings.get_last_selected_model()
-
-    def set_last_selected_model(self, model_id: str | None) -> None:
-        """Persist the last-picked driver model. Called from set_model_override
-        automatically; exposed here for tests."""
-        self._settings.set_last_selected_model(model_id)
-
-    def driver_models(self) -> dict[str, Any]:
-        return cast(dict[str, Any], self._drivers.catalog())
-
-    def _retrieval_handlers(self) -> dict[str, Any]:
-        """Lazily build the search/extract capability handlers from the research
-        providers — so the Build agent toolset's search/extract are REAL, not a false
-        affordance, without eagerly importing httpx."""
-        if self._cap_handlers is None:
-            deps = self._research()
-            search, extraction = self._compose_mcp_retrieval(deps)
-            self._cap_handlers = retrieval_capability_handlers(search, extraction)
-        return self._cap_handlers
-
-    def _compose_mcp_retrieval(self, deps: dict[str, Any]) -> tuple[Any, Any]:
-        return self._mcp._compose_mcp_retrieval(deps)
-
-    def _build_broker(self) -> CapabilityBroker:
-        """The orchestrator-side capability broker for a Build conversation. search/
-        extract are backed by the research providers (lazy); provider keys never reach
-        the sandbox (§6). The kill switch calls broker.revoke_all()."""
-        broker = CapabilityBroker()
-
-        async def _search(*, query: str, limit: int = 8) -> Any:
-            return await self._retrieval_handlers()["search"](query=query, limit=limit)
-
-        async def _extract(*, url: str) -> Any:
-            return await self._retrieval_handlers()["extract"](url=url)
-
-        broker.register("search", _search)
-        broker.register("extract", _extract)
-        return broker
-
-    def _loop_for(
-        self,
-        conversation_id: str,
-        *,
-        driver_context_window: int | None = None,
-    ) -> AgentLoop:
-        compose_snapshot = self._driver_contexts.compose_snapshot(conversation_id)
-        if driver_context_window is None and compose_snapshot is not None:
-            driver_context_window = compose_snapshot.context_window
-        if driver_context_window is None:
-            loop = self._loops.get(conversation_id)
-            if loop is not None:
-                return loop
-        # The per-conversation model PICK drives the WHOLE generative pipeline:
-        # build the router with it so the brain AND the summarizer (context
-        # condensation) AND any other generative role all run on the picked
-        # model — not just the driver while local models summarize underneath.
-        override = (
-            compose_snapshot.model_key
-            if compose_snapshot is not None
-            else self._settings._get_model_override(conversation_id)
-        )
-        # Surface FIRST: it scopes which skills the router injects (a build-only
-        # skill shouldn't reach an agent conversation's prompt, and vice versa).
-        surface = self._surface_of(conversation_id)
-        # Single source of truth (gated by surface) shared with the loop compose
-        # below and the UI badge — they can't desync.
-        autonomous = self._effective_autonomous(conversation_id)
-        strict_appkit = (
-            surface in self._BUILD_LIKE_SURFACES
-            and self._effective_appkit_mode(conversation_id)
-            and not self._effective_artifact_mode(conversation_id)
-        )
-        router = self._router_now(
-            pick=override,
-            surface=surface,
-            autonomous=autonomous,
-            conversation_id=conversation_id,
-            appkit_mode=strict_appkit,
-        )
-        # Research↔Build isolation: the SURFACE picks the agent class, so
-        # completion semantics (prose=answer for Research vs affirmative
-        # `finish` for Build) are owned by type, not a shared mode flag.
-        # "agent" is a build-like surface — same BuildAgent + build loop.
-        if surface in self._BUILD_LIKE_SURFACES:
-            agent: RouterAgent = BuildAgent(
-                router,
-                conversation_id=conversation_id,
-                model_override=override,
-                driver_context_window=driver_context_window,
-            )
-        else:
-            agent = ResearchAgent(
-                router,
-                conversation_id=conversation_id,
-                model_override=override,
-                driver_context_window=driver_context_window,
-            )
-        if surface in self._BUILD_LIKE_SURFACES:
-            loop = self._compose_build_loop(
-                conversation_id,
-                router,
-                agent,
-                driver_context_window=driver_context_window,
-            )
-        elif surface == "deep_research":
-            loop = self._compose_deep_research_loop(
-                conversation_id,
-                router,
-                agent,
-                driver_context_window=driver_context_window,
-            )
-        else:
-            loop = AgentLoop(
-                conversation_id,
-                self._store,
-                agent,
-                _NoToolExecutor(),
-                router,
-                RuleBasedAnalyzer(),
-                NeverConfirm(),  # Research surface: no human gate
-                NoOpCondenser(),
-                RouterSummarizer(router),
-                mode=self._mode,
-                # Research surface: always standard (no assist compensations);
-                # explicit default so the positive PRODUCTION gate fires.
-                model_policy=ModelExecutionPolicy.standard(),
-                driver_context_window=driver_context_window,
-            )
-        # Watch-it-write: wire the loop's stream sink to the store's ephemeral
-        # broadcast so streamed file-content frames reach the conversation's WS
-        # subscribers live (never persisted). Bound to this cid.
-        loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
-            _cid, frame
-        )
-        self._loops[conversation_id] = loop
-        return loop
-
-    def _loop_for_resolved(
-        self, conversation_id: str, snapshot: ResolvedDriverContext
-    ) -> AgentLoop:
-        """Compose (or return) the loop for *snapshot*'s resolved driver context.
-
-        If a run is already admitted the existing loop is returned unchanged —
-        never recompose an active run.  Otherwise the provisional loop is
-        replaced with one composed against *snapshot.context_window*, preserving
-        the sandbox/session by exact identity (parked as a pending session so
-        ``_compose_build_loop`` adopts it).
-        """
-        existing_loop = self._loops.get(conversation_id)
-        if self._workspace.has_admitted_run(conversation_id):
-            if existing_loop is None:
-                raise RuntimeError("admitted conversation has no composed loop")
-            return existing_loop
-
-        previous_snapshot = self._driver_contexts.resolved_snapshot(conversation_id)
-        if existing_loop is not None and previous_snapshot is not None:
-            previous_binding = (
-                previous_snapshot.model_key,
-                previous_snapshot.provider,
-                previous_snapshot.model_id,
-                previous_snapshot.context_window,
-            )
-            next_binding = (
-                snapshot.model_key,
-                snapshot.provider,
-                snapshot.model_id,
-                snapshot.context_window,
-            )
-            if previous_binding == next_binding:
-                return existing_loop
-
-        old_loop = self._loops.pop(conversation_id, None)
-        old_executor = self._executors.pop(conversation_id, None)
-        old_sandbox = getattr(old_executor, "_sandbox", None) if old_executor is not None else None
-        had_pending = conversation_id in self._pending_sessions
-        old_pending = self._pending_sessions.get(conversation_id)
-        if old_sandbox is not None:
-            self._pending_sessions[conversation_id] = old_sandbox
-
-        self._driver_contexts.begin_compose(conversation_id, snapshot)
-        try:
-            loop = self._loop_for(conversation_id)
-        except BaseException:
-            self._loops.pop(conversation_id, None)
-            self._executors.pop(conversation_id, None)
-            if old_loop is not None:
-                self._loops[conversation_id] = old_loop
-            if old_executor is not None:
-                self._executors[conversation_id] = old_executor
-            if had_pending and old_pending is not None:
-                self._pending_sessions[conversation_id] = old_pending
-            else:
-                self._pending_sessions.pop(conversation_id, None)
-            raise
-        finally:
-            self._driver_contexts.end_compose(conversation_id, snapshot)
-        self._driver_contexts.bind_resolved(conversation_id, snapshot)
-        return loop
-
-    def _executor_for(self, conversation_id: str) -> DefaultToolExecutor:
-        """Read-only accessor for a conversation's tool executor, lazily building
-        the loop (which constructs + REGISTERS the executor in ``self._executors``)
-        on first access.
-
-        Purely additive: building the loop here is exactly what ``_loop_for`` already
-        does for any caller; no existing behavior changes. Raises ``LookupError``
-        when the conversation's surface has no tool executor (e.g. a research
-        surface uses a no-tool executor and never populates ``_executors``)."""
-        executor = self._executors.get(conversation_id)
-        if executor is None:
-            # Building the loop populates self._executors for build-like surfaces.
-            self._loop_for(conversation_id)
-            executor = self._executors.get(conversation_id)
-        if executor is None:
-            raise LookupError(
-                f"no tool executor for conversation {conversation_id!r} "
-                "(its surface has no executable tools)"
-            )
-        return executor
-
-    async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult:
-        """[D2] Execute ONE externally-driven (Pi sidecar) tool call against this
-        conversation's executor, MIRRORING ``observe.execute_and_observe``'s
-        Action→Observation pairing: append an ``ActionEvent``, run the executor
-        (which always returns a ``ToolResult`` and never raises), then append the
-        paired ``ObservationEvent`` (success) or ``AgentErrorEvent`` (failure), and
-        return the ``ToolResult``.
-
-        Additive single-call helper for the bridge; the in-process loop's own
-        ``execute_and_observe`` path is untouched. The F9/W-39/K1 observer guards
-        are loop-internal concerns and deliberately NOT replicated here — Pi owns
-        its own loop, so this is the one externally-driven execution per call."""
-        executor = self._executor_for(conversation_id)
-        action = ActionEvent(
-            source=EventSource.AGENT,
-            thought=f"[pi] {tool_call.tool_name}",
-            tool_call=tool_call,
-        )
-        await self._store.append(conversation_id, action)
-        result = await executor.execute(tool_call)
-        if result.success:
-            await self._store.append(
-                conversation_id,
-                ObservationEvent(tool_result=result, action_id=action.id),
-            )
-        else:
-            await self._store.append(
-                conversation_id,
-                AgentErrorEvent(
-                    error=result.error or "tool failed",
-                    action_id=action.id,
-                    tool_call_id=tool_call.call_id,
-                ),
-            )
-        return result
-
-    def _mcp_egress_hosts(self) -> frozenset[str]:
-        return self._mcp._mcp_egress_hosts()
-
-    def _mcp_proxy_env(self, url: str | None = None) -> dict[str, str] | None:
-        return self._mcp._mcp_proxy_env(url)
+    def _sandbox_service_now(self) -> SandboxService:
+        return self._sandbox._sandbox_service_now()
 
     def _build_sandbox_spec(
         self,
@@ -1639,1361 +353,16 @@ class ConversationRuntime:
         surface: str = "build",
         mcp_egress_hosts: frozenset[str] | None = None,
     ) -> SandboxSpec:
-        return self._sandbox._build_sandbox_spec(surface=surface, mcp_egress_hosts=mcp_egress_hosts)
+        return self._sandbox._build_sandbox_spec(
+            surface=surface,
+            mcp_egress_hosts=mcp_egress_hosts,
+        )
 
-    def upload_session(self, conversation_id: str) -> SandboxSession:
-        return self._sessions.upload_session(conversation_id)
-
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._workspace.lock(conversation_id)
-
-    def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]:
-        return self._workspace.fence(conversation_id)
-
-    @contextlib.asynccontextmanager
-    async def workspace_mutation(
+    async def _resolve_driver_context(
         self,
         conversation_id: str,
-        operation: str,
-        *,
-        paths: tuple[str, ...] = (),
-    ) -> AsyncIterator[None]:
-        async with self._workspace.mutation(
-            conversation_id,
-            operation,
-            paths=paths,
-        ):
-            yield
-
-    async def record_workspace_mutation_locked(
-        self,
-        conversation_id: str,
-        operation: str,
-        *,
-        paths: tuple[str, ...] = (),
-    ) -> WorkspaceMutationEvent:
-        return await self._workspace.record_mutation_locked(
-            conversation_id,
-            operation,
-            paths=paths,
-        )
-
-    async def finalize_host_workspace_change(
-        self,
-        conversation_id: str,
-        operation: str,
-    ) -> VersionRecord:
-        return await self._workspace.finalize_sandbox_change(
-            conversation_id,
-            operation,
-        )
-
-    async def finalize_host_mirror_change_locked(
-        self,
-        conversation_id: str,
-        operation: str,
-    ) -> VersionRecord:
-        return await self._workspace.finalize_host_mirror_change_locked(
-            conversation_id,
-            operation,
-        )
-
-    async def require_committed_host_mirror_locked(
-        self,
-        conversation_id: str,
-    ) -> CommittedWorkspaceView:
-        return await self._workspace.require_committed_host_mirror_locked(conversation_id)
-
-    def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
-        """[DC-07] Store an uploaded file in the server-side sidecar directory."""
-        if not self._uploads_base:
-            return
-        path = Path(self._uploads_base) / conversation_id / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
-
-    def get_upload_names(self, conversation_id: str) -> set[str]:
-        """[DC-07] List filenames currently held server-side for this conversation."""
-        if not self._uploads_base:
-            return set()
-        path = Path(self._uploads_base) / conversation_id
-        if not path.is_dir():
-            return set()
-        return {p.name for p in path.iterdir() if p.is_file()}
-
-    def get_upload_size(self, conversation_id: str) -> int:
-        """[DC-07] Total bytes of server-side uploads for this conversation."""
-        if not self._uploads_base:
-            return 0
-        path = Path(self._uploads_base) / conversation_id
-        if not path.is_dir():
-            return 0
-        return sum(p.stat().st_size for p in path.iterdir() if p.is_file())
-
-    def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None:
-        """[G1/DR-4] Append Passages from a text upload to the per-conversation
-        upload corpus. Called by the upload route after parsing .txt/.md/.csv
-        files. The passages are keyed by conversation_id and retrieved at run
-        time to seed basic research (F3) and DR runs (F2)."""
-        bucket = self._upload_passages.setdefault(conversation_id, [])
-        bucket.extend(passages)
-
-    def get_upload_passages(self, conversation_id: str) -> list[Any]:
-        """[G1/DR-4] Return the accumulated upload Passages for this conversation
-        (empty list if none were ingested, e.g. non-text uploads only)."""
-        return list(self._upload_passages.get(conversation_id, []))
-
-    def _build_common_exec_kwargs(
-        self,
-        session: SandboxSession,
-        broker: CapabilityBroker,
-        conversation_id: str,
-        model_policy: ModelExecutionPolicy,
-        read_char_budget: int,
-        scope_guard: Any,
-        on_tool_success: Any,
-        workflow_router_mode: bool,
-        workflow_events: Any,
-    ) -> dict[str, Any]:
-        async def execution_admission(agent_view_id: str | None) -> str | None:
-            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
-            if latest_workspace_run_intent(events) is None:
-                return None
-            if (
-                agent_view_id is not None
-                and current_workspace_agent_view_id(events) == agent_view_id
-            ):
-                return None
-            return (
-                "A newer user instruction or model view superseded this action before "
-                "execution. The action was not run; continue from the latest instruction."
-            )
-
-        return dict(
-            # SandboxSession is a drop-in SandboxInstance (it implements the
-            # protocol at runtime); the `id` attribute differs only in being a
-            # property rather than a plain attribute, which trips the
-            # type-checker's invariance check on a protocol field. Cast to
-            # the protocol type so the type checker is happy without
-            # touching runtime behavior.
-            sandbox=cast(SandboxInstance, session),
-            broker=broker,
-            conversation_id=conversation_id,
-            model_policy=model_policy,
-            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
-            # LLM-using tools (slides_generate) author with the model the user picked.
-            driver_llm=self._effective_driver_endpoint(conversation_id),
-            # CW-6: capability-derived file_read page budget (see above).
-            read_char_budget=read_char_budget,
-            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
-            # optional observe-only audit on normal/AppKit builds).
-            scope_guard=scope_guard,
-            on_tool_success=on_tool_success,
-            # P7: the active contract's starter_kit for scaffold_starter.
-            starter_kit=self._starter_kit_for(conversation_id),
-            workflow_events=workflow_events if workflow_router_mode else None,
-            primitive_live_verifier=make_security_live_verifier(),
-            workspace_lock=self.workspace_lock(conversation_id),
-            workspace_fence=lambda: self._workspace.interprocess_mutation_fence(conversation_id),
-            execution_admission=execution_admission,
-            # WO-C1: the host-owned intent writer, resolved against the ACTIVE config
-            # at invocation time (see _write_release_intent). release_declare persists
-            # its sidecar ONLY through this handle — never a fallback store.
-            release_intent_writer=self._write_release_intent,
-        )
-
-    def _compose_build_loop(
-        self,
-        conversation_id: str,
-        router: DefaultLLMRouter,
-        agent: RouterAgent,
-        *,
-        driver_context_window: int | None = None,
-        sealed_workflow_run: WorkflowRun | None = None,
-        sealed_workflow_instance_id: str | None = None,
-    ) -> AgentLoop:
-        """[Agent surface] Compose — not reinvent — the loop for Build mode: the agent
-        toolset (Prompt 1) over a resilient SandboxSession, the SecurityAnalyzer, the
-        BlastRadiusConfirm gate (NOT Research's NeverConfirm), and the real condenser. The
-        executor is held so the kill switch can revoke caps + tear down the sandbox."""
-        broker = self._build_broker()
-        # Adopt a pending session (created by upload_session for a pre-kick upload) so
-        # the build's workspace IS the one uploads landed in — object identity, not a
-        # re-read of the directory. Create a fresh session only when there is none.
-        session = self._pending_sessions.pop(conversation_id, None)
-        if session is None:
-            egress_surface = self._surface_of(conversation_id)
-            if self._effective_artifact_mode(conversation_id):
-                # Artifact builds do not need the agent browser's arbitrary
-                # public web. Keep them on the finite registry allowlist even
-                # when entered from the general-agent surface.
-                egress_surface = "build"
-            sandbox_spec = self._build_sandbox_spec(
-                surface=egress_surface,
-                mcp_egress_hosts=self._mcp_egress_hosts(),
-            )
-            if sealed_workflow_run is not None:
-                sandbox_spec = sandbox_spec.model_copy(
-                    update={
-                        "permitted": sandbox_spec.permitted - {Capability.NETWORK},
-                        "egress_allow": frozenset(
-                            sealed_workflow_run.definition.policies.egress_allow
-                        ),
-                        "public_web": False,
-                    }
-                )
-            session = SandboxSession(
-                self._sandbox_service_now(),
-                sandbox_spec,
-                conversation_id=conversation_id,
-                # Mid-run death (transport drop / OOM): restore the last snapshot
-                # into the fresh instance before the agent retries (bp-13 §2).
-                on_recreate=lambda: self._rehydrate_after_recreate(conversation_id),
-                # Canonical Preview owns launch/port/health/restart/cleanup. Do not
-                # expose the legacy unmanaged static shell session to the driver.
-                legacy_auto_preview=False,
-            )
-        # Order C: resolve the policy ONCE — anchored_edit + tier/assist both come
-        # from _effective_policy, eliminating the former separate caps-resolution path
-        # (W4 anchored-edit heuristic). _effective_policy IS the single source of truth
-        # (runtime_settings.py). No second reader of ModelEntry.capabilities remains here.
-        model_policy = self._effective_policy(conversation_id)
-        # C6: artifact_mode selects a narrow scope (NO shell/browser/plan-gate);
-        # file_str_replace is excluded from ARTIFACT_TOOLS regardless of policy.
-        _art_mode = self._effective_artifact_mode(conversation_id)
-        _scope = artifact_scope() if _art_mode else agent_scope(model_policy=model_policy)
-        # CW-6: derive the capability-aware file_read page budget from the SAME
-        # (assist, live-context-window) inputs the snapshot caps use, so a file that
-        # fits the assist-OFF snapshot pin also reads in ONE shot. assist-ON resolves
-        # to the static 7k default → byte-identical to today.
-        _driver_context_window = (
-            driver_context_window
-            if isinstance(driver_context_window, int) and driver_context_window > 0
-            else self._driver_context_window(conversation_id)
-        )
-        _read_char_budget = derive_context_caps(
-            assist=model_policy.assist,
-            context_window=_driver_context_window,
-        ).read_char_budget
-        # CONTRACT-ACTIVATE: in artifact mode, govern tools by the conversation's build
-        # contract + live phase (no raw rewrite during the edit phase, etc.).
-        #
-        # REL-3 audit: when DISCO_TOOLSCOPE_AUDIT=1, default build-like runs also
-        # instantiate the same phase tracker + ContractScopeGuard, but in OBSERVE
-        # mode. The executor sees an allow either way; only would-denies are logged.
-        _audit_on = toolscope_audit_enabled()
-        if _art_mode:
-            _audit_observer = (
-                self._toolscope_audit_recorder(conversation_id).record if _audit_on else None
-            )
-            _scope_guard, _on_tool_success = self._build_scope_guard(
-                conversation_id, observer=_audit_observer
-            )
-        elif _audit_on:
-            _scope_guard, _on_tool_success = self._build_scope_audit_guard(conversation_id)
-        else:
-            _scope_guard, _on_tool_success = (None, None)
-        # EPIC F: strict AppKit mode is mutually exclusive with artifact mode.
-        _appkit_mode = self._effective_appkit_mode(conversation_id) and not _art_mode
-        _appkit_autonomous = self._effective_autonomous(conversation_id)
-        _appkit_phase = AppKitPhaseState() if _appkit_mode else None
-        _workflow_router_mode = (
-            workflow_router_enabled()
-            and self._surface_of(conversation_id) == "agent"
-            and not _art_mode
-            and not _appkit_mode
-            and sealed_workflow_run is None
-        )
-        _workflow_phase = (
-            WorkflowPhaseState(
-                phase=WorkflowPhase.RUN,
-                instance_id=sealed_workflow_instance_id,
-                output_path_template=(
-                    sealed_workflow_run.definition.output_contract.path_template
-                    if sealed_workflow_run is not None
-                    else None
-                ),
-            )
-            if sealed_workflow_run is not None
-            else (WorkflowPhaseState() if _workflow_router_mode else None)
-        )
-
-        async def _workflow_events(kind: str, payload: dict[str, Any]) -> None:
-            await handle_workflow_tool_event(
-                conversation_id=conversation_id,
-                loops=self._loops,
-                kind=kind,
-                payload=payload,
-            )
-
-        _common_exec_kwargs = self._build_common_exec_kwargs(
-            session,
-            broker,
-            conversation_id,
-            model_policy,
-            _read_char_budget,
-            _scope_guard,
-            _on_tool_success,
-            _workflow_router_mode,
-            _workflow_events,
-        )
-        executor: DefaultToolExecutor
-        if _appkit_mode:
-            assert _appkit_phase is not None
-            executor = AppKitToolExecutor(
-                _build_appkit_registry(),
-                _scope,
-                appkit_phase=_appkit_phase,
-                base_scope=_scope,
-                autonomous=_appkit_autonomous,
-                # Read the live loop mode after _loop_for registers it. Before that
-                # point, fail closed to PLANNING, which is also the loop's initial mode.
-                mode_getter=lambda cid=conversation_id: (
-                    self._loops[cid].mode if cid in self._loops else OperatingMode.PLANNING
-                ),
-                on_preview_sync=lambda active_session=session: _sync_appkit_live_preview(
-                    active_session
-                ),
-                **_common_exec_kwargs,
-            )
-        elif _workflow_router_mode or sealed_workflow_run is not None:
-            assert _workflow_phase is not None
-            workflow_registry = build_default_registry()
-            project_root = self._project_store_now().root
-            owner_id = self._store.conversation_owner_id_sync(conversation_id) or DEFAULT_OWNER_ID
-            workflow_store = JsonDirWorkflowStore(project_root or "", owner_id=owner_id)
-
-            def _workflow_mcp_tool_names(
-                registry: ToolRegistry = workflow_registry,
-            ) -> frozenset[str]:
-                return frozenset(name for name in registry.names() if name.startswith("mcp__"))
-
-            if _workflow_router_mode:
-                for tool in workflow_router_tools(
-                    store=workflow_store,
-                    phase_state=_workflow_phase,
-                    mcp_tool_names_getter=_workflow_mcp_tool_names,
-                ):
-                    workflow_registry.register(tool)
-
-            workflow_executor_ref: dict[str, ScopedPhaseExecutor] = {}
-
-            def _workflow_scope_resolver(
-                phase_state: WorkflowPhaseState = _workflow_phase,
-            ) -> ToolScope:
-                workflow_executor = workflow_executor_ref["executor"]
-                return workflow_effective_scope(
-                    phase=phase_state.phase,
-                    compiled_run_scope=phase_state.compiled_run_scope,
-                    base_scope=workflow_executor.widened_scope,
-                    output_path_template=phase_state.output_path_template,
-                )
-
-            executor = ScopedPhaseExecutor(
-                workflow_registry,
-                _scope,
-                scope_resolver=_workflow_scope_resolver,
-                **_common_exec_kwargs,
-            )
-            workflow_executor_ref["executor"] = executor
-        else:
-            executor = DefaultToolExecutor(
-                build_default_registry(),
-                _scope,
-                **_common_exec_kwargs,
-            )
-        # RP-05 rung A+B: extend the registry with MCP tools from the pool
-        # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
-        # The snapshot is frozen per conversation — list_changed notifications do
-        # NOT mutate this list.
-        all_mcp_tools, _mcp_max_schemas = _mcp_composition_inputs(self)
-        if all_mcp_tools:
-            # RP-05c: apply advertised/callable split. Over the cap, only
-            # non-MCP tools + tool_search are advertised; all remain callable.
-            if _appkit_mode and isinstance(executor, AppKitToolExecutor):
-                # In strict AppKit mode, MCP names must not bypass the phase scope.
-                # Apply the whole delta only after request_custom_build widens to
-                # the normal Build scope.
-                executor.set_widen_callback(
-                    lambda ex=executor, tools=all_mcp_tools, ms=_mcp_max_schemas: _apply_mcp_scope(
-                        ex,
-                        tools,
-                        self._mcp_call_target,
-                        max_active_schemas=ms,
-                    )
-                )
-            else:
-                _apply_mcp_scope(
-                    executor,
-                    all_mcp_tools,
-                    self._mcp_call_target,
-                    max_active_schemas=_mcp_max_schemas,
-                )
-
-            # RP-05b §3: the retrieval-tier MCP providers are composed into the
-            # bundled search/extraction in `_compose_mcp_retrieval` (consumed by
-            # research_stream, _execute_deep_research, and the Build broker's
-            # search/extract handlers) — so MCP-discovered URLs flow through the
-            # real GroundingPipeline. Registering them here under `mcp_search_*` /
-            # `mcp_extract_*` broker names was DEAD: nothing called those names
-            # (the Build agent calls `search`/`extract`; Research bypasses the
-            # broker). The cap-handler cache is invalidated when the providers are
-            # (re)built so the composition picks up the live set.
-
-        if _appkit_mode and isinstance(executor, AppKitToolExecutor):
-            _bind_ejection(self, conversation_id, executor, _scope, all_mcp_tools, _mcp_max_schemas)
-
-        if sealed_workflow_run is not None:
-            assert _workflow_phase is not None
-            _workflow_phase.compiled_run_scope = compile_workflow_scope(
-                sealed_workflow_run.definition,
-                frozenset(t.name for t in all_mcp_tools),
-            )
-
-        # Emit mcp_approval_required frames for any servers that need re-approval
-        for server, info in self._mcp_approval_pending.items():
-            try:
-                self._store.publish_ephemeral(
-                    conversation_id,
-                    {
-                        "type": "mcp_approval_required",
-                        "server": server,
-                        "description_hash": info.get("new_hash", ""),
-                        "old_description_hash": info.get("old_hash", ""),
-                    },
-                )
-            except Exception:
-                pass  # best-effort; WS frame emission is not critical
-        self._executors[conversation_id] = executor
-        _mcp_risks = _mcp_base_risk_by_tool(all_mcp_tools)
-        # P6: the contract's verification finalizer, advertised as a per-kind alias of
-        # `finish`. Bound on BOTH the loop (dispatch/advertisement/requery) and the agent
-        # (batched-call selection); guard the agent hook for test fakes that don't have it.
-        _finish_alias = (
-            sealed_workflow_run.definition.verify.finalizer
-            if sealed_workflow_run is not None
-            else self._finalizer_alias_for(conversation_id)
-        )
-        # REL-1c: inject for ALL build-like loops — the gate self-skips non-web
-        # deliverables, and shadow-agreement telemetry must cover DEFAULT builds
-        # (plain builds have no resolved contract, so gating injection on the
-        # finalizer alias would starve the shadow exactly like the REL-2a dead
-        # hook). The alias still separately drives requested_verification.
-        web_verifier = HostWebAppVerifier(executor)
-        host_verifier = HostVerifierDispatcher(
-            {
-                (
-                    "disco.host_web_verifier@1",
-                    "disco.web_functional@1",
-                    "host.verify_deliverable",
-                ): web_verifier,
-            },
-            legacy_adapter=web_verifier,
-        )
-        verifier_judge = ModelVerifier(router, conversation_id=conversation_id)
-        host_verify_canary_hook = self._host_verify_canary_hook_for(conversation_id)
-        _set_alias = getattr(agent, "set_finish_alias", None)
-        if callable(_set_alias):
-            _set_alias(_finish_alias)
-        if build_platform_shadow_enabled() and sealed_workflow_run is None:
-            # Observe the exact already-composed legacy tool surface. This result
-            # is never fed back into executor, loop, routing, or finish setup.
-            try:
-                self._build_platform_shadow_records[conversation_id] = observe_legacy_build(
-                    appkit_mode=_appkit_mode,
-                    tool_specs=executor.available_tools(),
-                )
-            except Exception:
-                logger.warning(
-                    "build-platform shadow observer failed; legacy authority is unchanged",
-                    exc_info=True,
-                )
-        self._build_platform.select_builtin(
-            conversation_id,
-            appkit=_appkit_mode,
-            eligible=sealed_workflow_run is None and not any((_art_mode, _workflow_router_mode)),
-            tool_specs=executor.available_tools(),
-        )
-        if sealed_workflow_run is not None:
-            assert _workflow_phase is not None
-            assert _workflow_phase.compiled_run_scope is not None
-            _sealed_plan_gated = "submit_plan" in _workflow_phase.compiled_run_scope.allowed_tools
-            _sealed_planning_tools = (
-                frozenset({"submit_plan", "file_list", "file_read", "search", "extract", "think"})
-                & _workflow_phase.compiled_run_scope.allowed_tools
-            )
-            return AgentLoop(
-                conversation_id,
-                self._store,
-                agent,
-                executor,
-                router,
-                RuleBasedAnalyzer(_mcp_risks),
-                # Sandboxed workflow actions remain frictionless, while any
-                # HIGH-risk MCP tool (host/in-process by definition) reaches
-                # the human gate. NeverConfirm here would nullify W4's honest
-                # execution-scope label for sealed workflows.
-                BlastRadiusConfirm(),
-                LLMSummarizingCondenser(context_window=_driver_context_window),
-                RouterSummarizer(router),
-                mode=OperatingMode.PLANNING if _sealed_plan_gated else OperatingMode.INTERACTIVE,
-                planning_tools=_sealed_planning_tools if _sealed_plan_gated else frozenset(),
-                autonomous=True,
-                model_policy=model_policy,
-                driver_context_window=_driver_context_window,
-                quiet=self._effective_quiet(conversation_id),
-                workflow_run=sealed_workflow_run,
-                finish_alias=_finish_alias,
-                host_verifier=host_verifier,
-                verifier_judge=verifier_judge,
-                host_verifier_verdict_hook=host_verify_canary_hook,
-                host_verify_authoritative=host_verify_authoritative_enabled(),
-                terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
-                finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
-                control_fence=lambda: self._workspace.fence(conversation_id),
-            )
-        if _art_mode:
-            # C6: artifact mode — low-friction authoring path:
-            #   • NeverConfirm: artifacts are low-risk; no per-action approval.
-            #   • INTERACTIVE: no plan-gate; the model acts directly on first message.
-            #   • No planning_tools: submit_plan / plan_step are excluded from scope.
-            # Everything else (broker, sandbox, condenser, summarizer, autonomous,
-            # assist) is byte-identical to the normal build loop — only the gate,
-            # mode, and scope differ.
-            return AgentLoop(
-                conversation_id,
-                self._store,
-                agent,
-                executor,
-                router,
-                RuleBasedAnalyzer(_mcp_risks),
-                # Artifact-native sandbox operations still auto-approve. Host
-                # MCP actions use their configured risk tier and can gate;
-                # treating them as ordinary confined artifact ops would be a
-                # false security boundary.
-                BlastRadiusConfirm(),
-                LLMSummarizingCondenser(context_window=_driver_context_window),
-                RouterSummarizer(router),
-                # INTERACTIVE: no plan-gate; artifact authoring starts immediately.
-                mode=OperatingMode.INTERACTIVE,
-                # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
-                autonomous=self._effective_autonomous(conversation_id),
-                model_policy=model_policy,
-                driver_context_window=_driver_context_window,
-                quiet=self._effective_quiet(conversation_id),
-                finish_alias=_finish_alias,  # P6 contract finalizer alias
-                host_verifier=host_verifier,
-                verifier_judge=verifier_judge,
-                host_verifier_verdict_hook=host_verify_canary_hook,
-                host_verify_authoritative=host_verify_authoritative_enabled(),
-                terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
-                finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
-                control_fence=lambda: self._workspace.fence(conversation_id),
-            )
-        if _appkit_mode:
-            _mcp_risks["request_custom_build"] = SecurityRisk.HIGH
-        _analyzer = RuleBasedAnalyzer(_mcp_risks)
-        _planning_tools = frozenset(
-            # read/explore + plan + `think`. `think` is a pure NO-OP reasoning
-            # scratchpad (read_only=True, no side effect), so it belongs among
-            # the allowed PLANNING first moves (§11.1/§15.2/§20.1: submit_plan /
-            # ask / clarify / think / safe read). It passes the just-merged phase
-            # gate because it is BOTH in this allowlist AND in the read-only
-            # capability set (ToolDef.read_only) the gate intersects against.
-            {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
-        )
-        if _workflow_router_mode:
-            _planning_tools = _planning_tools | WORKFLOW_ROUTER_ALLOWED_TOOLS
-        return AgentLoop(
-            conversation_id,
-            self._store,
-            agent,
-            executor,
-            router,
-            _analyzer,
-            # DC-03: sandboxed ops auto-approve (confinement is the blast radius);
-            # host-scope/unknown ops keep ConfirmRisky semantics; publish always gates.
-            BlastRadiusConfirm(),
-            # A-S1: derive condensation thresholds from the AGENT_DRIVER model's
-            # context window (soft 65% / hard 80%) instead of the old bare 24k/32k.
-            LLMSummarizingCondenser(context_window=_driver_context_window),
-            RouterSummarizer(router),
-            # Build starts in PLANNING. The planner has a context-rich surface — it
-            # can READ to explore (file_list/file_read in the workspace, search/extract
-            # on the web) before calling `submit_plan`. This mirrors Claude Code's plan
-            # mode: writes/edits/shell are off the table until approval, but the
-            # planner can gather context first. approve_plan flips to execution; the
-            # per-action gate above still governs the build that follows.
-            mode=OperatingMode.PLANNING,
-            planning_tools=_planning_tools,
-            # Same gated source of truth as the router prefix and the UI badge —
-            # _compose_build_loop only runs for build-like surfaces today, but reading
-            # the gated value means a future caller can't desync the loop's behavior
-            # from the prompt prefix.
-            autonomous=self._effective_autonomous(conversation_id),
-            model_policy=model_policy,
-            driver_context_window=_driver_context_window,
-            quiet=self._effective_quiet(conversation_id),
-            finish_alias=_finish_alias,  # P6 contract finalizer alias
-            host_verifier=host_verifier,
-            verifier_judge=verifier_judge,
-            host_verifier_verdict_hook=host_verify_canary_hook,
-            host_verify_authoritative=host_verify_authoritative_enabled(),
-            terminal_commit_hook=self._workspace.terminal_commit_hook(conversation_id),
-            finish_sealability_probe=self._workspace.finish_sealability_probe(conversation_id),
-            control_fence=lambda: self._workspace.fence(conversation_id),
-            strict_appkit_active=(
-                (lambda phase=_appkit_phase: phase.phase != AppKitPhase.CUSTOM_BUILD)
-                if _appkit_phase is not None
-                else None
-            ),
-        )
-
-    # ---- deep research surface ---------------------------------------------
-
-    def _compose_deep_research_loop(
-        self,
-        conversation_id: str,
-        router: DefaultLLMRouter,
-        agent: RouterAgent,
-        *,
-        driver_context_window: int | None = None,
-    ) -> AgentLoop:
-        return self._dr._compose_deep_research_loop(
-            conversation_id,
-            router,
-            agent,
-            driver_context_window=driver_context_window,
-        )
-
-    def _depth_for(self, conversation_id: str) -> DepthTier:
-        return self._dr._depth_for(conversation_id)
-
-    def set_depth(self, conversation_id: str, tier: str | None) -> None:
-        return self._dr.set_depth(conversation_id, tier)
-
-    def _iterative_for(self, conversation_id: str) -> bool:
-        return self._dr._iterative_for(conversation_id)
-
-    def set_iterative(self, conversation_id: str, enabled: bool) -> None:
-        return self._dr.set_iterative(conversation_id, enabled)
-
-    def set_recency(self, conversation_id: str, window: str | None) -> None:
-        return self._dr.set_recency(conversation_id, window)
-
-    def _research(self, search_override: Any | None = None) -> dict[str, Any]:
-        return self._dr._research(search_override=search_override)
-
-    def research_stream(
-        self,
-        query: str,
-        *,
-        model_override: str | None = None,
-        drop_weak: bool = False,
-        domains_deny: frozenset[str] = frozenset(),
-        think: bool = False,
-        conversation_id: str | None = None,
-        space_ids: frozenset[str] = frozenset(),
-        owner_id: str | None = None,
-        include_unclaimed_legacy: bool = False,
-        sources: list[str] | tuple[str, ...] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
-        return self._dr.research_stream(
-            query,
-            model_override=model_override,
-            drop_weak=drop_weak,
-            domains_deny=domains_deny,
-            think=think,
-            conversation_id=conversation_id,
-            space_ids=space_ids,
-            owner_id=owner_id,
-            include_unclaimed_legacy=include_unclaimed_legacy,
-            sources=sources,
-        )
-
-    def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> None:
-        """Schedule the loop to run (idempotent: a no-op if already running). The
-        loop itself decides if there's unprocessed work and streams events.
-
-        Before composing the loop the effective driver's context window is resolved
-        once per run (singleflight-bounded live probing).  The task is registered
-        synchronously in ``_tasks``; resolution, composition, and workspace
-        admission happen inside it."""
-        self._title_service.schedule(conversation_id)
-        existing = self._tasks.get(conversation_id)
-        if existing is not None and not existing.done():
-            return  # already running; the new message is picked up at the next step
-
-        # Reconcile an idle cached sandbox before registering the new run. This is
-        # synchronous and contains no model/tool spend; once the task is registered,
-        # the stale-backend guard correctly treats it as an active run and will not
-        # evict underneath it.
-        self._evict_stale_backend(conversation_id)
-
-        async def _resolve_loop() -> AgentLoop:
-            await self._build_platform.prepare_route_pin(conversation_id)
-            snapshot = await self._resolve_driver_context(conversation_id)
-            return self._loop_for_resolved(conversation_id, snapshot)
-
-        task, generation = self._create_run_task(
-            conversation_id,
-            loop_factory=_resolve_loop,
-            claimed_user_seq=claimed_user_seq,
-        )
-        task.add_done_callback(
-            lambda t, _cid=conversation_id, _gen=generation: self._on_run_task_done(_cid, t, _gen)
-        )
-
-    def _create_run_task(
-        self,
-        conversation_id: str,
-        loop: AgentLoop | None = None,
-        *,
-        loop_factory: Callable[[], Awaitable[AgentLoop]] | None = None,
-        claimed_user_seq: int | None = None,
-        expected_run_intent_id: str | None = None,
-        task_context: contextvars.Context | None = None,
-    ) -> tuple[asyncio.Task[Any], int]:
-        """Create and synchronously register a loop run task.
-
-        This is the normal conversation lifecycle primitive: the task is present in
-        ``_tasks`` before the loop can reach tool/file operations, so suspend/idle
-        sweepers see active work and cannot tear down the sandbox mid-run.
-        """
-        existing = self._tasks.get(conversation_id)
-        if existing is not None and not existing.done():
-            raise RuntimeError("conversation already has a live run task")
-        if (loop is None) == (loop_factory is None):
-            raise ValueError("provide exactly one of loop or loop_factory")
-
-        # Atomically bind the NEW run task to the user turn that launched it. Callers
-        # pass the seq returned by the durable USER append. This happens at the shared
-        # task-creation chokepoint with no await before registration. A user turn that
-        # lands while a prior task is still live never reaches this function (kick's
-        # early return), so it remains eligible for stranded-follow-up recovery.
-        if claimed_user_seq is not None:
-            self._run_claimed_user_seq[conversation_id] = max(
-                claimed_user_seq,
-                self._run_claimed_user_seq.get(conversation_id, -1),
-            )
-        # finding #3: this is a NEW run task → bump the conversation's run-generation
-        # and bind it into the done-callback/finalizer, so the finalizer for THIS run
-        # can tell whether a newer run has since reused the pin.
-        generation = self._run_generation.get(conversation_id, 0) + 1
-        self._run_generation[conversation_id] = generation
-
-        async def run() -> Any:
-            selected_loop = await loop_factory() if loop_factory is not None else loop
-            assert selected_loop is not None
-            if expected_run_intent_id is None:
-                return await self._workspace.run_after_admission(conversation_id, selected_loop)
-            return await self._workspace.run_after_admission(
-                conversation_id,
-                selected_loop,
-                expected_run_intent_id=expected_run_intent_id,
-            )
-
-        task = asyncio.create_task(run(), context=task_context)
-        self._tasks[conversation_id] = task
-        return task, generation
-
-    # W2: statuses that mean "the run already concluded" — terminalization must not clobber.
-    _CONCLUDED_STATUSES = frozenset(
-        {
-            ConversationStatus.FINISHED,
-            ConversationStatus.ERROR,
-            ConversationStatus.STUCK,
-            ConversationStatus.PAUSED,
-        }
-    )
-
-    # W11: statuses where it is LEGITIMATE for loop.run() to return and wait — the loop
-    # parked intentionally (for the user, or a control op like confirm/resume/pick).
-    # A clean return at any OTHER status (i.e. RUNNING) means the turn ended WITHOUT
-    # concluding: the silent stall. IDLE = "ready, no unprocessed work" (also fine).
-    _RUN_PARKED_STATUSES = frozenset(
-        {
-            ConversationStatus.IDLE,
-            ConversationStatus.PAUSED,
-            ConversationStatus.WAITING_FOR_CONFIRMATION,
-            ConversationStatus.AWAITING_PLAN_APPROVAL,
-            ConversationStatus.AWAITING_USER_DECISION,
-            ConversationStatus.AWAITING_USER_QUESTION,
-        }
-    )
-    # Consecutive NO-PROGRESS non-terminal returns tolerated before STUCK. The
-    # counter resets whenever a run makes a new successful productive action
-    # (see `_finalize_clean_return`), so a long, working iteration never trips it
-    # — only a genuine no-progress wedge accrues toward this cap.
-    _MAX_NONTERMINAL_REKICKS = 3
-
-    # Statuses at which a run is BETWEEN turns (terminal or idle) — the kernel pin
-    # is released so the next run re-resolves the current selection (finding #1).
-    # NB: PAUSED and the AWAITING_*/WAITING_* gate-parks are deliberately EXCLUDED
-    # — their resume/approve must continue under the SAME pinned kernel.
-    _KERNEL_UNPIN_STATUSES = frozenset(
-        {
-            ConversationStatus.FINISHED,
-            ConversationStatus.ERROR,
-            ConversationStatus.STUCK,
-            ConversationStatus.IDLE,
-        }
-    )
-
-    def _on_run_task_done(
-        self, conversation_id: str, task: asyncio.Task[Any], generation: int | None = None
-    ) -> None:
-        """W2 supervision callback. Deregister the task; on an UNHANDLED exception (NOT
-        cancellation), schedule terminalization to ERROR so the conversation can never sit
-        at RUNNING forever. `generation` (the run-generation this task was spawned under,
-        finding #3) is threaded to the clean-return finalizer so a stale finalizer can't
-        clear a pin a newer run has since reused."""
-        agent_view_id, run_intent_id = self._run_task_authorities.pop(task, (None, None))
-        if self._tasks.get(conversation_id) is task:
-            self._tasks.pop(conversation_id, None)
-            self._workspace.clear_run_claim(conversation_id)
-        if task.cancelled():
-            return  # cancellation is not an error
-        try:
-            exc = task.exception()
-        except asyncio.CancelledError:
-            return
-        if exc is None:
-            # W11: a CLEAN return is NOT proof the loop concluded. loop.run() can
-            # return while the conversation is still RUNNING — a dropped/unparseable
-            # model response ends the turn with no terminal StatusEvent, and the
-            # loop's `return await self.get_state()` carries RUNNING out unchanged.
-            # W2 only handled the exception case, so this sat at RUNNING forever
-            # (the silent MiniMax-build hang). Reconcile it (re-kick once, else STUCK).
-            with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-                asyncio.create_task(
-                    self._finalize_clean_return(
-                        conversation_id,
-                        generation,
-                        agent_view_id=agent_view_id,
-                        run_intent_id=run_intent_id,
-                    )
-                )
-            return
-        if isinstance(exc, (AgentViewSuperseded, WorkspaceRunSuperseded)):
-            # Another process/view owns this intent. The losing worker must not
-            # turn honest arbitration into ERROR/STUCK.  A newer ingress can,
-            # however, have called kick() while this task was still registered;
-            # that kick is intentionally a no-op. Hand off only when the newest
-            # intent still has no admitted view. A real winner is never stolen.
-            with contextlib.suppress(RuntimeError):
-                asyncio.create_task(self._rekick_unadmitted_superseding_intent(conversation_id))
-            return
-        # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
-        # Thread the run-generation (finding #3) so the crash terminalizer — like the
-        # clean-return finalizer above — only terminalizes/unpins if a NEWER run has not
-        # since reused the pin (it pops `_tasks` before scheduling this async cleanup, so
-        # a fresh user turn can start generation N+1 in the window).
-        with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-            asyncio.create_task(
-                self._terminalize_crashed(
-                    conversation_id,
-                    exc,
-                    generation,
-                    agent_view_id=agent_view_id,
-                    run_intent_id=run_intent_id,
-                )
-            )
-
-    async def _rekick_unadmitted_superseding_intent(self, conversation_id: str) -> None:
-        """Recover an ingress whose eager kick lost to the retiring stale task."""
-
-        try:
-            events = await self._store.get_events(conversation_id)
-        except Exception:  # noqa: BLE001 — supervision is best-effort
-            logger.exception("superseded-run handoff could not read %s", conversation_id)
-            return
-        if not workspace_run_intent_admission_required(events):
-            return
-        self.kick(conversation_id)
-
-    async def _maybe_rekick_for_stranded_followup(self, conversation_id: str) -> None:
-        """Engine-rekick fix. A follow-up appended while a run is FINALIZING is
-        stranded: `kick()` is a no-op while the prior run task is still live, and the
-        done-callback finalizers (`_finalize_clean_return` / `_terminalize_crashed`)
-        terminalize but never re-kick — so nothing ever starts the new run() that
-        would process the turn. Called AFTER terminalization at every terminal
-        conclusion site; re-kicks ONLY when the (now-correct, status-markers-excluded)
-        work-gate `signals.has_unprocessed_user_message` is open for this cid.
-
-        Ordering-insensitive: the predicate fix means a terminal marker no longer
-        masks a preceding follow-up, so it doesn't matter whether this runs before or
-        after the marker append. Best-effort: never re-raises.
-
-        INFINITE-LOOP GUARD (`_post_terminal_rekick_seq`): re-kick + record ONLY if
-        the latest unprocessed USER seq is STRICTLY NEWER than the seq that last
-        triggered a post-terminal re-kick here. A new follow-up recovers once; a
-        re-kicked turn that produces NO real progress (same seq) never loops; a clean
-        no-follow-up finish never re-kicks. This is ADDITIONAL to the existing
-        generation / stale-run guards (unchanged) — it does not replace them."""
-        try:
-            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
-        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            logger.exception("post-terminal re-kick could not read events for %s", conversation_id)
-            return
-        if (
-            not signals.has_unprocessed_user_message(events)
-            and pending_workspace_run_intent(events) is None
-        ):
-            return  # clean finish, no stranded follow-up → nothing to recover
-        latest_user_seq = max(
-            (
-                e.seq or 0
-                for e in events
-                if isinstance(e, MessageEvent) and e.source == EventSource.USER
-            ),
-            default=None,
-        )
-        if latest_user_seq is None:
-            return
-        claimed = self._run_claimed_user_seq.get(conversation_id)
-        if claimed is not None and latest_user_seq <= claimed:
-            # The current run already claimed this turn. This includes fail-fast
-            # preflight conclusions where no agent/action event can mark the turn as
-            # processed in the durable log. Only a genuinely newer user turn can be
-            # stranded during finalization and require a re-kick.
-            return
-        last = self._post_terminal_rekick_seq.get(conversation_id)
-        if last is not None and latest_user_seq <= last:
-            # Same (or older) follow-up already triggered a re-kick that made no real
-            # progress — don't loop on it.
-            return
-        self._post_terminal_rekick_seq[conversation_id] = latest_user_seq
-        logger.info(
-            "stranded follow-up on %s (user seq %s after a terminal conclusion) — "
-            "re-kicking to process it",
-            conversation_id,
-            latest_user_seq,
-        )
-        await self._workspace.rekick_stranded_followup(conversation_id, latest_user_seq)
-
-    @staticmethod
-    def _latest_status_event(events: list[Event]) -> StatusEvent | None:
-        for event in reversed(events):
-            if isinstance(event, StatusEvent):
-                return event
-        return None
-
-    # Live-caught (20-build soak, 2026-07-03): two builds paused, got the nudge,
-    # did REAL work (successful file_append), paused again — and died PAUSED.
-    # The pause COUNT resets on productive work (progress ⇒ a fresh window), but
-    # this guard scanned the WHOLE segment, saw the old marker, and refused a
-    # second nudge while the count==2 synthetic-finish branch saw count==1.
-    # Window semantics must MATCH the counter: a successful productive action
-    # consumes the marker (progress proves nudging works on this build). A hard
-    # per-segment cap keeps the ladder bounded (the cap-3 valve convention).
-    _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
-
-    @staticmethod
-    def _actionless_auto_resume_attempted(events: list[Event]) -> bool:
-        """True iff the nudge marker exists in the CURRENT pause window — i.e.
-        after the latest successful productive action (mirrors
-        signals.actionless_pause_count_current_execution_segment)."""
-        successful = signals.successful_action_ids(events)
-        for event in reversed(events):
-            if signals.is_successful_productive_action(event, successful):
-                return False
-            if (
-                isinstance(event, MessageEvent)
-                and event.source == EventSource.ENVIRONMENT
-                and event.message is not None
-                and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
-            ):
-                return True
-        return False
-
-    @staticmethod
-    def _actionless_auto_resume_total(events: list[Event]) -> int:
-        return sum(
-            1
-            for event in events
-            if isinstance(event, MessageEvent)
-            and event.source == EventSource.ENVIRONMENT
-            and event.message is not None
-            and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
-        )
-
-    async def _maybe_auto_resume_actionless_pause(
-        self,
-        conversation_id: str,
-        status: ConversationStatus,
-        generation: int | None,
-    ) -> bool:
-        """M3: drive the autonomous actionless-pause ladder.
-
-        The durable state is the event log: the current PAUSED(actionless), the
-        event-derived actionless-pause count, and the host nudge marker. Pause
-        #1 gets the one concrete continue-nudge; pause #2 re-enters through the
-        normal resume endpoint only when the core REL-RC-P predicate will fire.
-        """
-        if status != ConversationStatus.PAUSED:
-            return False
-        if generation is not None and self._run_generation.get(conversation_id) != generation:
-            return False
-        surface = self._surface_of(conversation_id)
-        if surface not in self._BUILD_LIKE_SURFACES:
-            return False
-        if not self._effective_autonomous(conversation_id):
-            return False
-        try:
-            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
-        except Exception:  # noqa: BLE001 — supervisor hook is best-effort
-            logger.exception(
-                "actionless auto-resume could not read events for %s",
-                conversation_id,
-            )
-            return False
-        latest_status = self._latest_status_event(events)
-        if (
-            latest_status is None
-            or latest_status.status != ConversationStatus.PAUSED
-            or latest_status.detail != "actionless"
-        ):
-            return False
-        pause_count = signals.actionless_pause_count_current_execution_segment(events)
-        if pause_count == 1:
-            if self._actionless_auto_resume_attempted(events):
-                return False
-            if (
-                self._actionless_auto_resume_total(events)
-                >= self._ACTIONLESS_AUTO_RESUME_SEGMENT_CAP
-            ):
-                return False
-            await self._store.append(
-                conversation_id,
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_ACTIONLESS_AUTO_RESUME_NUDGE),
-                ),
-            )
-        elif pause_count == 2:
-            if not signals.should_synthesize_finish_after_actionless_pauses(events):
-                return False
-        else:
-            return False
-        result = await self.resume_conversation(conversation_id)
-        if result.get("ok") is True:
-            return True
-        logger.warning(
-            "actionless auto-resume for %s was not accepted: %s",
-            conversation_id,
-            result,
-        )
-        return False
-
-    async def _append_task_status_if_current(
-        self,
-        conversation_id: str,
-        event: StatusEvent,
-        *,
-        agent_view_id: str | None,
-        run_intent_id: str | None,
-    ) -> bool:
-        """Append a supervisor/preflight status only for its durable run.
-
-        PKG-06-LIFECYCLE: routed through the sole LifecycleCommandService so
-        transition legality, durable authority validation, and ordered
-        persistence are centralized. Historical and non-Build callers do not
-        have strict run authority and retain the legacy behavior. Registered
-        Build tasks always capture at least the ingress intent; after
-        materialization they prefer the exact view id. The service performs
-        the last-moment recheck and append under the local plus process
-        workspace fence.
-        """
-
-        stored = await self._lifecycle_commands.append_task_status_if_current(
-            conversation_id,
-            event,
-            agent_view_id=agent_view_id,
-            run_intent_id=run_intent_id,
-        )
-        return stored is not None
-
-    async def _finalize_clean_return(
-        self,
-        conversation_id: str,
-        generation: int | None = None,
-        *,
-        agent_view_id: str | None = None,
-        run_intent_id: str | None = None,
-    ) -> None:
-        """W11 supervision. The run task returned WITHOUT raising. If the conversation
-        already concluded, or legitimately parked (awaiting the user / a control op),
-        there's nothing to do. But if it's still RUNNING the turn ended without
-        reaching a terminal state — the silent stall. Re-kick ONCE (recovers a
-        transient dropped response), and if it STILL returns non-terminal, terminalize
-        to STUCK so the wedge is visible to the operator/UI, never RUNNING forever.
-        Best-effort: never re-raises (a supervisor failure must not crash the loop)."""
-        try:
-            has_authority = agent_view_id is not None or run_intent_id is not None
-            if has_authority and not await self._workspace.run_authority_is_current(
-                conversation_id,
-                agent_view_id=agent_view_id,
-                run_intent_id=run_intent_id,
-            ):
-                return
-            state = await self._store.get_state(conversation_id)
-        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            logger.exception("clean-return finalize could not read state for %s", conversation_id)
-            return
-        status = state.execution_status
-        # [W-48 P1] Remember where this run ENDED so the sync backend-eviction path can
-        # tell a gate-parked conv (don't evict — preserve its mid-gate workspace) from
-        # a truly idle/finished one (safe to evict).
-        self._last_status[conversation_id] = status
-        if await self._maybe_auto_resume_actionless_pause(conversation_id, status, generation):
-            return
-        if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
-            # Healthy ending → reset the per-cid re-kick budget for the next segment.
-            self._nonterminal_rekicks.pop(conversation_id, None)
-            self._last_rekick_progress_seq.pop(conversation_id, None)
-            if status in self._CONCLUDED_STATUSES or status is ConversationStatus.IDLE:
-                self._emit_toolscope_audit_summary(conversation_id, status)
-            # A run that ended between turns (done/errored/stuck/idle) releases the
-            # kernel pin so the NEXT run re-resolves the current selection. A
-            # gate-park (AWAITING_*) or PAUSED stays pinned — its resume/approve
-            # must continue under the SAME kernel the run started on (finding #1).
-            # Generation-guarded (finding #3): a fresh turn may already have reused the
-            # pin between this task finishing and this finalizer running — don't clear
-            # it out from under that newer run.
-            if status in self._KERNEL_UNPIN_STATUSES:
-                self._unpin_if_current_generation(conversation_id, generation)
-                # Engine-rekick fix: only a genuinely TERMINAL conclusion
-                # (FINISHED/ERROR/STUCK/IDLE — the unpin set) can strand a follow-up
-                # that landed during finalization. A deliberate PARK (PAUSED /
-                # AWAITING_* / WAITING_*) must NOT be auto-resumed here — its resume
-                # is the user's explicit reply via the normal kick path. The helper
-                # no-ops unless the (now-correct) work-gate is open AND the follow-up
-                # seq is strictly newer than the last post-terminal re-kick.
-                await self._maybe_rekick_for_stranded_followup(conversation_id)
-            return
-        # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
-        # a different status): the turn ended without concluding.
-        # Progress-reset: a long, WORKING iteration ends non-terminal across many
-        # turn boundaries (each continuation returns RUNNING before the next kick).
-        # Reset the wedge budget whenever a NEW successful productive action landed
-        # since the last non-terminal return — only a run making NO progress across
-        # `_MAX_NONTERMINAL_REKICKS` returns is genuinely wedged. Reads/browser
-        # probes are NOT productive (see signals), so a read-only spin still STUCKs.
-        try:
-            events = agent_view_consistent_events(await self._store.get_events(conversation_id))
-            successful = signals.successful_action_ids(events)
-            last_prod_seq = max(
-                (
-                    (event.seq or 0)
-                    for event in events
-                    if signals.is_successful_productive_action(event, successful)
-                ),
-                default=0,
-            )
-        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            last_prod_seq = self._last_rekick_progress_seq.get(conversation_id, 0)
-        if last_prod_seq > self._last_rekick_progress_seq.get(conversation_id, 0):
-            self._nonterminal_rekicks[conversation_id] = 0  # forward progress → not wedged
-        self._last_rekick_progress_seq[conversation_id] = last_prod_seq
-
-        attempts = self._nonterminal_rekicks.get(conversation_id, 0)
-        if attempts < self._MAX_NONTERMINAL_REKICKS:
-            self._nonterminal_rekicks[conversation_id] = attempts + 1
-            logger.warning(
-                "run task for %s returned at %s without concluding; re-kicking "
-                "(silent-stall recovery, no-progress attempt %d/%d)",
-                conversation_id,
-                status.value,
-                attempts + 1,
-                self._MAX_NONTERMINAL_REKICKS,
-            )
-            self.kick(conversation_id)
-            return
-        # Already re-kicked and STILL non-terminal → stop spinning, mark STUCK honestly.
-        self._nonterminal_rekicks.pop(conversation_id, None)
-        self._last_rekick_progress_seq.pop(conversation_id, None)
-        try:
-            # Re-read under the (rare) race where the re-kick concluded between checks.
-            state = await self._store.get_state(conversation_id)
-            if state.execution_status in self._CONCLUDED_STATUSES:
-                return
-            logger.error(
-                "run task for %s wedged at RUNNING after re-kick; marking STUCK",
-                conversation_id,
-            )
-            stored = await self._append_task_status_if_current(
-                conversation_id,
-                LifecycleCommandService.build_status(
-                    ConversationStatus.STUCK,
-                    detail="loop ended without reaching a terminal state",
-                ),
-                agent_view_id=agent_view_id,
-                run_intent_id=run_intent_id,
-            )
-            if not stored:
-                return
-            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.STUCK)
-            # STUCK is terminal → release the kernel pin so the NEXT run re-resolves
-            # the current selection (finding #3). Unlike the healthy-return branch
-            # above (which unpins via `_KERNEL_UNPIN_STATUSES`), this path appends a
-            # FRESH terminal status and must clear the pin itself, else a wedged run
-            # would leak its pin forever and later gate/config flips stay ineffective.
-            # Generation-guarded (finding #3): if a newer run already reused the pin,
-            # leave it (the re-read above already returns on a concluded newer status).
-            self._unpin_if_current_generation(conversation_id, generation)
-            await self._emit_persistence_reminder(
-                conversation_id,
-                "The run ended without completing or stopping cleanly (the model turn "
-                "produced no actionable response). It's been marked stuck — send a "
-                "message to steer it and continue.",
-            )
-            # Engine-rekick fix: STUCK is terminal here too — recover a follow-up that
-            # landed during this wedge terminalization (guarded, so it can't loop).
-            await self._maybe_rekick_for_stranded_followup(conversation_id)
-        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            logger.exception("stall terminalization failed for %s", conversation_id)
-
-    async def _shadow_fold_manifest(
-        self, conversation_id: str, *, events: list[Any] | None = None
-    ) -> None:
-        """[REL-2a step2b-2b] SHADOW dual-write of the artifact manifest at finish-success.
-
-        The terminal pipeline is the sole production caller: it owns the local
-        and process workspace fences and records ``agent.artifact-manifest-fold``
-        before invoking this low-level writer. Direct callers must provide the
-        same effect boundary. Projects the emitted artifact paths from the event
-        log, logs divergence, then upserts missing paths. No reader is switched.
-        Best-effort failures leave the preceding mutation marker as honest
-        evidence that final bytes may have changed.
-        """
-        try:
-            sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
-            if sbx is None:
-                logger.info(
-                    "shadow fold skipped for %s: sandbox already released",
-                    conversation_id,
-                )
-                return  # sandbox already torn down → nothing durable to fold into; fail-soft
-            if events is None:
-                events = await self._store.get_events(conversation_id)
-            projected = artifact_paths_from_events(events)
-            store = ArtifactMemoryStore(sbx)
-            manifest = await store.read_artifacts()
-            manifest_paths = {r.path for r in manifest}
-            missing, extra = manifest_path_divergence(projected, manifest_paths)
-            if missing or extra:
-                logger.info(
-                    "artifact-manifest shadow divergence for %s: missing=%s extra=%s",
-                    conversation_id,
-                    sorted(missing),
-                    sorted(extra),
-                )
-            # Dual-write: fold the projection into the manifest (upsert is per-cid RMW-locked, so
-            # concurrent folds can't lose an entry). Only paths the manifest lacks need writing.
-            for path in sorted(missing):
-                await store.upsert_artifact(ArtifactRecord(path=path))
-            logger.info(
-                "shadow fold ran for %s: projected=%d manifest=%d missing=%d",
-                conversation_id,
-                len(projected),
-                len(manifest_paths),
-                len(missing),
-            )
-        except Exception:  # noqa: BLE001 — shadow is telemetry; never perturb a finished run
-            logger.exception("artifact-manifest shadow fold failed for %s", conversation_id)
-
-    async def sweep_stranded_runs_once(self) -> int:
-        """W11 backstop watchdog (idle-sweep cadence). A conversation whose status is
-        RUNNING but which has NO live run task is STRANDED — nothing will ever advance
-        it (the done-callback was lost, a re-kick never landed, or a prior process left
-        it RUNNING between reconcile passes). Route it through the same recovery as a
-        clean non-terminal return: re-kick once, else STUCK. Returns the count acted on.
-
-        Distinct from reconcile_orphaned_runs (startup-only, store-wide → PAUSED): this
-        runs continuously over the IN-PROCESS loops so a runtime stall self-heals
-        without waiting for a restart. Zero false-positive risk: a healthy RUNNING run
-        always has a live, not-done task in self._tasks, which is skipped here."""
-        acted = 0
-        for cid in list(self._loops):
-            task = self._tasks.get(cid)
-            if task is not None and not task.done():
-                continue  # a live task is driving it — healthy
-            try:
-                state = await self._store.get_state(cid)
-            except Exception:  # noqa: BLE001 — one bad cid must not abort the sweep
-                continue
-            if state.execution_status is not ConversationStatus.RUNNING:
-                continue
-            logger.warning("stranded RUNNING conversation %s (no live task) — reconciling", cid)
-            with contextlib.suppress(Exception):
-                await self._finalize_clean_return(cid)
-            acted += 1
-        return acted
-
-    async def _terminalize_crashed(
-        self,
-        conversation_id: str,
-        exc: BaseException,
-        generation: int | None = None,
-        *,
-        agent_view_id: str | None = None,
-        run_intent_id: str | None = None,
-    ) -> None:
-        """Append a terminal ERROR status + a user-visible reminder for a crashed run.
-        Idempotent: never overwrites an already-concluded status.
-
-        Generation-guarded (finding #3 — the crash path made SYMMETRIC with the clean
-        path). `_on_run_task_done` pops this run's task then schedules THIS terminalizer
-        async, so in the window before it runs a fresh user turn can start a NEWER run
-        (generation N+1) that REUSES the conversation's pin. A stale crash must then
-        neither append ERROR into the newer run's event log nor clear the newer run's
-        pin — so if a newer generation already started, skip terminalization entirely.
-        `generation` is None for legacy/stranded callers with no competing newer run
-        (terminalize as before)."""
-        try:
-            has_authority = agent_view_id is not None or run_intent_id is not None
-            if has_authority and not await self._workspace.run_authority_is_current(
-                conversation_id,
-                agent_view_id=agent_view_id,
-                run_intent_id=run_intent_id,
-            ):
-                return
-            state = await self._store.get_state(conversation_id)
-            # Re-check the live run-generation AFTER the await: a newer run may have been
-            # kicked while this stale crash cleanup was scheduled. The check + the ERROR
-            # append below are separated only by synchronous statements (no await), so a
-            # newer run can never slip in between the guard and the append.
-            if generation is not None and self._run_generation.get(conversation_id) != generation:
-                return  # a newer run owns this conversation — the crash is stale, drop it
-            if state.execution_status in self._CONCLUDED_STATUSES:
-                return  # already concluded — don't clobber
-            detail = f"uncaught {type(exc).__name__}: {exc}"[:200]
-            logger.error("run task for %s crashed: %s", conversation_id, detail, exc_info=exc)
-            stored = await self._append_task_status_if_current(
-                conversation_id,
-                LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=detail),
-                agent_view_id=agent_view_id,
-                run_intent_id=run_intent_id,
-            )
-            if not stored:
-                return
-            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
-            # Terminal ending → release the kernel pin (next run re-resolves). #1.
-            # Generation-guarded (finding #3): if a newer run reused the pin during the
-            # ERROR append above, leave it — that run owns the pin now.
-            self._unpin_if_current_generation(conversation_id, generation)
-            await self._emit_persistence_reminder(
-                conversation_id,
-                f"The run stopped on an unexpected internal error ({type(exc).__name__}). "
-                "It has been recorded as failed; you can retry or adjust the task.",
-            )
-            # Engine-rekick fix: ERROR is terminal — recover a follow-up that landed
-            # during this crash terminalization (guarded against looping). Reached
-            # only when this generation still owns the conversation (the guard above).
-            await self._maybe_rekick_for_stranded_followup(conversation_id)
-        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            logger.exception("crash terminalization failed for %s", conversation_id)
+    ) -> ResolvedDriverContext:
+        return await self._drivers.resolve_context(conversation_id)
 
     async def _preflight_driver(
         self,
@@ -3008,607 +377,84 @@ class ConversationRuntime:
             role=role,
         )
 
-    # W-48: HARD wall-clock bound on a SINGLE sandbox connectivity pre-flight. Like
-    # the driver pre-flight, the WHOLE point is to FAIL FAST — a gVisor host that's
-    # down (or an ssh:// host that black-holes the connection) must not stall the
-    # first kick for the docker-py / system-ssh default minute. The backends' own
-    # client_timeout_s bounds the socket, but the SSH transport is outside that, so
-    # asyncio.wait_for caps the entire probe here; a timeout is ITSELF "unreachable".
-    _SANDBOX_PREFLIGHT_TIMEOUT_S = 12.0
+    def _project_store_now(self) -> ProjectStore:
+        return self._projects.current_project_store()
 
-    @staticmethod
-    def _sandbox_endpoint_label(service: SandboxService) -> str:
-        """[W-48] A human-readable label NAMING the backend's connection endpoint, for
-        a typed pre-flight error the user can act on (which host/socket to fix)."""
-        name = getattr(service, "name", "sandbox")
-        cfg = getattr(service, "_cfg", None)
-        if cfg is not None:
-            if name in ("gvisor", "local"):
-                return f"{name} sandbox host {getattr(cfg, 'docker_socket', '?')}"
-            if name == "podman":
-                return f"podman sandbox host {getattr(cfg, 'podman_url', '?')}"
-        return f"{name} sandbox"
-
-    async def _preflight_sandbox(self, conversation_id: str) -> str | None:
-        """W-48: first-use connectivity PREFLIGHT for the Build sandbox. Probe the
-        configured backend's endpoint (the Docker socket / ssh:// host for the
-        container backends; the Podman native-remote socket; the workspace root for
-        the process backend) BEFORE the loop composes a session, so a misconfigured /
-        unreachable backend (e.g. gVisor pointed at a host that's down, or the
-        local-socket default selected for the REMOTE gVisor tier) fails fast with a
-        NAMED reason — "gVisor sandbox host ssh://sandbox@<host> unreachable: …" —
-        instead of a generic 500 on the first tool call. Returns None when reachable,
-        else the reason string (the caller surfaces it as StatusEvent(ERROR) + an
-        ambient reminder and does NOT start the loop). Bounded by
-        _SANDBOX_PREFLIGHT_TIMEOUT_S; a hung host is itself an 'unreachable' verdict.
-        The process (dev) backend's healthcheck is a cheap local check → ~no latency."""
-        if self._injected_sandbox is not None:
-            return None  # test/dev seam: the injected backend is authoritative
-        try:
-            service = self._sandbox_service_now()
-        except Exception as exc:  # noqa: BLE001 — backend couldn't even be built
-            return f"sandbox backend is misconfigured: {exc}"
-        label = self._sandbox_endpoint_label(service)
-        try:
-            await asyncio.wait_for(service.healthcheck(), self._SANDBOX_PREFLIGHT_TIMEOUT_S)
-        except TimeoutError:
-            return (
-                f"{label} unreachable: no response within "
-                f"{self._SANDBOX_PREFLIGHT_TIMEOUT_S:.0f}s (sandbox pre-flight timed out)"
-            )
-        except SandboxUnavailableError as exc:
-            return f"{label} unreachable: {exc}"
-        except Exception as exc:  # noqa: BLE001 — any probe failure blocks, with the cause
-            return f"{label} error: {exc}"
-        return None
-
-    async def _best_effort_destroy_session(self, session: SandboxSession) -> None:
-        """[W-48(c)] Tear down a stale-backend session without ever raising — the box
-        on the OLD backend is being abandoned because Settings switched backends."""
-        with contextlib.suppress(Exception):
-            await session.destroy()
-
-    def _clear_evicted_session_markers(self, conversation_id: str) -> None:
-        """[W-48 P1] Mirror the per-session marker cleanup that `_teardown_sandbox`
-        does, for the backend-eviction paths (which pop the loop/executor caches
-        directly rather than going through teardown). Most load-bearing: clearing the
-        `_rehydrated` marker — leaving it set makes the next run SKIP rehydrate and
-        start in an EMPTY workspace (silently losing prior work). The view-cache /
-        wake-lock / last-session entries are dropped too so a stale handle can't ghost
-        the fresh backend's session."""
-        self._connections.clear_session_state(conversation_id)
-        rehydrated = getattr(self, "_rehydrated", None)
-        if rehydrated is not None:
-            rehydrated.discard(conversation_id)
-        with contextlib.suppress(Exception):
-            from disco.tools.builtin.files import clear_conversation_read_state
-
-            clear_conversation_read_state(conversation_id)
-
-    def _evict_loop_for_model_change(self, conversation_id: str) -> None:
-        self._settings._evict_model_binding(conversation_id)
-
-    def _evict_stale_backend(self, conversation_id: str) -> None:
-        """[W-48(c)] On a persisted sandbox-backend change, reconcile THIS conversation:
-        if its cached session runs a DIFFERENT backend than the now-configured one (the
-        user switched backends in Settings), evict the cached loop/executor/pending
-        session so the NEXT compose builds a fresh sandbox on the new backend, and
-        best-effort tear the old box down (never leak the old backend's session).
-        No-op when the backend is unchanged, a backend override is injected (tests), a
-        live run is in flight (never reconnect mid-turn), or the conversation is PARKED
-        at a gate (P1 — evicting mid-gate would discard its workspace). Called
-        synchronously at the top of kick(); the async teardown is scheduled so kick()
-        stays non-blocking."""
-        if self._injected_sandbox is not None:
-            return  # injected backend is authoritative; Settings backend is ignored
-        try:
-            current = self._sandbox.effective_backend_name()
-        except Exception:  # noqa: BLE001 — config unreadable ⇒ leave caches alone
-            return
-        task = self._tasks.get(conversation_id)
-        if task is not None and not task.done():
-            return  # mid-turn — don't reconnect
-        # [W-48 P1] A gate-parked conv has no active task but its mid-gate workspace
-        # lives in the OLD backend's box — evicting it on a backend change would lose
-        # that state. Treat a gate like an active task: skip. (Sync path → the
-        # in-process last-status cache; see _last_status.)
-        if self._last_status.get(conversation_id) in _GATE_STATES:
-            return
-        stale: list[SandboxSession] = []
-        executor = self._executors.get(conversation_id)
-        sess = getattr(executor, "_sandbox", None) if executor is not None else None
-        if sess is not None and getattr(sess, "backend_name", current) != current:
-            stale.append(sess)
-            self._loops.pop(conversation_id, None)
-            self._executors.pop(conversation_id, None)
-        pending = self._pending_sessions.get(conversation_id)
-        if pending is not None and pending.backend_name != current:
-            self._pending_sessions.pop(conversation_id, None)
-            stale.append(pending)
-        if stale:
-            self._clear_evicted_session_markers(conversation_id)
-        for s in stale:
-            with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-                asyncio.create_task(self._best_effort_destroy_session(s))
-
-    async def reconcile_sandbox_backend(self) -> int:
-        """[W-48(c)] Sweep ALL cached sessions and destroy any whose backend != the
-        now-configured backend, so the next kick of each composes a fresh sandbox on
-        the new backend. Skips conversations with a LIVE run task (don't reconnect
-        mid-turn). Returns the count reconciled. The lazy per-conversation
-        `_evict_stale_backend` (run at kick) is the cross-process path that needs no
-        signal; this is the explicit form (tests + a future config-change hook)."""
-        if self._injected_sandbox is not None:
-            return 0
-        try:
-            current = self._sandbox.effective_backend_name()
-        except Exception:  # noqa: BLE001
-            return 0
-        reconciled = 0
-        for cid in list(self._executors) + list(self._pending_sessions):
-            task = self._tasks.get(cid)
-            if task is not None and not task.done():
-                continue  # mid-turn — don't reconnect
-            # [W-48 P1] Skip a conv PARKED at a gate — evicting mid-gate would discard
-            # its workspace. This path is async, so read the store authoritatively.
-            try:
-                state = await self._store.get_state(cid)
-            except Exception:  # noqa: BLE001 — one bad cid must not abort the sweep
-                state = None
-            if state is not None and state.execution_status in _GATE_STATES:
-                continue
-            executor = self._executors.get(cid)
-            sess = getattr(executor, "_sandbox", None) if executor is not None else None
-            pending = self._pending_sessions.get(cid)
-            mismatched: list[SandboxSession] = []
-            if sess is not None and getattr(sess, "backend_name", current) != current:
-                mismatched.append(sess)
-                self._loops.pop(cid, None)
-                self._executors.pop(cid, None)
-            if pending is not None and pending.backend_name != current:
-                self._pending_sessions.pop(cid, None)
-                mismatched.append(pending)
-            if mismatched:
-                self._clear_evicted_session_markers(cid)
-            for s in mismatched:
-                await self._best_effort_destroy_session(s)
-                reconciled += 1
-        return reconciled
-
-    async def _run_with_persistence(self, conversation_id: str, loop: AgentLoop) -> Any:
-        """Snapshot/rehydrate wrapper around `loop.run()`. Surface-aware:
-        - Build → snapshot+rehydrate the workspace as before.
-        - Deep Research → short-circuit `loop.run()` on the post-plan-approval
-          turn and run the DeepResearchRun engine; emit the ReportEvent +
-          StatusEvent(FINISHED) directly.
-        - Research → unchanged (the loop runs, no persistence)."""
-        surface = self._surface_of(conversation_id)
-        run_intent_id: str | None = None
-        current_task = asyncio.current_task()
-        registered_task = (
-            current_task is not None and self._tasks.get(conversation_id) is current_task
+    def _loop_for(
+        self,
+        conversation_id: str,
+        *,
+        driver_context_window: int | None = None,
+    ) -> AgentLoop:
+        return self._loop_factory.loop_for(
+            conversation_id,
+            driver_context_window=driver_context_window,
         )
-        if registered_task and current_task is not None and surface in self._BUILD_LIKE_SURFACES:
-            authority = await self._lifecycle_commands.resolve_current_authority(conversation_id)
-            agent_view_id, run_intent_id, _strict = authority
-            self._run_task_authorities[current_task] = (agent_view_id, run_intent_id)
 
-        if surface == "deep_research":
-            # Short-circuit the loop for Deep Research. The plan-mode intercept
-            # the loop would otherwise run isn't useful here — Deep Research
-            # decomposes the query algorithmically (not via an LLM planning
-            # round) and the engine handles the rest. The loop's plan-approval
-            # state machine is reused via control-op routing; the loop's
-            # `run()` itself is not the right driver.
-            await self._maybe_run_deep_research(conversation_id)
-            # Return the (possibly-updated) state. The store reflects whatever
-            # we emitted.
-            return await self._store.get_state(conversation_id)
+    def _compose_build_loop(
+        self,
+        conversation_id: str,
+        router: DefaultLLMRouter,
+        agent: RouterAgent,
+        *,
+        driver_context_window: int | None = None,
+        sealed_workflow_run: WorkflowRun | None = None,
+        sealed_workflow_instance_id: str | None = None,
+    ) -> AgentLoop:
+        return self._loop_factory.compose_build_loop(
+            conversation_id,
+            router,
+            agent,
+            driver_context_window=driver_context_window,
+            sealed_workflow_run=sealed_workflow_run,
+            sealed_workflow_instance_id=sealed_workflow_instance_id,
+        )
 
-        # W-35: driver pre-flight BEFORE the loop runs. A dead / unauthed /
-        # misconfigured driver would otherwise stall silently on the first
-        # mid-loop call. On failure, surface a NAMED StatusEvent(ERROR) + an
-        # ambient reminder and DO NOT start the loop (return the ERROR state).
-        reason = await self._preflight_driver(conversation_id)
-        if reason is not None:
-            stored = await self._append_task_status_if_current(
-                conversation_id,
-                LifecycleCommandService.build_status(ConversationStatus.ERROR, detail=reason[:200]),
-                agent_view_id=None,
-                run_intent_id=run_intent_id,
-            )
-            if not stored:
-                return await self._store.get_state(conversation_id)
-            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
-            await self._emit_persistence_reminder(
-                conversation_id,
-                f"{reason} The run did not start — check the model's endpoint and "
-                "API key in Settings, then send a message to retry.",
-            )
-            return await self._store.get_state(conversation_id)
+    async def _run_with_persistence(
+        self,
+        conversation_id: str,
+        loop: AgentLoop,
+    ) -> Any:
+        return await self._run_execution.run(conversation_id, loop)
 
-        # W-48: sandbox connectivity pre-flight BEFORE a Build loop composes a
-        # session. A misconfigured / unreachable backend (gVisor host down, or the
-        # local-socket default left on the REMOTE gVisor tier) would otherwise stall
-        # silently on the first tool call and surface as a generic error. Probe it
-        # up-front and, on failure, surface a NAMED StatusEvent(ERROR) + an ambient
-        # reminder and DO NOT start the loop (mirrors the W-35 driver pre-flight).
-        if surface in self._BUILD_LIKE_SURFACES:
-            sandbox_reason = await self._preflight_sandbox(conversation_id)
-            if sandbox_reason is not None:
-                stored = await self._append_task_status_if_current(
-                    conversation_id,
-                    LifecycleCommandService.build_status(
-                        ConversationStatus.ERROR, detail=sandbox_reason[:200]
-                    ),
-                    agent_view_id=None,
-                    run_intent_id=run_intent_id,
-                )
-                if not stored:
-                    return await self._store.get_state(conversation_id)
-                self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
-                await self._emit_persistence_reminder(
-                    conversation_id,
-                    f"{sandbox_reason} The run did not start — check the sandbox "
-                    "backend's host/connection in Settings → Sandbox, then send a "
-                    "message to retry.",
-                )
-                return await self._store.get_state(conversation_id)
-
-        # Rehydrate hook: BEFORE the loop runs for the first time, if a project
-        # storage path is configured AND a prior snapshot exists for this cid,
-        # write its files into the (lazy) sandbox so the agent sees them. Reads
-        # are cheap; the rehydrate only writes if there are files on disk.
-        if surface in self._BUILD_LIKE_SURFACES:
-            async with self.workspace_lock(conversation_id):
-                await self._maybe_rehydrate(conversation_id)
-                # DC-07: re-materialize server-side uploads into the fresh sandbox.
-                # This is the SINGLE chokepoint that covers ALL paths:
-                #   - post-restart resume → fresh sandbox via lazy compose
-                #   - first build after upload (pending session adoption or fresh)
-                #   - mid-run recreation (also handled by _rehydrate_after_recreate)
-                await self._rematerialize_uploads(conversation_id)
-
-        try:
-            state = await loop.run()
-        finally:
-            if registered_task and current_task is not None:
-                self._run_task_authorities[current_task] = (
-                    AgentLoop._current_agent_view_id(),
-                    run_intent_id,
-                )
-
-        # Snapshot hook: capture the workspace whenever a build run ENDS — not only
-        # on FINISHED. A run that ends STUCK/ERROR/PAUSED still wrote real files (the
-        # model may have built most of the deliverable before getting stuck); snapshot
-        # so that work is NOT lost (it was — a stuck iteration silently discarded a
-        # whole feature it had written). Snapshot is idempotent + cheap.
-        _ENDED_UNSEALED = {
-            ConversationStatus.STUCK,
-            ConversationStatus.ERROR,
-            ConversationStatus.PAUSED,
-            ConversationStatus.IDLE,
-        }
-        # Re-read the AUTHORITATIVE state from the store (computed from the event log)
-        # for the end-gate.
-        ended_state = await self._store.get_state(conversation_id)
-        if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in (
-            _ENDED_UNSEALED | {ConversationStatus.FINISHED}
-        ):
-            self._emit_toolscope_audit_summary(conversation_id, ended_state.execution_status)
-            if ended_state.execution_status is not ConversationStatus.FINISHED:
-                # FINISHED was captured and sealed synchronously by the loop's
-                # terminal hook. Recovery snapshots remain available for other
-                # ended states, under an honest trigger label.
-                async with self.workspace_lock(conversation_id):
-                    await self._maybe_snapshot(
-                        conversation_id,
-                        trigger=ended_state.execution_status.value,
-                    )
-            # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
-            # suspend = sweep_idle_once -> _suspend
-        return state
-
-    async def _teardown_sandbox(self, conversation_id: str) -> None:
-        return await self._lifecycle._teardown_sandbox(conversation_id)
-
-    async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
-        return await self._lifecycle.reconcile_orphaned_runs(owner_id=owner_id)
-
-    # ---- MCP pool lifecycle (RP-05 rung A) — delegators to McpManager --------
-
-    async def _start_mcp_pool(self) -> None:
-        return await self._mcp._start_mcp_pool()
-
-    async def _close_mcp_pool(self) -> None:
-        return await self._mcp._close_mcp_pool()
-
-    async def reload_mcp_pool(self) -> dict[str, Any]:
-        """Apply Settings MCP changes without restarting the agent-server."""
-        return await self._mcp.reload()
-
-    @property
-    def _mcp_call_target(self) -> Any:
-        return self._mcp._mcp_call_target
-
-    def mcp_approval_state(self) -> dict[str, dict]:
-        return self._mcp.mcp_approval_state()
-
-    def on_connect(self, conversation_id: str) -> None:
-        return self._connections.on_connect(conversation_id)
-
-    def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
-        return self._connections.on_disconnect(conversation_id, grace_s=grace_s)
+    async def _maybe_snapshot(
+        self,
+        conversation_id: str,
+        *,
+        trigger: str = "turn",
+    ) -> None:
+        await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
 
     async def _suspend(self, conversation_id: str) -> None:
-        return await self._lifecycle._suspend(conversation_id)
+        await self._lifecycle._suspend(conversation_id)
 
-    def sandbox_state(self, conversation_id: str) -> str | None:
-        return self._lifecycle.sandbox_state(conversation_id)
-
-    def sandbox_instance_ids(self, conversation_id: str) -> list[str]:
-        return self._lifecycle.sandbox_instance_ids(conversation_id)
-
-    async def sweep_idle_once(self) -> int:
-        return await self._lifecycle.sweep_idle_once()
-
-    async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
-        return await self._lifecycle.sweep_abandoned_gates_once(owner_id=owner_id)
-
-    async def _idle_sweep_loop(self) -> None:
-        return await self._lifecycle._idle_sweep_loop()
-
-    async def _maybe_run_deep_research(self, conversation_id: str) -> None:
-        return await self._dr._maybe_run_deep_research(conversation_id)
-
-    async def _propose_deep_research_plan(self, conversation_id: str, events: list) -> None:
-        return await self._dr._propose_deep_research_plan(conversation_id, events)
-
-    async def _execute_deep_research(
-        self,
-        conversation_id: str,
-        plan: PlanEvent,
-        *,
-        resume_from: ReportEvent | None = None,
-    ) -> None:
-        return await self._dr._execute_deep_research(conversation_id, plan, resume_from=resume_from)
-
-    def title_service(self) -> TitleService:
-        """Public accessor for the auto-titler (used by the projects backfill route)."""
-        return self._title_service
-
-    def suggestion_service(self) -> SuggestionService:
-        """Public accessor for request-time splash suggestion generation."""
-        return self._suggestion_service
+    async def _teardown_sandbox(self, conversation_id: str) -> None:
+        await self._lifecycle._teardown_sandbox(conversation_id)
 
     def project_store(self) -> ProjectStore:
-        """Public accessor for the live project store (used by the agent-server's
-        projects endpoints). Always returns a ProjectStore — callers check
-        ``.status()`` for the full validation classification (ok / not_found /
-        not_writable etc.).  An empty ``projects_root`` resolves to the
-        auto-default path rather than returning None."""
-        return self._project_store_now()
+        return self._projects.current_project_store()
 
-    async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict:
-        return await self._workspace.restore_version(conversation_id, seq)
-
-    async def _restore_workspace_version_locked(self, conversation_id: str, seq: int) -> dict:
-        return await self._workspace.restore_version_locked(conversation_id, seq)
-
-    # ---- share export (RP-06) ----------------------------------------------
-
-    async def share_export(
-        self,
-        conversation_id: str,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-        before_seq: int | None = None,
-    ) -> dict[str, Any]:
-        return await self._share.share_export(
-            conversation_id,
-            owner_id=owner_id,
-            before_seq=before_seq,
+    def live_session(self, conversation_id: str) -> SandboxSession | None:
+        executor = self._run_resources.executor(conversation_id)
+        return cast(
+            SandboxSession | None,
+            executor.sandbox if executor is not None else None,
         )
 
-    _IMPORT_MAX_EVENTS = 20_000
-
-    async def share_import(
-        self, bundle: Any, *, owner_id: str = DEFAULT_OWNER_ID
-    ) -> dict[str, Any]:
-        return await self._share.share_import(bundle, owner_id=owner_id)
-
-    @staticmethod
-    def _has_fresh_user_message(events, reports) -> bool:
-        return DeepResearchService._has_fresh_user_message(events, reports)
-
-    async def export_report(
-        self,
-        conversation_id: str,
-        fmt: str,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-    ) -> tuple[bytes, str, str] | None:
-        return await self._dr.export_report(conversation_id, fmt, owner_id=owner_id)
-
-    def create_share_link(
-        self,
-        conversation_id: str,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-    ) -> dict[str, Any]:
-        return self._share.create_share_link(conversation_id, owner_id=owner_id)
-
-    async def create_share_link_async(
-        self,
-        conversation_id: str,
-        *,
-        owner_id: str = DEFAULT_OWNER_ID,
-    ) -> dict[str, Any]:
-        return await self._share.create_share_link_async(conversation_id, owner_id=owner_id)
-
-    def lookup_share_link(self, token: str) -> dict | None:
-        return self._share.lookup_share_link(token)
-
-    def list_share_links(self, *, owner_id: str) -> list[dict]:
-        return self._share.list_share_links(owner_id=owner_id)
-
-    def revoke_share_link(self, token: str, *, owner_id: str) -> bool:
-        return self._share.revoke_share_link(token, owner_id=owner_id)
-
-    def _project_store_now(self) -> ProjectStore:
-        """Build a ProjectStore from the current settings. Built per-call (cheap;
-        matches the rest of the runtime's "reload the config each request"
-        discipline). An empty ``projects_root`` (fresh install) resolves to the
-        auto-default path via :func:`resolve_projects_root` inside
-        :class:`ProjectStore`; the validity status is always queryable via
-        ``store.status()`` at the use site."""
-        root = self._config_store.load().projects.projects_root
-        return ProjectStore(root)
-
-    async def _write_release_intent(
-        self, conversation_id: str, owner_id: str, intent: ReleaseIntent
-    ) -> None:
-        """WO-C1: the NARROW host-owned intent-writer capability injected into every
-        build executor's ToolContext.
-
-        Resolves the ACTIVE configured ProjectStore at INVOCATION time (via
-        ``_project_store_now``, which re-reads settings each call) — so a custom
-        ``projects_root``, even one changed AFTER the executor was built, owns where
-        the sidecar lands, and the tool never sees a raw root or a fallback store.
-        Fails closed with a typed :class:`ReleaseIntentWriteError` (persisting ZERO
-        bytes) when the configured root is missing/unwritable/not-a-directory, when the
-        caller does not own the target conversation, or when the atomic write fails.
-        The error messages are root/path/secret-free by construction."""
-        project_store = self._project_store_now()
-        status = project_store.status()
-        if status is not StorageStatus.OK:
-            raise ReleaseIntentWriteError(
-                "invalid_projects_root",
-                "the configured projects root is not a writable directory, so the "
-                f"release intent was not recorded (root status: {status.value}).",
-            )
-        conversation_owner = self._store.conversation_owner_id_sync(conversation_id)
-        if conversation_owner is not None and conversation_owner != owner_id:
-            raise ReleaseIntentWriteError(
-                "owner_conversation_mismatch",
-                "cannot record release intent for a conversation owned by a "
-                "different owner; nothing was persisted.",
-            )
-        try:
-            project_store.write_release_intent(conversation_id, intent)
-        except (StorageError, OSError) as exc:
-            raise ReleaseIntentWriteError(
-                "release_intent_persist_failed",
-                "failed to persist the release intent under the configured projects "
-                "root; nothing was persisted.",
-            ) from exc
-
-    async def _maybe_rehydrate(self, conversation_id: str) -> None:
-        return await self._lifecycle._maybe_rehydrate(conversation_id)
-
-    async def _rehydrate_after_recreate(self, conversation_id: str) -> None:
-        return await self._lifecycle._rehydrate_after_recreate(conversation_id)
-
-    async def _rematerialize_uploads(self, conversation_id: str) -> None:
-        return await self._lifecycle._rematerialize_uploads(conversation_id)
-
-    async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
-        return await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
-
-    async def _emit_persistence_reminder(
-        self, conversation_id: str, body: str, *, meta: dict[str, Any] | None = None
-    ) -> None:
-        """Surface a project-persistence problem on the event log as an implicit
-        system-reminder — same pattern as the loop's other gates, so the model
-        and the UI both see what went wrong, named. ``meta`` carries the typed
-        half of a disclosure (REL-27 seal refusals are adjudicated on it)."""
-        await self._store.append(
-            conversation_id,
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        f"<system-reminder>\nProject persistence note: {body}\n</system-reminder>"
-                    ),
-                ),
-                meta=meta or {},
-            ),
-        )
-
-    def resolve_cid_prefix(self, cid8: str) -> str | None:
-        return self._preview.resolve_cid_prefix(cid8)
-
-    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
-        return await self._preview.resolve_owned_cid_prefix(cid8, owner_id)
-
-    def preview_upstream(self, conversation_id: str) -> str | None:
-        """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
-        owns how — localhost for local, the remote host's tailnet IP for gVisor). The
-        browser never touches this; the agent-server proxies it (single origin)."""
-        port = self.preview_target_port(conversation_id)
-        return self.port_upstream(conversation_id, port) if port is not None else None
-
-    def preview_target_port(self, conversation_id: str) -> int | None:
-        """The live port behind the canonical, capability-isolated preview route."""
-        return self._preview.preview_target_port(conversation_id)
-
-    async def resolve_active_preview_projection(
-        self,
-        conversation_id: str,
-        projection: Any,
-    ) -> bool:
-        return await self._preview.resolve_active_preview_projection(conversation_id, projection)
-
-    async def resolve_finished_preview_runtime(
-        self,
-        conversation_id: str,
-        contract: Any,
-    ) -> dict[str, Any] | None:
-        return await self._preview.resolve_finished_preview_runtime(conversation_id, contract)
-
-    async def _sync_appkit_preview(self, session: SandboxSession) -> None:
-        await _sync_appkit_live_preview(session)
+    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
+        return self._workspace.lock(conversation_id)
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         return self._preview.port_upstream(conversation_id, port)
 
     async def wake_for_preview(
-        self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID
+        self,
+        cid8: str,
+        port: int,
+        *,
+        owner_id: str = DEFAULT_OWNER_ID,
     ) -> str | None:
         return await self._preview.wake_for_preview(cid8, port, owner_id=owner_id)
-
-    def live_session(self, conversation_id: str) -> SandboxSession | None:
-        """Read-only sandbox accessor (BP-14). Does NOT create a session — a GET must
-        have no creation side-effects. Returns None when no executor/sandbox exists."""
-        executor = self._executors.get(conversation_id)
-        return getattr(executor, "_sandbox", None) if executor is not None else None
-
-    def sandbox_backend_name(self) -> str | None:
-        """Name of the active sandbox backend ('gvisor', 'podman', 'local', 'process').
-        Returns None on any lookup failure."""
-        try:
-            return self._sandbox_service_now().name
-        except Exception:  # noqa: BLE001
-            return None
-
-    _SESSIONS_LIST_RETRIES: int = 2
-    _SESSIONS_LIST_BACKOFF_S: float = 0.25
-
-    async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
-        return await self._sessions.sessions_snapshot(conversation_id)
-
-    async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
-        """Compat wrapper — returns only the list, degraded on failure (DEFECT-1)."""
-        return (await self.sessions_snapshot(conversation_id))[0]
-
-    _SESSION_VIEW_CACHE_TTL: float = 0.5
-    _SESSION_VIEW_MAX_CHARS: int = 100_000
-
-    async def session_view(
-        self, conversation_id: str, name: str, tail_chars: int
-    ) -> SessionView | None:
-        return await self._sessions.session_view(conversation_id, name, tail_chars)
 
     async def preview(self, conversation_id: str) -> dict[str, Any]:
         return await self._preview.preview(conversation_id)
@@ -3616,83 +462,8 @@ class ConversationRuntime:
     async def ensure_preview(self, conversation_id: str) -> bool:
         return await self._preview.ensure_preview(conversation_id)
 
-    # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
-
-    def _kernel_for(self, conversation_id: str) -> BuildKernel:
-        """The active Build kernel for this conversation.
-
-        If a kernel is PINNED to this conversation's in-flight run, return it —
-        a run must not re-resolve mid-flight (codex finding #1), so every control
-        op on a live run lands on the SAME kernel the run started under, even if
-        Settings (or the experimental flag) changed since.
-
-        Otherwise resolve fresh: read the persisted `build_kernel` setting. The
-        setting is vestigial and legacy/unknown values resolve to `DiscoKernel`.
-        The config is reloaded per call, mirroring `_router_now`, so compatibility
-        migrations take effect without a restart."""
-        pinned = getattr(self, "_pinned_kernels", None)
-        if pinned is not None:
-            existing = pinned.get(conversation_id)
-            if existing is not None:
-                return existing
-        selected = self._config_store.load().build_kernel
-        return select_kernel(self, disco=self._disco_kernel, selected=selected)
-
-    def _ensure_kernel_pinned(self, conversation_id: str) -> BuildKernel:
-        """Resolve + PIN the kernel for a (continuing) run, if not already pinned
-        (codex finding #1, point b). Called at the start/send/steer entry points
-        BEFORE the first append/kick: the first turn of a run resolves the current
-        selection and stores it; a steer / gate-resume reuses the existing pin so a
-        run can never be split across kernels. The pin is cleared on terminalization
-        (`_clear_pinned_kernel`), so the next run re-resolves the selection."""
-        existing = self._pinned_kernels.get(conversation_id)
-        if existing is not None:
-            return existing
-        # No pin yet → `_kernel_for` resolves fresh (the pin read above is empty).
-        kernel = self._kernel_for(conversation_id)
-        self._pinned_kernels[conversation_id] = kernel
-        return kernel
-
-    def _clear_pinned_kernel(self, conversation_id: str) -> None:
-        """Drop the run's kernel pin so the next run re-resolves the current
-        selection. Called only on a TERMINAL ending (FINISHED/ERROR/STUCK) or kill
-        — NOT on a pause / gate-park, which stay pinned for resume."""
-        self._pinned_kernels.pop(conversation_id, None)
-
-    def _unpin_if_current_generation(self, conversation_id: str, generation: int | None) -> None:
-        """Clear the kernel pin ONLY if no NEWER run has started since the finalizing
-        task began (finding #3, the pin set/clear race). `_on_run_task_done` schedules
-        the clean-return finalizer ASYNC; before it runs, a fresh user turn can append +
-        `kick` a new run that REUSES this conversation's pin and bumps its run-generation.
-        A stale finalizer must NOT then clear the pin out from under that newer run. When
-        `generation` is None (the stranded-run sweep / legacy callers, which have no
-        competing newer run) clear unconditionally.
-
-        Every guarded terminal path (`_finalize_clean_return` FINISHED/STUCK/IDLE,
-        `_terminalize_crashed` ERROR, the abandoned-gate sweep, and `kill`) unpins here
-        with the winning generation."""
-        if generation is not None and self._run_generation.get(conversation_id) != generation:
-            return  # a newer run owns the pin now — leave it for that run
-        self._clear_pinned_kernel(conversation_id)
-
     def start(self, conversation_id: str) -> None:
-        """Start/continue the conversation's run THROUGH the pinned kernel (codex
-        finding #1, point a). For the default `disco` kernel this is a behaviour-
-        identical pass-through to `kick`.
-
-        If the kernel's `start` RAISES and we just created the pin in this call,
-        roll it back (finding #2): the pin is committed
-        only once the kernel call succeeds, so a failed start leaves NO pin and the
-        next attempt re-resolves the current selection. A pre-existing pin (a steer /
-        resume of a live run) is NOT rolled back — that run stays on its kernel."""
-        newly_pinned = conversation_id not in self._pinned_kernels
-        kernel = self._ensure_kernel_pinned(conversation_id)
-        try:
-            kernel.start(conversation_id)
-        except BaseException:
-            if newly_pinned:
-                self._clear_pinned_kernel(conversation_id)
-            raise
+        self._conversation_control.start(conversation_id)
 
     async def send_user_turn(
         self,
@@ -3704,351 +475,21 @@ class ConversationRuntime:
         verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
-        """Append a user turn (optional hidden context, optional steer) and
-        start/continue the run — routed THROUGH the pinned kernel (codex finding
-        #1, point a). For the default `disco` kernel this is byte-identical to the
-        store-append + `kick` the routes performed inline before the seam. Returns
-        the stored USER message so the REST routes can report its id/seq.
-
-        If the kernel's `send_user_turn` RAISES before any task is spawned and we just
-        created the pin in this call, roll it back (finding #2): the pin commits only
-        once the kernel call succeeds,
-        so a failed send leaves NO pin and the next attempt re-resolves. A pre-existing
-        pin (a steer of a live run) is NOT rolled back — that run stays on its kernel."""
-        # CONTRACT-ACTIVATE: declare the contract kind from the brief BEFORE the
-        # kernel composes the loop, so the starter recommendation / finalizer
-        # alias / delivery mode resolve for this very run. First-wins + guarded
-        # eviction inside — safe on steers and re-sends. Mirrors the kernel-pin
-        # rollback: a declaration made by THIS call is undone if the send never
-        # lands (codex defect #3 — a failed send must not permanently win the
-        # contract for a turn that never entered history).
-        # CONTRACT-DURABILITY: fold any PERSISTED declaration first, so after an
-        # agent-server restart the historical contract wins over this turn's brief
-        # (first-wins holds across restarts) and the phase tracker resumes where
-        # the run left off instead of restarting at BOOTSTRAP.
-        await self._fold_contract_from_history(conversation_id)
-        newly_declared = build_brief is not None and not self._contract.has_declared_contract(
-            conversation_id
+        return await self._conversation_control.send_user_turn(
+            conversation_id,
+            text,
+            context=context,
+            build_brief=build_brief,
+            verification_requirements=verification_requirements,
+            steer=steer,
         )
-        self.activate_contract_for_brief(conversation_id, build_brief)
-        newly_pinned = conversation_id not in self._pinned_kernels
-        kernel = self._ensure_kernel_pinned(conversation_id)
-        try:
-            return await kernel.send_user_turn(
-                conversation_id,
-                text,
-                context=context,
-                build_brief=build_brief,
-                verification_requirements=verification_requirements,
-                steer=steer,
-            )
-        except BaseException:
-            if newly_pinned:
-                self._clear_pinned_kernel(conversation_id)
-            if newly_declared:
-                self.set_build_kind(conversation_id, None)
-                # Finding #8: the kernel may have PERSISTED this turn's brief before
-                # raising — release the fold marker so a later fold can rediscover
-                # it instead of a later declaration silently winning.
-                self._contract.release_fold_attempt(conversation_id)
-            raise
-
-    async def _run_continuing_control(
-        self, conversation_id: str, call: Callable[[BuildKernel], Awaitable[Any]]
-    ) -> Any:
-        """Route a RUN-CONTINUING control op (confirm/reject/approve_plan/request_plan/
-        pick_alternative) through the conversation's PINNED kernel (finding #1).
-
-        These ops continue an in-flight (or gate-parked) run, so they MUST land on the
-        SAME kernel the run started under. The previous code called `_kernel_for`
-        directly: when no in-memory pin existed (after a restart, a legacy pre-A1 gated
-        conversation, or any direct unpinned kick) it RE-RESOLVED the selection instead
-        of pinning it — so a control op could start/continue a run on a kernel different
-        from the one a later op would resolve, the exact half-disco/half-pi split #1
-        forbids. Now we `_ensure_kernel_pinned` first: an existing pin is reused; a
-        missing one is resolved + committed here. The same rollback-on-raise semantics as
-        `start`/`send_user_turn` (finding #2): a FRESHLY-created pin is rolled back if the
-        kernel call raises (so a failed op leaves no stuck pin), while a pre-existing pin
-        from the live run is preserved. Byte-identical for the default `disco` kernel —
-        the op still lands on `_control`/`_loop_for` exactly as before, just pinned."""
-        # CONTRACT-DURABILITY (codex finding #7): a confirm/approve-plan can be the
-        # FIRST touch after a restart — fold before the kernel composes a loop, or a
-        # gated conversation continues contract-less.
-        await self._fold_contract_from_history(conversation_id)
-        newly_pinned = conversation_id not in self._pinned_kernels
-        kernel = self._ensure_kernel_pinned(conversation_id)
-        try:
-            return await call(kernel)
-        except BaseException:
-            if newly_pinned:
-                self._clear_pinned_kernel(conversation_id)
-            raise
-
-    async def confirm(self, conversation_id: str) -> None:
-        return await self._run_continuing_control(
-            conversation_id, lambda k: k.confirm(conversation_id)
-        )
-
-    async def reject(self, conversation_id: str, reason: str = "rejected by user") -> None:
-        return await self._run_continuing_control(
-            conversation_id, lambda k: k.reject(conversation_id, reason)
-        )
-
-    async def approve_plan(self, conversation_id: str) -> None:
-        return await self._run_continuing_control(
-            conversation_id, lambda k: k.approve_plan(conversation_id)
-        )
-
-    async def request_plan(self, conversation_id: str, text: str = "") -> None:
-        return await self._run_continuing_control(
-            conversation_id, lambda k: k.request_plan(conversation_id, text)
-        )
-
-    async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
-        """Resume from AWAITING_USER_DECISION by selecting the agent's proposed
-        alternative path. The loop synthesizes an ActionEvent from the option's
-        ToolCall and executes it directly, then resumes.
-
-        Routed through the PINNED kernel (finding #1): previously this bypassed the
-        kernel entirely and called `_loop_for(...).pick_alternative` directly, so a run
-        could be continued unpinned. `DiscoKernel.pick_alternative` performs the SAME
-        `_loop_for(...).pick_alternative(option_id)` call, so the disco path is
-        byte-identical — just pinned."""
-        return await self._run_continuing_control(
-            conversation_id, lambda k: k.pick_alternative(conversation_id, option_id)
-        )
-
-    async def pause(self, conversation_id: str) -> None:
-        return await self._control.pause(conversation_id)
 
     async def cancel(self, conversation_id: str) -> None:
-        return await self._control.cancel(conversation_id)
-
-    async def _close_dangling_actions_for_kill(
-        self, conversation_id: str, generation: int | None = None
-    ) -> list[AgentErrorEvent]:
-        """Close any unpaired ActionEvent with an honest kill-cancellation error.
-
-        A hard task cancellation can land after the ActionEvent was durably appended
-        but before execute_and_observe emits its ObservationEvent/AgentErrorEvent.
-        Provider history requires that assistant tool calls have matching tool
-        results, so kill terminalization repairs the append-only log by pairing each
-        still-dangling action exactly once.
-        """
-        # Public/direct compatibility wrapper. ControlOps.kill owns one larger
-        # fence across closure + executor teardown + terminal status and calls
-        # the locked primitive below instead.
-        async with self.workspace_lock(conversation_id):
-            async with self._workspace.interprocess_mutation_fence(conversation_id):
-                if (
-                    generation is not None
-                    and self._run_generation.get(conversation_id) != generation
-                ):
-                    return []
-                return await self._close_dangling_actions_for_kill_locked(conversation_id)
-
-    async def _close_dangling_actions_for_kill_locked(
-        self,
-        conversation_id: str,
-        authority: tuple[str | None, str | None, bool] | None = None,
-    ) -> list[AgentErrorEvent]:
-        """Atomically pair open actions while the caller owns both fences.
-
-        ``authority`` is the exact (view, intent, strict) tuple captured when a
-        hard kill began. Under strict v1, only that view's actions may be
-        closed; a stale worker must never close a newer process's action.
-        """
-
-        if not self._workspace.lock(conversation_id).locked():
-            raise RuntimeError("kill action closure requires the workspace fence")
-        self._workspace._require_process_fence_locked(conversation_id)
-        events = await self._store.get_events(conversation_id)
-        paired = signals._paired_action_ids(events)
-        captured_view_id = authority[0] if authority is not None else None
-        strict = authority[2] if authority is not None else False
-        errors: list[Event] = []
-        for event in events:
-            if not isinstance(event, ActionEvent) or event.id in paired:
-                continue
-            if strict and (captured_view_id is None or event.agent_view_id != captured_view_id):
-                continue
-            errors.append(
-                AgentErrorEvent(
-                    id=f"evt_kill_cancelled_{event.id}",
-                    error="cancelled",
-                    detail=(
-                        "Kill interrupted this admitted action before its result was "
-                        "recorded. Its outcome is UNKNOWN; re-verify the workspace or "
-                        "external system before retrying."
-                    ),
-                    action_id=event.id,
-                    tool_call_id=event.tool_call.call_id,
-                    # Keep the closure in the exact admitted view that emitted
-                    # the action so strict histories retain the pair.
-                    agent_view_id=event.agent_view_id,
-                )
-            )
-        if not errors:
-            return []
-        stored = await self._store.append_many(conversation_id, errors)
-        return [e for e in stored if isinstance(e, AgentErrorEvent)]
-
-    async def resume(self, conversation_id: str) -> None:
-        """Continue a stopped (PAUSED) Deep Research run. Clears the cancel flag and
-        re-kicks; `_maybe_run_deep_research` detects the PAUSED state and re-runs the
-        execution to completion (the new full report supersedes the partial)."""
-        self._cancel_flags.pop(conversation_id, None)
-        self.kick(conversation_id)
-
-    def _condense_trailing_degeneracy(self, events: list):
-        return self._resume._condense_trailing_degeneracy(events)
-
-    async def _reconstruct_resume_context(self, conversation_id: str, events: list) -> list:
-        return await self._resume._reconstruct_resume_context(conversation_id, events)
-
-    async def resume_conversation(self, conversation_id: str) -> dict:
-        # CONTRACT-DURABILITY: a resume after an agent-server restart is exactly
-        # the path that used to lose the contract — fold BEFORE the resume seam
-        # composes a loop so the executor bakes contract-derived state.
-        await self._fold_contract_from_history(conversation_id)
-        return await self._resume.resume_conversation(conversation_id)
+        await self._conversation_control.cancel(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
-        # Capture the run-generation this kill is issued against (finding #4 — the LAST
-        # terminalizer path). The control-op teardown AWAITS the killed task (+ the
-        # executor/sandbox teardown), and in that window a fresh user turn can start a
-        # NEWER run (generation N+1) that REUSES this conversation's loop/executor/pin.
-        # Thread the captured generation so the kill terminalizes + tears down ONLY its
-        # own run (mirrors the crash/clean-return/abandoned-gate terminalizers).
-        generation = self._run_generation.get(conversation_id)
-        # Hard kill = terminal → release the kernel pin (next run re-resolves). #1.
-        # Generation-guarded (finding #4): clear only THIS generation's pin via the same
-        # `_unpin_if_current_generation` semantics the other terminalizers use, so a
-        # newer run that re-pins during teardown keeps its own pin.
-        self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.IDLE)
-        self._unpin_if_current_generation(conversation_id, generation)
-        return await self._control.kill(conversation_id, generation)
-
-    async def forget_conversation(self, conversation_id: str) -> None:
-        return await self._workspace.forget(conversation_id)
-
-    async def _forget_conversation_locked(self, conversation_id: str) -> None:
-        return await self._workspace.forget_locked(conversation_id)
+        await self._conversation_control.kill(conversation_id)
 
     async def aclose(self) -> None:
-        for task in self._tasks.values():
-            task.cancel()
+        await self._run_supervisor.close()
         await self._driver_preflight.aclose()
-        for executor in self._executors.values():
-            with contextlib.suppress(Exception):
-                await executor.kill()
-        for session in self._pending_sessions.values():
-            with contextlib.suppress(Exception):
-                await session.destroy()
-
-    # ---- RP-08: scheduled tasks ---------------------------------------------
-
-    def _schedule_manager(self) -> Any:
-        return self._schedule._schedule_manager()
-
-    async def _schedule_manager_loop(self) -> None:
-        await self._schedule._schedule_manager_loop()
-
-    def create_schedule(
-        self,
-        *,
-        conversation_id: str,
-        owner_id: str,
-        rrule: str,
-        description: str,
-        timezone: str = "UTC",
-        depth: str | None = None,
-        model_override: str | None = None,
-    ) -> dict:
-        return self._schedule.create_schedule(
-            conversation_id=conversation_id,
-            owner_id=owner_id,
-            rrule=rrule,
-            description=description,
-            timezone=timezone,
-            depth=depth,
-            model_override=model_override,
-        )
-
-    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
-        return self._schedule.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
-
-    def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
-        return self._schedule.delete_schedule(schedule_id, owner_id=owner_id)
-
-    async def fire_schedule_now(self, schedule_id: str, *, owner_id: str) -> bool:
-        """Run a schedule immediately, out of band (gap #98). False if not found."""
-        return await self._schedule.fire_now(schedule_id, owner_id=owner_id)
-
-    def create_workflow_schedule(
-        self,
-        spec: ScheduleSpec,
-        *,
-        owner_id: str,
-    ) -> dict:
-        return self._schedule.create_workflow_schedule(spec, owner_id=owner_id)
-
-    def list_workflow_schedules(
-        self,
-        *,
-        owner_id: str | None = None,
-        include_unclaimed_legacy: bool = False,
-    ) -> list[dict]:
-        return self._schedule.list_workflow_schedules(
-            owner_id=owner_id,
-            include_unclaimed_legacy=include_unclaimed_legacy,
-        )
-
-    def list_workflow_schedule_runs(
-        self,
-        *,
-        schedule_id: str | None = None,
-        owner_id: str | None = None,
-        include_unclaimed_legacy: bool = False,
-        limit: int = 100,
-    ) -> list[dict]:
-        return self._schedule.list_workflow_schedule_runs(
-            schedule_id=schedule_id,
-            owner_id=owner_id,
-            include_unclaimed_legacy=include_unclaimed_legacy,
-            limit=limit,
-        )
-
-    async def fire_workflow_schedule_now(
-        self,
-        schedule_id: str,
-        *,
-        owner_id: str,
-        include_unclaimed_legacy: bool = False,
-    ) -> dict | None:
-        return await self._schedule.fire_workflow_schedule_now(
-            schedule_id,
-            owner_id=owner_id,
-            include_unclaimed_legacy=include_unclaimed_legacy,
-        )
-
-    def preview_schedule_runs(
-        self,
-        rrule: str,
-        n: int = 3,
-        *,
-        timezone: str = "UTC",
-    ) -> list[str]:
-        return self._schedule.preview_schedule_runs(rrule, n, timezone=timezone)
-
-    # -- activity dashboard ----------------------------------------------------
-
-    def running_conversation_ids(self) -> set[str]:
-        """The conversation ids with a LIVE (not-yet-done) run task in THIS process —
-        the ground truth of "what's executing right now" (cached status can lag a
-        crash). Done tasks are filtered, so a finished-but-uncleaned entry never
-        counts. Not owner-scoped; the endpoint intersects with the owner's summaries."""
-        return {cid for cid, task in self._tasks.items() if not task.done()}
-
-    def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[dict]:
-        return self._schedule.list_recent_schedule_runs(owner_id=owner_id, limit=limit)

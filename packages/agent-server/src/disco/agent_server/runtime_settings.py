@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from disco.core import (
     ActionEvent,
@@ -23,10 +23,10 @@ from disco.core import (
 from disco.core.llm import ConfigStore, DefaultLLMRouter, ModelExecutionPolicy, SecretStore
 from disco.core.llm.config import RouterConfig
 from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
-from disco.core.loop import AgentLoop
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools import DefaultToolExecutor, SandboxSession
 from disco.tools.projects import ProjectStore, StorageStatus
+
+from .run_registry import LoopRegistry, RunRegistry, RunResourceRegistry
 
 # Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
 # the prior turn has fully concluded (or cooperatively stopped), so re-pinning the
@@ -93,24 +93,21 @@ class _RuntimeModelBindings:
     def __init__(
         self,
         *,
-        loops: dict[str, AgentLoop],
-        tasks: dict[str, asyncio.Task[Any]],
+        loops: LoopRegistry,
+        runs: RunRegistry,
         contexts: _DriverContextBindings,
-        executors: dict[str, DefaultToolExecutor],
-        pending_sessions: dict[str, SandboxSession],
+        resources: RunResourceRegistry,
     ) -> None:
         self._loops = loops
-        self._tasks = tasks
+        self._runs = runs
         self._contexts = contexts
-        self._executors = executors
-        self._pending_sessions = pending_sessions
+        self._resources = resources
 
     def loop_exists(self, conversation_id: str) -> bool:
-        return conversation_id in self._loops
+        return self._loops.loop(conversation_id) is not None
 
     def live_task_exists(self, conversation_id: str) -> bool:
-        task = self._tasks.get(conversation_id)
-        return task is not None and not task.done()
+        return self._runs.active_task(conversation_id) is not None
 
     def compose_model_key(self, conversation_id: str) -> str | None:
         return self._contexts.compose_model_key(conversation_id)
@@ -118,13 +115,9 @@ class _RuntimeModelBindings:
     def evict_for_model_change(self, conversation_id: str) -> None:
         if self.live_task_exists(conversation_id):
             return
-        self._loops.pop(conversation_id, None)
+        self._loops.forget(conversation_id)
         self._contexts.discard(conversation_id)
-        executor = self._executors.pop(conversation_id, None)
-        if conversation_id not in self._pending_sessions:
-            session = getattr(executor, "_sandbox", None) if executor is not None else None
-            if session is not None:
-                self._pending_sessions[conversation_id] = cast(SandboxSession, session)
+        self._resources.park_executor_session(conversation_id)
 
 
 class _RuntimeSurfaceSettings:
@@ -218,6 +211,9 @@ class _RuntimeSurfaceSettings:
             pass
         return "research"
 
+    def forget(self, conversation_id: str) -> None:
+        self._surfaces.pop(conversation_id, None)
+
 
 class _RuntimeModeSettings:
     """Own transient artifact/AppKit identity caches and research source pins."""
@@ -296,6 +292,11 @@ class _RuntimeModeSettings:
             return ()
         return self._research_sources.get(conversation_id, ())
 
+    def forget(self, conversation_id: str) -> None:
+        self._artifact_mode.pop(conversation_id, None)
+        self._appkit_mode.pop(conversation_id, None)
+        self._research_sources.pop(conversation_id, None)
+
 
 class RuntimeSettings:
     def __init__(
@@ -337,6 +338,15 @@ class RuntimeSettings:
 
     def _get_model_override(self, conversation_id: str) -> str | None:
         return self._model_overrides.get(conversation_id)
+
+    def _forget(self, conversation_id: str) -> None:
+        self._model_overrides.pop(conversation_id, None)
+        self._autonomous.pop(conversation_id, None)
+        self._assist.pop(conversation_id, None)
+        self._quiet.pop(conversation_id, None)
+        self._settings_locks.pop(conversation_id, None)
+        self._surface_settings.forget(conversation_id)
+        self._mode_settings.forget(conversation_id)
 
     def _evict_model_binding(self, conversation_id: str) -> None:
         self._model_bindings.evict_for_model_change(conversation_id)

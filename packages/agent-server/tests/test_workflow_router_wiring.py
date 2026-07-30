@@ -31,12 +31,12 @@ def _runtime() -> ConversationRuntime:
 
 
 def _compose(rt: ConversationRuntime, cid: str, *, surface: str):
-    rt.set_surface(cid, surface)
+    rt._settings._set_surface(cid, surface)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):
-        loop = rt._compose_build_loop(cid, router, agent)
-    rt._loops[cid] = loop
+        loop = rt._loop_factory.compose_build_loop(cid, router, agent)
+    rt._loop_registry.bind(cid, loop)
     return loop
 
 

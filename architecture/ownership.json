@@ -115,28 +115,7 @@
       "evidence": "composition facade; 11 constructor parameters (6 collaborators, 5 scalar/config)"
     }
   ],
-  "legacy_disguised_collaborators": [
-    {
-      "path": "packages/agent-server/src/disco/agent_server/appkit_ejection.py",
-      "symbol": "AppKitEjectionService",
-      "parameter": "runtime",
-      "annotation": "Any",
-      "disposition_id": "DM-001",
-      "owner_package": "PKG-06-RUNTIME",
-      "removal_package": "PKG-06-RUNTIME",
-      "reason": "DM-001 runtime back-reference exposes ConversationRuntime collaborators through self._rt"
-    },
-    {
-      "path": "packages/agent-server/src/disco/agent_server/build_platform_runtime.py",
-      "symbol": "BuildPlatformRuntime",
-      "parameter": "runtime",
-      "annotation": "Any",
-      "disposition_id": "DM-001",
-      "owner_package": "PKG-06-RUNTIME",
-      "removal_package": "PKG-06-RUNTIME",
-      "reason": "DM-001 runtime back-reference exposes ConversationRuntime collaborators through self._rt"
-    }
-  ],
+  "legacy_disguised_collaborators": [],
   "declarative_authorization_positives": [
     {
       "kind": "declarative_authorization_positive",

@@ -15,16 +15,14 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
 from disco.core.owners import install_owner_id
 from disco.core.workflow import ScheduleSpec
+from disco.tools.projects import ProjectStore
 from pydantic import BaseModel, ConfigDict, Field
-
-if TYPE_CHECKING:
-    from .runtime import ConversationRuntime
 
 _LOG = logging.getLogger(__name__)
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
@@ -280,10 +278,23 @@ class JsonWorkflowScheduleStore:
         return rows[:limit]
 
 
+class WorkflowScheduleRuntime(Protocol):
+    def _project_store_now(self) -> ProjectStore: ...
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        owner_id: str,
+        coalesced: bool,
+    ) -> WorkflowScheduleRunRecord: ...
+
+
 class WorkflowScheduleManager:
     def __init__(
         self,
-        runtime: ConversationRuntime,
+        runtime: WorkflowScheduleRuntime,
         *,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:

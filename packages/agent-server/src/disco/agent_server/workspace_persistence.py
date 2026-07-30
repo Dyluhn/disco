@@ -210,7 +210,7 @@ async def probe_finish_sealability(
     failures propagate — the core gate treats a probe error as advisory.
     """
 
-    executor = rt._executors.get(conversation_id)
+    executor = rt._run_resources.executor(conversation_id)
     session = getattr(executor, "_sandbox", None) if executor is not None else None
     if session is None or snapshot_fn is None:
         return SealabilityProbeResult(sealable=True, detail="no live workspace to probe")
@@ -621,7 +621,7 @@ class WorkspacePersistence:
             # (pilot seed 406546, p4_ff_import_rollback). Holding the reference does
             # not keep a dead box alive — capture still fails closed if the session
             # is gone — it removes the WINDOW.
-            pinned_executor = self._rt._executors.get(conversation_id)
+            pinned_executor = self._rt._run_resources.executor(conversation_id)
             pinned_session = (
                 getattr(pinned_executor, "_sandbox", None) if pinned_executor is not None else None
             )
@@ -640,7 +640,7 @@ class WorkspacePersistence:
                     ),
                 )
                 events = await self._rt._store.get_events(conversation_id)
-                await self._rt._shadow_fold_manifest(
+                await self._rt._artifact_manifest_shadow.fold(
                     conversation_id,
                     events=events,
                 )
@@ -716,7 +716,7 @@ class WorkspacePersistence:
         Replicated from LifecycleManager so the bulk commit/capture methods can
         use it without a cross-object call.
         """
-        task = self._rt._tasks.get(conversation_id)
+        task = self._rt._run_registry.task(conversation_id)
         return task is not None and not task.done()
 
     # -- journal recovery ------------------------------------------------------
@@ -1035,7 +1035,7 @@ class WorkspacePersistence:
                 trigger,
                 exc,
             )
-            await self._rt._emit_persistence_reminder(
+            await self._rt._persistence_notifier.emit(
                 conversation_id,
                 f"snapshot failed: {exc}",
                 meta=_seal_refusal_meta(exc),
@@ -1072,7 +1072,7 @@ class WorkspacePersistence:
                 conversation_id,
                 status.value,
             )
-            await self._rt._emit_persistence_reminder(
+            await self._rt._persistence_notifier.emit(
                 conversation_id,
                 f"project storage is {status.value}; this build was NOT saved.",
             )
@@ -1087,7 +1087,7 @@ class WorkspacePersistence:
         # rotated between the terminal and the seal, the pinned reference is a dead
         # generation, so fall back to whatever is live now. The pin closes the
         # dropped-executor window; it does not bind the seal to a corpse.
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         live_session = getattr(executor, "_sandbox", None) if executor is not None else None
         session = pinned_session
         if session is not None and live_session is not None and live_session is not session:

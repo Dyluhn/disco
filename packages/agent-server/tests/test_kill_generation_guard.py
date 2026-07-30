@@ -12,6 +12,7 @@ diagnostic and must not veto a current durable target.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -39,10 +40,32 @@ from harness.build_soak.oracles.event_chain import EventChainOracle
 CID = "conv-kill-gen"
 
 
+@pytest.fixture(autouse=True)
+def _deploy_lock_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
+
+
 def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     router = MagicMock()
     svc = ProcessSandboxService()
     return ConversationRuntime(store, router=router, sandbox_service=svc)
+
+
+def _advance_generation(rt: ConversationRuntime) -> int:
+    task = MagicMock()
+    task.done.return_value = True
+    generation = rt._run_registry.register_task(CID, task)
+    assert rt._run_registry.complete_task(CID, task)
+    return generation
+
+
+async def _close_dangling_actions(
+    rt: ConversationRuntime,
+) -> list[AgentErrorEvent]:
+    authority = await rt._lifecycle_commands.resolve_current_authority(CID)
+    async with rt._workspace.lock(CID):
+        async with rt._workspace.interprocess_mutation_fence(CID):
+            return await rt._run_kills._close_dangling_actions_locked(CID, authority)
 
 
 async def _seed(store: SqliteEventStore) -> None:
@@ -111,29 +134,26 @@ async def test_kill_newer_run_in_task_await_window_does_not_corrupt_it() -> None
     await _seed(store)
     rt = _runtime(store)
 
-    rt._run_generation[CID] = 1  # the killed run's generation
-
     # The newer run (gen 2) reuses the SAME cached executor/loop — it must survive.
     survivor_executor = MagicMock()
     survivor_executor.kill = AsyncMock()
-    rt._executors[CID] = survivor_executor
+    rt._run_resources.set_executor(CID, survivor_executor)
     survivor_loop = object()
-    rt._loops[CID] = survivor_loop
+    rt._loop_registry.bind(CID, survivor_loop)
     survivor_task = MagicMock()
     survivor_task.done.return_value = False
 
     def _newer_run_starts() -> None:
-        rt._run_generation[CID] = 2
-        rt._tasks[CID] = survivor_task
+        assert rt._run_registry.register_task(CID, survivor_task) == 2
 
-    rt._tasks[CID] = _RaceTask(_newer_run_starts)
+    assert rt._run_registry.register_task(CID, _RaceTask(_newer_run_starts)) == 1
 
     await rt.kill(CID)
 
     # The newer run's executor is NOT killed and its loop is NOT evicted.
     survivor_executor.kill.assert_not_awaited()
-    assert rt._executors.get(CID) is survivor_executor
-    assert rt._loops.get(CID) is survivor_loop
+    assert rt._run_resources.executor(CID) is survivor_executor
+    assert rt._loop_registry.loop(CID) is survivor_loop
     # No stale terminal IDLE in the newer run's log.
     assert not _killed_detail_present(await store.get_events(CID))
 
@@ -149,7 +169,7 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
     await _seed(store)
     rt = _runtime(store)
 
-    rt._run_generation[CID] = 1  # the killed run's generation; unchanged through guard A
+    assert _advance_generation(rt) == 1
 
     survivor_executor = MagicMock()
     survivor_executor.kill = AsyncMock()
@@ -159,7 +179,6 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
 
     async def _kill_then_newer_run() -> None:
         # A real replacement owns both local task identity and durable authority.
-        rt._run_generation[CID] = 2
         intent = await store.append(
             CID,
             WorkspaceMutationEvent(
@@ -176,24 +195,22 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
                 run_protocol_version=1,
             ),
         )
-        rt._tasks[CID] = survivor_task
-        rt._executors[CID] = survivor_executor
-        rt._loops[CID] = survivor_loop
+        assert rt._run_registry.register_task(CID, survivor_task) == 2
+        rt._run_resources.set_executor(CID, survivor_executor)
+        rt._loop_registry.bind(CID, survivor_loop)
 
     killed_executor = MagicMock()
     killed_executor.kill = AsyncMock(side_effect=_kill_then_newer_run)
-    rt._executors[CID] = killed_executor
-    rt._loops[CID] = object()
-    # No live task → guard A passes (generation still 1 when it is checked).
-    rt._tasks.pop(CID, None)
+    rt._run_resources.set_executor(CID, killed_executor)
+    rt._loop_registry.bind(CID, object())
 
     await rt.kill(CID)
 
     # The killed run's OWN executor was still torn down...
     killed_executor.kill.assert_awaited_once()
     survivor_executor.kill.assert_not_awaited()
-    assert rt._executors.get(CID) is survivor_executor
-    assert rt._loops.get(CID) is survivor_loop
+    assert rt._run_resources.executor(CID) is survivor_executor
+    assert rt._loop_registry.loop(CID) is survivor_loop
     # ...but the stale terminal IDLE is NOT appended into the newer run's log.
     assert not _killed_detail_present(await store.get_events(CID))
 
@@ -208,25 +225,25 @@ async def test_kill_with_no_newer_run_terminalizes_and_tears_down() -> None:
     await _seed(store)
     rt = _runtime(store)
 
-    rt._run_generation[CID] = 1
-    rt._pinned_kernels[CID] = object()  # the killed run's pin
+    assert _advance_generation(rt) == 1
+    rt._kernel_pins.ensure(CID)
 
     executor = MagicMock()
     executor.kill = AsyncMock()
-    rt._executors[CID] = executor
+    rt._run_resources.set_executor(CID, executor)
     pending = MagicMock()
     pending.destroy = AsyncMock()
-    rt._pending_sessions[CID] = pending
-    rt._loops[CID] = object()
+    rt._run_resources.set_pending_session(CID, pending)
+    rt._loop_registry.bind(CID, object())
 
     await rt.kill(CID)
 
     executor.kill.assert_awaited_once()
     pending.destroy.assert_awaited_once()
-    assert CID not in rt._executors
-    assert CID not in rt._pending_sessions
-    assert CID not in rt._loops
-    assert CID not in rt._pinned_kernels  # terminal kill releases the pin
+    assert rt._run_resources.executor(CID) is None
+    assert rt._run_resources.pending_session(CID) is None
+    assert rt._loop_registry.loop(CID) is None
+    assert rt._kernel_pins.current(CID) is None
     assert _killed_detail_present(await store.get_events(CID))
     assert (await store.get_state(CID)).execution_status is ConversationStatus.IDLE
 
@@ -243,13 +260,13 @@ async def test_kill_with_no_generation_tracked_terminalizes_legacy() -> None:
     # No entry in _run_generation → captured generation is None.
     executor = MagicMock()
     executor.kill = AsyncMock()
-    rt._executors[CID] = executor
-    rt._loops[CID] = object()
+    rt._run_resources.set_executor(CID, executor)
+    rt._loop_registry.bind(CID, object())
 
     await rt.kill(CID)
 
     executor.kill.assert_awaited_once()
-    assert CID not in rt._loops
+    assert rt._loop_registry.loop(CID) is None
     assert _killed_detail_present(await store.get_events(CID))
 
 
@@ -258,7 +275,7 @@ async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
     store.create_conversation(CID, owner_id="local")
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
+    rt._settings._set_surface(CID, "build")
     lock = rt.workspace_lock(CID)
     await lock.acquire()
 
@@ -276,8 +293,8 @@ async def test_kill_accepts_current_durable_target_despite_stale_local_generatio
     store = SqliteEventStore(":memory:")
     await _seed(store)
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
-    rt._run_generation[CID] = 1
+    rt._settings._set_surface(CID, "build")
+    assert _advance_generation(rt) == 1
     lock = rt.workspace_lock(CID)
     await lock.acquire()
 
@@ -286,7 +303,7 @@ async def test_kill_accepts_current_durable_target_despite_stale_local_generatio
     assert not killing.done()
     # Generation alone is process-local diagnostic state. With no replacement
     # task or durable intent/view, the queued command still targets this run.
-    rt._run_generation[CID] = 2
+    assert _advance_generation(rt) == 2
     lock.release()
 
     await killing
@@ -299,7 +316,7 @@ async def test_kill_closes_dangling_action_with_cancelled_agent_error() -> None:
     await _seed(store)
     action = await store.append(CID, _action())
     rt = _runtime(store)
-    rt._run_generation[CID] = 1
+    assert _advance_generation(rt) == 1
 
     await rt.kill(CID)
 
@@ -319,7 +336,7 @@ async def test_second_kill_does_not_duplicate_cancelled_agent_error() -> None:
     await _seed(store)
     action = await store.append(CID, _action())
     rt = _runtime(store)
-    rt._run_generation[CID] = 1
+    assert _advance_generation(rt) == 1
 
     await rt.kill(CID)
     await rt.kill(CID)
@@ -338,12 +355,12 @@ async def test_kill_closure_waits_for_real_outcome_under_shared_fence() -> None:
     await _seed(store)
     action = await store.append(CID, _action(agent_view_id="view-a"))
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
-    rt._run_generation[CID] = 1
+    rt._settings._set_surface(CID, "build")
+    assert _advance_generation(rt) == 1
 
     lock = rt.workspace_lock(CID)
     await lock.acquire()
-    closing = asyncio.create_task(rt._close_dangling_actions_for_kill(CID, 1))
+    closing = asyncio.create_task(_close_dangling_actions(rt))
     await asyncio.sleep(0)
     assert not closing.done()
 
@@ -389,10 +406,10 @@ async def test_kill_closure_preserves_strict_action_view_attribution() -> None:
     )
     action = await store.append(CID, _action(agent_view_id="view-strict"))
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
-    rt._run_generation[CID] = 1
+    rt._settings._set_surface(CID, "build")
+    assert _advance_generation(rt) == 1
 
-    closures = await rt._close_dangling_actions_for_kill(CID, 1)
+    closures = await _close_dangling_actions(rt)
     assert len(closures) == 1
     assert closures[0].action_id == action.id
     assert closures[0].tool_call_id == action.tool_call.call_id
@@ -429,7 +446,7 @@ async def test_strict_kill_status_is_bound_to_captured_view() -> None:
         ),
     )
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
+    rt._settings._set_surface(CID, "build")
 
     await rt._control.kill(CID)
 
@@ -466,11 +483,11 @@ async def test_cross_process_new_intent_blocks_stale_kill_teardown_and_idle(
         ),
     )
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
+    rt._settings._set_surface(CID, "build")
 
     capture_done = asyncio.Event()
     release_kill = asyncio.Event()
-    original_capture = rt._control._capture_kill_authority
+    original_capture = rt._lifecycle_commands.resolve_current_authority
 
     async def _capture_then_pause(conversation_id: str):
         authority = await original_capture(conversation_id)
@@ -478,7 +495,11 @@ async def test_cross_process_new_intent_blocks_stale_kill_teardown_and_idle(
         await release_kill.wait()
         return authority
 
-    monkeypatch.setattr(rt._control, "_capture_kill_authority", _capture_then_pause)
+    monkeypatch.setattr(
+        rt._lifecycle_commands,
+        "resolve_current_authority",
+        _capture_then_pause,
+    )
     killing = asyncio.create_task(rt._control.kill(CID))
     await asyncio.wait_for(capture_done.wait(), timeout=1)
 
@@ -502,12 +523,12 @@ async def test_cross_process_new_intent_blocks_stale_kill_teardown_and_idle(
     )
     peer_executor = MagicMock()
     peer_executor.kill = AsyncMock()
-    rt._executors[CID] = peer_executor
+    rt._run_resources.set_executor(CID, peer_executor)
     release_kill.set()
 
     await asyncio.wait_for(killing, timeout=1)
     peer_executor.kill.assert_not_awaited()
-    assert rt._executors.get(CID) is peer_executor
+    assert rt._run_resources.executor(CID) is peer_executor
     assert not _killed_detail_present(await store.get_events(CID))
 
 
@@ -529,7 +550,7 @@ async def test_kill_with_no_dangling_actions_adds_no_cancelled_agent_error() -> 
         ),
     )
     rt = _runtime(store)
-    rt._run_generation[CID] = 1
+    assert _advance_generation(rt) == 1
 
     await rt.kill(CID)
 
@@ -543,7 +564,7 @@ async def test_event_chain_oracle_passes_killed_sequence_after_pair_recovery() -
     await _seed(store)
     await store.append(CID, _action())
     rt = _runtime(store)
-    rt._run_generation[CID] = 1
+    assert _advance_generation(rt) == 1
 
     await rt.kill(CID)
 

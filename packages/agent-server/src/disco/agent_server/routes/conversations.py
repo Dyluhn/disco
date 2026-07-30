@@ -306,7 +306,7 @@ def _register_workspace_version_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         try:
-            return await runtime.restore_workspace_version(conversation_id, seq)
+            return await runtime._workspace.restore_version(conversation_id, seq)
         except WorkspaceRestoreConflict as exc:
             raise HTTPException(
                 status_code=409,

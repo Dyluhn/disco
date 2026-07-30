@@ -44,6 +44,7 @@ from disco.tools.projects import (
 from disco.tools.sandbox._container import PREVIEW_PORT
 
 from .lifecycle_command_service import LifecycleCommandService
+from .runtime_settings import _BUILD_LIKE_SURFACES
 from .workspace_commit import (
     CommittedWorkspaceView,
     WorkspaceCommitUnavailable,
@@ -78,9 +79,9 @@ def _current_lifecycle_task_authority(
     """Return only the exact registered task's captured durable target."""
 
     task = asyncio.current_task()
-    if task is None or rt._tasks.get(conversation_id) is not task:
+    if task is None or not rt._run_registry.owns_task(conversation_id, task):
         return None, None
-    return rt._run_task_authorities.get(task, (None, None))
+    return rt._run_authorities.get(task)
 
 
 async def _apply_restore_to_session(
@@ -216,7 +217,9 @@ class WorkspaceCoordinator:
         barrier. Whichever side wins first therefore has an unambiguous head.
         """
 
-        build_run = self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES
+        build_run = (
+            self._rt._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES
+        )
         try:
             if build_run:
                 async with self.lock(conversation_id):
@@ -245,8 +248,8 @@ class WorkspaceCoordinator:
 
         if not self.lock(conversation_id).locked():
             raise RuntimeError("run claim requires the workspace fence")
-        task = self._rt._tasks.get(conversation_id)
-        if task is not None and not task.done() and conversation_id not in self._admitted_runs:
+        task = self._rt._run_registry.active_task(conversation_id)
+        if task is not None and conversation_id not in self._admitted_runs:
             self._pending_runs.add(conversation_id)
 
     def clear_run_claim(self, conversation_id: str) -> None:
@@ -263,7 +266,7 @@ class WorkspaceCoordinator:
     async def _lifecycle_fence(self, conversation_id: str) -> AsyncIterator[None]:
         """Expose only serialization; lifecycle policy stays in its command service."""
 
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             yield
             return
         if self.fence_owned_by_current_task(conversation_id):
@@ -279,7 +282,7 @@ class WorkspaceCoordinator:
 
         if not self.lock(conversation_id).locked():
             raise RuntimeError("locked lifecycle transition requires the workspace fence")
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             yield
             return
         if self.fence_owned_by_current_task(conversation_id):
@@ -291,7 +294,7 @@ class WorkspaceCoordinator:
     def _require_lifecycle_fence(self, conversation_id: str) -> None:
         """Fail closed unless a Build transition owns both workspace fences."""
 
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             return
         if not self.lock(conversation_id).locked():
             raise RuntimeError("locked status append requires the workspace fence")
@@ -441,7 +444,7 @@ class WorkspaceCoordinator:
             # A host edit is a new input to an active build. Start or hand off a
             # task while the fence is still held; execution itself queues behind
             # the completed host mutation.
-            self._rt.kick(conversation_id)
+            self._rt._run_controller.kick(conversation_id)
             self.claim_registered_run_locked(conversation_id)
         else:
             stored = await self._rt._store.append(conversation_id, mutation)
@@ -479,7 +482,7 @@ class WorkspaceCoordinator:
     ) -> WorkspaceMutationEvent | None:
         """Durably invalidate an old workspace seal before a Build execution ingress."""
 
-        if self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES:
+        if self._rt._settings._surface_of(conversation_id) not in _BUILD_LIKE_SURFACES:
             return None
         self._require_process_fence_locked(conversation_id)
         return await self.record_mutation_locked(
@@ -502,7 +505,7 @@ class WorkspaceCoordinator:
         history = await self._rt._store.get_events(conversation_id)
         closures = self._dangling_action_closures(history)
         pending = [*closures, *events]
-        if self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES:
+        if self._rt._settings._surface_of(conversation_id) in _BUILD_LIKE_SURFACES:
             self._require_process_fence_locked(conversation_id)
             expected_operation = f"agent.run-intent.{source}"
             if intent is not None and (
@@ -557,7 +560,10 @@ class WorkspaceCoordinator:
         async with self.lock(conversation_id):
             async with self.interprocess_mutation_fence(conversation_id):
                 await self.record_run_intent_locked(conversation_id, "stranded-followup")
-                self._rt.kick(conversation_id, claimed_user_seq=claimed_user_seq)
+                self._rt._run_controller.kick(
+                    conversation_id,
+                    claimed_user_seq=claimed_user_seq,
+                )
                 self.claim_registered_run_locked(conversation_id)
 
     def finish_sealability_probe(
@@ -814,7 +820,7 @@ class WorkspaceCoordinator:
             session = _usable(self._rt.live_session(conversation_id))
         if session is None:
             try:
-                self._rt._loop_for(conversation_id)
+                self._rt._loop_factory.loop_for(conversation_id)
             except Exception as exc:  # noqa: BLE001 — mapped to a named storage error
                 _LOG.error("could not create sandbox for restore of %s: %s", conversation_id, exc)
                 raise WorkspaceRestoreStorageError(
@@ -860,12 +866,15 @@ class WorkspaceCoordinator:
         )
 
     async def forget(self, conversation_id: str) -> None:
-        self._rt._clear_pinned_kernel(conversation_id)
-        task = self._rt._tasks.pop(conversation_id, None)
+        self._rt._kernel_pins.clear(conversation_id)
+        task = self._rt._run_registry.task(conversation_id)
+        self._rt._run_registry.detach_task_if_owned(conversation_id, task)
         if task is not None and not task.done():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+        if task is not None:
+            self._rt._run_authorities.discard(task)
         async with self.lock(conversation_id):
             await self.forget_locked(conversation_id)
 
@@ -875,43 +884,28 @@ class WorkspaceCoordinator:
         # synchronous ingress claim explicitly so a reused conversation id is
         # not rejected forever.
         self.clear_run_claim(conversation_id)
-        executor = self._rt._executors.pop(conversation_id, None)
+        executor = self._rt._run_resources.pop_executor(conversation_id)
         if executor is not None:
             with contextlib.suppress(Exception):
                 await executor.kill()
-        session = self._rt._pending_sessions.pop(conversation_id, None)
+        session = self._rt._run_resources.pop_pending_session(conversation_id)
         if session is not None:
             with contextlib.suppress(Exception):
                 await session.destroy()
         with contextlib.suppress(Exception):
-            await self._rt._sandbox_service_now().destroy_by_conversation(conversation_id)
-        for cache in self._conversation_caches():
-            cache.pop(conversation_id, None)
+            await self._rt._sandbox._sandbox_service_now().destroy_by_conversation(
+                conversation_id
+            )
+        self._rt._run_registry.forget(conversation_id)
+        self._rt._run_ingress.forget(conversation_id)
+        self._rt._loop_registry.forget(conversation_id)
+        self._rt._run_recovery.forget(conversation_id)
+        self._rt._cancellations.clear(conversation_id)
+        self._rt._settings._forget(conversation_id)
         self._rt._contract.forget(conversation_id)
         self._rt._dr.forget(conversation_id)
+        self._rt._mcp._forget(conversation_id)
         self._rt._spaces.forget(conversation_id)
         self._rt._connections.clear_conversation(conversation_id)
         self._rt._driver_contexts.discard(conversation_id)
         self._rt._driver_preflight.discard_conversation(conversation_id)
-
-    def _conversation_caches(self) -> tuple[dict, ...]:
-        return (
-            self._rt._run_generation,
-            self._rt._loops,
-            self._rt._nonterminal_rekicks,
-            self._rt._last_rekick_progress_seq,
-            self._rt._post_terminal_rekick_seq,
-            self._rt._run_claimed_user_seq,
-            self._rt._last_status,
-            self._rt._cancel_flags,
-            self._rt._model_override,
-            self._rt._surface,
-            self._rt._autonomous,
-            self._rt._assist,
-            self._rt._quiet,
-            self._rt._artifact_mode,
-            self._rt._appkit_mode,
-            self._rt._depth,
-            self._rt._upload_passages,
-            self._rt._mcp_approval_pending,
-        )

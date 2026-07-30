@@ -27,7 +27,13 @@ from typing import Any
 from disco.tools import SandboxSession
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
+from .runtime_settings import _BUILD_LIKE_SURFACES
+
 _LOG = logging.getLogger(__name__)
+_SESSIONS_LIST_RETRIES = 2
+_SESSIONS_LIST_BACKOFF_S = 0.25
+_SESSION_VIEW_CACHE_TTL = 0.5
+_SESSION_VIEW_MAX_CHARS = 100_000
 
 
 class SessionsService:
@@ -37,36 +43,45 @@ class SessionsService:
     def upload_session(self, conversation_id: str) -> SandboxSession:
         """Session uploads write through. The executor's live session when a
         loop exists; otherwise a pending session the NEXT build loop adopts."""
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         if executor is not None:
             return executor._sandbox
-        if conversation_id not in self._rt._pending_sessions:
-            self._rt._pending_sessions[conversation_id] = SandboxSession(
-                self._rt._sandbox_service_now(),
-                self._rt._build_sandbox_spec(
-                    surface=self._rt._surface_of(conversation_id),
-                    mcp_egress_hosts=self._rt._mcp_egress_hosts(),
-                ),
-                conversation_id=conversation_id,
-                on_recreate=lambda: self._rt._rehydrate_after_recreate(conversation_id),
-                legacy_auto_preview=(
-                    self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+        if not self._rt._run_resources.has_pending_session(conversation_id):
+            self._rt._run_resources.set_pending_session(
+                conversation_id,
+                SandboxSession(
+                    self._rt._sandbox._sandbox_service_now(),
+                    self._rt._sandbox._build_sandbox_spec(
+                        surface=self._rt._settings._surface_of(conversation_id),
+                        mcp_egress_hosts=self._rt._mcp._mcp_egress_hosts(),
+                    ),
+                    conversation_id=conversation_id,
+                    on_recreate=lambda: self._rt._lifecycle._rehydrate_after_recreate(
+                        conversation_id
+                    ),
+                    legacy_auto_preview=(
+                        self._rt._settings._surface_of(conversation_id)
+                        not in _BUILD_LIKE_SURFACES
+                    ),
                 ),
             )
-        return self._rt._pending_sessions[conversation_id]
+        session = self._rt._run_resources.pending_session(conversation_id)
+        assert session is not None
+        return session
 
     async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
         """Session list + staleness. Fresh on success (cache updated); on
         transport failure retry twice (0.25 s apart), then degrade to the
         last-known list marked stale=True — a read-only listing must never
         500 the UI poll loop (DEFECT-1). No sandbox -> ([], False)."""
-        session = self._rt.live_session(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return ([], False)
         last_exc: BaseException | None = None
-        for attempt in range(self._rt._SESSIONS_LIST_RETRIES + 1):
+        for attempt in range(_SESSIONS_LIST_RETRIES + 1):
             if attempt > 0:
-                await asyncio.sleep(self._rt._SESSIONS_LIST_BACKOFF_S)
+                await asyncio.sleep(_SESSIONS_LIST_BACKOFF_S)
             try:
                 all_sessions = await session.sessions.list()
                 filtered = [s for s in all_sessions if not s.name.startswith("__")]
@@ -77,7 +92,7 @@ class SessionsService:
         _LOG.warning(
             "sessions_snapshot: %s failed after %d attempts: %s",
             conversation_id,
-            self._rt._SESSIONS_LIST_RETRIES + 1,
+            _SESSIONS_LIST_RETRIES + 1,
             last_exc,
         )
         return (self._rt._connections.last_sessions_get(conversation_id), True)
@@ -87,7 +102,8 @@ class SessionsService:
     ) -> SessionView | None:
         """Coalesced capture-pane: at most one in-flight call per (cid, name),
         result cached 0.5s so concurrent polls share one exec_shell round-trip."""
-        session = self._rt.live_session(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
+        session = executor.sandbox if executor is not None else None
         if session is None:
             return None
         lock = self._rt._connections.session_view_lock(conversation_id, name)
@@ -95,11 +111,11 @@ class SessionsService:
             loop = asyncio.get_running_loop()
             now = loop.time()
             cached = self._rt._connections.session_view_cache_get(conversation_id, name)
-            if cached is not None and (now - cached[0]) < self._rt._SESSION_VIEW_CACHE_TTL:
+            if cached is not None and (now - cached[0]) < _SESSION_VIEW_CACHE_TTL:
                 view = cached[1]
             else:
                 view = await session.sessions.view(
-                    name, tail_chars=self._rt._SESSION_VIEW_MAX_CHARS
+                    name, tail_chars=_SESSION_VIEW_MAX_CHARS
                 )
                 self._rt._connections.session_view_cache_set(
                     conversation_id,

@@ -37,6 +37,7 @@ from .preview_projection import (
     SealedPreviewRuntimeContract,
     derive_sealed_preview_runtime_contract,
 )
+from .runtime_settings import _BUILD_LIKE_SURFACES
 from .workspace_commit import WorkspaceCommitUnavailable, resolve_committed_workspace
 
 _LOG = logging.getLogger(__name__)
@@ -50,7 +51,9 @@ class PreviewService:
         """Full conversation id whose uuid part starts with cid8 — live executors only
         (a preview without a live sandbox is a 503 anyway). Ambiguous (>1) → None."""
         matches = [
-            cid for cid in self._rt._executors.keys() if cid.removeprefix("conv_").startswith(cid8)
+            cid
+            for cid in self._rt._run_resources.conversation_ids(executors_only=True)
+            if cid.removeprefix("conv_").startswith(cid8)
         ]
         if len(matches) == 1:
             return matches[0]
@@ -58,7 +61,7 @@ class PreviewService:
 
     async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
         matches: list[str] = []
-        for cid in self._rt._executors.keys():
+        for cid in self._rt._run_resources.conversation_ids(executors_only=True):
             if not cid.removeprefix("conv_").startswith(cid8):
                 continue
             if await self._rt._store.conversation_owned_by(cid, owner_id):
@@ -146,7 +149,7 @@ class PreviewService:
         the newest remaining servable selection.  Once a manager exists, no healthy
         selection means unavailable rather than a hidden legacy-8000 fallback.
         """
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
@@ -154,7 +157,9 @@ class PreviewService:
             # sandbox use.  Do not guess the legacy :8000 target before a managed launch;
             # that would expose a second lifecycle authority and tell the user a runtime
             # exists when the honest state is still "Preparing preview".
-            if self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES or getattr(
+            if self._rt._settings._surface_of(
+                conversation_id
+            ) in _BUILD_LIKE_SURFACES or getattr(
                 session, "_auto_preview_disabled", False
             ):
                 return None
@@ -188,7 +193,7 @@ class PreviewService:
         starts/restarts a command.
         """
 
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
@@ -205,7 +210,7 @@ class PreviewService:
     ) -> dict[str, Any] | None:
         """Resolve the exact original generation or its host-bound sealed restore."""
 
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         if manager is None:
@@ -479,24 +484,8 @@ class PreviewService:
         }
 
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
-        """Generalized upstream resolution for any curated USER port (BP-10).
-        expose_port itself refuses non-USER ports — defense stays in the backend.
-
-        SECURITY (noVNC BLOCK fix): NOVNC_PORT is a curated USER port so expose_port
-        can map it, but it is ALSO the live-browser surface, which must be closed when
-        the feature is disabled. This is the single chokepoint every proxy consumer
-        (HostPreviewProxyMiddleware, the /port/{port} route, and the /browser/live-url
-        route) flows through — gating here means disabling Live closes the network
-        surface, not merely the button, even if a stale stack is still listening on 6080.
-
-        SECURITY (capability gate): the noVNC port is opened ONLY when the feature is
-        enabled AND this conversation's sandbox can actually run + stream the stack
-        (`supports_live_view` ⇐ LIVE_VIEW_BACKENDS — gVisor only). The persisted
-        `enabled` flag is NOT sufficient on its own: a user who enables Live on gVisor and
-        then SWITCHES the backend to local/podman would otherwise leave a stale enabled
-        flag holding the noVNC port open on a non-gVisor session. Gating on the SAME
-        single-source-of-truth as live-ready/live-url keeps the surface consistent."""
-        executor = self._rt._executors.get(conversation_id)
+        """Resolve a curated port, gating noVNC on live-view enablement and capability."""
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return None
@@ -541,7 +530,7 @@ class PreviewService:
 
         lock = self._rt._connections.wake_lock_for(cid)
         async with lock:
-            if cid in self._rt._executors:
+            if self._rt._run_resources.has_executor(cid):
                 return self._rt.port_upstream(cid, port)
             woke = await self._rt.ensure_preview(cid)
             if woke:
@@ -566,7 +555,7 @@ class PreviewService:
         actually routable (expose_port / port_owners), NOT by the backend's name — a local
         rootless podman publishes real localhost URLs and previews exactly like the local
         backend; a genuinely unroutable backend still degrades honestly below."""
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return {
@@ -629,7 +618,8 @@ class PreviewService:
             preparing_reason = (
                 "Preparing preview: waiting for the platform-managed runtime to start."
                 if manager is None
-                and self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES
+                and self._rt._settings._surface_of(conversation_id)
+                in _BUILD_LIKE_SURFACES
                 else None
             )
             return {
@@ -673,7 +663,7 @@ class PreviewService:
         the documented resume path: re-compose the loop/executor (lazy sandbox),
         rehydrate the snapshot, then start the preview — the user explicitly asked to
         see the artifact again, and that's exactly what the snapshot is for."""
-        executor = self._rt._executors.get(conversation_id)
+        executor = self._rt._run_resources.executor(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         store = self._rt._project_store_now()
@@ -683,7 +673,8 @@ class PreviewService:
         # runtime verification authority.
         if (
             executor is None
-            and self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+            and self._rt._settings._surface_of(conversation_id)
+            not in _BUILD_LIKE_SURFACES
         ):
             if store is None or store.status() != StorageStatus.OK:
                 return False
@@ -693,9 +684,9 @@ class PreviewService:
                 return False
             if record is None or record.files_missing:
                 return False
-            self._rt._loop_for(conversation_id)
-            await self._rt._maybe_rehydrate(conversation_id)
-            executor = self._rt._executors.get(conversation_id)
+            self._rt._loop_factory.loop_for(conversation_id)
+            await self._rt._lifecycle._maybe_rehydrate(conversation_id)
+            executor = self._rt._run_resources.executor(conversation_id)
             session = getattr(executor, "_sandbox", None) if executor is not None else None
             if session is None:
                 return False
@@ -733,7 +724,8 @@ class PreviewService:
                     return False
             if (
                 session is not None
-                and self._rt._surface_of(conversation_id) not in self._rt._BUILD_LIKE_SURFACES
+                and self._rt._settings._surface_of(conversation_id)
+                not in _BUILD_LIKE_SURFACES
             ):
                 try:
                     return await session.ensure_preview()
@@ -759,8 +751,8 @@ class PreviewService:
                         (entry.path, verified.read_bytes(entry.path)) for entry in verified.files
                     )
                 if executor is None:
-                    self._rt._loop_for(conversation_id)
-                    executor = self._rt._executors.get(conversation_id)
+                    self._rt._loop_factory.loop_for(conversation_id)
+                    executor = self._rt._run_resources.executor(conversation_id)
                 session = getattr(executor, "_sandbox", None) if executor is not None else None
                 if session is None:
                     return False
@@ -771,9 +763,7 @@ class PreviewService:
                     manager = PreviewManager(session)
                     session._preview_manager = manager
                 await self._replace_with_sealed_workspace(session, files)
-                if getattr(self._rt, "_rehydrated", None) is None:
-                    self._rt._rehydrated = set()
-                self._rt._rehydrated.add(conversation_id)
+                self._rt._lifecycle._mark_rehydrated(conversation_id)
 
                 current_events = await self._rt._store.get_events(conversation_id)
                 current_committed = resolve_committed_workspace(

@@ -11,14 +11,20 @@ from disco.core.llm import DefaultLLMRouter
 from disco.core.loop import AgentLoop, RouterAgent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import ScheduleSpec, WorkflowRun
-from disco.tools import DefaultToolExecutor
 from disco.tools.projects import ProjectStore
 
 from .driver_context import ResolvedDriverContext
+from .run_registry import (
+    LoopRegistry,
+    RunAuthorityLedger,
+    RunIngressLedger,
+    RunRegistry,
+    RunResourceRegistry,
+)
 from .workflow_schedule import WorkflowScheduleRunRecord
 
 if TYPE_CHECKING:
-    from .runtime import ConversationRuntime
+    from .schedule import ScheduleRuntime
 
 
 class WorkflowConversationSettings(Protocol):
@@ -54,11 +60,11 @@ class WorkflowLoopFactory(Protocol):
 
 
 class WorkflowRunControl(Protocol):
-    _tasks: dict[str, asyncio.Task[Any]]
-    _loops: dict[str, AgentLoop]
-    _executors: dict[str, DefaultToolExecutor]
-    _run_task_authorities: dict[asyncio.Task[Any], tuple[str | None, str | None]]
-    _run_claimed_user_seq: dict[str, int]
+    _run_registry: RunRegistry
+    _run_authorities: RunAuthorityLedger
+    _run_ingress: RunIngressLedger
+    _loop_registry: LoopRegistry
+    _run_resources: RunResourceRegistry
     _driver_contexts: WorkflowDriverContexts
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
@@ -192,7 +198,7 @@ class ScheduleService:
 
             self._sched_manager = ScheduleManager(
                 self._store,
-                cast("ConversationRuntime", self._runtime_port),
+                cast("ScheduleRuntime", self._runtime_port),
             )
         return self._sched_manager
 

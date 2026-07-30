@@ -100,7 +100,7 @@ def test_no_runtime_means_the_wire_layer_still_just_appends():
 def test_build_route_atomically_persists_user_and_intent_after_runtime_restart():
     store = SqliteEventStore(":memory:")
     first_runtime = _runtime(store, "unused")
-    first_runtime.kick = MagicMock()
+    first_runtime._run_controller.kick = MagicMock()
     first_client = TestClient(create_app(store, runtime=first_runtime))
     cid = first_client.post(
         "/conversations",
@@ -117,7 +117,7 @@ def test_build_route_atomically_persists_user_and_intent_after_runtime_restart()
     assert first.json()["seq"] == first_events[0]["seq"]
 
     restarted_runtime = _runtime(store, "unused")
-    restarted_runtime.kick = MagicMock()
+    restarted_runtime._run_controller.kick = MagicMock()
     restarted_client = TestClient(create_app(store, runtime=restarted_runtime))
     second = restarted_client.post(
         f"/conversations/{cid}/messages",
@@ -147,19 +147,19 @@ def test_create_conversation_applies_depth_tier():
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "depth_tier": "exhaustive"},
     ).json()["conversation_id"]
-    assert runtime._depth_for(cid) == DepthTier.EXHAUSTIVE
+    assert runtime._dr._depth_for(cid) == DepthTier.EXHAUSTIVE
 
     cid_q = client.post(
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "depth_tier": "quick"},
     ).json()["conversation_id"]
-    assert runtime._depth_for(cid_q) == DepthTier.QUICK
+    assert runtime._dr._depth_for(cid_q) == DepthTier.QUICK
 
     # omitted → the standard_deep default still applies
     cid_def = client.post(
         "/conversations", json={"owner_id": "local", "surface": "deep_research"}
     ).json()["conversation_id"]
-    assert runtime._depth_for(cid_def) == DepthTier.STANDARD_DEEP
+    assert runtime._dr._depth_for(cid_def) == DepthTier.STANDARD_DEEP
 
 
 def test_create_conversation_applies_iterative():
@@ -173,19 +173,19 @@ def test_create_conversation_applies_iterative():
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "iterative": True},
     ).json()["conversation_id"]
-    assert runtime._iterative_for(cid_on) is True
+    assert runtime._dr._iterative_for(cid_on) is True
 
     cid_off = client.post(
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "iterative": False},
     ).json()["conversation_id"]
-    assert runtime._iterative_for(cid_off) is False
+    assert runtime._dr._iterative_for(cid_off) is False
 
     # omitted → the OFF default still applies
     cid_def = client.post(
         "/conversations", json={"owner_id": "local", "surface": "deep_research"}
     ).json()["conversation_id"]
-    assert runtime._iterative_for(cid_def) is False
+    assert runtime._dr._iterative_for(cid_def) is False
 
 
 def test_create_conversation_applies_research_sources():
@@ -202,4 +202,4 @@ def test_create_conversation_applies_research_sources():
         },
     ).json()["conversation_id"]
 
-    assert runtime.get_research_sources(cid) == ("news", "arxiv", "ddgs")
+    assert runtime._settings.get_research_sources(cid) == ("news", "arxiv", "ddgs")

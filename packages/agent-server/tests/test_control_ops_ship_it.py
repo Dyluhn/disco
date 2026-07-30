@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from disco.agent_server.control_ops import ControlOps, _is_ship_it_intent
 from disco.agent_server.lifecycle_command_service import LifecycleCommandService
+from disco.agent_server.run_registry import CancellationRegistry, LoopRegistry
 from disco.agent_server.workspace_service import WorkspaceCoordinator
 from disco.core import (
     ConversationStatus,
@@ -71,6 +72,8 @@ class _Runtime:
         self._store = store
         self._project_store = project_store
         self._tasks: dict[str, Any] = {}
+        self._settings = MagicMock()
+        self._settings._surface_of.return_value = "build"
         self._workspace = WorkspaceCoordinator(self)
         self._lifecycle_commands = LifecycleCommandService(
             store=store,
@@ -98,6 +101,20 @@ def _make_rt(store: SqliteEventStore, tmp_path: Path) -> _Runtime:
     """Faithful runtime: real store + real WorkspaceCoordinator, trackable
     kick/_loop_for spies. A replan lands observable events in `store`."""
     return _Runtime(store, ProjectStore(str(tmp_path / "projects")))
+
+
+def _make_ops(runtime: _Runtime) -> ControlOps:
+    controller = MagicMock()
+    controller.kick = runtime.kick
+    controller.loop_for = runtime._loop_for
+    return ControlOps(
+        runtime._store,
+        runtime._workspace,
+        LoopRegistry(),
+        CancellationRegistry(),
+        controller,
+        MagicMock(),
+    )
 
 
 async def _finished_conversation(store: SqliteEventStore) -> None:
@@ -242,7 +259,7 @@ async def test_ship_it_post_finish_appends_message_no_planning_status(tmp_path: 
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
 
     await ops.request_plan(CID, "publish it and be done")
 
@@ -283,7 +300,7 @@ async def test_ship_it_case_insensitive(tmp_path: Path) -> None:
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
 
     await ops.request_plan(CID, "YOU'RE DONE")
 
@@ -311,7 +328,7 @@ async def test_ship_it_all_stop_phrases_skip_replan(tmp_path: Path) -> None:
         store = SqliteEventStore(":memory:")
         await _finished_conversation(store)
         rt = _make_rt(store, tmp_path)
-        ops = ControlOps(rt)
+        ops = _make_ops(rt)
 
         await ops.request_plan(CID, phrase)
 
@@ -329,7 +346,7 @@ async def test_mid_sentence_stop_phrase_still_replans(tmp_path: Path) -> None:
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "you're done with the header, now add a footer"
@@ -349,7 +366,7 @@ async def test_real_change_intent_post_finish_still_replans(tmp_path: Path) -> N
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "add a dark mode toggle"
@@ -363,7 +380,7 @@ async def test_publish_to_netlify_post_finish_still_replans(tmp_path: Path) -> N
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "publish to Netlify"
@@ -377,7 +394,7 @@ async def test_bare_publish_post_finish_still_replans(tmp_path: Path) -> None:
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "publish it"
@@ -397,7 +414,7 @@ async def test_replan_ingress_is_atomic_no_orphan_kick(
     store = SqliteEventStore(":memory:")
     await _finished_conversation(store)
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     async def _boom(*_args: Any, **_kwargs: Any) -> Any:
@@ -429,7 +446,7 @@ async def test_ship_it_phrase_mid_run_still_replans(tmp_path: Path) -> None:
     store.create_conversation(CID, owner_id="local")
     # IDLE by default (no StatusEvent appended) — NOT FINISHED.
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "publish it and be done"
@@ -449,7 +466,7 @@ async def test_ship_it_phrase_awaiting_approval_still_replans(tmp_path: Path) ->
         StatusEvent(status=ConversationStatus.AWAITING_PLAN_APPROVAL),
     )
     rt = _make_rt(store, tmp_path)
-    ops = ControlOps(rt)
+    ops = _make_ops(rt)
     before = await store.get_events(CID)
 
     text = "we're done"

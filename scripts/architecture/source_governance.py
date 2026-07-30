@@ -17,36 +17,7 @@ from typing import Any
 from . import observation_governance, python_scan
 from .policy import load_ownership, load_policy
 
-LEGACY_DISGUISED_COLLABORATORS = {
-    (
-        "packages/agent-server/src/disco/agent_server/appkit_ejection.py",
-        "AppKitEjectionService",
-        "runtime",
-    ): {
-        "annotation": "Any",
-        "disposition_id": "DM-001",
-        "owner_package": "PKG-06-RUNTIME",
-        "removal_package": "PKG-06-RUNTIME",
-        "reason": (
-            "DM-001 runtime back-reference exposes ConversationRuntime "
-            "collaborators through self._rt"
-        ),
-    },
-    (
-        "packages/agent-server/src/disco/agent_server/build_platform_runtime.py",
-        "BuildPlatformRuntime",
-        "runtime",
-    ): {
-        "annotation": "Any",
-        "disposition_id": "DM-001",
-        "owner_package": "PKG-06-RUNTIME",
-        "removal_package": "PKG-06-RUNTIME",
-        "reason": (
-            "DM-001 runtime back-reference exposes ConversationRuntime "
-            "collaborators through self._rt"
-        ),
-    },
-}
+LEGACY_DISGUISED_COLLABORATORS: dict[tuple[str, str, str], dict[str, str]] = {}
 FROZEN_GENERIC_COLLABORATORS: dict[tuple[str, str, str], str] = {
     (
         "packages/agent-server/src/disco/agent_server/share_service.py",

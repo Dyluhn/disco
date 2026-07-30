@@ -110,17 +110,23 @@ async def _handle_control_frame(
     """Dispatch a control frame (confirm/reject/approve_plan/request_plan/
     pick_alternative/pause/cancel/resume) to the runtime."""
     if frame.type == "confirm":
-        await runtime.confirm(conversation_id)
+        await runtime._conversation_control.confirm(conversation_id)
     elif frame.type == "reject":
-        await runtime.reject(conversation_id)
+        await runtime._conversation_control.reject(conversation_id)
     elif frame.type == "approve_plan":
-        await runtime.approve_plan(conversation_id)
+        await runtime._conversation_control.approve_plan(conversation_id)
     elif frame.type == "request_plan":
-        await runtime.request_plan(conversation_id, frame.content or "")
+        await runtime._conversation_control.request_plan(
+            conversation_id,
+            frame.content or "",
+        )
     elif frame.type == "pick_alternative" and frame.option_id is not None:
-        await runtime.pick_alternative(conversation_id, frame.option_id)
+        await runtime._conversation_control.pick_alternative(
+            conversation_id,
+            frame.option_id,
+        )
     elif frame.type == "pause":
-        await runtime.pause(conversation_id)
+        await runtime._conversation_control.pause(conversation_id)
     elif frame.type == "cancel":
         await runtime.cancel(conversation_id)
     elif frame.type == "resume":
@@ -136,7 +142,8 @@ async def _handle_send_message_frame(
     runtime: ConversationRuntime | None,
 ) -> None:
     """Handle a send_message frame: append context + user message, then kick."""
-    brief = classify_build_brief(frame.content) if frame.build_brief is not None else None
+    content = frame.content or ""
+    brief = classify_build_brief(content) if frame.build_brief is not None else None
     # R3: an optional large `context` (e.g. a full DR report) is stored as a
     # HIDDEN ENVIRONMENT message FIRST, then the short visible user message.
     # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
@@ -145,7 +152,7 @@ async def _handle_send_message_frame(
     if runtime is not None:
         await runtime.send_user_turn(
             conversation_id,
-            frame.content,
+            content,
             context=frame.context,
             build_brief=brief,
             verification_requirements=frame.verification_requirements,
@@ -182,7 +189,7 @@ async def _append_wire_only_send(
         pending.append(_build_brief_message(brief))
     pending.append(
         _user_message(
-            frame.content,
+            frame.content or "",
             verification_requirements=frame.verification_requirements,
         )
     )
@@ -201,12 +208,13 @@ async def _handle_steer_frame(
     # at each section boundary → the steer becomes a new gather leg.
     # OFF-path (no DR run active): falls through to the original agent-loop kick,
     # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
-    if runtime is not None and runtime._dr.enqueue_steer(conversation_id, frame.steer_text):
+    steer_text = frame.steer_text or ""
+    if runtime is not None and runtime._dr.enqueue_steer(conversation_id, steer_text):
         return
     if runtime is not None:
-        await runtime.send_user_turn(conversation_id, frame.steer_text, steer=True)
+        await runtime.send_user_turn(conversation_id, steer_text, steer=True)
     else:
-        await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
+        await store.append(conversation_id, _user_message(steer_text, steer=True))
 
 
 async def _handle_selection_edit_frame(
@@ -251,7 +259,7 @@ def _handle_inject_source_frame(
 
     from disco.retrieval.models import Passage as _RetrievalPassage
 
-    text = frame.inject_source_text.strip()
+    text = (frame.inject_source_text or "").strip()
     passage_id = "injected-" + _hashlib.sha256(text.encode()).hexdigest()[:12]
     passage = _RetrievalPassage(
         id=passage_id,
@@ -512,6 +520,13 @@ async def _run_research_ws(
     if await _reject_forbidden_research_conversation(
         websocket, store, conversation_id, session.session_id, session.owner_id
     ):
+        return
+    if runtime is None:
+        await _send_json_redacted(
+            websocket,
+            {"type": "error", "message": "research runtime unavailable"},
+        )
+        await websocket.close()
         return
     raw_space_ids = body.get("space_ids") or []
     if not isinstance(raw_space_ids, list):

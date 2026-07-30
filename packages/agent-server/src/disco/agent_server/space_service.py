@@ -58,7 +58,8 @@ class ConfiguredProjectRoot:
         self._config_store = config_store
 
     def root(self) -> str | None:
-        return ProjectStore(self._config_store.load().projects.projects_root).root
+        root = ProjectStore(self._config_store.load().projects.projects_root).root
+        return str(root) if root is not None else None
 
 
 class SpaceService:

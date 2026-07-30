@@ -32,6 +32,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    from .debt_location_overrides import CURRENT_LOCATION_OVERRIDES
+except ImportError:
+    from debt_location_overrides import CURRENT_LOCATION_OVERRIDES
+
 # Accepted packages own these exact resolved dispositions. Keep the immutable ID
 # universe; only transition accepted package IDs from active to resolved.
 PKG02_RESOLVED_IDS = frozenset({"PY-0890", "PY-0891", "DM-010"})
@@ -118,6 +123,24 @@ PKG06_LIFECYCLE_RESOLVED_IDS = frozenset(
         "PY-0247",
     }
 )
+PKG06_RUNTIME_RESOLVED_IDS = frozenset(
+    {
+        "DM-001",
+        "PY-0166",
+        "PY-0183",
+        "PY-0184",
+        "PY-0185",
+        "PY-0188",
+        "PY-0189",
+        "PY-0190",
+    }
+) | frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(248, 251)),
+        *(f"PY-{number:04d}" for number in range(300, 325)),
+        "PY-0898",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -129,10 +152,12 @@ RESOLVED_IDS = (
     | PKG05_CONTEXT_RESOLVED_IDS
     | PKG05_LOOP_RESOLVED_IDS
     | PKG06_LIFECYCLE_RESOLVED_IDS
+    | PKG06_RUNTIME_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 636
-EXPECTED_OBSERVATIONS = 18
+EXPECTED_ACTIVE_DEBT_ROWS = 601
+EXPECTED_OBSERVATIONS = 16
 LOCATION_OVERRIDES = {
+    **CURRENT_LOCATION_OVERRIDES,
     "DM-001": (
         "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369"
     ),
@@ -153,34 +178,34 @@ LOCATION_OVERRIDES = {
     ),
     "PY-0192": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "DeepResearchService:86-1282"
+        "DeepResearchService:59-1235"
     ),
     "PY-0194": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_maybe_run_deep_research:542-627"
+        "_maybe_run_deep_research:502-587"
     ),
     "PY-0195": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_propose_deep_research_plan:629-780"
+        "_propose_deep_research_plan:589-742"
     ),
     "PY-0196": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_propose_deep_research_plan:629-780"
+        "_propose_deep_research_plan:589-742"
     ),
     "PY-0197": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_execute_deep_research:782-1059"
+        "_execute_deep_research:744-1012"
     ),
     "PY-0198": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_execute_deep_research:782-1059"
+        "_execute_deep_research:744-1012"
     ),
     "PY-0199": (
         "packages/agent-server/src/disco/agent_server/deep_research_service.py:"
-        "_follow_up_deep_research:1077-1254"
+        "_follow_up_deep_research:1030-1207"
     ),
     "PY-0200": (
-        "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1282"
+        "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1235"
     ),
     "PY-0305": (
         "packages/agent-server/src/disco/agent_server/runtime.py:_sync_appkit_live_preview:512-595"
@@ -239,11 +264,11 @@ LOCATION_OVERRIDES = {
     "PY-0324": ("packages/agent-server/src/disco/agent_server/runtime.py:<module>:1-5369"),
     "PY-0357": (
         "packages/agent-server/src/disco/agent_server/workspace_service.py:"
-        "WorkspaceCoordinator:135-922"
+        "WorkspaceCoordinator:136-911"
     ),
     "PY-0358": (
         "packages/agent-server/src/disco/agent_server/workspace_service.py:"
-        "WorkspaceCoordinator:135-922"
+        "WorkspaceCoordinator:136-911"
     ),
     "PY-0359": ("packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-922"),
 }

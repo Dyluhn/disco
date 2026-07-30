@@ -174,7 +174,7 @@ def _make_runtime_lifespan(
 
             async def _start_mcp_without_owning_readiness() -> None:
                 try:
-                    await active_runtime._start_mcp_pool()
+                    await active_runtime._mcp._start_mcp_pool()
                 except Exception:
                     # Approval and per-server connection failures are handled by
                     # McpManager. An unexpected aggregate error is still logged,
@@ -185,14 +185,18 @@ def _make_runtime_lifespan(
                 _start_mcp_without_owning_readiness(), name="mcp-startup"
             )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
-                await active_runtime.reconcile_orphaned_runs()
+                await active_runtime._lifecycle.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
-                await active_runtime.prewarm_model_probe()
+                await active_runtime._drivers.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once
-                await active_runtime.prewarm_vision_probe()
-            idle_sweep_task = asyncio.create_task(active_runtime._idle_sweep_loop())
+                await active_runtime._drivers.prewarm_vision_probe()
+            idle_sweep_task = asyncio.create_task(
+                active_runtime._lifecycle._idle_sweep_loop()
+            )
             # RP-08: start the schedule manager loop alongside the idle sweep.
-            schedule_task = asyncio.create_task(active_runtime._schedule_manager_loop())
+            schedule_task = asyncio.create_task(
+                active_runtime._schedule._schedule_manager_loop()
+            )
         yield
         if schedule_task is not None:
             schedule_task.cancel()
@@ -208,7 +212,7 @@ def _make_runtime_lifespan(
                 await mcp_start_task
         if runtime is not None:
             with contextlib.suppress(Exception):
-                await runtime._close_mcp_pool()
+                await runtime._mcp._close_mcp_pool()
 
     return runtime_lifespan
 

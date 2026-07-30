@@ -96,11 +96,7 @@ def _register_upload_routes(
         request: Request,
         files: Annotated[list[UploadFile], File()],
     ) -> JSONResponse:
-        """Upload files into the conversation's sandbox under uploads/.
-
-        Returns 200 {"saved": [...], "rejected": [...]} unless ALL files are
-        rejected (413).  Allowed in every state except terminal ERROR.
-        """
+        """Upload accepted files under uploads/; reject all-invalid batches with 413."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         state = await store.get_state(conversation_id)
@@ -115,7 +111,7 @@ def _register_upload_routes(
 
         if runtime is None:
             raise HTTPException(status_code=409, detail={"reason": "no_active_sandbox"})
-        session = runtime.upload_session(conversation_id)
+        session = runtime._sessions.upload_session(conversation_id)
 
         saved: list[dict] = []
         rejected: list[dict] = []
@@ -140,14 +136,14 @@ def _register_upload_routes(
             # Quota, collision choice, invalidation, and both writes share the
             # finalization lock. Two simultaneous uploads can never select the
             # same suffix or slip a write between FINISHED and its seal.
-            async with runtime.workspace_fence(conversation_id):
-                server_names = runtime.get_upload_names(conversation_id)
+            async with runtime._workspace.fence(conversation_id):
+                server_names = runtime._uploads.names(conversation_id)
                 try:
                     sandbox_names: set[str] = set(await session.list_dir("uploads"))
                 except Exception:  # noqa: BLE001 — uploads/ may not exist yet
                     sandbox_names = set()
                 existing_names = server_names | sandbox_names
-                existing_bytes = runtime.get_upload_size(conversation_id)
+                existing_bytes = runtime._uploads.size(conversation_id)
                 for fname in sandbox_names - server_names:
                     try:
                         existing_bytes += len(await session.read_file(f"uploads/{fname}"))
@@ -170,13 +166,13 @@ def _register_upload_routes(
                     final_name = f"{stem}-{counter}{suffix}"
                     counter += 1
                 upload_path = f"uploads/{final_name}"
-                await runtime.record_workspace_mutation_locked(
+                await runtime._workspace.record_mutation_locked(
                     conversation_id,
                     "upload.write",
                     paths=(upload_path,),
                 )
                 await session.write_file(upload_path, data)
-                runtime.store_upload(conversation_id, final_name, data)
+                runtime._uploads.store(conversation_id, final_name, data)
 
             # G1/DR-4 F2: for supported document types, parse the bytes
             # into Passages and add them to the per-conversation upload corpus so
@@ -185,7 +181,10 @@ def _register_upload_routes(
             # agent to read but are NOT indexed as retrievable passages.
             upload_doc = parse_upload_to_doc(final_name, data, conversation_id)
             if upload_doc is not None and upload_doc.passages:
-                runtime.add_upload_passages(conversation_id, list(upload_doc.passages))
+                runtime._dr.add_upload_passages(
+                    conversation_id,
+                    list(upload_doc.passages),
+                )
 
             saved.append({"name": final_name, "bytes": len(data)})
 

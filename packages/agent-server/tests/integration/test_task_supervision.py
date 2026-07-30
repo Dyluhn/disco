@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import uuid
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from disco.agent_server import ConversationRuntime
@@ -37,19 +39,28 @@ _CFG = RouterConfig(models={"scripted-m": _ENTRY}, default_model="scripted-m")
 _STEP = [("noop", [ProposedToolCall(tool_name="finish", arguments={})])]
 
 
+@pytest.fixture(autouse=True)
+def _deploy_lock_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
+
+
 def _runtime(store: SqliteEventStore) -> ConversationRuntime:
-    return ConversationRuntime(
+    runtime = ConversationRuntime(
         store,
         router=DefaultLLMRouter(_CFG, {"scripted": ScriptedProvider(_STEP)}),
         sandbox_service=ProcessSandboxService(),
     )
+    runtime._title_service.schedule = MagicMock()
+    runtime._build_platform.prepare_route_pin = AsyncMock()
+    runtime._drivers.resolve_context = AsyncMock(return_value=MagicMock())
+    return runtime
 
 
 async def _kicked_conversation(store, runtime) -> tuple[str, int]:
     cid = f"sup-{uuid.uuid4().hex[:8]}"
     store.create_conversation(cid, owner_id="local", surface="build")
-    runtime.set_surface(cid, "build")
-    runtime.set_artifact_mode(cid, True)
+    runtime._settings._set_surface(cid, "build")
+    runtime._settings.set_artifact_mode(cid, True)
     stored = await store.append(
         cid,
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
@@ -76,10 +87,14 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
     cid, seq = await _kicked_conversation(store, runtime)
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _BoomLoop())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _BoomLoop(),
+    )
 
-    runtime.kick(cid, claimed_user_seq=seq)
-    task = runtime._tasks.get(cid)
+    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    task = runtime._run_registry.task(cid)
     assert task is not None
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
@@ -99,10 +114,14 @@ async def test_cancellation_is_not_reported_as_error(monkeypatch):
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store)
     cid, seq = await _kicked_conversation(store, runtime)
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _CancelLoop())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _CancelLoop(),
+    )
 
-    runtime.kick(cid, claimed_user_seq=seq)
-    task = runtime._tasks.get(cid)
+    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    task = runtime._run_registry.task(cid)
     assert task is not None
     await asyncio.sleep(0.1)
     task.cancel()
@@ -127,9 +146,13 @@ async def test_terminalize_is_idempotent(monkeypatch):
             await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
             raise RuntimeError("late crash after finishing")
 
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _FinishThenRaise())
-    runtime.kick(cid, claimed_user_seq=seq)
-    task = runtime._tasks.get(cid)
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _FinishThenRaise(),
+    )
+    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    task = runtime._run_registry.task(cid)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
     await asyncio.sleep(0.2)
@@ -171,9 +194,13 @@ async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
             await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
             return await store.get_state(cid)
 
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _ReturnAtRunning(),
+    )
 
-    runtime.kick(cid, claimed_user_seq=seq)
+    runtime._run_controller.kick(cid, claimed_user_seq=seq)
     state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)
 
     assert state.execution_status == ConversationStatus.STUCK, (
@@ -204,9 +231,13 @@ async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypa
             await store.append(cid, StatusEvent(status=status))
             return await store.get_state(cid)
 
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _TransientStall())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _TransientStall(),
+    )
 
-    runtime.kick(cid, claimed_user_seq=user_seq)
+    runtime._run_controller.kick(cid, claimed_user_seq=user_seq)
     state = await _drain_until(
         store, cid, lambda s: s.execution_status == ConversationStatus.FINISHED
     )
@@ -232,9 +263,13 @@ async def test_clean_return_at_paused_is_left_alone(monkeypatch):
             await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
             return await store.get_state(cid)
 
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _Park())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _Park(),
+    )
 
-    runtime.kick(cid, claimed_user_seq=seq)
+    runtime._run_controller.kick(cid, claimed_user_seq=seq)
     await asyncio.sleep(0.4)
 
     state = await store.get_state(cid)
@@ -254,14 +289,18 @@ async def test_stranded_running_swept_to_recovery(monkeypatch):
             await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
             return await store.get_state(cid)
 
-    monkeypatch.setattr(runtime, "_loop_for", lambda _c: _ReturnAtRunning())
+    monkeypatch.setattr(
+        runtime._loop_factory,
+        "loop_for_resolved",
+        lambda _cid, _snapshot: _ReturnAtRunning(),
+    )
     # Simulate a stranded conversation: a loop this process owns, status RUNNING in the
     # store, but NO live task in self._tasks (the done-callback never fired).
-    runtime._loops[cid] = _ReturnAtRunning()  # type: ignore[assignment]
-    runtime._run_claimed_user_seq[cid] = seq
+    runtime._loop_registry.bind(cid, _ReturnAtRunning())  # type: ignore[arg-type]
+    runtime._run_ingress.claim_user_seq(cid, seq)
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
-    acted = await runtime.sweep_stranded_runs_once()
+    acted = await runtime._run_sweep.sweep_once()
     assert acted == 1, "the stranded RUNNING conversation must be detected"
 
     state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)

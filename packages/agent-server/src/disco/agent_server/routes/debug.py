@@ -97,17 +97,19 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         runtime_state: dict[str, Any] | None = None
         if runtime is not None:
             runtime_state = {
-                "sandbox_backend": runtime.sandbox_backend_name(),
-                "sandbox_state": runtime.sandbox_state(conversation_id),
-                "sandbox_instance_ids": runtime.sandbox_instance_ids(conversation_id),
+                "sandbox_backend": runtime._sandbox.backend_name(),
+                "sandbox_state": runtime._lifecycle.sandbox_state(conversation_id),
+                "sandbox_instance_ids": runtime._lifecycle.sandbox_instance_ids(
+                    conversation_id
+                ),
                 "live_session": runtime.live_session(conversation_id) is not None,
                 "mcp_retrieval_searches": [
                     str(getattr(provider, "name", type(provider).__name__))
-                    for provider in runtime._mcp_retrieval_searches
+                    for provider in runtime._mcp._retrieval_searches
                 ],
                 "mcp_retrieval_extractions": [
                     str(getattr(provider, "name", type(provider).__name__))
-                    for provider in runtime._mcp_retrieval_extractions
+                    for provider in runtime._mcp._retrieval_extractions
                 ],
             }
             ps_method = getattr(runtime, "project_store", None)

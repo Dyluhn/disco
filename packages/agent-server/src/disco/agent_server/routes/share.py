@@ -47,8 +47,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
 
     @router.get("/api/share")
     async def list_share_links(request: Request) -> dict:
-        """List the active share links owned by the default owner. Revoked
-        links are filtered out at the store level."""
+        """List active, owner-scoped share links."""
         if runtime is None:
             return {"links": []}
         return {
@@ -108,19 +107,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
 
     @router.get("/share/{token}")
     async def share_viewer(token: str) -> HTMLResponse:
-        """Serve the read-only static viewer for a shared conversation.
-
-        The page is a single self-contained HTML document (a CDN-free
-        stub) that calls `/api/share/{token}/bundle` to fetch the
-        scrubbed JSON bundle and renders it with NO WebSocket dependency.
-        The viewer code is embedded as a `script` block so the response
-        is one round-trip; no external assets are loaded (the CSP
-        forbids it).
-
-        404 with NO distinguishing information when the token is missing
-        or revoked — the two cases are conflated so a probe cannot
-        confirm a token ever existed. The bundle endpoint similarly 404s
-        on bad tokens."""
+        """Serve the self-contained, read-only viewer without token-state disclosure."""
         # Confirmed-revoked vs never-issued are 404 in both cases: the
         # static viewer cannot tell the difference and neither can a
         # probe. The HTML page itself is the same either way.

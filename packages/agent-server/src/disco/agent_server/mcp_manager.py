@@ -23,13 +23,23 @@ import asyncio
 import contextlib
 import ipaddress
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from disco.core.env import disco_env
+from disco.core.llm import ConfigStore, SecretStore
+from disco.core.store.sqlite import SqliteEventStore
 from disco.tools import ToolDef
 from disco.tools.mcp import McpPool, McpServerConfig
+from disco.tools.mcp.http import McpHttpClient
 from pydantic import ValidationError
+
+from .build_loop_components import (
+    McpApprovalNotice,
+    McpCallTarget,
+    McpLoopSnapshot,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -41,6 +51,61 @@ _LOG = logging.getLogger(__name__)
 _HTTP_CONNECT_ATTEMPTS = 3
 _HTTP_INIT_TIMEOUT_S = 3.0
 _HTTP_RETRY_DELAYS_S = (0.25, 1.0)
+
+
+class _MergedCallTarget:
+    """Prefer HTTP transport, then fall back to the stdio pool."""
+
+    def __init__(
+        self,
+        pool: McpPool | None,
+        http_client_for: Callable[[str], McpHttpClient | None],
+    ) -> None:
+        self._pool = pool
+        self._http_client_for = http_client_for
+
+    async def call_tool(
+        self,
+        server: str,
+        tool: str,
+        arguments: dict[str, object],
+    ) -> dict[str, object]:
+        client = self._http_client_for(server)
+        if client is not None:
+            return cast(dict[str, object], await client.call_tool(tool, arguments))
+        if self._pool is not None:
+            return cast(
+                dict[str, object],
+                await self._pool.call_tool(server, tool, arguments),
+            )
+        raise RuntimeError(f"MCP server {server!r} is not connected")
+
+
+def _snapshot_for_manager(
+    manager: McpManager,
+    call_target: McpCallTarget,
+    egress_hosts: frozenset[str],
+) -> McpLoopSnapshot:
+    tools: list[ToolDef] = []
+    if manager._pool is not None and manager._pool.started:
+        tools.extend(manager._pool.snapshot())
+    tools.extend(manager._http_tools.values())
+    config = manager._config_store.load()
+    approvals = tuple(
+        McpApprovalNotice(
+            server=server,
+            description_hash=str(info.get("new_hash", "")),
+            old_description_hash=str(info.get("old_hash", "")),
+        )
+        for server, info in sorted(manager._approval_pending.items())
+    )
+    return McpLoopSnapshot(
+        tools=tuple(tools),
+        max_active_schemas=config.mcp.max_active_schemas if config.mcp else 20,
+        call_target=call_target,
+        egress_hosts=egress_hosts,
+        approvals=approvals,
+    )
 
 
 def _diagnostic_exception_type(exc: BaseException) -> str:
@@ -76,13 +141,28 @@ def _diagnostic_exception_type(exc: BaseException) -> str:
 
 
 class McpManager:
-    """Owns the MCP lifecycle logic; shared state lives on the runtime back-ref."""
+    """Own the MCP lifecycle, transport caches, and approval state."""
 
-    def __init__(self, rt: Any) -> None:
-        self._rt = rt
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        secret_store: SecretStore,
+        store: SqliteEventStore,
+    ) -> None:
+        self._config_store = config_store
+        self._secret_store = secret_store
+        self._store = store
         self._reload_lock = asyncio.Lock()
-        if not hasattr(rt, "_mcp_http_status"):
-            rt._mcp_http_status = {}
+        self._pool: McpPool | None = None
+        self._approval_pending: dict[str, dict[str, object]] = {}
+        self._http_clients: dict[str, McpHttpClient] = {}
+        self._http_tools: dict[str, ToolDef] = {}
+        self._http_status: dict[str, dict[str, Any]] = {}
+        self._retrieval_searches: list[Any] = []
+        self._retrieval_extractions: list[Any] = []
+
+    def _forget(self, conversation_id: str) -> None:
+        self._approval_pending.pop(conversation_id, None)
 
     def _set_http_status(
         self,
@@ -101,7 +181,7 @@ class McpManager:
             if exception_type is not None:
                 diagnostic["exception_type"] = exception_type
             entry["diagnostic"] = diagnostic
-        self._rt._mcp_http_status[name] = entry
+        self._http_status[name] = entry
 
     @staticmethod
     def _typed_server(name: str, raw: object) -> McpServerConfig:
@@ -115,39 +195,33 @@ class McpManager:
         return TypedMcpServerConfig.model_validate({**payload, "name": name})
 
     async def reload(self) -> dict[str, Any]:
-        """Atomically apply the latest persisted MCP config and approvals.
-
-        Settings is served by the app-server, while this process owns the live
-        clients/tool registry. Historically config mutations stayed invisible
-        here until a process restart. Serializing close→start makes a successful
-        Settings save immediately truthful for the next Agent/workflow turn.
-        """
+        """Atomically make persisted MCP config truthful for subsequent turns."""
 
         async with self._reload_lock:
             await self._close_mcp_pool()
-            self._rt._mcp_approval_pending.clear()
+            self._approval_pending.clear()
             await self._start_mcp_pool()
-            servers = self._rt._config_store.load().mcp.servers
+            servers = self._config_store.load().mcp.servers
             pool_status = (
-                self._rt._mcp_pool.server_status() if self._rt._mcp_pool is not None else {}
+                self._pool.server_status() if self._pool is not None else {}
             )
             pool_tools = (
-                [tool.name for tool in self._rt._mcp_pool.snapshot()]
-                if self._rt._mcp_pool is not None
+                [tool.name for tool in self._pool.snapshot()]
+                if self._pool is not None
                 else []
             )
             connected = sorted(
                 {
                     *(
                         name
-                        for name, state in self._rt._mcp_http_status.items()
+                        for name, state in self._http_status.items()
                         if state.get("status") == "connected"
                     ),
                     *(name for name, status in pool_status.items() if status == "connected"),
                 }
             )
             server_statuses = {
-                name: dict(state) for name, state in self._rt._mcp_http_status.items()
+                name: dict(state) for name, state in self._http_status.items()
             }
             server_statuses.update(
                 {name: {"status": status} for name, status in pool_status.items()}
@@ -158,11 +232,11 @@ class McpManager:
                 "connected_servers": connected,
                 "registered_tools": sorted(
                     {
-                        *self._rt._mcp_http_tools,
+                        *self._http_tools,
                         *pool_tools,
                     }
                 ),
-                "approval_required": sorted(self._rt._mcp_approval_pending),
+                "approval_required": sorted(self._approval_pending),
                 "server_statuses": server_statuses,
             }
 
@@ -179,8 +253,8 @@ class McpManager:
         return compose_with_mcp(
             deps["search"],
             deps["extraction"],
-            mcp_searches=self._rt._mcp_retrieval_searches,
-            mcp_extractions=self._rt._mcp_retrieval_extractions,
+            mcp_searches=self._retrieval_searches,
+            mcp_extractions=self._retrieval_extractions,
         )
 
     def _mcp_egress_hosts(self) -> frozenset[str]:
@@ -194,7 +268,7 @@ class McpManager:
         url_hosts: list[str] = []
         allowed_hosts: list[str] = []
 
-        for client in self._rt._mcp_http_clients.values():
+        for client in self._http_clients.values():
             url_hosts.append(client._url)
             allowed_hosts.extend(client.allowed_hosts)
 
@@ -244,15 +318,10 @@ class McpManager:
         return proxy_env(host, EGRESS_PROXY_PORT)
 
     async def _start_mcp_pool(self) -> None:
-        """Start the MCP client pool if mcp.enabled + servers are configured.
-        Called once at runtime startup (from the app lifespan). Loads approvals
-        from the mcp_approvals table. On ApprovalRequired, the affected server
-        is refused and the WS frame is dispatched; other servers still start.
-
-        Rung B: also starts streamable_http servers via McpHttpClient."""
-        cfg = self._rt._config_store.load()
+        """Start configured stdio and streamable-HTTP clients with approvals."""
+        cfg = self._config_store.load()
         mcp_cfg = cfg.mcp
-        self._rt._mcp_http_status.clear()
+        self._http_status.clear()
         if not mcp_cfg.enabled or not mcp_cfg.servers:
             if not mcp_cfg.enabled:
                 for name in mcp_cfg.servers:
@@ -271,7 +340,7 @@ class McpManager:
         approvals: dict[str, str] = {}
         config_approvals: dict[str, str] = {}
         try:
-            conn = getattr(self._rt._store, "_conn", None)
+            conn = getattr(self._store, "_conn", None)
             if conn is not None:
                 for row in list_mcp_approvals(conn):
                     approvals[row["server"]] = row["description_hash"]
@@ -320,19 +389,19 @@ class McpManager:
                 servers=stdio_servers,
                 max_active_schemas=mcp_cfg.max_active_schemas,
             )
-            self._rt._mcp_pool = McpPool(
+            self._pool = McpPool(
                 typed,
-                secrets=self._rt._secret_store,
+                secrets=self._secret_store,
                 approvals=approvals,
                 config_approvals=config_approvals,
             )
             try:
-                await self._rt._mcp_pool.start()
+                await self._pool.start()
             except Exception:
                 _LOG.warning("MCP pool: failed to start", exc_info=True)
 
             # D1/D3: collect servers that need re-approval from the pool status
-            if self._rt._mcp_pool is not None:
+            if self._pool is not None:
                 # E6 (#10): the pool is the source of the AUTHORITATIVE new_hash
                 # (the SHA-256 of the canonicalized tool descriptions the live
                 # server just advertised). Persist it to the shared
@@ -341,12 +410,12 @@ class McpManager:
                 # ApprovalDiff. Without this row, the UI only sees the STORED
                 # (old) hash from mcp_approvals, which makes the diff useless
                 # (or worse, shows the same value for both old and new).
-                pending_db_conn = getattr(self._rt._store, "_conn", None)
-                for name, info in self._rt._mcp_pool.approval_pending().items():
+                pending_db_conn = getattr(self._store, "_conn", None)
+                for name, info in self._pool.approval_pending().items():
                     kind = info.get("kind", "tools")
                     old_hash = info.get("old_hash", "")
                     new_hash = info.get("new_hash", "")
-                    self._rt._mcp_approval_pending[name] = {
+                    self._approval_pending[name] = {
                         "kind": kind,
                         "old_hash": old_hash,
                         "new_hash": new_hash,
@@ -421,7 +490,7 @@ class McpManager:
                 self._set_http_status(name, "connected", attempts=attempt)
                 return
             except ConfigApprovalRequired as exc:
-                self._rt._mcp_approval_pending[name] = {
+                self._approval_pending[name] = {
                     "kind": "config",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
@@ -429,12 +498,12 @@ class McpManager:
                 self._set_http_status(name, "approval_required")
                 return
             except ApprovalRequired as exc:
-                self._rt._mcp_approval_pending[name] = {
+                self._approval_pending[name] = {
                     "kind": "tools",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
-                http_db_conn = getattr(self._rt._store, "_conn", None)
+                http_db_conn = getattr(self._store, "_conn", None)
                 if http_db_conn is not None:
                     try:
                         from disco.tools.mcp.migrations import (
@@ -487,7 +556,7 @@ class McpManager:
                 )
 
     async def _discard_http_client(self, name: str) -> None:
-        client = self._rt._mcp_http_clients.pop(name, None)
+        client = self._http_clients.pop(name, None)
         if client is not None:
             with contextlib.suppress(Exception):
                 await client.close()
@@ -512,7 +581,7 @@ class McpManager:
             raise RuntimeError("MCP HTTP origin is not operator-approved")
         client = McpHttpClient(
             server=srv,
-            secrets=self._rt._secret_store,
+            secrets=self._secret_store,
             init_timeout_s=_HTTP_INIT_TIMEOUT_S,
             call_timeout_s=10.0,
         )
@@ -525,10 +594,10 @@ class McpManager:
         try:
             await client.connect(proxy_env=self._mcp_proxy_env(srv.url))
         except Exception:
-            self._rt._mcp_http_clients[name] = client  # register for close
+            self._http_clients[name] = client  # register for close
             raise
 
-        self._rt._mcp_http_clients[name] = client
+        self._http_clients[name] = client
 
         # List tools and build ToolDefs
         raw_tools = await client.list_tools()
@@ -557,7 +626,7 @@ class McpManager:
                 continue
 
             qname = qualified_name(name, tool.name)
-            if qname in self._rt._mcp_http_tools:
+            if qname in self._http_tools:
                 _LOG.warning("McpPool: HTTP tool %r already registered — skipping", qname)
                 continue
 
@@ -565,7 +634,7 @@ class McpManager:
                 name=name, desc=tool.description or "(no description)"
             )
 
-            self._rt._mcp_http_tools[qname] = ToolDef(
+            self._http_tools[qname] = ToolDef(
                 name=qname,
                 description=fenced_desc,
                 args_model=_schema_to_args_model(tool),
@@ -586,19 +655,15 @@ class McpManager:
     def _mcp_origin_approved(self, name: str, srv: McpServerConfig) -> bool:
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 
+        if not srv.url:
+            return False
         refs = self._mcp_secret_refs(srv)
-        checker = getattr(self._rt, "_origin_approved", None)
-        if callable(checker):
-            return all(
-                checker(srv.url, f"mcp:{name}", ref) and secret_ref_allowed_for_origin(ref, srv.url)
-                for ref in refs
-            )
         return all(
-            self._rt._config_store.origin_approved(
+            self._config_store.origin_approved(
                 srv.url,
                 f"mcp:{name}",
                 ref,
-                secret_store=self._rt._secret_store,
+                secret_store=self._secret_store,
             )
             and secret_ref_allowed_for_origin(ref, srv.url)
             for ref in refs
@@ -609,25 +674,20 @@ class McpManager:
         return refs or ("",)
 
     @property
-    def _mcp_call_target(self) -> Any:
+    def _mcp_call_target(self) -> McpCallTarget:
         """A callable that routes MCP tool invocations to the right transport.
 
         Stdio tools go through the pool; HTTP tools go through _mcp_http_clients.
         This is used by _MCPToolWrapper at invocation time.
         """
-        pool = self._rt._mcp_pool
-        http_clients = self._rt._mcp_http_clients
+        return _MergedCallTarget(self._pool, self._http_clients.get)
 
-        class _MergedCallTarget:
-            async def call_tool(self, server, tool, arguments):
-                # Try HTTP first (faster path), then stdio
-                if server in http_clients:
-                    return await http_clients[server].call_tool(tool, arguments)
-                if pool is not None:
-                    return await pool.call_tool(server, tool, arguments)
-                raise RuntimeError(f"MCP server {server!r} is not connected")
-
-        return _MergedCallTarget()
+    def _loop_snapshot(self) -> McpLoopSnapshot:
+        return _snapshot_for_manager(
+            self,
+            self._mcp_call_target,
+            self._mcp_egress_hosts(),
+        )
 
     async def _build_mcp_retrieval_providers(self) -> None:
         """Build retrieval-tier MCP providers from registered MCP tools.
@@ -642,8 +702,8 @@ class McpManager:
         mcp_entries: list[dict[str, Any]] = []
 
         # Stdio tools from the pool
-        if self._rt._mcp_pool is not None and self._rt._mcp_pool.started:
-            for tdef in self._rt._mcp_pool.snapshot():
+        if self._pool is not None and self._pool.started:
+            for tdef in self._pool.snapshot():
                 from disco.tools.mcp.naming import split_qualified_name
 
                 parts = split_qualified_name(tdef.name)
@@ -659,7 +719,7 @@ class McpManager:
                 )
 
         # HTTP tools
-        for qname, tdef in self._rt._mcp_http_tools.items():
+        for qname, tdef in self._http_tools.items():
             from disco.tools.mcp.naming import split_qualified_name
 
             parts = split_qualified_name(qname)
@@ -675,7 +735,7 @@ class McpManager:
             )
 
         if mcp_entries:
-            self._rt._mcp_retrieval_searches, self._rt._mcp_retrieval_extractions = (
+            self._retrieval_searches, self._retrieval_extractions = (
                 build_retrieval_providers(
                     mcp_entries,
                     call_fn=self._mcp_call_target.call_tool,
@@ -683,33 +743,31 @@ class McpManager:
             )
             _LOG.info(
                 "MCP retrieval: built %d search + %d extraction provider(s)",
-                len(self._rt._mcp_retrieval_searches),
-                len(self._rt._mcp_retrieval_extractions),
+                len(self._retrieval_searches),
+                len(self._retrieval_extractions),
             )
             # Drop any cached Build cap-handlers so the next build composes over
             # the freshly-built MCP providers (RP-05b §3).
-            self._rt._cap_handlers = None
 
     async def _close_mcp_pool(self) -> None:
-        if self._rt._mcp_pool is not None:
-            await self._rt._mcp_pool.aclose()
-            self._rt._mcp_pool = None
-        for client in list(self._rt._mcp_http_clients.values()):
+        if self._pool is not None:
+            await self._pool.aclose()
+            self._pool = None
+        for client in list(self._http_clients.values()):
             with contextlib.suppress(Exception):
                 await client.close()
-        self._rt._mcp_http_clients.clear()
-        self._rt._mcp_http_tools.clear()
-        self._rt._mcp_retrieval_searches.clear()
-        self._rt._mcp_retrieval_extractions.clear()
-        for state in self._rt._mcp_http_status.values():
+        self._http_clients.clear()
+        self._http_tools.clear()
+        self._retrieval_searches.clear()
+        self._retrieval_extractions.clear()
+        for state in self._http_status.values():
             if state.get("status") in {"connecting", "connected"}:
                 state.clear()
                 state["status"] = "disconnected"
-        self._rt._cap_handlers = None
 
     def mcp_approval_state(self) -> dict[str, dict]:
         """Return the pending approval state for WS frame dispatch (D3).
 
         Each key is a server name; value has 'old_hash' and 'new_hash'.
         """
-        return dict(self._rt._mcp_approval_pending)
+        return dict(self._approval_pending)

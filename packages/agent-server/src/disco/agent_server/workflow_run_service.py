@@ -173,8 +173,8 @@ class _WorkflowRunExecution:
         failed = self._failure_factory(
             schedule_id, conversation_id, fired_at, output_path, coalesced
         )
-        incumbent = self._run_control._tasks.get(conversation_id)
-        if incumbent is not None and not incumbent.done():
+        incumbent = self._run_control._run_registry.active_task(conversation_id)
+        if incumbent is not None:
             return failed("sealed workflow schedule found an existing live run task")
         plan = await self._compose(
             schedule_id=schedule_id,
@@ -252,7 +252,7 @@ class _WorkflowRunExecution:
                 model_override=snapshot.model_key,
                 driver_context_window=snapshot.context_window,
             )
-            previous_executor = self._run_control._executors.get(conversation_id)
+            previous_executor = self._run_control._run_resources.executor(conversation_id)
             try:
                 loop = self._loop_factory._compose_build_loop(
                     conversation_id,
@@ -275,7 +275,7 @@ class _WorkflowRunExecution:
         finally:
             self._run_control._driver_contexts.end_compose(conversation_id, snapshot)
         self._run_control._driver_contexts.bind_resolved(conversation_id, snapshot)
-        sealed_executor = self._run_control._executors.get(conversation_id)
+        sealed_executor = self._run_control._run_resources.executor(conversation_id)
         loop.stream_sink = lambda frame: self._store.publish_ephemeral(conversation_id, frame)
         return _ExecutionPlan(
             schedule_id=schedule_id,
@@ -336,8 +336,8 @@ class _WorkflowRunExecution:
         cid = plan.conversation_id
         async with self._run_control.workspace_lock(cid):
             async with self._workspace.interprocess_mutation_fence(cid):
-                incumbent = self._run_control._tasks.get(cid)
-                if incumbent is not None and not incumbent.done():
+                incumbent = self._run_control._run_registry.active_task(cid)
+                if incumbent is not None:
                     raise WorkspaceRunSuperseded(
                         "sealed workflow schedule lost task registration authority"
                     )
@@ -345,8 +345,8 @@ class _WorkflowRunExecution:
                     raise WorkspaceRunSuperseded(
                         "sealed workflow schedule lost pristine ingress authority"
                     )
-                previous_loop = self._run_control._loops.get(cid)
-                self._run_control._loops[cid] = plan.loop
+                previous_loop = self._run_control._loop_registry.loop(cid)
+                self._run_control._loop_registry.bind(cid, plan.loop)
                 try:
                     task, generation = self._run_control._create_run_task(
                         cid,
@@ -372,21 +372,20 @@ class _WorkflowRunExecution:
                     )
                     if stored_user is None or stored_user.seq is None:
                         raise RuntimeError("schedule ingress did not return its USER identity")
-                    self._run_control._run_claimed_user_seq[cid] = max(
-                        stored_user.seq,
-                        self._run_control._run_claimed_user_seq.get(cid, -1),
-                    )
+                    self._run_control._run_ingress.claim_user_seq(cid, stored_user.seq)
                     return task, generation
                 except BaseException:
-                    if task is not None and self._run_control._tasks.get(cid) is task:
-                        self._run_control._tasks.pop(cid, None)
+                    if task is not None and self._run_control._run_registry.detach_task_if_owned(
+                        cid,
+                        task,
+                    ):
                         self._workspace.clear_run_claim(cid)
                         task.cancel()
-                    if self._run_control._loops.get(cid) is plan.loop:
+                    if self._run_control._loop_registry.owns(cid, plan.loop):
                         if previous_loop is None:
-                            self._run_control._loops.pop(cid, None)
+                            self._run_control._loop_registry.forget(cid)
                         else:
-                            self._run_control._loops[cid] = previous_loop
+                            self._run_control._loop_registry.bind(cid, previous_loop)
                     raise
 
     async def _clean_failed_registration(
@@ -398,12 +397,12 @@ class _WorkflowRunExecution:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            self._run_control._run_task_authorities.pop(task, None)
-        if self._run_control._executors.get(cid) is plan.sealed_executor:
+            self._run_control._run_authorities.discard(task)
+        if self._run_control._run_resources.owns_executor(cid, plan.sealed_executor):
             if plan.previous_executor is None:
-                self._run_control._executors.pop(cid, None)
+                self._run_control._run_resources.pop_executor(cid)
             else:
-                self._run_control._executors[cid] = plan.previous_executor
+                self._run_control._run_resources.set_executor(cid, plan.previous_executor)
         if (
             plan.sealed_executor is not None
             and plan.sealed_executor is not plan.previous_executor
@@ -425,13 +424,13 @@ class _WorkflowRunExecution:
             run_error = exc
         finally:
             cid = plan.conversation_id
-            if self._run_control._tasks.get(cid) is task:
-                self._run_control._tasks.pop(cid, None)
+            authority = self._run_control._run_authorities.discard(task)
+            owned = self._run_control._run_registry.complete_task(cid, task)
+            if owned:
                 self._workspace.clear_run_claim(cid)
-            agent_view_id, run_intent_id = self._run_control._run_task_authorities.pop(
-                task,
-                (None, plan.intent.id),
-            )
+            agent_view_id, run_intent_id = authority
+            if run_intent_id is None:
+                run_intent_id = plan.intent.id
         if run_error is not None:
             return await self._run_failure(
                 plan,

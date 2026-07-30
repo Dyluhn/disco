@@ -1,38 +1,7 @@
-"""Deep Research surface — plan → iterate → report + the live research stream —
-extracted from `runtime.py`.
-
-God-file decomposition (pure move, zero behavior change). The Deep Research
-machinery moves out of runtime.py into a `DeepResearchService` collaborator
-constructed once in `ConversationRuntime`:
-
-  - loop frame + depth tier: _compose_deep_research_loop / _depth_for / set_depth
-  - live grounded answer stream: _research / research_stream
-  - the kick-path driver: _maybe_run_deep_research / _propose_deep_research_plan /
-    _execute_deep_research / _has_fresh_user_message / _follow_up_deep_research
-  - report export: export_report
-
-`DeepResearchService` reaches the runtime's wiring (`_store`, `_router_now`,
-`_compose_mcp_retrieval`, `_config_store`, `_model_override`,
-`_sandbox_service_now`, `_sandbox_spec`, `_maybe_snapshot`, `_secret_store`,
-`_effective_autonomous`, `_research`-cache state, `_depth`, `_cancel_flags`)
-via a back-reference. Every method called by the app's routes, by a staying
-runtime method (`_loop_for` → `_compose_deep_research_loop`,
-`_retrieval_handlers` → `_research`, `_run_with_persistence` →
-`_maybe_run_deep_research`), or directly by a test keeps a one-line delegator
-on `ConversationRuntime`; only the DR-internal helper
-(`_follow_up_deep_research`) moves without one.
-
-Internal cross-calls that have a delegator route through `self._rt` so a
-test's monkeypatch on the runtime (`rt._execute_deep_research = …`) is
-honored. The `_research`-cache state, `_depth`, and `_cancel_flags` stay
-declared on the runtime (`_cancel_flags` is shared with kill/cancel/resume);
-the runtime-local `_NoToolExecutor` + `_release_process_memory` are reached
-via a late-bound import.
-"""
+"""Deep Research planning, retrieval, execution, and reporting."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Sequence
@@ -76,6 +45,8 @@ from disco.retrieval.models import Passage
 from disco.retrieval.ranking import Embedder
 from disco.tools.projects import StorageStatus
 
+from .build_loop_components import _NoToolExecutor
+from .deep_research_state import DeepResearchState
 from .space_store import JsonSpaceStore
 
 _LOG = logging.getLogger(__name__)
@@ -88,30 +59,37 @@ def _clean_model_text(text: str | None) -> str:
 class DeepResearchService:
     """Deep Research + live-research-stream logic; runtime wiring via the back-ref."""
 
-    def __init__(self, rt: Any) -> None:
+    def __init__(
+        self,
+        rt: Any,
+        *,
+        state: DeepResearchState | None = None,
+        injected_providers: dict[str, Any] | None = None,
+    ) -> None:
         self._rt = rt
-        self._steer_queues: dict[str, list[str]] = {}
-        self._injected_source_queues: dict[str, list[Passage]] = {}
+        self._state = state or DeepResearchState()
+        self._injected_providers = injected_providers
+        self._research_providers: dict[str, Any] | None = None
+        self._research_encoders_key: tuple[object, ...] | None = None
 
     def enqueue_steer(self, conversation_id: str, text: str) -> bool:
-        """Queue a steer only while this owner has an active research run."""
-        queue = self._steer_queues.get(conversation_id)
-        if queue is None:
-            return False
-        queue.append(text)
-        return True
+        return self._state.enqueue_steer(conversation_id, text)
 
     def inject_source(self, conversation_id: str, passage: Passage) -> bool:
-        """Queue a typed source only while this owner has an active run."""
-        queue = self._injected_source_queues.get(conversation_id)
-        if queue is None:
-            return False
-        queue.append(passage)
-        return True
+        return self._state.inject_source(conversation_id, passage)
 
     def forget(self, conversation_id: str) -> None:
-        self._steer_queues.pop(conversation_id, None)
-        self._injected_source_queues.pop(conversation_id, None)
+        self._state.forget(conversation_id)
+
+    def add_upload_passages(
+        self,
+        conversation_id: str,
+        passages: list[Passage],
+    ) -> None:
+        self._state.add_upload_passages(conversation_id, passages)
+
+    def get_upload_passages(self, conversation_id: str) -> list[Passage]:
+        return self._state.upload_passages(conversation_id)
 
     def embedder(self) -> Embedder:
         """Return the live research embedder for Space corpus ingestion."""
@@ -128,7 +106,7 @@ class DeepResearchService:
             return frozenset(), ()
         if owner_id is None:
             return frozenset(), tuple(sorted(space_ids))
-        project_store = self._rt.project_store()
+        project_store = self._rt._projects.current_project_store()
         if project_store.status() != StorageStatus.OK or project_store.root is None:
             return frozenset(), tuple(sorted(space_ids))
         space_store = JsonSpaceStore(project_store.root)
@@ -164,8 +142,6 @@ class DeepResearchService:
         machinery: same PlanEvent, same AWAITING_PLAN_APPROVAL status, same
         approve_plan WS frame). No tools, no risk gate, no condenser — Deep
         Research's iteration lives in the engine, not the loop."""
-        from .runtime import _NoToolExecutor
-
         # Deep Research intentionally uses the standard tier: it is a read-only
         # pipeline (no tool execution), so the weak-model assist compensations
         # (F-features) are not applicable. Explicit model_policy= satisfies the
@@ -191,70 +167,26 @@ class DeepResearchService:
         )
 
     def _depth_for(self, conversation_id: str) -> DepthTier:
-        """The depth tier for this conversation. Stored in `_depth` per cid (set
-        at create-time by the agent-server's POST /conversations handler).
-        Defaults to STANDARD_DEEP — the everyday Deep Research run."""
-        raw = self._rt._depth.get(conversation_id) if hasattr(self._rt, "_depth") else None
-        if raw is None:
-            return DepthTier.STANDARD_DEEP
-        try:
-            return DepthTier(raw)
-        except ValueError:
-            return DepthTier.STANDARD_DEEP
+        return self._state.depth_for(conversation_id)
 
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
-        """Pin the Deep Research depth tier for this conversation (set at submit
-        time by the UI's tier selector). Stored in memory; recovery falls to the
-        default after restart, which is acceptable for a follow-up turn (rare
-        for Deep Research — the run is the conversation)."""
-        if not hasattr(self._rt, "_depth"):
-            self._rt._depth = {}
-        if tier and tier in {t.value for t in DepthTier}:
-            self._rt._depth[conversation_id] = tier
+        self._state.set_depth(conversation_id, tier)
 
     # ── A4.4 iterative research toggle ────────────────────────────────────────
 
     def _iterative_for(self, conversation_id: str) -> bool:
-        """Whether iterative refinement is enabled for this conversation. Stored
-        in `_iterative` per cid (set at submit time by the UI's toggle). Defaults
-        to False — the standard non-iterative run, byte-identical to before."""
-        if not hasattr(self._rt, "_iterative"):
-            return False
-        return bool(self._rt._iterative.get(conversation_id, False))
+        return self._state.iterative_for(conversation_id)
 
     def set_iterative(self, conversation_id: str, enabled: bool) -> None:
-        """Pin the iterative-research toggle for this conversation (set at submit
-        time by the UI). Stored in memory; recovery falls to the default (False)
-        after restart, which is the safe OFF path."""
-        if not hasattr(self._rt, "_iterative"):
-            self._rt._iterative = {}
-        self._rt._iterative[conversation_id] = bool(enabled)
+        self._state.set_iterative(conversation_id, enabled)
 
     # ── DR-3 recency window (E2) ──────────────────────────────────────────────
 
     def set_recency(self, conversation_id: str, window: str | None) -> None:
-        """Pin the recency window for this conversation's Deep Research run
-        (sent via CreateConversationBody.recency_window at submit time).
-
-        Accepts ``"month"`` or ``"week"``; None means off (default — no
-        time-filtering, no date injection → byte-identical to a run without
-        recency set). Stored in memory; recovery defaults to None on restart,
-        which falls to the off path (safe, conservative)."""
-        if not hasattr(self._rt, "_recency"):
-            self._rt._recency = {}
-        if window in {"month", "week"}:
-            self._rt._recency[conversation_id] = window
-        elif window is None:
-            self._rt._recency.pop(conversation_id, None)
+        self._state.set_recency(conversation_id, window)
 
     def _recency_for(self, conversation_id: str) -> Literal["month", "week"] | None:
-        """Return the recency window for this conversation (None = off)."""
-        if not hasattr(self._rt, "_recency"):
-            return None
-        val = self._rt._recency.get(conversation_id)
-        if val in ("month", "week"):
-            return val  # type: ignore[return-value]
-        return None
+        return self._state.recency_for(conversation_id)
 
     def _research(self, search_override: Any | None = None) -> dict[str, Any]:
         # A statically-injected provider set (tests) is used as-is. Otherwise build
@@ -262,13 +194,13 @@ class DeepResearchService:
         # it — so flipping local↔remote takes effect on the next research run without
         # a restart (rebuild is cheap: fastembed models are module-cached, not per
         # provider instance).
-        if self._rt._injected_research_providers is not None:
+        if self._injected_providers is not None:
             if search_override is not None:
                 return {
-                    **self._rt._injected_research_providers,
+                    **self._injected_providers,
                     "search": search_override,
                 }
-            return self._rt._injected_research_providers
+            return self._injected_providers
         cfg = self._rt._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
@@ -335,10 +267,10 @@ class DeepResearchService:
                 extraction_secret_ref=ext.api_key_env,
                 origin_approved=self._rt._origin_approved,
             )
-        if self._rt._research_providers is None or self._rt._research_encoders_key != key:
+        if self._research_providers is None or self._research_encoders_key != key:
             from disco.retrieval.live import build_live_retrieval
 
-            self._rt._research_providers = build_live_retrieval(
+            self._research_providers = build_live_retrieval(
                 remote=enc.remote,
                 reranker_url=enc.reranker_url,
                 embedder_url=enc.embedder_url,
@@ -353,8 +285,8 @@ class DeepResearchService:
                 extraction_secret_ref=ext.api_key_env,
                 origin_approved=self._rt._origin_approved,
             )
-            self._rt._research_encoders_key = key
-        return self._rt._research_providers
+            self._research_encoders_key = key
+        return self._research_providers
 
     def _search_override_for_sources(self, sources: Sequence[str] | None) -> Any | None:
         clean = tuple(str(source).strip() for source in (sources or ()) if str(source).strip())
@@ -497,7 +429,7 @@ class DeepResearchService:
         from disco.retrieval.streaming import stream_research_answer
 
         search_override = self._search_override_for_sources(sources)
-        deps = self._rt._research(search_override=search_override)
+        deps = self._research(search_override=search_override)
         # W-35 + P1-3: pre-flight the model the ANSWER STREAM actually uses for
         # generation — RAG_ANSWERER (streaming.py), NOT AGENT_DRIVER. With those
         # roles assigned to different endpoints, probing AGENT_DRIVER would both
@@ -537,11 +469,11 @@ class DeepResearchService:
             return
         # RP-05b §3: MCP retrieval providers join the citation path here too — the
         # composite hands MCP-discovered hits to the SAME GroundingPipeline.
-        search, extraction = self._rt._compose_mcp_retrieval(deps)
+        search, extraction = self._rt._mcp._compose_mcp_retrieval(deps)
         router = self._rt._router_now(pick=model_override, enable_thinking=think)
         # G1/DR-4 F3: load seed passages from the upload corpus for this cid.
         # Empty list when no text files were attached (the OFF path).
-        seed_passages = self._rt.get_upload_passages(conversation_id) if conversation_id else []
+        seed_passages = self.get_upload_passages(conversation_id) if conversation_id else []
         async for frame in stream_research_answer(
             query,
             router=router,
@@ -587,7 +519,7 @@ class DeepResearchService:
 
         # Phase 1: no plan yet → decompose + propose
         if not plans:
-            await self._rt._propose_deep_research_plan(conversation_id, events)
+            await self._propose_deep_research_plan(conversation_id, events)
             return
 
         # Phase 1R: PLAN REVISION (live STUCK 2026-07-07). A plan exists but is
@@ -621,7 +553,7 @@ class DeepResearchService:
                 )
             )
             if in_revision_planning or fresh_msg_while_awaiting:
-                await self._rt._propose_deep_research_plan(conversation_id, events)
+                await self._propose_deep_research_plan(conversation_id, events)
                 return
 
         # Phase 2b: RESUME a stopped run (status PAUSED) → continue from the
@@ -636,7 +568,7 @@ class DeepResearchService:
                 ConversationStatus.RUNNING,
                 detail="plan_approved",
             )
-            await self._rt._execute_deep_research(conversation_id, plans[-1], resume_from=partial)
+            await self._execute_deep_research(conversation_id, plans[-1], resume_from=partial)
             return
 
         # Phase 2: plan approved, no report yet → run the engine
@@ -646,7 +578,7 @@ class DeepResearchService:
             # The marker: the last StatusEvent's detail is "plan_approved".
             last_status = next((e for e in reversed(events) if isinstance(e, StatusEvent)), None)
             if last_status is not None and last_status.detail == "plan_approved":
-                await self._rt._execute_deep_research(conversation_id, plans[-1])
+                await self._execute_deep_research(conversation_id, plans[-1])
 
         # Phase 3: FOLLOW-UP — a FINISHED report exists AND there's a new user
         # message since the last report. Run a follow-up synthesis that reuses
@@ -694,7 +626,7 @@ class DeepResearchService:
         # stuck RUNNING with only a system-reminder. Pre-flight the role the run
         # uses for generation (RAG_ANSWERER) BEFORE setting RUNNING; on failure
         # emit a NAMED StatusEvent(ERROR) and do NOT start.
-        override = self._rt._model_override.get(conversation_id)
+        override = self._rt._settings._get_model_override(conversation_id)
         preflight_reason = await self._rt._preflight_driver(
             conversation_id, override=override, role=ModelRole.RAG_ANSWERER
         )
@@ -726,7 +658,7 @@ class DeepResearchService:
         await self._rt._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.RUNNING
         )
-        tier = self._rt._depth_for(conversation_id)
+        tier = self._depth_for(conversation_id)
         from disco.retrieval.deep_research import bounds_for
 
         bound = bounds_for(tier)
@@ -737,7 +669,9 @@ class DeepResearchService:
         # the override (see the DeepResearchRun compose below) — without it HERE,
         # a user's pick silently applied to gather/synthesis but NOT to the
         # decompose/plan step (the exact half-applied-pill bug).
-        router = self._rt._router_now(pick=self._rt._model_override.get(conversation_id))
+        router = self._rt._drivers.router(
+            pick=self._rt._settings._get_model_override(conversation_id)
+        )
         recency_window = self._recency_for(conversation_id)
         try:
             subqs = await decompose_query(
@@ -792,7 +726,7 @@ class DeepResearchService:
             ),
         )
         await self._rt._store.append(conversation_id, plan)
-        if self._rt._effective_autonomous(conversation_id):
+        if self._rt._settings._effective_autonomous(conversation_id):
             # Headless/autonomous DR: no human to approve the plan. Auto-approve
             # inline (emit the same RUNNING/plan_approved StatusEvent approve_plan
             # would) and run the engine directly — otherwise the run stalls forever
@@ -801,7 +735,7 @@ class DeepResearchService:
             await self._rt._lifecycle_commands.append_status(
                 conversation_id, ConversationStatus.RUNNING, detail="plan_approved"
             )
-            await self._rt._execute_deep_research(conversation_id, plan)
+            await self._execute_deep_research(conversation_id, plan)
             return
         await self._rt._lifecycle_commands.append_status(
             conversation_id, ConversationStatus.AWAITING_PLAN_APPROVAL, detail=plan.id
@@ -835,7 +769,7 @@ class DeepResearchService:
             plan.summary,
         )
         plan_steps = [s.title for s in plan.steps]
-        tier = self._rt._depth_for(conversation_id)
+        tier = self._depth_for(conversation_id)
         recency_window = self._recency_for(conversation_id)
 
         # Build the engine. Providers come from the existing research-stream
@@ -848,9 +782,9 @@ class DeepResearchService:
             RouterQueryRewriter,
         )
 
-        research_sources = self._rt.get_research_sources(conversation_id)
+        research_sources = self._rt._settings.get_research_sources(conversation_id)
         search_override = self._search_override_for_sources(research_sources)
-        deps = self._rt._research(search_override=search_override)
+        deps = self._research(search_override=search_override)
         space_ids = self._rt._spaces.get_space_ids(conversation_id)
         space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
         space_ids, forbidden_space_ids = self._validated_space_ids(
@@ -869,7 +803,7 @@ class DeepResearchService:
         # On failure: emit a NAMED StatusEvent(ERROR) + ErrorEvent and DO NOT run.
         from disco.core import ErrorEvent
 
-        override = self._rt._model_override.get(conversation_id)
+        override = self._rt._settings._get_model_override(conversation_id)
         # P1-3: the DR engine synthesises/judges with RAG_ANSWERER — probe THAT
         # role, not AGENT_DRIVER (which DR generation does not use).
         required_encoders = ("reranker", "nli", "embedder") if space_ids else ("reranker", "nli")
@@ -888,8 +822,10 @@ class DeepResearchService:
         # RP-05b §3: deep research's discovery/extraction also flows MCP providers
         # through the SAME engine, so deep-research citations can come from the MCP
         # tier identically to bundled providers.
-        search, extraction = self._rt._compose_mcp_retrieval(deps)
-        router = self._rt._router_now(pick=self._rt._model_override.get(conversation_id))
+        search, extraction = self._rt._mcp._compose_mcp_retrieval(deps)
+        router = self._rt._drivers.router(
+            pick=self._rt._settings._get_model_override(conversation_id)
+        )
         retrieval_engine = DefaultRetrievalEngine(
             search=search,
             extraction=extraction,
@@ -916,7 +852,7 @@ class DeepResearchService:
         # G1/DR-4 F2: load any pre-attached upload passages (text files the user
         # attached in the initial box before submitting).  Empty when no text
         # files were uploaded (the OFF path — byte-identical to pre-DR-4 code).
-        upload_passages = self._rt.get_upload_passages(conversation_id)
+        upload_passages = self.get_upload_passages(conversation_id)
 
         run = DeepResearchRun(
             query=query,
@@ -1015,31 +951,21 @@ class DeepResearchService:
 
         # Fresh cancel flag for this execution; the engine polls it at each
         # sub-question/section boundary so Stop actually halts the run.
-        flag = asyncio.Event()
-        self._rt._cancel_flags[conversation_id] = flag
+        flag = self._rt._cancellations.begin(conversation_id)
 
         # D3: initialise per-cid steer/inject queues on the research owner.
         # The WS handler enqueues into these; pop_* closures drain them at
         # each section boundary. Queues are removed in `finally` below so the
         # presence of a key = "a DR run is currently in flight for this cid".
-        self._steer_queues[conversation_id] = []
-        self._injected_source_queues[conversation_id] = []
+        self._state.begin_live_run(conversation_id)
 
         def pop_steers() -> list[str]:
             """Drain the steer queue (called at each section boundary)."""
-            queue = self._steer_queues.get(conversation_id, [])
-            if not queue:
-                return []
-            steers, queue[:] = queue[:], []
-            return steers
+            return self._state.pop_steers(conversation_id)
 
         def pop_injected_sources() -> list[Passage]:
             """Drain the inject-source queue (called at each section boundary)."""
-            queue = self._injected_source_queues.get(conversation_id, [])
-            if not queue:
-                return []
-            injected, queue[:] = queue[:], []
-            return injected
+            return self._state.pop_injected_sources(conversation_id)
 
         try:
             result = await run.run(
@@ -1064,7 +990,7 @@ class DeepResearchService:
             )
             return
         finally:
-            self._rt._cancel_flags.pop(conversation_id, None)
+            self._rt._cancellations.clear(conversation_id)
             # D3: remove per-cid queues so the WS handler knows no DR run is
             # active for this cid (it tests `cid in _dr_steer` for routing).
             self.forget(conversation_id)

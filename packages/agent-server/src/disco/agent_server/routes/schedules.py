@@ -23,10 +23,7 @@ def make_schedules_router(
         body: CreateScheduleBody,
         request: Request,
     ) -> dict:
-        """Create a cron-style recurring schedule for a conversation.
-
-        The cron expression in `rrule` is validated by cronsim; an invalid
-        expression returns 422 (never silent — the user must fix it)."""
+        """Create a recurring schedule, returning 422 for an invalid cron."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
@@ -79,9 +76,7 @@ def make_schedules_router(
 
     @router.post("/api/conversations/{conversation_id}/schedules/{schedule_id}/fire-now")
     async def fire_schedule_now(conversation_id: str, schedule_id: str, request: Request) -> dict:
-        """Run a schedule IMMEDIATELY (gap #98 — the 'fire now' control + the verify
-        fire-now seam). Reuses the periodic execute path: emits a ScheduleRunEvent,
-        re-injects the original query, kicks the loop. 404 if no such schedule."""
+        """Fire a schedule through its periodic execution path, or return 404."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         await require_owned_conversation(request, store, conversation_id)
@@ -95,8 +90,7 @@ def make_schedules_router(
 
     @router.post("/api/schedules/preview")
     async def preview_schedule(body: PreviewScheduleBody) -> dict:
-        """Preview the next N run times for a cron expression.  Use this before
-        saving a schedule — the confirm card shows next-3-runs to the user."""
+        """Preview the next N run times for a cron expression."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         times = runtime._schedule.preview_schedule_runs(
@@ -113,12 +107,7 @@ def make_schedules_router(
 
     @router.post("/api/workflows/schedules")
     async def create_workflow_schedule(body: ScheduleSpec, request: Request) -> dict:
-        """Create a sealed recurring workflow schedule.
-
-        This is intentionally additive to the existing conversation schedules:
-        workflow schedules fire fresh sealed agent conversations rather than
-        appending to an existing conversation.
-        """
+        """Create a sealed schedule that fires fresh workflow conversations."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         try:

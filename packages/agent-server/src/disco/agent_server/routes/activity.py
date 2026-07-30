@@ -27,7 +27,7 @@ def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime |
             return {"running": [], "recent_runs": [], "counts": {"running": 0}}
 
         owner_id = current_owner_id(request)
-        live = runtime.running_conversation_ids()
+        live = set(runtime._run_registry.active_conversation_ids())
         running: list[dict] = []
         if live:
             summaries = await store.list_conversation_summaries(
@@ -50,7 +50,10 @@ def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime |
                     }
                 )
 
-        recent_runs = runtime.list_recent_schedule_runs(owner_id=owner_id, limit=limit)
+        recent_runs = runtime._schedule.list_recent_schedule_runs(
+            owner_id=owner_id,
+            limit=limit,
+        )
         return {
             "running": running,
             "recent_runs": recent_runs,

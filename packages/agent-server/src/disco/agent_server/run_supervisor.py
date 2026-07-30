@@ -7,7 +7,7 @@ import contextlib
 import contextvars
 import logging
 from collections.abc import Awaitable
-from typing import Protocol, cast
+from typing import cast
 
 from disco.core import (
     ConversationState,
@@ -24,13 +24,24 @@ from disco.core.loop import AgentLoop, AgentViewSuperseded, signals
 from disco.core.store.sqlite import SqliteEventStore
 
 from .lifecycle_command_service import LifecycleCommandService
+from .run_completion import RunCompletionPort
 from .run_registry import (
     KernelPinRegistry,
+    RunAuthorityLedger,
+    RunIngressLedger,
     RunRecoveryLedger,
     RunRegistry,
     RunResourceRegistry,
     RunTask,
     RunWorkspacePort,
+)
+from .run_supervision_protocols import (
+    DeepResearchRunPort,
+    RunObservabilityPort,
+    RunPersistencePort,
+    RunPreflightPort,
+    RunReentryPort,
+    RunSurfacePolicy,
 )
 from .workspace_commit import WorkspaceRunSuperseded, pending_workspace_run_intent
 
@@ -83,46 +94,6 @@ _ENDED_UNSEALED = frozenset(
 )
 _MAX_NONTERMINAL_REKICKS = 3
 _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
-
-
-class RunReentryPort(Protocol):
-    def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> None: ...
-
-    async def resume_conversation(self, conversation_id: str) -> dict[str, object]: ...
-
-
-class RunSurfacePolicy(Protocol):
-    def surface(self, conversation_id: str) -> str: ...
-
-    def is_build_surface(self, surface: str) -> bool: ...
-
-    def autonomous(self, conversation_id: str) -> bool: ...
-
-
-class RunObservabilityPort(Protocol):
-    def emit_audit(self, conversation_id: str, status: ConversationStatus) -> None: ...
-
-    async def emit_reminder(self, conversation_id: str, message: str) -> None: ...
-
-
-class RunPreflightPort(Protocol):
-    async def driver_failure(self, conversation_id: str) -> str | None: ...
-
-    async def sandbox_failure(self, conversation_id: str) -> str | None: ...
-
-
-class RunPersistencePort(Protocol):
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
-
-    async def rehydrate(self, conversation_id: str) -> None: ...
-
-    async def rematerialize_uploads(self, conversation_id: str) -> None: ...
-
-    async def snapshot(self, conversation_id: str, *, trigger: str) -> None: ...
-
-
-class DeepResearchRunPort(Protocol):
-    async def run_deep_research(self, conversation_id: str) -> None: ...
 
 
 def _latest_status_event(events: list[Event]) -> StatusEvent | None:
@@ -182,6 +153,7 @@ class RunFinalizer:
     def __init__(
         self,
         registry: RunRegistry,
+        ingress: RunIngressLedger,
         recovery: RunRecoveryLedger,
         kernels: KernelPinRegistry,
         store: SqliteEventStore,
@@ -191,7 +163,8 @@ class RunFinalizer:
         policy: RunSurfacePolicy,
         observability: RunObservabilityPort,
     ) -> None:
-        self._registry, self._recovery, self._kernels = registry, recovery, kernels
+        self._registry, self._ingress = registry, ingress
+        self._recovery, self._kernels = recovery, kernels
         self._store, self._workspace, self._lifecycle = store, workspace, lifecycle
         self._reentry, self._policy = reentry, policy
         self._observability = observability
@@ -219,7 +192,7 @@ class RunFinalizer:
         latest_user_seq = _latest_user_seq(events)
         if latest_user_seq is None:
             return
-        claimed = self._registry.claimed_user_seq(conversation_id)
+        claimed = self._ingress.claimed_user_seq(conversation_id)
         if claimed is not None and latest_user_seq <= claimed:
             return
         if not self._recovery.claim_terminal_rekick(conversation_id, latest_user_seq):
@@ -307,26 +280,6 @@ class RunFinalizer:
             await self.rekick_stranded(conversation_id)
         except Exception:  # noqa: BLE001
             logger.exception("crash terminalization failed for %s", conversation_id)
-
-    async def sweep_stranded(self) -> int:
-        acted = 0
-        for conversation_id in tuple(self._registry.loops):
-            if self._registry.active_task(conversation_id) is not None:
-                continue
-            try:
-                state = await self._store.get_state(conversation_id)
-            except Exception:  # noqa: BLE001
-                continue
-            if state.execution_status is not ConversationStatus.RUNNING:
-                continue
-            logger.warning(
-                "stranded RUNNING conversation %s (no live task) — reconciling",
-                conversation_id,
-            )
-            with contextlib.suppress(Exception):
-                await self.finalize_clean(conversation_id)
-            acted += 1
-        return acted
 
     async def _owns_authority(
         self,
@@ -507,11 +460,14 @@ class RunSupervisor:
     def __init__(
         self,
         registry: RunRegistry,
+        authorities: RunAuthorityLedger,
+        ingress: RunIngressLedger,
         resources: RunResourceRegistry,
         workspace: RunWorkspacePort,
-        finalizer: RunFinalizer,
+        finalizer: RunCompletionPort,
     ) -> None:
-        self._registry, self._resources = registry, resources
+        self._registry, self._authorities = registry, authorities
+        self._ingress, self._resources = ingress, resources
         self._workspace, self._finalizer = workspace, finalizer
 
     def create_task(
@@ -537,11 +493,9 @@ class RunSupervisor:
             )
 
         task = asyncio.create_task(run(), context=task_context)
-        generation = self._registry.register_task(
-            conversation_id,
-            task,
-            claimed_user_seq=claimed_user_seq,
-        )
+        generation = self._registry.register_task(conversation_id, task)
+        if claimed_user_seq is not None:
+            self._ingress.claim_user_seq(conversation_id, claimed_user_seq)
         task.add_done_callback(
             lambda completed: self.on_task_done(conversation_id, completed, generation)
         )
@@ -553,10 +507,8 @@ class RunSupervisor:
         task: RunTask,
         generation: int | None = None,
     ) -> None:
-        (agent_view_id, run_intent_id), owned = self._registry.complete_task(
-            conversation_id,
-            task,
-        )
+        agent_view_id, run_intent_id = self._authorities.discard(task)
+        owned = self._registry.complete_task(conversation_id, task)
         if owned:
             self._workspace.clear_run_claim(conversation_id)
         if task.cancelled():
@@ -591,6 +543,8 @@ class RunSupervisor:
     async def close(self) -> None:
         await self._registry.close()
         await self._resources.close()
+        self._authorities.clear()
+        self._ingress.clear()
 
     @staticmethod
     def _schedule(awaitable: Awaitable[object]) -> None:
@@ -604,6 +558,7 @@ class RunPersistenceSupervisor:
     def __init__(
         self,
         registry: RunRegistry,
+        authorities: RunAuthorityLedger,
         store: SqliteEventStore,
         lifecycle: LifecycleCommandService,
         policy: RunSurfacePolicy,
@@ -612,7 +567,8 @@ class RunPersistenceSupervisor:
         persistence: RunPersistencePort,
         deep_research: DeepResearchRunPort,
     ) -> None:
-        self._registry, self._store, self._lifecycle = registry, store, lifecycle
+        self._registry, self._authorities = registry, authorities
+        self._store, self._lifecycle = store, lifecycle
         self._policy, self._observability = policy, observability
         self._preflight, self._persistence = preflight, persistence
         self._deep_research = deep_research
@@ -621,7 +577,7 @@ class RunPersistenceSupervisor:
         surface = self._policy.surface(conversation_id)
         current = asyncio.current_task()
         task = cast(RunTask | None, current)
-        registered = task is not None and self._registry.tasks.get(conversation_id) is task
+        registered = task is not None and self._registry.owns_task(conversation_id, task)
         run_intent_id = await self._bind_initial_authority(
             conversation_id,
             task,
@@ -665,7 +621,7 @@ class RunPersistenceSupervisor:
         agent_view_id, run_intent_id, _strict = (
             await self._lifecycle.resolve_current_authority(conversation_id)
         )
-        self._registry.bind_authority(
+        self._authorities.bind(
             task,
             agent_view_id=agent_view_id,
             run_intent_id=run_intent_id,
@@ -739,7 +695,7 @@ class RunPersistenceSupervisor:
             return await loop.run()
         finally:
             if registered and task is not None:
-                self._registry.bind_authority(
+                self._authorities.bind(
                     task,
                     agent_view_id=AgentLoop._current_agent_view_id(),
                     run_intent_id=run_intent_id,

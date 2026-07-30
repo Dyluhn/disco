@@ -16,7 +16,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from cronsim import CronSim, CronSimError
@@ -36,8 +36,26 @@ from .workflow_schedule import (
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
+    from disco.tools.projects import ProjectStore
 
-    from .runtime import ConversationRuntime
+
+class ScheduleRuntime(Protocol):
+    def _project_store_now(self) -> ProjectStore: ...
+
+    def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
+
+    def set_depth(self, conversation_id: str, tier: str | None) -> None: ...
+
+    async def send_user_turn(self, conversation_id: str, text: str) -> MessageEvent: ...
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        owner_id: str,
+        coalesced: bool,
+    ) -> WorkflowScheduleRunRecord: ...
 
 _LOG = logging.getLogger(__name__)
 
@@ -121,7 +139,7 @@ class ScheduleManager:
     def __init__(
         self,
         store: SqliteEventStore,
-        runtime: ConversationRuntime,
+        runtime: ScheduleRuntime,
         *,
         now_fn: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[float], Coroutine[Any, Any, None]] | None = None,

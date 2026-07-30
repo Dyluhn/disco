@@ -9,6 +9,7 @@ from disco.tools.projects import ProjectStore
 from disco.tools.sandbox import SandboxInstance
 
 from .lifecycle import LifecycleManager
+from .run_registry import RunResourceRegistry
 from .runtime_settings import RuntimeSettings
 
 
@@ -25,17 +26,17 @@ class BuildSurfacePolicy:
 class BuildExecutorAccess:
     """Expose only route rollback and live-sandbox lookup."""
 
-    def __init__(self, executors: dict[str, DefaultToolExecutor]) -> None:
-        self._executors = executors
+    def __init__(self, resources: RunResourceRegistry) -> None:
+        self._resources = resources
 
     def discard_composed_executor(self, conversation_id: str) -> None:
-        self._executors.pop(conversation_id, None)
+        self._resources.pop_executor(conversation_id)
 
     def executor_for(self, conversation_id: str) -> DefaultToolExecutor | None:
-        return self._executors.get(conversation_id)
+        return self._resources.executor(conversation_id)
 
     def sandbox_for(self, conversation_id: str) -> SandboxInstance | None:
-        executor = self._executors.get(conversation_id)
+        executor = self._resources.executor(conversation_id)
         return executor.sandbox if executor is not None else None
 
 

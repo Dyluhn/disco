@@ -21,11 +21,11 @@ runtime.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING
 
 from disco.core.env import disco_env
-from disco.core.llm import SandboxSettings
+from disco.core.llm import ConfigStore, SandboxSettings
 from disco.tools import (
     REGISTRY_EGRESS_ALLOW,
     Capability,
@@ -34,14 +34,13 @@ from disco.tools import (
 )
 from disco.tools.sandbox import (
     SandboxConfig,
+    SandboxUnavailableError,
     preflight_build_sandbox_backend,
     service_from_config,
 )
 
-if TYPE_CHECKING:
-    from .runtime import ConversationRuntime
-
 logger = logging.getLogger(__name__)
+_RUN_PREFLIGHT_TIMEOUT_S = 12.0
 
 
 def effective_local_runtime(backend: str, runtime: str) -> str:
@@ -102,22 +101,24 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
 
 
 class SandboxRuntimeService:
-    """Sandbox-resolution and probing for the conversation runtime.
+    """Own sandbox selection, injected backend state, and the base sandbox spec."""
 
-    Reaches mutable runtime state + config via `self._rt` — the owning
-    `ConversationRuntime`. See the module docstring for the full list of
-    reached attributes.
-    """
-
-    def __init__(self, runtime: ConversationRuntime) -> None:
-        self._rt = runtime
+    def __init__(
+        self,
+        config_store: ConfigStore,
+        injected_service: SandboxService | None,
+        sandbox_spec: SandboxSpec,
+    ) -> None:
+        self._config_store = config_store
+        self._injected_service = injected_service
+        self._sandbox_spec = sandbox_spec
 
     def _sandbox_service_now(self) -> SandboxService:
         """The active sandbox backend: the injected override if present, else built from
         the persisted SandboxSettings (reloaded each time — the Settings selector drives it)."""
-        if self._rt._injected_sandbox is not None:
-            return self._rt._injected_sandbox
-        return self._rt._build_sandbox_service_from_config(self._rt._config_store.load().sandbox)
+        if self._injected_service is not None:
+            return self._injected_service
+        return build_sandbox_service(self._config_store.load().sandbox)
 
     def effective_backend_name(self) -> str:
         """Return the concrete backend identity selected by Settings + deployment.
@@ -129,7 +130,7 @@ class SandboxRuntimeService:
         session as stale and discards its workspace.
         """
 
-        settings = self._rt._config_store.load().sandbox
+        settings = self._config_store.load().sandbox
         cfg = effective_sandbox_config(settings)
         # ProcessSandboxService allocates a dev workspace root in its constructor;
         # its configured and concrete identities are already identical, so avoid
@@ -147,6 +148,43 @@ class SandboxRuntimeService:
         except Exception:
             return None
 
+    def base_spec(self) -> SandboxSpec:
+        """Return the immutable spec used for one-off host-owned sandboxes."""
+
+        return self._sandbox_spec
+
+    def uses_injected_backend(self) -> bool:
+        return self._injected_service is not None
+
+    async def preflight_failure(self) -> str | None:
+        """Return a bounded, endpoint-named failure for the configured backend."""
+        if self._injected_service is not None:
+            return None
+        try:
+            service = self._sandbox_service_now()
+        except Exception as exc:
+            return f"sandbox backend is misconfigured: {exc}"
+        from disco.tools.sandbox import sandbox_endpoint_label
+
+        settings = self._config_store.load().sandbox
+        label = sandbox_endpoint_label(
+            getattr(service, "name", settings.backend),
+            settings.docker_socket,
+            settings.podman_url,
+        )
+        try:
+            await asyncio.wait_for(service.healthcheck(), _RUN_PREFLIGHT_TIMEOUT_S)
+        except TimeoutError:
+            return (
+                f"{label} unreachable: no response within "
+                f"{_RUN_PREFLIGHT_TIMEOUT_S:.0f}s (sandbox pre-flight timed out)"
+            )
+        except SandboxUnavailableError as exc:
+            return f"{label} unreachable: {exc}"
+        except Exception as exc:
+            return f"{label} error: {exc}"
+        return None
+
     async def probe_active_sandbox(self) -> tuple[bool, str, str]:
         """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
         agent-server, because this is the process that actually runs sandboxes (it owns
@@ -155,9 +193,9 @@ class SandboxRuntimeService:
         disagree. Returns (reachable, backend, detail). Never raises."""
         from disco.tools.sandbox import probe_sandbox_reachability, sandbox_endpoint_label
 
-        settings = self._rt._config_store.load().sandbox
+        settings = self._config_store.load().sandbox
         try:
-            service = self._rt._sandbox_service_now()
+            service = self._sandbox_service_now()
         except Exception as exc:
             endpoint = sandbox_endpoint_label(
                 settings.backend, settings.docker_socket, settings.podman_url
@@ -216,27 +254,27 @@ class SandboxRuntimeService:
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
                 base_allow = frozenset(base_allow | mcp_egress_hosts)
-            return self._rt._sandbox_spec.model_copy(
+            return self._sandbox_spec.model_copy(
                 update={
                     "egress_allow": base_allow,
                     "public_web": False,
-                    "permitted": self._rt._sandbox_spec.permitted - {Capability.NETWORK},
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
                 }
             )
         if egress == "public":
-            return self._rt._sandbox_spec.model_copy(
+            return self._sandbox_spec.model_copy(
                 update={
                     "egress_allow": frozenset(),
                     "public_web": True,
-                    "permitted": self._rt._sandbox_spec.permitted - {Capability.NETWORK},
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
                 }
             )
         if egress in {"sealed", "none"}:
-            return self._rt._sandbox_spec.model_copy(
+            return self._sandbox_spec.model_copy(
                 update={
                     "egress_allow": frozenset(),
                     "public_web": False,
-                    "permitted": self._rt._sandbox_spec.permitted - {Capability.NETWORK},
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
                 }
             )
         if egress not in {"open", "raw"}:
@@ -245,8 +283,8 @@ class SandboxRuntimeService:
                 "filtered, public, sealed, open, or raw"
             )
         spec_update = {
-            "permitted": self._rt._sandbox_spec.permitted - {Capability.NETWORK},
+            "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
             "public_web": True,
             "egress_allow": frozenset(),
         }
-        return self._rt._sandbox_spec.model_copy(update=spec_update)
+        return self._sandbox_spec.model_copy(update=spec_update)

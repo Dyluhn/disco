@@ -1,13 +1,5 @@
 [
   {
-    "id": "DM-001",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/runtime.py:ConversationRuntime:810-5369",
-    "concern": "distributed service locator/shared mutable caches",
-    "owner_package": "PKG-06-RUNTIME",
-    "source_disposition_id": "DM-001"
-  },
-  {
     "id": "DM-002",
     "kind": "distributed_concern",
     "location": "packages/agent-server/src/disco/agent_server/workspace_service.py + packages/agent-server/src/disco/agent_server/workspace_persistence.py + packages/agent-server/src/disco/agent_server/lifecycle.py",
@@ -134,13 +126,5 @@
     "concern": "project manifest is unversioned while version allocator/digests are serialized compatibility boundaries",
     "owner_package": "PKG-10-PROJECTS",
     "source_disposition_id": "DM-022"
-  },
-  {
-    "id": "PY-0188",
-    "kind": "typed_non_violation",
-    "location": "packages/agent-server/src/disco/agent_server/build_kernel/base.py:BuildKernel:54-145",
-    "classification": "typed protocol contract (not a concrete service)",
-    "owner_package": "PKG-06-RUNTIME",
-    "source_disposition_id": "PY-0188"
   }
 ]

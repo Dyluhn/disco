@@ -974,12 +974,12 @@ async def _fire_approved_workflow_once(
         cron=_ONE_SHOT_CRON,
         enabled=False,
     )
-    row = runtime.create_workflow_schedule(spec, owner_id=owner_id)
+    row = runtime._schedule.create_workflow_schedule(spec, owner_id=owner_id)
     schedule_id = str(row.get("schedule_id") or "")
     if not schedule_id:
         raise ValueError("workflow schedule creation did not return a schedule_id")
     try:
-        record = await runtime.fire_workflow_schedule_now(
+        record = await runtime._schedule.fire_workflow_schedule_now(
             schedule_id,
             owner_id=owner_id,
         )

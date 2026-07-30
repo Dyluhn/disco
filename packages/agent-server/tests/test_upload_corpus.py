@@ -15,6 +15,7 @@ import contextlib
 import io
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -56,6 +57,20 @@ class _FakeRuntime:
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._upload_passages: dict[str, list[Any]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
+        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self._workspace = SimpleNamespace(
+            fence=self.workspace_fence,
+            record_mutation_locked=self.record_workspace_mutation_locked,
+        )
+        self._uploads = SimpleNamespace(
+            store=self.store_upload,
+            names=self.get_upload_names,
+            size=self.get_upload_size,
+        )
+        self._dr = SimpleNamespace(
+            add_upload_passages=self.add_upload_passages,
+            get_upload_passages=self.get_upload_passages,
+        )
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
@@ -130,7 +145,7 @@ def test_md_upload_populates_corpus() -> None:
     assert r.status_code == 200
     assert r.json()["saved"][0]["name"] == "notes.md"
     # Corpus should have passages
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     assert len(passages) >= 1
     # All passages have the right source_url
     for p in passages:
@@ -142,7 +157,7 @@ def test_txt_upload_populates_corpus() -> None:
     client, cid, _, rt = _make_client()
     r = _upload(client, cid, [("files", b"Hello world.\n\nSecond para.", "data.txt")])
     assert r.status_code == 200
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     assert len(passages) >= 1
 
 
@@ -152,7 +167,7 @@ def test_csv_upload_populates_corpus() -> None:
     csv_bytes = b"name,value\nalpha,1\nbeta,2\n"
     r = _upload(client, cid, [("files", csv_bytes, "data.csv")])
     assert r.status_code == 200
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     assert len(passages) == 2
 
 
@@ -163,7 +178,7 @@ def test_pdf_upload_does_not_populate_corpus() -> None:
     assert r.status_code == 200
     assert r.json()["saved"][0]["name"] == "report.pdf"
     # Corpus should be empty for this cid
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     assert passages == []
 
 
@@ -172,7 +187,7 @@ def test_binary_upload_does_not_populate_corpus() -> None:
     client, cid, _, rt = _make_client()
     r = _upload(client, cid, [("files", b"\x00\x01\x02binary", "model.bin")])
     assert r.status_code == 200
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     assert passages == []
 
 
@@ -181,12 +196,34 @@ def test_corpus_accumulates_multiple_uploads() -> None:
     client, cid, _, rt = _make_client()
     _upload(client, cid, [("files", b"First file content.", "a.txt")])
     _upload(client, cid, [("files", b"Second file content.\n\nMore.", "b.md")])
-    passages = rt.get_upload_passages(cid)
+    passages = rt._dr.get_upload_passages(cid)
     # At least one passage from each file
     assert len(passages) >= 2
 
 
 # ── WS frame cid threading test ───────────────────────────────────────────────
+
+
+def _research_runtime(research_stream: Any) -> mock.MagicMock:
+    runtime = mock.MagicMock()
+    runtime._dr = SimpleNamespace(research_stream=research_stream)
+    runtime._settings = SimpleNamespace(
+        get_last_selected_model=mock.MagicMock(return_value=None)
+    )
+    runtime._mcp = SimpleNamespace(
+        _start_mcp_pool=mock.AsyncMock(),
+        _close_mcp_pool=mock.AsyncMock(),
+    )
+    runtime._lifecycle = SimpleNamespace(
+        reconcile_orphaned_runs=mock.AsyncMock(),
+        _idle_sweep_loop=mock.AsyncMock(),
+    )
+    runtime._drivers = SimpleNamespace(
+        prewarm_model_probe=mock.AsyncMock(),
+        prewarm_vision_probe=mock.AsyncMock(),
+    )
+    runtime._schedule = SimpleNamespace(_schedule_manager_loop=mock.AsyncMock())
+    return runtime
 
 
 @pytest.mark.asyncio
@@ -215,17 +252,10 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
         }
         yield {"type": "state", "status": "finished"}
 
-    fake_rt = mock.MagicMock()
-    fake_rt.research_stream = mock.MagicMock(
+    research_stream = mock.MagicMock(
         side_effect=lambda query, **kw: _fake_stream(**{"query": query, **kw})
     )
-    fake_rt.get_last_selected_model = mock.MagicMock(return_value=None)
-    # lifespan calls await / asyncio.create_task on several runtime methods —
-    # they must be AsyncMocks or create_task will crash ("expected a coroutine").
-    fake_rt._start_mcp_pool = mock.AsyncMock()
-    fake_rt._idle_sweep_loop = mock.AsyncMock()
-    fake_rt._schedule_manager_loop = mock.AsyncMock()
-    fake_rt._close_mcp_pool = mock.AsyncMock()
+    fake_rt = _research_runtime(research_stream)
 
     app = create_app(store, runtime=fake_rt)
 
@@ -248,8 +278,8 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
                 pass
 
     # conversation_id should have been passed to research_stream
-    assert fake_rt.research_stream.called
-    call_kwargs = fake_rt.research_stream.call_args
+    assert research_stream.called
+    call_kwargs = research_stream.call_args
     assert call_kwargs is not None
     kwargs = call_kwargs.kwargs
     assert kwargs.get("conversation_id") == "conv_abc123"
@@ -281,15 +311,10 @@ async def test_ws_research_no_conversation_id_is_none() -> None:
         }
         yield {"type": "state", "status": "finished"}
 
-    fake_rt = mock.MagicMock()
-    fake_rt.research_stream = mock.MagicMock(
+    research_stream = mock.MagicMock(
         side_effect=lambda query, **kw: _fake_stream(**{"query": query, **kw})
     )
-    fake_rt.get_last_selected_model = mock.MagicMock(return_value=None)
-    fake_rt._start_mcp_pool = mock.AsyncMock()
-    fake_rt._idle_sweep_loop = mock.AsyncMock()
-    fake_rt._schedule_manager_loop = mock.AsyncMock()
-    fake_rt._close_mcp_pool = mock.AsyncMock()
+    fake_rt = _research_runtime(research_stream)
 
     app = create_app(store, runtime=fake_rt)
 
@@ -305,7 +330,7 @@ async def test_ws_research_no_conversation_id_is_none() -> None:
             except Exception:
                 pass
 
-    call_kwargs = fake_rt.research_stream.call_args
+    call_kwargs = research_stream.call_args
     assert call_kwargs is not None
     kwargs = call_kwargs.kwargs
     assert kwargs.get("conversation_id") is None

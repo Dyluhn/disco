@@ -487,7 +487,7 @@ async def _handle_import_project(
         title=title,
         surface="build",
     )
-    runtime.set_surface(conversation_id, "build")
+    runtime._settings._set_surface(conversation_id, "build")
     created_at = await _created_at_for(store, conversation_id, owner_id)
     ps.write_manifest(
         conversation_id,
@@ -534,7 +534,10 @@ async def _handle_backfill_titles(
         return {"titled": {}, "scanned": 0, "status": "no-runtime"}
     summaries = await store.list_conversation_summaries(owner_id=owner_id, limit=500, cursor=None)
     candidates = [s.conversation_id for s in summaries if not s.title or retitle_fallbacks]
-    titled = await runtime.title_service().backfill(candidates, retitle_fallbacks=retitle_fallbacks)
+    titled = await runtime._title_service.backfill(
+        candidates,
+        retitle_fallbacks=retitle_fallbacks,
+    )
     return {"titled": titled, "count": len(titled), "scanned": len(candidates)}
 
 
@@ -752,7 +755,7 @@ async def _handle_delete_project(
     if runtime is None:
         deleted = ps.delete(conversation_id)
     else:
-        async with runtime.workspace_mutation(
+        async with runtime._workspace.mutation(
             conversation_id,
             "project.delete",
             paths=(".",),
@@ -1100,10 +1103,7 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
     async def list_projects(
         request: Request,
     ) -> dict:
-        """List Build projects under the configured projects_root, joined with
-        their conversation metadata (title/created_at). Returns an empty list
-        with a clear `status` field when the storage isn't configured/valid —
-        graceful empty, never crash."""
+        """List Build projects with metadata, or a clear empty storage status."""
         return await _handle_list_projects(request, store=store, runtime=runtime)
 
     @router.post("/api/projects/backfill-titles")

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
+from disco.core.loop import AgentLoop
 from disco.core.loop.workflow_state import (
     abort_workflow_to_router,
     seed_approved_workflow_plan,
@@ -15,12 +15,10 @@ from disco.core.workflow import WorkflowDefinition, WorkflowRun
 
 async def handle_workflow_tool_event(
     *,
-    conversation_id: str,
-    loops: Mapping[str, Any],
+    loop: AgentLoop | None,
     kind: str,
     payload: dict[str, Any],
 ) -> None:
-    loop = loops.get(conversation_id)
     if loop is None:
         return
     if kind == "enter_workflow":
@@ -37,6 +35,6 @@ async def handle_workflow_tool_event(
             definition=definition,
             params=params,
         )
-        await seed_approved_workflow_plan(loop, workflow_run)
+        await seed_approved_workflow_plan(cast(Any, loop), workflow_run)
     elif kind == "workflow_abort":
-        await abort_workflow_to_router(loop)
+        await abort_workflow_to_router(cast(Any, loop))

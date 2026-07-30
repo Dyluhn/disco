@@ -18,6 +18,7 @@ import contextlib
 import io
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
 from disco.agent_server import create_app
@@ -60,6 +61,17 @@ class _FakeRuntime:
         self._pending_sessions: dict[str, _FakeSession] = {}
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
+        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self._workspace = SimpleNamespace(
+            fence=self.workspace_fence,
+            record_mutation_locked=self.record_workspace_mutation_locked,
+        )
+        self._uploads = SimpleNamespace(
+            store=self.store_upload,
+            names=self.get_upload_names,
+            size=self.get_upload_size,
+        )
+        self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
@@ -414,17 +426,17 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     cid = "conv_adoption_test"
-    rt.set_surface(cid, "build")
+    rt._settings._set_surface(cid, "build")
 
-    with mock.patch.object(rt, "_sandbox_service_now"):
-        session = rt.upload_session(cid)
-        assert cid in rt._pending_sessions
+    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+        session = rt._sessions.upload_session(cid)
+        assert rt._run_resources.has_pending_session(cid)
         assert session._auto_preview_disabled is True
 
-        loop = rt._compose_build_loop(cid, router, agent)
+        loop = rt._loop_factory.compose_build_loop(cid, router, agent)
 
     assert loop.executor._sandbox is session
-    assert cid not in rt._pending_sessions
+    assert not rt._run_resources.has_pending_session(cid)
 
 
 def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None:
@@ -436,35 +448,39 @@ def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     cid = "conv_research_upload"
-    rt.set_surface(cid, "research")
+    rt._settings._set_surface(cid, "research")
 
-    with mock.patch.object(rt, "_sandbox_service_now"):
-        session = rt.upload_session(cid)
+    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+        session = rt._sessions.upload_session(cid)
 
     assert session._auto_preview_disabled is False
 
 
 @pytest.mark.asyncio
-async def test_pending_session_destroyed_on_kill() -> None:
+async def test_pending_session_destroyed_on_kill(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Killing a conversation tears down any pending (pre-loop) sandbox session."""
     from unittest import mock
 
     from disco.agent_server.runtime import ConversationRuntime
 
+    monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "locks"))
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
     cid = f"conv_{uuid.uuid4().hex}"
     store.create_conversation(cid, owner_id="local")
 
-    with mock.patch.object(rt, "_sandbox_service_now"):
-        session = rt.upload_session(cid)
-    assert cid in rt._pending_sessions
+    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+        session = rt._sessions.upload_session(cid)
+    assert rt._run_resources.has_pending_session(cid)
 
     session.destroy = mock.AsyncMock()
     await rt.kill(cid)
 
     session.destroy.assert_called_once()
-    assert cid not in rt._pending_sessions
+    assert not rt._run_resources.has_pending_session(cid)
 
 
 def test_partial_reject_returns_200_with_saved_and_rejected() -> None:
@@ -496,7 +512,7 @@ def test_sidecar_quota_counts_toward_limit() -> None:
     sess = _FakeSession()
     rt._executors[cid] = _FakeExecutor(sess)
     # Pre-fill sidecar with 99 MB — near the 100 MB cap.
-    rt.store_upload(cid, "big.bin", b"x" * (99 * 1024 * 1024))
+    rt._uploads.store(cid, "big.bin", b"x" * (99 * 1024 * 1024))
     client = TestClient(create_app(store, runtime=rt))
     # 2 MB extra pushes over 100 MB → rejected.
     r = _upload(client, cid, [("files", b"x" * (2 * 1024 * 1024), "extra.bin")])
@@ -513,7 +529,7 @@ def test_sidecar_quota_allows_when_under() -> None:
     sess = _FakeSession()
     rt._executors[cid] = _FakeExecutor(sess)
     # Pre-fill sidecar with 90 MB — 5 MB more is safe.
-    rt.store_upload(cid, "big.bin", b"x" * (90 * 1024 * 1024))
+    rt._uploads.store(cid, "big.bin", b"x" * (90 * 1024 * 1024))
     client = TestClient(create_app(store, runtime=rt))
     r = _upload(client, cid, [("files", b"x" * (5 * 1024 * 1024), "ok.bin")])
     assert r.status_code == 200
@@ -539,7 +555,7 @@ async def test_upload_survives_recreation() -> None:
 
     # Verify it is in the sandbox AND sidecar.
     assert await sess.read_file("uploads/data.txt") == data
-    assert rt.get_upload_names(cid) == {"data.txt"}
+    assert rt._uploads.names(cid) == {"data.txt"}
 
     # 2. Simulate sandbox recreation (wipe it).
     sess._files = {}
@@ -567,6 +583,7 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
     from unittest import mock
 
     from disco.agent_server.runtime import ConversationRuntime
+    from disco.agent_server.upload_store import UploadStore
     from disco.core.llm import DefaultLLMRouter
     from disco.core.loop import RouterAgent
 
@@ -579,14 +596,14 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
     agent = mock.MagicMock(spec=RouterAgent)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        rt._uploads_base = tmpdir
+        rt._uploads = UploadStore(tmpdir)
         data = b"post-restart data"
-        rt.store_upload(cid, "data.csv", data)
-        assert rt.get_upload_names(cid) == {"data.csv"}
+        rt._uploads.store(cid, "data.csv", data)
+        assert rt._uploads.names(cid) == {"data.csv"}
 
         # Post-restart state: no executor, no pending session.
-        assert cid not in rt._executors
-        assert cid not in rt._pending_sessions
+        assert not rt._run_resources.has_executor(cid)
+        assert not rt._run_resources.has_pending_session(cid)
 
         # Mock a sandbox instance that stores files in memory.
         mock_files: dict[str, bytes] = {}
@@ -609,11 +626,16 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
         mock_service.name = "mock"
 
         # Simulate the resume path: compose a fresh build loop (the lazy path).
-        with mock.patch.object(rt, "_sandbox_service_now", return_value=mock_service):
-            rt._compose_build_loop(cid, router, agent)
+        with mock.patch.object(
+            rt._sandbox,
+            "_sandbox_service_now",
+            return_value=mock_service,
+        ):
+            rt._loop_factory.compose_build_loop(cid, router, agent)
 
         # Now an executor exists with a fresh sandbox (post-lazy-compose).
-        executor = rt._executors[cid]
+        executor = rt._run_resources.executor(cid)
+        assert executor is not None
         session = executor._sandbox
         assert session is not None
 
@@ -622,7 +644,7 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
 
         # Trigger re-materialization — this is what _run_with_persistence does
         # after the chokepoint fix.
-        await rt._rematerialize_uploads(cid)
+        await rt._lifecycle._rematerialize_uploads(cid)
 
         # Assert the uploads were written into the sandbox.
         assert mock_files.get("uploads/data.csv") == data

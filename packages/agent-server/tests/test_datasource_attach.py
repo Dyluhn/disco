@@ -20,6 +20,7 @@ import contextlib
 import io
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 from disco.agent_server import create_app
 from disco.core import (
@@ -65,6 +66,17 @@ class _FakeRuntime:
         self._pending_sessions: dict[str, _FakeSession] = {}
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
+        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self._workspace = SimpleNamespace(
+            fence=self.workspace_fence,
+            record_mutation_locked=self.record_workspace_mutation_locked,
+        )
+        self._uploads = SimpleNamespace(
+            store=self.store_upload,
+            names=self.get_upload_names,
+            size=self.get_upload_size,
+        )
+        self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
 
     def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
