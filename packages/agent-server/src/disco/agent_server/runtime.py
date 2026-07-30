@@ -3945,9 +3945,9 @@ class ConversationRuntime:
             current_task is not None and self._tasks.get(conversation_id) is current_task
         )
         if registered_task and current_task is not None and surface in self._BUILD_LIKE_SURFACES:
-            intent = latest_workspace_run_intent(await self._store.get_events(conversation_id))
-            run_intent_id = intent.id if intent is not None else None
-            self._run_task_authorities[current_task] = (None, run_intent_id)
+            authority = await self._lifecycle_commands.resolve_current_authority(conversation_id)
+            agent_view_id, run_intent_id, _strict = authority
+            self._run_task_authorities[current_task] = (agent_view_id, run_intent_id)
 
         if surface == "deep_research":
             # Short-circuit the loop for Deep Research. The plan-mode intercept
