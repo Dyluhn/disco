@@ -345,6 +345,162 @@ def _recover_masked_candidate(
     return detection
 
 
+@dataclass(frozen=True)
+class _SpecAssembly:
+    """The `ReleaseSpec` (+ ingress view + digest) assembled from a detection that
+    named an ingress — or the reason assembly could not complete.
+
+    `spec` / `ingress_info` / `digest` are set together on success. `spec_error` is
+    set instead (and `assessment` downgraded to `needs_review`) when a schema-valid
+    intent still describes an inconsistent release. All four are `None` — and
+    `assessment` unchanged from the detection — when the detection names no ingress
+    at all."""
+
+    spec: ReleaseSpec | None
+    ingress_info: _IngressInfo | None
+    digest: str | None
+    spec_error: str | None
+    assessment: ReleaseAssessment
+
+
+def _assemble_spec_view(
+    effective: DetectionResult,
+    *,
+    name: str,
+    version_seq: int,
+    tree_digest: str,
+) -> _SpecAssembly:
+    """Build the `ReleaseSpec` + ingress view for a detection that named an ingress.
+
+    A SCHEMA-valid intent can still describe an INCONSISTENT release — e.g. a
+    resource naming a consumer service the release does not define — which only
+    trips the `ReleaseSpec` cross-field validators at assembly. That is a repairable
+    owner problem, not a server fault: fail closed to `needs_review` with a typed
+    blocker rather than letting a 500 escape. The spec models set
+    `hide_input_in_errors`, so the message names FIELDS/ids only — never a secret
+    VALUE — and it is length-clamped defensively.
+    """
+    ingress = effective.ingress
+    if ingress is None:
+        return _SpecAssembly(None, None, None, None, effective.assessment)
+    try:
+        spec = _build_spec(effective, name=name, version_seq=version_seq, tree_digest=tree_digest)
+    except ValidationError as exc:
+        spec_error = _clamp(str(exc), _REASON_MAX)
+        return _SpecAssembly(None, None, None, spec_error, ReleaseAssessment.needs_review)
+    ingress_info = _IngressInfo(
+        service=ingress.id,
+        runtime=ingress.runtime.value,
+        port=ingress.port_env,
+        health_path=ingress.health_path,
+    )
+    return _SpecAssembly(spec, ingress_info, spec_digest(spec), None, effective.assessment)
+
+
+@dataclass(frozen=True)
+class _OutcomeResolution:
+    """The route's final verdict pieces, resolved from an assembled spec (or its
+    failure): the (possibly downgraded) `assessment`, the flat `blockers` list, the
+    `overlay_files` to inject (empty unless self-hostable), `self_host`, and the
+    `spec_digest` (`None` unless a self-host bundle actually shipped)."""
+
+    assessment: ReleaseAssessment
+    blockers: list[_ResponseBlocker]
+    overlay_files: dict[str, str]
+    self_host: bool
+    digest: str | None
+
+
+def _resolve_outcome(
+    effective: DetectionResult,
+    files: Mapping[str, bytes],
+    *,
+    assembly: _SpecAssembly,
+) -> _OutcomeResolution:
+    """Turn an assembled spec (or its failure) into the endpoint's blockers /
+    overlay / self-host verdict — the same branching `assess_release` always ran,
+    isolated here from request/response plumbing."""
+    assessment = assembly.assessment
+    digest = assembly.digest
+    blockers: list[_ResponseBlocker] = []
+    overlay_files: dict[str, str] = {}
+    self_host = False
+
+    if assembly.spec_error is not None:
+        blockers.append(
+            _ResponseBlocker(
+                code="release_spec_invalid",
+                message=(
+                    "the declared release intent could not be assembled into a valid "
+                    f"release spec and needs owner review: {assembly.spec_error}"
+                ),
+            )
+        )
+    elif assessment is ReleaseAssessment.candidate and assembly.spec is not None:
+        validation = validate_release(assembly.spec, files)
+        if validation.ok:
+            # ATOMIC overlay (plan §10.1): the COMPLETE overlay is generated in memory
+            # and collision-checked as a WHOLE. A collision with ANY generated path
+            # means the bundle cannot be placed intact, so the ENTIRE overlay is
+            # withheld (never a partial, self-host-labelled bundle §2 #7 forbids) and
+            # the assessment fails closed — `needs_review`, `self_host:false`, and NO
+            # bound `spec_digest` — with one typed `overlay_path_conflict` blocker per
+            # colliding path (plan §10.2). Otherwise the whole overlay ships and the
+            # candidate is self-hostable.
+            overlay = emit_local_compose(assembly.spec)
+            collisions = _overlay_collisions(overlay, files)
+            if collisions:
+                assessment = ReleaseAssessment.needs_review
+                digest = None
+                blockers.extend(
+                    _ResponseBlocker(
+                        code="overlay_path_conflict",
+                        message=(
+                            f"the generated self-host overlay file {path!r} conflicts "
+                            "with a file already in the workspace; the whole self-host "
+                            "overlay is withheld until the conflict is resolved "
+                            "(rename or remove the workspace file)."
+                        ),
+                        path=path,
+                    )
+                    for path in collisions
+                )
+            else:
+                overlay_files = {
+                    path: overlay[path] for path in overlay if not is_runtime_secret_path(path)
+                }
+                self_host = True
+        else:
+            blockers.extend(
+                _ResponseBlocker(
+                    code=blocker.code.value, message=blocker.message, path=blocker.path
+                )
+                for blocker in validation.blockers
+            )
+    elif effective.blockers:
+        # A detector fail-closed with EXACT typed codes (required_env_unresolved,
+        # port_contract_unresolved, entrypoint_unresolved, toolchain_unsupported,
+        # output_dir_unresolved, health_path_unresolved, runtime_conflict). Surface
+        # each verbatim so a predictable defect is precisely diagnosable.
+        blockers.extend(
+            _ResponseBlocker(code=item.code, message=item.message, field=item.field, path=item.path)
+            for item in effective.blockers
+        )
+    else:
+        blockers.extend(
+            _ResponseBlocker(code="release_field_unresolved", field=item.field, message=item.detail)
+            for item in effective.missing
+        )
+
+    return _OutcomeResolution(
+        assessment=assessment,
+        blockers=blockers,
+        overlay_files=overlay_files,
+        self_host=self_host,
+        digest=digest,
+    )
+
+
 def assess_release(
     files: Mapping[str, bytes],
     *,
@@ -394,121 +550,24 @@ def assess_release(
     # then runs against the FULL workspace, so the masked reserved file is reported.
     effective = _recover_masked_candidate(detection, files, intent=intent, imported=imported)
 
-    ingress = effective.ingress
-    assessment = effective.assessment
-    spec: ReleaseSpec | None = None
-    ingress_info: _IngressInfo | None = None
-    digest: str | None = None
-    spec_error: str | None = None
-    if ingress is not None:
-        try:
-            spec = _build_spec(
-                effective, name=project_name, version_seq=version_seq, tree_digest=tree_digest
-            )
-        except ValidationError as exc:
-            # A SCHEMA-valid intent can still describe an INCONSISTENT release — e.g. a
-            # resource naming a consumer service the release does not define — which
-            # only trips the ReleaseSpec cross-field validators at assembly. That is a
-            # repairable owner problem, not a server fault: fail closed to needs_review
-            # with a typed blocker rather than letting a 500 escape. The spec models set
-            # `hide_input_in_errors`, so the message names FIELDS/ids only — never a
-            # secret VALUE — and it is length-clamped defensively.
-            assessment = ReleaseAssessment.needs_review
-            spec_error = _clamp(str(exc), _REASON_MAX)
-        else:
-            digest = spec_digest(spec)
-            ingress_info = _IngressInfo(
-                service=ingress.id,
-                runtime=ingress.runtime.value,
-                port=ingress.port_env,
-                health_path=ingress.health_path,
-            )
-
-    blockers: list[_ResponseBlocker] = []
-    overlay_files: dict[str, str] = {}
-    self_host = False
-
-    if spec_error is not None:
-        blockers.append(
-            _ResponseBlocker(
-                code="release_spec_invalid",
-                message=(
-                    "the declared release intent could not be assembled into a valid "
-                    f"release spec and needs owner review: {spec_error}"
-                ),
-            )
-        )
-    elif assessment is ReleaseAssessment.candidate and spec is not None:
-        validation = validate_release(spec, files)
-        if validation.ok:
-            # ATOMIC overlay (plan §10.1): the COMPLETE overlay is generated in memory
-            # and collision-checked as a WHOLE. A collision with ANY generated path
-            # means the bundle cannot be placed intact, so the ENTIRE overlay is
-            # withheld (never a partial, self-host-labelled bundle §2 #7 forbids) and
-            # the assessment fails closed — `needs_review`, `self_host:false`, and NO
-            # bound `spec_digest` — with one typed `overlay_path_conflict` blocker per
-            # colliding path (plan §10.2). Otherwise the whole overlay ships and the
-            # candidate is self-hostable.
-            overlay = emit_local_compose(spec)
-            collisions = _overlay_collisions(overlay, files)
-            if collisions:
-                assessment = ReleaseAssessment.needs_review
-                digest = None
-                overlay_files = {}
-                self_host = False
-                blockers.extend(
-                    _ResponseBlocker(
-                        code="overlay_path_conflict",
-                        message=(
-                            f"the generated self-host overlay file {path!r} conflicts "
-                            "with a file already in the workspace; the whole self-host "
-                            "overlay is withheld until the conflict is resolved "
-                            "(rename or remove the workspace file)."
-                        ),
-                        path=path,
-                    )
-                    for path in collisions
-                )
-            else:
-                overlay_files = {
-                    path: overlay[path] for path in overlay if not is_runtime_secret_path(path)
-                }
-                self_host = True
-        else:
-            blockers.extend(
-                _ResponseBlocker(
-                    code=blocker.code.value, message=blocker.message, path=blocker.path
-                )
-                for blocker in validation.blockers
-            )
-    elif effective.blockers:
-        # A detector fail-closed with EXACT typed codes (required_env_unresolved,
-        # port_contract_unresolved, entrypoint_unresolved, toolchain_unsupported,
-        # output_dir_unresolved, health_path_unresolved, runtime_conflict). Surface
-        # each verbatim so a predictable defect is precisely diagnosable.
-        blockers.extend(
-            _ResponseBlocker(code=item.code, message=item.message, field=item.field, path=item.path)
-            for item in effective.blockers
-        )
-    else:
-        blockers.extend(
-            _ResponseBlocker(code="release_field_unresolved", field=item.field, message=item.detail)
-            for item in effective.missing
-        )
+    assembly = _assemble_spec_view(
+        effective, name=project_name, version_seq=version_seq, tree_digest=tree_digest
+    )
+    outcome = _resolve_outcome(effective, files, assembly=assembly)
 
     response = ReleaseResponse(
-        assessment=assessment.value,
+        assessment=outcome.assessment.value,
         reasons=list(effective.reasons),
-        blockers=blockers,
+        blockers=outcome.blockers,
         required_env=_required_env_view(effective),
         command=_RELEASE_COMMAND,
-        ingress=ingress_info,
-        self_host=self_host,
-        spec_digest=digest,
+        ingress=assembly.ingress_info,
+        self_host=outcome.self_host,
+        spec_digest=outcome.digest,
         version_seq=version_seq,
         tree_digest=tree_digest,
     )
-    return AssessedRelease(response=response, overlay_files=overlay_files)
+    return AssessedRelease(response=response, overlay_files=outcome.overlay_files)
 
 
 def _read_tree(root: Path) -> dict[str, bytes]:
