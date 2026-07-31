@@ -26,11 +26,12 @@ from .evidence import (
     _scan_for_secrets,
     _signed_header,
 )
+from .worker_endpoint import WorkerEndpoint
 from .workerd_lifecycle import _WorkerdApp
 
 
 async def _check_forged_signature_rejected(
-    worker: _WorkerdApp,
+    worker: WorkerEndpoint,
     webhook_secret: str,
     app_binding: str,
     plan_selector: str,
@@ -88,7 +89,7 @@ async def _check_forged_signature_rejected(
 
 
 async def _check_replay_deduped(
-    worker: _WorkerdApp,
+    worker: WorkerEndpoint,
     webhook_secret: str,
     app_binding: str,
     plan_selector: str,

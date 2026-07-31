@@ -21,7 +21,7 @@ from .evidence import (
     _stripe_event_body,
     _stripe_metadata,
 )
-from .workerd_lifecycle import _WorkerdApp
+from .worker_endpoint import WorkerEndpoint
 
 
 class _LifecycleContext:
@@ -29,7 +29,7 @@ class _LifecycleContext:
 
     def __init__(
         self,
-        worker: _WorkerdApp,
+        worker: WorkerEndpoint,
         webhook_secret: str,
         app_binding: str,
         plan_selector: str,
@@ -95,7 +95,7 @@ class _LifecycleContext:
 
 
 async def _check_webhook_lifecycle(
-    worker: _WorkerdApp,
+    worker: WorkerEndpoint,
     webhook_secret: str,
     app_binding: str,
     plan_selector: str,
