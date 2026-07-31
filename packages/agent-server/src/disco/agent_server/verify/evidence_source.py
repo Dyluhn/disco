@@ -59,7 +59,11 @@ class ClientEvidenceAdapter:
 
     __slots__ = ("_client",)
 
-    def __init__(self, client: Any) -> None:
+    def __init__(self, client: EvidenceSource) -> None:
+        # Typed as the narrow port, not ``Any``. A wide client (e.g.
+        # ``HttpVerifyClient``) satisfies ``EvidenceSource`` structurally — it has
+        # these two methods and many more — so nothing at a call site changes,
+        # while the adapter now states the only capability it actually consumes.
         self._client = client
 
     async def fetch_app(self, url: str) -> tuple[int, bytes] | None:
