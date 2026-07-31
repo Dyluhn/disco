@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.env import disco_env
-from disco.tools import Capability
+from disco.tools import Capability, SandboxInstance, SandboxService, SandboxSpec
 
 from .deploy import (
     ensure_workspace_dir,
@@ -254,6 +254,147 @@ def _deployable_relpaths(workspace: Path) -> list[str]:
     return sorted(out)
 
 
+class _BuildAborted(Exception):
+    """Internal control-flow signal: a pre-build gate or the push step already
+    computed the structured :class:`BuildResult` a refusal/failure must return.
+    Raised by the ``SandboxBuildBackend._resolve_*``/``_create_build_instance``/
+    ``_push_workspace`` helpers and always caught inside :meth:`SandboxBuildBackend.build`
+    (never escapes it) — this lets each helper signal its own failure without
+    threading an Optional failure value back through the call chain."""
+
+    def __init__(self, result: BuildResult) -> None:
+        super().__init__(result.stderr)
+        self.result = result
+
+
+def _validated_asset_out_dir(
+    asset_dir: str, workspace: Path, workspace_root: Path
+) -> tuple[Path, Path]:
+    """Validate *asset_dir* is a safe relative path and that the LIVE host asset
+    dir is a REAL (non-symlink) directory contained in the workspace, BEFORE
+    anything is read or cleared. Returns ``(out_dir, out_root)`` — the live path
+    and its resolved form. Raises :class:`_BuildOutputEscape` on any violation.
+
+    SECURITY: anchored to the resolved WORKSPACE ROOT (not merely the asset dir);
+    the asset dir must be a REAL directory (``is_symlink`` via lstat, NOT
+    ``resolve`` — which would FOLLOW and MASK an in-workspace link) so build
+    output lands ONLY in the real asset dir."""
+    asset_rel = Path(asset_dir)
+    if asset_rel.is_absolute() or any(p == ".." for p in asset_rel.parts) or not asset_rel.parts:
+        raise _BuildOutputEscape(
+            f"invalid asset dir (must be a relative path inside the workspace): {asset_dir!r}"
+        )
+    out_dir = workspace / asset_rel
+    # The asset dir must be a REAL directory. lstat (``is_symlink``), NOT
+    # ``resolve`` — resolve would FOLLOW an in-workspace link and MASK it, silently
+    # broadening the sync target. A symlinked asset dir (in-workspace OR escaping)
+    # is REJECTED.
+    if out_dir.is_symlink():
+        raise _BuildOutputEscape(
+            f"{asset_dir} is a symlink; build output must land in the real ./{asset_dir}"
+        )
+    # Anchor to the workspace root: a now-rejected escaping link kept as
+    # belt-and-suspenders (never write build output outside the workspace).
+    if out_dir.exists() and not workspace_contained(out_dir, workspace_root):
+        raise _BuildOutputEscape(f"{asset_dir} resolves outside the workspace")
+    return out_dir, out_dir.resolve()
+
+
+async def _list_build_output_entries(instance: object, asset_dir: str) -> list[str]:
+    """List the sandboxed build output via ``find … -print0`` (NULL-delimited, so a
+    filename containing a newline can't corrupt the listing — SEC-23). Raises
+    :class:`_BuildOutputUnavailable` when `find` FAILS (never a silent success on
+    missing output); :class:`_BuildOutputTooLarge` when the file COUNT is over cap."""
+    listing = await instance.exec_shell(  # type: ignore[attr-defined]
+        f"find {shlex.quote(asset_dir)} -type f -print0", timeout_s=60
+    )
+    if listing.exit_code != 0:
+        # FAIL CLOSED: could not list the build output — NOT a silent success.
+        raise _BuildOutputUnavailable(
+            f"could not list build output under {asset_dir} (find exit={listing.exit_code})"
+        )
+    entries = [e for e in listing.stdout.split("\0") if e]
+    if len(entries) > _MAX_OUTPUT_FILES:
+        raise _BuildOutputTooLarge(
+            f"build output has {len(entries)} files (cap {_MAX_OUTPUT_FILES})"
+        )
+    return entries
+
+
+async def _stage_validated_entries(
+    instance: object,
+    entries: list[str],
+    asset_dir: str,
+    workspace: Path,
+    out_root: Path,
+    workspace_root: Path,
+) -> list[tuple[str, bytes]]:
+    """PASS 1 — validate + read EVERY listed entry against the LIVE host tree (so a
+    planted symlink is caught) BEFORE anything is cleared. Every path is validated
+    to stay STRICTLY inside BOTH the resolved asset-dir root AND the resolved
+    workspace root before it is read (:func:`_contained_dest`) — an absolute path,
+    a ``..`` traversal, or an escaping symlink is REJECTED
+    (:class:`_BuildOutputEscape`). A ``None`` read-back is a BUILD FAILURE
+    (:class:`_BuildOutputUnavailable`, never an empty-file silent success); an
+    over-cap running total is :class:`_BuildOutputTooLarge`; an EMPTY result (no
+    artifacts to deploy) is also a BUILD FAILURE."""
+    staged: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    for entry in entries:
+        rel = entry[2:] if entry.startswith("./") else entry
+        if not rel:
+            continue
+        # Lexical + resolved guard (absolute / ``..`` / escaping-resolved) BEFORE read.
+        if _contained_dest(rel, workspace, out_root, workspace_root) is None:
+            raise _BuildOutputEscape(rel)
+        data = await instance.read_file(rel)  # type: ignore[attr-defined]
+        if data is None:
+            # FAIL CLOSED: a listed output file that reads back as None is a build
+            # failure, never an empty-file silent success.
+            raise _BuildOutputUnavailable(f"build output file unreadable: {rel}")
+        total_bytes += len(data)
+        if total_bytes > _MAX_OUTPUT_BYTES:
+            raise _BuildOutputTooLarge(f"build output exceeds {_MAX_OUTPUT_BYTES} bytes")
+        staged.append((rel, data))
+    if not staged:
+        # An empty asset dir = nothing to deploy = a broken build. Fail closed.
+        raise _BuildOutputUnavailable(f"build produced no output files under {asset_dir}")
+    return staged
+
+
+def _replace_asset_dir(
+    staged: list[tuple[str, bytes]],
+    workspace: Path,
+    asset_rel: Path,
+    workspace_root: Path,
+    out_dir: Path,
+) -> None:
+    """PASS 2 — stage the validated bytes into a FRESH sibling dir via the ONE
+    guarded writer, then CLEAR the stale host asset dir and atomically move the
+    staged tree into place with ``os.replace`` — stale files never survive, and a
+    partially-written tree is never visible."""
+    stage_root = workspace / f".disco-build-out-{_uuid.uuid4().hex[:12]}"
+    try:
+        os.makedirs(stage_root)
+        for rel, data in staged:
+            # Guarded writer: LSTATs every component (refuses a symlinked one) —
+            # no raw mkdir/write of a workspace path lives outside it.
+            try:
+                write_workspace_file(rel, data, stage_root)
+            except DeployRefused as exc:
+                raise _BuildOutputEscape(rel) from exc
+        staged_out = stage_root / asset_rel
+        if asset_rel.parent.parts:
+            ensure_workspace_dir(asset_rel.parent, workspace_root)
+        # Clear the stale host asset dir (a real, contained dir per the checks
+        # above); `os.replace` of a dir onto a non-empty dir is not allowed.
+        if out_dir.exists():
+            shutil.rmtree(out_dir)
+        os.replace(staged_out, out_dir)  # atomic same-FS rename
+    finally:
+        shutil.rmtree(stage_root, ignore_errors=True)
+
+
 class SandboxBuildBackend:
     """PRODUCTION :class:`BuildBackend` — runs the untrusted build in an isolating
     Disco sandbox. Constructed from the live runtime; used only by the owner's real
@@ -285,96 +426,113 @@ class SandboxBuildBackend:
         except Exception:  # noqa: BLE001 — any lookup failure → not isolating → refuse
             return False
 
-    async def build(
-        self,
-        workspace: Path,
-        *,
-        install_cmd: str,
-        build_cmd: str,
-        asset_dir: str = _BUILD_OUTPUT_DIR,
-    ) -> BuildResult:
-        # ISOLATION RACE (SEC-19/CORR-20): resolve the sandbox service EXACTLY ONCE
-        # and verify ITS isolation kind on the SAME instance we then build on — the
-        # old code did a separate `sandbox_backend_name()` lookup for the gate and
-        # another `_sandbox_service_now()` for the build, so a settings race
-        # (gvisor→process) between them could run the untrusted build on the HOST.
-        # One fetch, one verify, one use.
-        # CORR-20: the SERVICE lookup itself can raise (no backend configured, a
-        # provider import error) — convert it to a structured failed BuildResult, never
-        # let it escape as a 500 to the deploy caller.
+    async def _resolve_isolated_service(self) -> SandboxService:
+        """ISOLATION RACE (SEC-19/CORR-20): resolve the sandbox service EXACTLY ONCE
+        and verify ITS isolation kind on the SAME instance :meth:`build` then builds
+        on — a separate ``sandbox_backend_name()`` lookup for the gate and another
+        ``_sandbox_service_now()`` for the build would let a settings race
+        (gvisor→process) between them run the untrusted build on the HOST. One
+        fetch, one verify, one use. CORR-20: the SERVICE lookup itself can raise (no
+        backend configured, a provider import error) — converted here to a
+        :class:`_BuildAborted` carrying a structured failed :class:`BuildResult`,
+        never left to escape :meth:`build` as a 500."""
         try:
             svc = self._runtime._sandbox_service_now()
         except Exception as exc:  # noqa: BLE001 — surface as a failed build, not a 500
             _log.warning("appkit deploy build: sandbox service lookup failed: %s", exc)
-            return BuildResult(
-                returncode=-1,
-                stdout="",
-                stderr=f"[deploy build failed: could not resolve sandbox service: {exc}]",
-                isolated=False,
-            )
+            raise _BuildAborted(
+                BuildResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=f"[deploy build failed: could not resolve sandbox service: {exc}]",
+                    isolated=False,
+                )
+            ) from exc
         backend_name = getattr(svc, "name", None)
         if not _is_deploy_grade(backend_name, allow_local=self._allow_local):
             # Defense in depth — the executor/deploy gate already refused, but never
             # run the untrusted build on a non-deploy-grade backend (process, the weak
             # shared-kernel `local` without override, or an unknown/None kind).
-            return BuildResult(
-                returncode=-1,
-                stdout="",
-                stderr=(
-                    f"[deploy build refused: sandbox backend {backend_name!r} is not "
-                    "deploy-grade isolation (require gVisor or podman; `local` is "
-                    "shared-kernel and opt-in only). Refusing to build on the host.]"
-                ),
-                isolated=False,
+            raise _BuildAborted(
+                BuildResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=(
+                        f"[deploy build refused: sandbox backend {backend_name!r} is not "
+                        "deploy-grade isolation (require gVisor or podman; `local` is "
+                        "shared-kernel and opt-in only). Refusing to build on the host.]"
+                    ),
+                    isolated=False,
+                )
             )
-        # Filtered-egress Build spec: the npm registry is reachable so `npm ci`
-        # installs; nothing host-side is. ENFORCE it — a deploy build must not run
-        # with open egress (don't assume the default held).
-        # CORR-20: the SPEC lookup can also raise (bad env/config) — structured failed
-        # BuildResult, not an escaping 500.
+        return svc
+
+    async def _resolve_filtered_spec(self) -> SandboxSpec:
+        """Filtered-egress Build spec: the npm registry is reachable so `npm ci`
+        installs; nothing host-side is. ENFORCE it — a deploy build must not run
+        with open egress (don't assume the default held). CORR-20: the SPEC lookup
+        can also raise (bad env/config) — a :class:`_BuildAborted` structured failed
+        BuildResult, not an escaping 500."""
         try:
             spec = self._runtime._build_sandbox_spec(surface="build")
         except Exception as exc:  # noqa: BLE001 — surface as a failed build, not a 500
             _log.warning("appkit deploy build: build sandbox spec lookup failed: %s", exc)
-            return BuildResult(
-                returncode=-1,
-                stdout="",
-                stderr=f"[deploy build failed: could not resolve build sandbox spec: {exc}]",
-                isolated=False,
-            )
+            raise _BuildAborted(
+                BuildResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=f"[deploy build failed: could not resolve build sandbox spec: {exc}]",
+                    isolated=False,
+                )
+            ) from exc
         if not _spec_is_filtered_egress(spec):
-            return BuildResult(
-                returncode=-1,
-                stdout="",
-                stderr=(
-                    "[deploy build refused: the build sandbox egress is not FILTERED "
-                    "(open network or empty allowlist). A deploy build must run behind "
-                    "the egress allowlist.]"
-                ),
-                isolated=False,
+            raise _BuildAborted(
+                BuildResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=(
+                        "[deploy build refused: the build sandbox egress is not FILTERED "
+                        "(open network or empty allowlist). A deploy build must run behind "
+                        "the egress allowlist.]"
+                    ),
+                    isolated=False,
+                )
             )
-        cid = f"appkit-deploy-build-{_uuid.uuid4().hex[:12]}"
-        # SANDBOX CREATE failure → structured failed BuildResult, not a 500 (CORR-20).
+        return spec
+
+    async def _create_build_instance(
+        self, svc: SandboxService, spec: SandboxSpec, cid: str
+    ) -> SandboxInstance:
+        """SANDBOX CREATE failure → a :class:`_BuildAborted` structured failed
+        BuildResult, not a 500 (CORR-20)."""
         try:
-            instance = await svc.create(spec, owner_id=self._owner_id, conversation_id=cid)
+            return await svc.create(spec, owner_id=self._owner_id, conversation_id=cid)
         except Exception as exc:  # noqa: BLE001 — surface as a failed build, not a 500
             _log.warning("appkit deploy build: sandbox create failed: %s", exc)
-            return BuildResult(
-                returncode=-1,
-                stdout="",
-                stderr=f"[deploy build failed: could not create sandbox: {exc}]",
-                isolated=False,
-            )
-        try:
-            workspace_root = workspace.resolve()
-            for rel in _deployable_relpaths(workspace):
-                full = workspace / rel
-                if not _push_src_contained(full, workspace_root):
-                    # P0 (PUSH side): a workspace SYMLINK escaping the workspace
-                    # (→ a host secret) would dereference on read_bytes and push
-                    # host-secret content INTO the build sandbox/artifact. FAIL
-                    # CLOSED — reject the whole build, never read through it.
-                    return BuildResult(
+            raise _BuildAborted(
+                BuildResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=f"[deploy build failed: could not create sandbox: {exc}]",
+                    isolated=False,
+                )
+            ) from exc
+
+    async def _push_workspace(
+        self, instance: SandboxInstance, workspace: Path, workspace_root: Path
+    ) -> None:
+        """Push the hash-covered deploy tree into the box. Raises
+        :class:`_BuildAborted` (never a raw read through it) when a workspace entry
+        escapes the workspace."""
+        for rel in _deployable_relpaths(workspace):
+            full = workspace / rel
+            if not _push_src_contained(full, workspace_root):
+                # P0 (PUSH side): a workspace SYMLINK escaping the workspace
+                # (→ a host secret) would dereference on read_bytes and push
+                # host-secret content INTO the build sandbox/artifact. FAIL
+                # CLOSED — reject the whole build, never read through it.
+                raise _BuildAborted(
+                    BuildResult(
                         returncode=-1,
                         stdout="",
                         stderr=(
@@ -383,40 +541,92 @@ class SandboxBuildBackend:
                         ),
                         isolated=True,
                     )
-                # Read through the ONE guarded reader (containment already re-checked
-                # by it) so the push never dereferences an escaping symlink and no
-                # raw workspace read exists outside the choke point.
-                data = read_workspace_file(full, workspace_root, text=False)
-                await instance.write_file(rel, data if data is not None else b"")
-            res = await instance.exec_shell(
-                f"{install_cmd} && {build_cmd}", timeout_s=_BUILD_TIMEOUT_S
-            )
-            if getattr(res, "timed_out", False):
-                return BuildResult(
-                    returncode=res.exit_code or -1,
-                    stdout=res.stdout,
-                    stderr=(res.stderr or "") + "\n[build timed out]",
-                    isolated=True,
                 )
-            if res.exit_code == 0:
-                try:
-                    await self._sync_output_back(instance, workspace, asset_dir=asset_dir)
-                except _BuildOutputRejected as exc:
-                    # The untrusted build's output is bad (escapes the asset dir, is
-                    # missing/unreadable, or is over-cap). FAIL CLOSED — reject the
-                    # whole build; never sync, never let the deploy proceed off it.
-                    return BuildResult(
-                        returncode=-1,
-                        stdout=res.stdout,
-                        stderr=(res.stderr or "") + f"\n[build output rejected: {exc}]",
-                        isolated=True,
-                    )
+            # Read through the ONE guarded reader (containment already re-checked
+            # by it) so the push never dereferences an escaping symlink and no
+            # raw workspace read exists outside the choke point.
+            data = read_workspace_file(full, workspace_root, text=False)
+            await instance.write_file(rel, data if data is not None else b"")
+
+    async def _run_build_and_sync(
+        self,
+        instance: SandboxInstance,
+        workspace: Path,
+        install_cmd: str,
+        build_cmd: str,
+        asset_dir: str,
+    ) -> BuildResult:
+        """Run `npm ci && npm run build` in the box, then sync a successful build's
+        output back to the host — rejecting the whole build (never syncing) when
+        the sandboxed output itself is bad."""
+        res = await instance.exec_shell(f"{install_cmd} && {build_cmd}", timeout_s=_BUILD_TIMEOUT_S)
+        if getattr(res, "timed_out", False):
             return BuildResult(
-                returncode=res.exit_code,
+                returncode=res.exit_code or -1,
                 stdout=res.stdout,
-                stderr=res.stderr,
+                stderr=(res.stderr or "") + "\n[build timed out]",
                 isolated=True,
             )
+        if res.exit_code == 0:
+            try:
+                await self._sync_output_back(instance, workspace, asset_dir=asset_dir)
+            except _BuildOutputRejected as exc:
+                # The untrusted build's output is bad (escapes the asset dir, is
+                # missing/unreadable, or is over-cap). FAIL CLOSED — reject the
+                # whole build; never sync, never let the deploy proceed off it.
+                return BuildResult(
+                    returncode=-1,
+                    stdout=res.stdout,
+                    stderr=(res.stderr or "") + f"\n[build output rejected: {exc}]",
+                    isolated=True,
+                )
+        return BuildResult(
+            returncode=res.exit_code,
+            stdout=res.stdout,
+            stderr=res.stderr,
+            isolated=True,
+        )
+
+    async def _teardown_build_instance(
+        self, instance: SandboxInstance, svc: SandboxService, cid: str
+    ) -> None:
+        """Teardown + volume cleanup. SURFACE failures (log) rather than swallow
+        silently — a leaked deploy-build box/volume is an operability + cost leak
+        (SEC-24/CORR-21)."""
+        try:
+            await instance.destroy()
+        except Exception as exc:  # noqa: BLE001 — best-effort, but never silent
+            _log.warning("appkit deploy build: sandbox teardown failed for %s: %s", cid, exc)
+            try:
+                # Belt-and-suspenders: sweep any container + egress sidecar +
+                # volumes left for this conversation.
+                await svc.destroy_by_conversation(cid)
+            except Exception as exc2:  # noqa: BLE001
+                _log.warning("appkit deploy build: volume sweep failed for %s: %s", cid, exc2)
+
+    async def build(
+        self,
+        workspace: Path,
+        *,
+        install_cmd: str,
+        build_cmd: str,
+        asset_dir: str = _BUILD_OUTPUT_DIR,
+    ) -> BuildResult:
+        try:
+            svc = await self._resolve_isolated_service()
+            spec = await self._resolve_filtered_spec()
+            cid = f"appkit-deploy-build-{_uuid.uuid4().hex[:12]}"
+            instance = await self._create_build_instance(svc, spec, cid)
+        except _BuildAborted as exc:
+            return exc.result
+        try:
+            workspace_root = workspace.resolve()
+            await self._push_workspace(instance, workspace, workspace_root)
+            return await self._run_build_and_sync(
+                instance, workspace, install_cmd, build_cmd, asset_dir
+            )
+        except _BuildAborted as exc:
+            return exc.result
         except Exception as exc:  # noqa: BLE001 — sandbox write/exec/read errors
             # CORR-20: a sandbox op (write/exec/read) raising must become a structured
             # FAILED build, not escape as a 500 to the deploy caller.
@@ -428,19 +638,7 @@ class SandboxBuildBackend:
                 isolated=True,
             )
         finally:
-            # Teardown + volume cleanup. SURFACE failures (log) rather than swallow
-            # silently — a leaked deploy-build box/volume is an operability + cost
-            # leak (SEC-24/CORR-21).
-            try:
-                await instance.destroy()
-            except Exception as exc:  # noqa: BLE001 — best-effort, but never silent
-                _log.warning("appkit deploy build: sandbox teardown failed for %s: %s", cid, exc)
-                try:
-                    # Belt-and-suspenders: sweep any container + egress sidecar +
-                    # volumes left for this conversation.
-                    await svc.destroy_by_conversation(cid)
-                except Exception as exc2:  # noqa: BLE001
-                    _log.warning("appkit deploy build: volume sweep failed for %s: %s", cid, exc2)
+            await self._teardown_build_instance(instance, svc, cid)
 
     async def _sync_output_back(
         self, instance: object, workspace: Path, *, asset_dir: str = _BUILD_OUTPUT_DIR
@@ -449,116 +647,19 @@ class SandboxBuildBackend:
         configure another, e.g. ``build/``) with the freshly-built tree from the box
         so the trusted ``wrangler deploy`` publishes only hash-covered output.
 
-        ATOMIC + CAPPED + FAIL-CLOSED replace (CORR-16/17/18/19, SEC-22/23):
-
-        * The CONFIGURED ``asset_dir`` is synced (validated to be a safe RELATIVE
-          path — no absolute / ``..`` segment).
-        * Output is enumerated with ``find … -print0`` (NULL-delimited, so a filename
-          containing a newline can't corrupt the listing — SEC-23).
-        * A ``find`` that FAILS (non-zero exit), an EMPTY output (no artifacts), or a
-          file that reads back as ``None`` is a BUILD FAILURE (raises
-          :class:`_BuildOutputUnavailable`) — never a silent success on missing
-          output.
-        * File-count + total-byte CAPS reject a runaway / file-bomb output
-          (:class:`_BuildOutputTooLarge`).
-        * Every listed path is validated to stay STRICTLY inside BOTH the resolved
-          asset-dir root AND the resolved workspace root BEFORE it is read
-          (:func:`_contained_dest`) — an absolute path, a ``..`` traversal, or a
-          symlink (the asset-dir root itself, planted in the live tree, OR an
-          intermediate dir) that escapes is REJECTED (:class:`_BuildOutputEscape`).
-        * The validated bytes are staged into a FRESH sibling dir via the ONE guarded
-          writer, then the stale host asset dir is CLEARED and the staged tree is
-          moved into place with an atomic ``os.replace`` — stale files never survive,
-          and a partially-written tree is never visible.
-
-        SECURITY: the asset-dir / per-file containment is anchored to the resolved
-        WORKSPACE ROOT (not merely the asset dir), and the asset dir must be a REAL
-        directory (``is_symlink`` via lstat, NOT ``resolve`` — which would FOLLOW and
-        MASK an in-workspace link) so build output lands ONLY in the real asset dir.
-        Validation runs against the LIVE host tree BEFORE anything is cleared, so a
-        planted symlink is still caught."""
+        ATOMIC + CAPPED + FAIL-CLOSED (CORR-16/17/18/19, SEC-22/23): validate the
+        asset dir and list its output (:func:`_validated_asset_out_dir`,
+        :func:`_list_build_output_entries`), validate + read every entry against
+        the LIVE host tree (:func:`_stage_validated_entries`), then atomically
+        replace the stale host asset dir with the staged tree
+        (:func:`_replace_asset_dir`)."""
         workspace_root = workspace.resolve()
-        asset_rel = Path(asset_dir)
-        if (
-            asset_rel.is_absolute()
-            or any(p == ".." for p in asset_rel.parts)
-            or not asset_rel.parts
-        ):
-            raise _BuildOutputEscape(
-                f"invalid asset dir (must be a relative path inside the workspace): {asset_dir!r}"
-            )
-        out_dir = workspace / asset_rel
-        # The asset dir must be a REAL directory. lstat (``is_symlink``), NOT
-        # ``resolve`` — resolve would FOLLOW an in-workspace link and MASK it, silently
-        # broadening the sync target. A symlinked asset dir (in-workspace OR escaping)
-        # is REJECTED.
-        if out_dir.is_symlink():
-            raise _BuildOutputEscape(
-                f"{asset_dir} is a symlink; build output must land in the real ./{asset_dir}"
-            )
-        # Anchor to the workspace root: a now-rejected escaping link kept as
-        # belt-and-suspenders (never write build output outside the workspace).
-        if out_dir.exists() and not workspace_contained(out_dir, workspace_root):
-            raise _BuildOutputEscape(f"{asset_dir} resolves outside the workspace")
-        out_root = out_dir.resolve()
-        listing = await instance.exec_shell(  # type: ignore[attr-defined]
-            f"find {shlex.quote(asset_dir)} -type f -print0", timeout_s=60
+        out_dir, out_root = _validated_asset_out_dir(asset_dir, workspace, workspace_root)
+        entries = await _list_build_output_entries(instance, asset_dir)
+        staged = await _stage_validated_entries(
+            instance, entries, asset_dir, workspace, out_root, workspace_root
         )
-        if listing.exit_code != 0:
-            # FAIL CLOSED: could not list the build output — NOT a silent success.
-            raise _BuildOutputUnavailable(
-                f"could not list build output under {asset_dir} (find exit={listing.exit_code})"
-            )
-        entries = [e for e in listing.stdout.split("\0") if e]
-        if len(entries) > _MAX_OUTPUT_FILES:
-            raise _BuildOutputTooLarge(
-                f"build output has {len(entries)} files (cap {_MAX_OUTPUT_FILES})"
-            )
-        # PASS 1 — validate + read EVERY entry against the LIVE host tree (so a planted
-        # symlink is caught) before anything is cleared. Read into a staging list.
-        staged: list[tuple[str, bytes]] = []
-        total_bytes = 0
-        for entry in entries:
-            rel = entry[2:] if entry.startswith("./") else entry
-            if not rel:
-                continue
-            # Lexical + resolved guard (absolute / ``..`` / escaping-resolved) BEFORE read.
-            if _contained_dest(rel, workspace, out_root, workspace_root) is None:
-                raise _BuildOutputEscape(rel)
-            data = await instance.read_file(rel)  # type: ignore[attr-defined]
-            if data is None:
-                # FAIL CLOSED: a listed output file that reads back as None is a build
-                # failure, never an empty-file silent success.
-                raise _BuildOutputUnavailable(f"build output file unreadable: {rel}")
-            total_bytes += len(data)
-            if total_bytes > _MAX_OUTPUT_BYTES:
-                raise _BuildOutputTooLarge(f"build output exceeds {_MAX_OUTPUT_BYTES} bytes")
-            staged.append((rel, data))
-        if not staged:
-            # An empty asset dir = nothing to deploy = a broken build. Fail closed.
-            raise _BuildOutputUnavailable(f"build produced no output files under {asset_dir}")
-        # PASS 2 — stage into a FRESH sibling dir via the ONE guarded writer, then
-        # CLEAR the stale host asset dir and atomically move the staged tree in.
-        stage_root = workspace / f".disco-build-out-{_uuid.uuid4().hex[:12]}"
-        try:
-            os.makedirs(stage_root)
-            for rel, data in staged:
-                # Guarded writer: LSTATs every component (refuses a symlinked one) —
-                # no raw mkdir/write of a workspace path lives outside it.
-                try:
-                    write_workspace_file(rel, data, stage_root)
-                except DeployRefused as exc:
-                    raise _BuildOutputEscape(rel) from exc
-            staged_out = stage_root / asset_rel
-            if asset_rel.parent.parts:
-                ensure_workspace_dir(asset_rel.parent, workspace_root)
-            # Clear the stale host asset dir (a real, contained dir per the checks
-            # above); `os.replace` of a dir onto a non-empty dir is not allowed.
-            if out_dir.exists():
-                shutil.rmtree(out_dir)
-            os.replace(staged_out, out_dir)  # atomic same-FS rename
-        finally:
-            shutil.rmtree(stage_root, ignore_errors=True)
+        _replace_asset_dir(staged, workspace, Path(asset_dir), workspace_root, out_dir)
 
 
 def build_backend_for_runtime(runtime: ConversationRuntime | None) -> SandboxBuildBackend | None:

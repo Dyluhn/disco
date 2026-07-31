@@ -636,6 +636,194 @@ async def _execute_committed_deploy(
         ) from exc
 
 
+def _secret_store() -> cf.SecretStore:
+    return cf.SecretStore()
+
+
+def _status_payload() -> dict:
+    st = cf.connection_status(_secret_store())
+    return {
+        "connected": st.connected,
+        "token_present": st.token_present,
+        "decryptable": st.decryptable,
+        "account_id": st.account_id,
+        # SEC-26 (remainder): scrub the free-text detail on every client-facing path.
+        "detail": _scrub_text(st.detail),
+    }
+
+
+async def _connect_payload(body: ConnectBody, token_verifier: TokenVerifier) -> dict:
+    store_ = _secret_store()
+    if not store_.can_store:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason": "secret_store_locked",
+                "message": "DISCO_SECRET_KEY is unset — cannot encrypt the token.",
+            },
+        )
+    # SEC-29: validate + bound the account id BEFORE any store. A malformed /
+    # unbounded account id is rejected (400) and never persisted.
+    account_id = _validate_account_id(body.account_id)
+    token = _secret_value(body.token)
+    _check_secret_len(token, "token")
+    # CORR-27 + SEC-29: VERIFY the token — bound to THIS account when the verifier
+    # supports it — BEFORE storing it. Never mark an account "connected" on an
+    # unverified credential, or on a token that is not valid for this account.
+    ok, detail, account_scoped = await _verify_token_for_account(
+        token_verifier, token or "", account_id
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "token_verification_failed", "message": _scrub_text(detail)},
+        )
+    # SEC-29 (remainder): an account-agnostic-only verify proves the token is ACTIVE
+    # but NOT that it is bound to THIS account. Per operator policy either REFUSE the
+    # connect (require an account-scoped verifier) or degrade-but-SURFACE — never
+    # silently treat the agnostic result as account-bound.
+    if not account_scoped and _require_account_scoped_verify():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason": "account_scope_unverifiable",
+                "message": (
+                    "The token verified as active but could NOT be verified as scoped "
+                    "to this account (no account-scoped verifier is available, and "
+                    "DISCO_REQUIRE_ACCOUNT_SCOPED_VERIFY is set). Refusing to connect."
+                ),
+            },
+        )
+    try:
+        st = cf.connect_account(store_, token=token or "", account_id=account_id)
+    except WeakSecretError as exc:
+        # SEC-30: deploy credentials are refused under a weak/absent app secret.
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "weak_app_secret", "message": _scrub_text(str(exc))},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_input", "message": _scrub_text(str(exc))},
+        ) from exc
+    # NOTE: never echo the token back. ``account_scoped`` surfaces whether the token
+    # was verified AS bound to this account (True) or only account-agnostically
+    # active (False) — the caller is never silently told an agnostic verify is bound.
+    return {
+        "connected": st.connected,
+        "account_id": st.account_id,
+        "detail": _scrub_text(st.detail),
+        "account_scoped": account_scoped,
+    }
+
+
+def _disconnect_payload() -> dict:
+    st = cf.disconnect_account(_secret_store())
+    return {"connected": st.connected, "detail": _scrub_text(st.detail)}
+
+
+async def _connection_test_payload(body: ConnectionTestBody, token_verifier: TokenVerifier) -> dict:
+    store_ = _secret_store()
+    ad_hoc = _secret_value(body.token)
+    _check_secret_len(ad_hoc, "token")
+    token = ad_hoc or store_.get_secret(cf.CF_TOKEN_SECRET)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "no_token", "message": "No token to test — connect first."},
+        )
+    ok, detail = await token_verifier.verify(token)
+    return {"ok": ok, "detail": _scrub_text(detail)}
+
+
+async def _deploy_plan_payload(
+    body: DeployPlanBody, workspace_gate: _CommittedWorkspaceGate
+) -> dict:
+    plan = await _build_committed_plan(workspace_gate, body.conversation_id, _secret_store())
+    return _plan_public(plan, body.conversation_id)
+
+
+async def _deploy_payload(
+    body: DeployBody,
+    *,
+    store: SqliteEventStore,
+    workspace_gate: _CommittedWorkspaceGate,
+    command_runner: CommandRunner,
+    deploy_build_backend: BuildBackend | None,
+    stripe_dependencies: StripeDeployDependencies | None,
+    webhook_dependencies: WebhookDeployDependencies | None,
+    deploys_in_flight: set[str],
+) -> dict:
+    cid = body.conversation_id
+    # SEC-25: refuse a second concurrent deploy for the same conversation. The
+    # check-then-add pair runs with no await between them, so it is atomic under
+    # asyncio — exactly one in-flight deploy per conversation.
+    if cid in deploys_in_flight:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "deploy_in_progress",
+                "message": (
+                    "A deploy is already in progress for this conversation. Wait "
+                    "for it to finish before starting another."
+                ),
+            },
+        )
+    deploys_in_flight.add(cid)
+    try:
+        workspace = workspace_gate.resolve_workspace(cid)
+        owner_id = await store.conversation_owner_id(cid)
+        admin_token = _secret_value(body.admin_token)
+        _check_secret_len(admin_token, "admin_token")
+        result = await _execute_committed_deploy(
+            workspace_gate,
+            workspace,
+            body,
+            _secret_store(),
+            runner=command_runner,
+            build_backend=deploy_build_backend,
+            admin_token=admin_token,
+            owner_id=owner_id,
+            stripe_dependencies=stripe_dependencies,
+            webhook_dependencies=webhook_dependencies,
+        )
+
+        # CORR-25 — a real deploy whose step ABORTED/failed must NOT be 200. It
+        # is an upstream (wrangler/sandbox) failure → 502, carrying the failed
+        # step + detail so the client can distinguish a partial failure from a
+        # clean run or a refusal. SEC-26 (boundary): the failed-step / error
+        # detail are scrubbed of any absolute host path before they reach the client.
+        if not result.dry_run and not result.succeeded:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "reason": "deploy_failed",
+                    "message": "A deploy step failed; the deploy was aborted.",
+                    "failed_step": _scrub_text(result.failed_step),
+                    "error_detail": _scrub_text(result.error_detail),
+                },
+            )
+
+        return {
+            "executed": result.executed,
+            "dry_run": result.dry_run,
+            "succeeded": result.succeeded,
+            # SEC-26 (remainder): scrub the free-text result fields on the SUCCESS
+            # path too — a host/internal path in a step label or detail must not leak.
+            "failed_step": _scrub_text(result.failed_step),
+            "error_detail": _scrub_text(result.error_detail),
+            "deployed_url": result.deployed_url,
+            # SEC-26: a workspace-relative record path, never the absolute host path.
+            "record_path": _relative_record_path(result.record_path, workspace),
+            "plan": _plan_public(result.plan, cid),
+            # SEC-26 (remainder): scrub every transcript line (host/internal paths).
+            "transcript": _scrub_transcript(result.transcript),
+        }
+    finally:
+        deploys_in_flight.discard(cid)
+
+
 def make_cloudflare_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -650,7 +838,10 @@ def make_cloudflare_router(
     are injectable so tests drive fakes; in production they default to the REAL
     subprocess / HTTP / sandbox implementations so a fully-gated, owner-authed,
     confirmed deploy can actually run (P1-4 — the owner path is functional, not a
-    dead stub). Every route is owner-gated by ``_require_owner`` (P0-3)."""
+    dead stub). Every route is owner-gated by ``_require_owner`` (P0-3). Each
+    handler is a thin registration over a module-level ``_*_payload`` function —
+    the request/response contract lives here (for FastAPI's signature
+    introspection); the logic lives there."""
     _reset_owner_auth_throttle()
     router = APIRouter(dependencies=[Depends(_require_owner)])
     token_verifier = verifier or HttpTokenVerifier()
@@ -668,186 +859,40 @@ def make_cloudflare_router(
     # for the duration of its deploy; a second concurrent request gets 409. Lives in
     # the router closure (per app), and asyncio's single-threaded scheduling makes
     # the check-then-add atomic (no await between them).
-    _deploys_in_flight: set[str] = set()
-
-    def _secret_store() -> cf.SecretStore:
-        return cf.SecretStore()
+    deploys_in_flight: set[str] = set()
 
     @router.get("/api/appkit/cloudflare/status")
     async def status() -> dict:
-        st = cf.connection_status(_secret_store())
-        return {
-            "connected": st.connected,
-            "token_present": st.token_present,
-            "decryptable": st.decryptable,
-            "account_id": st.account_id,
-            # SEC-26 (remainder): scrub the free-text detail on every client-facing path.
-            "detail": _scrub_text(st.detail),
-        }
+        return _status_payload()
 
     @router.post("/api/appkit/cloudflare/connect")
     async def connect(body: ConnectBody) -> dict:
-        store_ = _secret_store()
-        if not store_.can_store:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "reason": "secret_store_locked",
-                    "message": "DISCO_SECRET_KEY is unset — cannot encrypt the token.",
-                },
-            )
-        # SEC-29: validate + bound the account id BEFORE any store. A malformed /
-        # unbounded account id is rejected (400) and never persisted.
-        account_id = _validate_account_id(body.account_id)
-        token = _secret_value(body.token)
-        _check_secret_len(token, "token")
-        # CORR-27 + SEC-29: VERIFY the token — bound to THIS account when the verifier
-        # supports it — BEFORE storing it. Never mark an account "connected" on an
-        # unverified credential, or on a token that is not valid for this account.
-        ok, detail, account_scoped = await _verify_token_for_account(
-            token_verifier, token or "", account_id
-        )
-        if not ok:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": "token_verification_failed", "message": _scrub_text(detail)},
-            )
-        # SEC-29 (remainder): an account-agnostic-only verify proves the token is ACTIVE
-        # but NOT that it is bound to THIS account. Per operator policy either REFUSE the
-        # connect (require an account-scoped verifier) or degrade-but-SURFACE — never
-        # silently treat the agnostic result as account-bound.
-        if not account_scoped and _require_account_scoped_verify():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "reason": "account_scope_unverifiable",
-                    "message": (
-                        "The token verified as active but could NOT be verified as scoped "
-                        "to this account (no account-scoped verifier is available, and "
-                        "DISCO_REQUIRE_ACCOUNT_SCOPED_VERIFY is set). Refusing to connect."
-                    ),
-                },
-            )
-        try:
-            st = cf.connect_account(store_, token=token or "", account_id=account_id)
-        except WeakSecretError as exc:
-            # SEC-30: deploy credentials are refused under a weak/absent app secret.
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": "weak_app_secret", "message": _scrub_text(str(exc))},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": "invalid_input", "message": _scrub_text(str(exc))},
-            ) from exc
-        # NOTE: never echo the token back. ``account_scoped`` surfaces whether the token
-        # was verified AS bound to this account (True) or only account-agnostically
-        # active (False) — the caller is never silently told an agnostic verify is bound.
-        return {
-            "connected": st.connected,
-            "account_id": st.account_id,
-            "detail": _scrub_text(st.detail),
-            "account_scoped": account_scoped,
-        }
+        return await _connect_payload(body, token_verifier)
 
     @router.post("/api/appkit/cloudflare/disconnect")
     async def disconnect() -> dict:
-        st = cf.disconnect_account(_secret_store())
-        return {"connected": st.connected, "detail": _scrub_text(st.detail)}
+        return _disconnect_payload()
 
     @router.post("/api/appkit/cloudflare/connection-test")
     async def connection_test(body: ConnectionTestBody) -> dict:
-        store_ = _secret_store()
-        ad_hoc = _secret_value(body.token)
-        _check_secret_len(ad_hoc, "token")
-        token = ad_hoc or store_.get_secret(cf.CF_TOKEN_SECRET)
-        if not token:
-            raise HTTPException(
-                status_code=400,
-                detail={"reason": "no_token", "message": "No token to test — connect first."},
-            )
-        ok, detail = await token_verifier.verify(token)
-        return {"ok": ok, "detail": _scrub_text(detail)}
+        return await _connection_test_payload(body, token_verifier)
 
     @router.post("/api/appkit/cloudflare/deploy-plan")
     async def deploy_plan(body: DeployPlanBody) -> dict:
-        plan = await _build_committed_plan(
-            workspace_gate,
-            body.conversation_id,
-            _secret_store(),
-        )
-        return _plan_public(plan, body.conversation_id)
+        return await _deploy_plan_payload(body, workspace_gate)
 
     @router.post("/api/appkit/cloudflare/deploy")
     async def deploy_(body: DeployBody) -> dict:
-        cid = body.conversation_id
-        # SEC-25: refuse a second concurrent deploy for the same conversation. The
-        # check-then-add pair runs with no await between them, so it is atomic under
-        # asyncio — exactly one in-flight deploy per conversation.
-        if cid in _deploys_in_flight:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "deploy_in_progress",
-                    "message": (
-                        "A deploy is already in progress for this conversation. Wait "
-                        "for it to finish before starting another."
-                    ),
-                },
-            )
-        _deploys_in_flight.add(cid)
-        try:
-            workspace = workspace_gate.resolve_workspace(cid)
-            owner_id = await store.conversation_owner_id(cid)
-            admin_token = _secret_value(body.admin_token)
-            _check_secret_len(admin_token, "admin_token")
-            result = await _execute_committed_deploy(
-                workspace_gate,
-                workspace,
-                body,
-                _secret_store(),
-                runner=command_runner,
-                build_backend=deploy_build_backend,
-                admin_token=admin_token,
-                owner_id=owner_id,
-                stripe_dependencies=stripe_dependencies,
-                webhook_dependencies=webhook_dependencies,
-            )
-
-            # CORR-25 — a real deploy whose step ABORTED/failed must NOT be 200. It
-            # is an upstream (wrangler/sandbox) failure → 502, carrying the failed
-            # step + detail so the client can distinguish a partial failure from a
-            # clean run or a refusal. SEC-26 (boundary): the failed-step / error
-            # detail are scrubbed of any absolute host path before they reach the client.
-            if not result.dry_run and not result.succeeded:
-                raise HTTPException(
-                    status_code=502,
-                    detail={
-                        "reason": "deploy_failed",
-                        "message": "A deploy step failed; the deploy was aborted.",
-                        "failed_step": _scrub_text(result.failed_step),
-                        "error_detail": _scrub_text(result.error_detail),
-                    },
-                )
-
-            return {
-                "executed": result.executed,
-                "dry_run": result.dry_run,
-                "succeeded": result.succeeded,
-                # SEC-26 (remainder): scrub the free-text result fields on the SUCCESS
-                # path too — a host/internal path in a step label or detail must not leak.
-                "failed_step": _scrub_text(result.failed_step),
-                "error_detail": _scrub_text(result.error_detail),
-                "deployed_url": result.deployed_url,
-                # SEC-26: a workspace-relative record path, never the absolute host path.
-                "record_path": _relative_record_path(result.record_path, workspace),
-                "plan": _plan_public(result.plan, cid),
-                # SEC-26 (remainder): scrub every transcript line (host/internal paths).
-                "transcript": _scrub_transcript(result.transcript),
-            }
-        finally:
-            _deploys_in_flight.discard(cid)
+        return await _deploy_payload(
+            body,
+            store=store,
+            workspace_gate=workspace_gate,
+            command_runner=command_runner,
+            deploy_build_backend=deploy_build_backend,
+            stripe_dependencies=stripe_dependencies,
+            webhook_dependencies=webhook_dependencies,
+            deploys_in_flight=deploys_in_flight,
+        )
 
     return router
 

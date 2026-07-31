@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from disco.core.appkit.spec import AppSpec, WebhookMeta
+from disco.core.appkit.spec import AppSpec, WebhookEndpointMeta, WebhookMeta
 from disco.core.env import disco_env
 from disco.core.host_egress import origin_for_url
 from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
@@ -193,78 +193,94 @@ class WebhookDeploymentLifecycle:
         return frozenset({WEBHOOK_EMIT_SERVICE_NAME}) if self._has_outbound else frozenset()
 
     def _read_snapshot(self, meta: WebhookMeta) -> _WebhookSnapshot:
-        inbound_fingerprint: bytes | None = None
-        if any(endpoint.direction == "inbound" for endpoint in meta.endpoints):
-            try:
-                inbound = resolve_webhook_inbound_secret(
-                    self._secret_store, self._owner_id, self._audience
-                )
-            except Exception as exc:
-                raise WebhookDeployError(
-                    "webhook_runtime_config", "Webhook inbound secret is unavailable"
-                ) from exc
-            if inbound is None:
-                raise WebhookDeployError(
-                    "webhook_runtime_config", "Webhook inbound secret is not configured"
-                )
-            inbound_fingerprint = _fingerprint(inbound)
-
+        inbound_fingerprint = self._read_inbound_fingerprint(meta)
         outbound: list[_OutboundSnapshot] = []
         for endpoint in meta.endpoints:
-            if endpoint.direction != "outbound":
-                continue
-            try:
-                config = self._config_store.get(
-                    self._owner_id, self._audience, endpoint.endpoint_id
-                )
-            except Exception as exc:
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    "Webhook outbound operator configuration is unavailable",
-                ) from exc
-            if config is None or not config.enabled:
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    f"Webhook outbound endpoint {endpoint.endpoint_id!r} is missing or disabled",
-                )
-            expected_ref = webhook_secret_ref(self._owner_id, self._audience, endpoint.endpoint_id)
-            if (
-                config.owner_id != self._owner_id
-                or config.audience != self._audience
-                or config.endpoint_id != endpoint.endpoint_id
-                or config.event_types != frozenset(endpoint.event_types)
-                or config.secret_ref != expected_ref
-                or not _valid_target_url(config.target_url)
-                or not secret_ref_allowed_for_origin(config.secret_ref, config.target_url)
-            ):
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    f"Webhook outbound endpoint {endpoint.endpoint_id!r} does not match "
-                    "the generated app",
-                )
-            try:
-                secret = self._secret_store.get_secret(config.secret_ref, strong_required=True)
-            except Exception as exc:
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    f"Webhook outbound endpoint {endpoint.endpoint_id!r} secret is unavailable",
-                ) from exc
-            if secret is None or not _valid_signing_secret(secret):
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    f"Webhook outbound endpoint {endpoint.endpoint_id!r} secret is not "
-                    "configured safely",
-                )
-            if self._approvals is None or not self._approvals.is_approved(
-                config.target_url, WEBHOOK_PURPOSE, config.secret_ref
-            ):
-                raise WebhookDeployError(
-                    "webhook_runtime_config",
-                    f"Webhook outbound endpoint {endpoint.endpoint_id!r} origin is not approved",
-                )
-            outbound.append(_OutboundSnapshot(config, _fingerprint(secret)))
-
+            snapshot = self._read_outbound_snapshot(endpoint)
+            if snapshot is not None:
+                outbound.append(snapshot)
         return _WebhookSnapshot(meta, inbound_fingerprint, tuple(outbound))
+
+    def _read_inbound_fingerprint(self, meta: WebhookMeta) -> bytes | None:
+        """The inbound signing-secret fingerprint, or ``None`` when this app has no
+        inbound endpoint."""
+        if not any(endpoint.direction == "inbound" for endpoint in meta.endpoints):
+            return None
+        try:
+            inbound = resolve_webhook_inbound_secret(
+                self._secret_store, self._owner_id, self._audience
+            )
+        except Exception as exc:
+            raise WebhookDeployError(
+                "webhook_runtime_config", "Webhook inbound secret is unavailable"
+            ) from exc
+        if inbound is None:
+            raise WebhookDeployError(
+                "webhook_runtime_config", "Webhook inbound secret is not configured"
+            )
+        return _fingerprint(inbound)
+
+    def _read_outbound_snapshot(self, endpoint: WebhookEndpointMeta) -> _OutboundSnapshot | None:
+        """The validated outbound-endpoint snapshot, or ``None`` for a non-outbound
+        *endpoint* (skipped by the caller's loop)."""
+        if endpoint.direction != "outbound":
+            return None
+        try:
+            config = self._config_store.get(self._owner_id, self._audience, endpoint.endpoint_id)
+        except Exception as exc:
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                "Webhook outbound operator configuration is unavailable",
+            ) from exc
+        if config is None or not config.enabled:
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                f"Webhook outbound endpoint {endpoint.endpoint_id!r} is missing or disabled",
+            )
+        expected_ref = webhook_secret_ref(self._owner_id, self._audience, endpoint.endpoint_id)
+        if self._outbound_config_mismatched(config, endpoint, expected_ref):
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                f"Webhook outbound endpoint {endpoint.endpoint_id!r} does not match "
+                "the generated app",
+            )
+        try:
+            secret = self._secret_store.get_secret(config.secret_ref, strong_required=True)
+        except Exception as exc:
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                f"Webhook outbound endpoint {endpoint.endpoint_id!r} secret is unavailable",
+            ) from exc
+        if secret is None or not _valid_signing_secret(secret):
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                f"Webhook outbound endpoint {endpoint.endpoint_id!r} secret is not "
+                "configured safely",
+            )
+        if self._approvals is None or not self._approvals.is_approved(
+            config.target_url, WEBHOOK_PURPOSE, config.secret_ref
+        ):
+            raise WebhookDeployError(
+                "webhook_runtime_config",
+                f"Webhook outbound endpoint {endpoint.endpoint_id!r} origin is not approved",
+            )
+        return _OutboundSnapshot(config, _fingerprint(secret))
+
+    def _outbound_config_mismatched(
+        self, config: WebhookTargetConfig, endpoint: WebhookEndpointMeta, expected_ref: str
+    ) -> bool:
+        """True when the operator-configured *config* does not match the app's
+        declared *endpoint* (owner/audience/endpoint id/event types/secret ref) or
+        its target URL/secret-ref origin binding is no longer valid."""
+        return bool(
+            config.owner_id != self._owner_id
+            or config.audience != self._audience
+            or config.endpoint_id != endpoint.endpoint_id
+            or config.event_types != frozenset(endpoint.event_types)
+            or config.secret_ref != expected_ref
+            or not _valid_target_url(config.target_url)
+            or not secret_ref_allowed_for_origin(config.secret_ref, config.target_url)
+        )
 
     def recheck_after_build(self, app_spec: AppSpec) -> None:
         if self._has_outbound:
