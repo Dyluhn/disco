@@ -70,6 +70,78 @@ def _schema_type(schema: dict[str, Any]) -> str | None:
     return schema_type if isinstance(schema_type, str) else None
 
 
+def _direct_violation(node: dict[str, Any], *, location: str) -> Violation | None:
+    """Decide whether ``node`` itself is a blind schema (bare object or
+    untyped-array-items). Does not look at children."""
+    schema_type = _schema_type(node)
+    if schema_type == "object":
+        properties = node.get("properties")
+        additional = node.get("additionalProperties", True)
+        if not properties and _is_permissive_additional_properties(additional):
+            return Violation(
+                location=location,
+                kind="bare-object",
+                detail="object has no properties and allows arbitrary keys",
+            )
+    elif schema_type == "array" and not node.get("items"):
+        return Violation(
+            location=location,
+            kind="untyped-array-items",
+            detail="array has no item schema",
+        )
+    return None
+
+
+def _child_violations(node: dict[str, Any], *, label: str, path: str) -> list[Violation]:
+    """Recurse into a dict node's children: ``properties``, ``items``, other
+    list-valued keys, and other scalar-valued keys, in that order."""
+    violations: list[Violation] = []
+    for key, value in node.items():
+        if key in {"description", "title", "default", "examples"}:
+            continue
+        if key == "properties" and isinstance(value, dict):
+            for prop_name, prop_schema in value.items():
+                violations.extend(
+                    _walk_schema(
+                        prop_schema,
+                        label=label,
+                        path=f"{path}.{prop_name}",
+                        is_root=False,
+                    )
+                )
+            continue
+        if key == "items":
+            violations.extend(
+                _walk_schema(
+                    value,
+                    label=label,
+                    path=f"{path}[]",
+                    is_root=False,
+                )
+            )
+            continue
+        if isinstance(value, list):
+            for index, item in enumerate(value):
+                violations.extend(
+                    _walk_schema(
+                        item,
+                        label=label,
+                        path=f"{path}.{key}[{index}]",
+                        is_root=False,
+                    )
+                )
+        else:
+            violations.extend(
+                _walk_schema(
+                    value,
+                    label=label,
+                    path=f"{path}.{key}",
+                    is_root=False,
+                )
+            )
+    return violations
+
+
 def _walk_schema(
     node: object,
     *,
@@ -77,75 +149,17 @@ def _walk_schema(
     path: str,
     is_root: bool,
 ) -> list[Violation]:
-    violations: list[Violation] = []
     if isinstance(node, dict):
-        schema_type = _schema_type(node)
+        violations: list[Violation] = []
         location = f"{label} {path}"
         if not is_root and location not in ALLOW_SCHEMA_HOLES:
-            if schema_type == "object":
-                properties = node.get("properties")
-                additional = node.get("additionalProperties", True)
-                if not properties and _is_permissive_additional_properties(additional):
-                    violations.append(
-                        Violation(
-                            location=location,
-                            kind="bare-object",
-                            detail="object has no properties and allows arbitrary keys",
-                        )
-                    )
-            elif schema_type == "array" and not node.get("items"):
-                violations.append(
-                    Violation(
-                        location=location,
-                        kind="untyped-array-items",
-                        detail="array has no item schema",
-                    )
-                )
-
-        for key, value in node.items():
-            if key in {"description", "title", "default", "examples"}:
-                continue
-            if key == "properties" and isinstance(value, dict):
-                for prop_name, prop_schema in value.items():
-                    violations.extend(
-                        _walk_schema(
-                            prop_schema,
-                            label=label,
-                            path=f"{path}.{prop_name}",
-                            is_root=False,
-                        )
-                    )
-                continue
-            if key == "items":
-                violations.extend(
-                    _walk_schema(
-                        value,
-                        label=label,
-                        path=f"{path}[]",
-                        is_root=False,
-                    )
-                )
-                continue
-            if isinstance(value, list):
-                for index, item in enumerate(value):
-                    violations.extend(
-                        _walk_schema(
-                            item,
-                            label=label,
-                            path=f"{path}.{key}[{index}]",
-                            is_root=False,
-                        )
-                    )
-            else:
-                violations.extend(
-                    _walk_schema(
-                        value,
-                        label=label,
-                        path=f"{path}.{key}",
-                        is_root=False,
-                    )
-                )
-    elif isinstance(node, list):
+            direct = _direct_violation(node, location=location)
+            if direct is not None:
+                violations.append(direct)
+        violations.extend(_child_violations(node, label=label, path=path))
+        return violations
+    if isinstance(node, list):
+        violations = []
         for index, item in enumerate(node):
             violations.extend(
                 _walk_schema(
@@ -155,7 +169,8 @@ def _walk_schema(
                     is_root=False,
                 )
             )
-    return violations
+        return violations
+    return []
 
 
 def _tool_defs() -> list[tuple[str, ToolDef]]:

@@ -118,9 +118,9 @@ async def test_executor_maps_permitted_typed_receipts_without_activation() -> No
     assert result.success is True
     assert result.effect_receipts == (_read_receipt(),)
     assert result.action_profile == behavior.static_profile()
-    assert executor.tool_names_with_capability(EffectCapability.WORKSPACE_CONTENT_READ) == {
-        "read_probe"
-    }
+    assert executor._catalog.tool_names_with_capability(
+        EffectCapability.WORKSPACE_CONTENT_READ, executor._scope
+    ) == {"read_probe"}
     # The legacy planner query is still the live source in K1.
     assert executor.readonly_tool_names() == {"read_probe"}
 
@@ -447,9 +447,9 @@ def test_registry_completeness_fails_for_a_new_callable_unclassified_tool() -> N
     new_tool = _EffectTool(name="new_callable", behavior=None, receipt=_read_receipt())
     executor = _executor(classified, new_tool)
 
-    assert executor.unclassified_tool_names() == {"new_callable"}
+    assert executor._catalog.unclassified_tool_names(executor._scope) == {"new_callable"}
     with pytest.raises(ValueError, match="new_callable"):
-        executor.assert_behavior_complete()
+        executor._catalog.assert_behavior_complete(executor._scope)
 
 
 def test_registry_is_strict_by_default_with_an_explicit_test_only_escape() -> None:

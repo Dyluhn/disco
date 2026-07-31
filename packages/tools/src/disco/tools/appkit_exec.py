@@ -52,6 +52,7 @@ from .appkit_scope import (
     appkit_effective_scope,
     fold_appkit_phase_evidence,
 )
+from .executor_parts.invocation import fail_result
 from .registry import ToolRegistry, ToolScope
 from .scoped_exec import ExecutorKwargs, ScopedPhaseExecutor
 
@@ -321,7 +322,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
         name = call.tool_name
         if name == REQUEST_CUSTOM_BUILD:
             if self._appkit_on_eject is None:
-                return self._fail(
+                return fail_result(
                     call,
                     "execution_error",
                     "AppKit ejection was not completed: the host revision service is "
@@ -331,7 +332,7 @@ class AppKitToolExecutor(ScopedPhaseExecutor):
             try:
                 receipt = await self._appkit_on_eject(call)
             except Exception as exc:  # noqa: BLE001 - fail closed at the host boundary
-                return self._fail(
+                return fail_result(
                     call,
                     "execution_error",
                     f"AppKit ejection was not completed: {exc}. Strict AppKit remains active.",
