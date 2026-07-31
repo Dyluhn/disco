@@ -163,6 +163,29 @@ PKG07_PREVIEW_RESOLVED_IDS = frozenset(
         "PY-0363",
     }
 )
+PKG08_VERIFY_RESOLVED_IDS = frozenset(
+    {
+        "DM-013",
+        "PY-0163",
+        "PY-0164",
+        "PY-0165",
+        *(f"PY-{number:04d}" for number in range(329, 346)),
+        "PY-0438",
+        *(f"PY-{number:04d}" for number in range(440, 444)),
+        "PY-0455",
+        "PY-0675",
+        "PY-0676",
+        *(f"PY-{number:04d}" for number in range(679, 692)),
+        *(f"PY-{number:04d}" for number in range(805, 809)),
+        *(f"PY-{number:04d}" for number in range(882, 887)),
+    }
+)
+PKG08_FINISH_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(504, 556)),
+        "PY-0701",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -177,9 +200,11 @@ RESOLVED_IDS = (
     | PKG06_RUNTIME_RESOLVED_IDS
     | PKG07_WORKSPACE_RESOLVED_IDS
     | PKG07_PREVIEW_RESOLVED_IDS
+    | PKG08_VERIFY_RESOLVED_IDS
+    | PKG08_FINISH_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 536
-EXPECTED_OBSERVATIONS = 13
+EXPECTED_ACTIVE_DEBT_ROWS = 433
+EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,
     "DM-001": (

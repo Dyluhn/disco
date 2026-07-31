@@ -110,7 +110,7 @@
   {
     "id": "DM-013",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/host.py:HostWebAppVerifier._verify_via_client:230-275",
@@ -1658,7 +1658,7 @@
   {
     "id": "PY-0163",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/scripts/verify_browser_injection.py:main:90-192",
@@ -1667,7 +1667,7 @@
   {
     "id": "PY-0164",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/scripts/verify_plan_approve.py:_drive:95-163",
@@ -1676,7 +1676,7 @@
   {
     "id": "PY-0165",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/scripts/verify_replan_acceptance.py:main:107-208",
@@ -3152,7 +3152,7 @@
   {
     "id": "PY-0329",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/stripe_live_verifier.py:_WorkerdApp:296-631",
@@ -3161,7 +3161,7 @@
   {
     "id": "PY-0330",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/stripe_live_verifier.py:_miniflare_probe_script:877-1004",
@@ -3170,7 +3170,7 @@
   {
     "id": "PY-0331",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/stripe_live_verifier.py:_check_webhook_lifecycle:1591-1741",
@@ -3179,7 +3179,7 @@
   {
     "id": "PY-0332",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/stripe_live_verifier.py:<module>:1-2154",
@@ -3188,7 +3188,7 @@
   {
     "id": "PY-0333",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard.py:collect_appkit_rows:225-280",
@@ -3197,7 +3197,7 @@
   {
     "id": "PY-0334",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard.py:render_html:311-407",
@@ -3206,7 +3206,7 @@
   {
     "id": "PY-0335",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/host.py:verify:60-146",
@@ -3215,7 +3215,7 @@
   {
     "id": "PY-0336",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/host.py:_with_typed_result:278-343",
@@ -3224,7 +3224,7 @@
   {
     "id": "PY-0337",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/operator.py:_gate_context:118-161",
@@ -3233,7 +3233,7 @@
   {
     "id": "PY-0338",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/operator.py:_derive_view:164-232",
@@ -3242,7 +3242,7 @@
   {
     "id": "PY-0339",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:HttpVerifyClient:179-524",
@@ -3251,7 +3251,7 @@
   {
     "id": "PY-0340",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:_locate_deliverables:544-597",
@@ -3260,7 +3260,7 @@
   {
     "id": "PY-0341",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:_run_forbid_checks:640-690",
@@ -3269,7 +3269,7 @@
   {
     "id": "PY-0342",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:run_scenario:984-1137",
@@ -3278,7 +3278,7 @@
   {
     "id": "PY-0343",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:run_ws_exchange:273-344",
@@ -3287,7 +3287,7 @@
   {
     "id": "PY-0344",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:fetch_preview:458-524",
@@ -3296,7 +3296,7 @@
   {
     "id": "PY-0345",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/agent-server/src/disco/agent_server/verify/runner.py:<module>:1-1137",
@@ -4133,7 +4133,7 @@
   {
     "id": "PY-0438",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/contract/export_render.py:check_export_render:307-383",
@@ -4151,7 +4151,7 @@
   {
     "id": "PY-0440",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/dod.py:plan_predicate_diff:254-327",
@@ -4160,7 +4160,7 @@
   {
     "id": "PY-0441",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/dod.py:is_monotonic_extension:330-369",
@@ -4169,7 +4169,7 @@
   {
     "id": "PY-0442",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/dod_evaluator.py:_default_command_runner:288-448",
@@ -4178,7 +4178,7 @@
   {
     "id": "PY-0443",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/dod_evaluator.py:<module>:1-1037",
@@ -4286,7 +4286,7 @@
   {
     "id": "PY-0455",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/evidence/schema.py:redact:160-211",
@@ -4727,7 +4727,7 @@
   {
     "id": "PY-0504",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/common.py:_last_verification_authority_seq:368-451",
@@ -4736,7 +4736,7 @@
   {
     "id": "PY-0505",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/common.py:_is_web_deliverable:469-516",
@@ -4745,7 +4745,7 @@
   {
     "id": "PY-0506",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/common.py:_real_web_failure_evidence:837-871",
@@ -4754,7 +4754,7 @@
   {
     "id": "PY-0507",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/common.py:_browser_verified:893-942",
@@ -4763,7 +4763,7 @@
   {
     "id": "PY-0508",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/common.py:<module>:1-1296",
@@ -4772,7 +4772,7 @@
   {
     "id": "PY-0509",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_ContentGateMixin:165-1251",
@@ -4781,7 +4781,7 @@
   {
     "id": "PY-0510",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_dictated_content_app_bundle_paths_within_deadline:290-397",
@@ -4790,7 +4790,7 @@
   {
     "id": "PY-0511",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_dictated_content_app_bundle_paths_within_deadline:290-397",
@@ -4799,7 +4799,7 @@
   {
     "id": "PY-0512",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_read_deliverable_bytes:399-449",
@@ -4808,7 +4808,7 @@
   {
     "id": "PY-0513",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:dictated_content_gate_passed:503-671",
@@ -4817,7 +4817,7 @@
   {
     "id": "PY-0514",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:dictated_content_gate_passed:503-671",
@@ -4826,7 +4826,7 @@
   {
     "id": "PY-0515",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:finish_dod_gate_passed:673-780",
@@ -4835,7 +4835,7 @@
   {
     "id": "PY-0516",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:finish_dod_gate_passed:673-780",
@@ -4844,7 +4844,7 @@
   {
     "id": "PY-0517",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_record_plan_verifier_failure:841-985",
@@ -4853,7 +4853,7 @@
   {
     "id": "PY-0518",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:_record_plan_verifier_failure:841-985",
@@ -4862,7 +4862,7 @@
   {
     "id": "PY-0519",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:build_dod_evaluator:987-1174",
@@ -4871,7 +4871,7 @@
   {
     "id": "PY-0520",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:build_dod_evaluator:987-1174",
@@ -4880,7 +4880,7 @@
   {
     "id": "PY-0521",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/content_gates.py:<module>:1-1251",
@@ -4889,7 +4889,7 @@
   {
     "id": "PY-0522",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/finalize.py:_FinalizeMixin:83-656",
@@ -4898,7 +4898,7 @@
   {
     "id": "PY-0523",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/finalize.py:normalize_finish_step:126-296",
@@ -4907,7 +4907,7 @@
   {
     "id": "PY-0524",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/finalize.py:_reuse_finish_verify_receipt:298-365",
@@ -4916,7 +4916,7 @@
   {
     "id": "PY-0525",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/finalize.py:_preflight_failed_plan_verifier:367-411",
@@ -4925,7 +4925,7 @@
   {
     "id": "PY-0526",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/finalize.py:seal_gate_allows_finish:413-527",
@@ -4934,7 +4934,7 @@
   {
     "id": "PY-0527",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_host_verification_claims:126-215",
@@ -4943,7 +4943,7 @@
   {
     "id": "PY-0528",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_preview_selection_at:492-580",
@@ -4952,7 +4952,7 @@
   {
     "id": "PY-0529",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_bind_host_verification_authority:583-692",
@@ -4961,7 +4961,7 @@
   {
     "id": "PY-0530",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_bind_host_verification_authority:583-692",
@@ -4970,7 +4970,7 @@
   {
     "id": "PY-0531",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_emit_host_verdict_audit:866-948",
@@ -4979,7 +4979,7 @@
   {
     "id": "PY-0532",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_prepare_appkit_typed_authority:951-1055",
@@ -4988,7 +4988,7 @@
   {
     "id": "PY-0533",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_prepare_appkit_typed_authority:951-1055",
@@ -4997,7 +4997,7 @@
   {
     "id": "PY-0534",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_record_appkit_typed_verdict:1058-1240",
@@ -5006,7 +5006,7 @@
   {
     "id": "PY-0535",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_record_appkit_typed_verdict:1058-1240",
@@ -5015,7 +5015,7 @@
   {
     "id": "PY-0536",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_judge_semantic_claims:1602-1733",
@@ -5024,7 +5024,7 @@
   {
     "id": "PY-0537",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_judge_semantic_claims:1602-1733",
@@ -5033,7 +5033,7 @@
   {
     "id": "PY-0538",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_HostVerifyBaseMixin:1736-2247",
@@ -5042,7 +5042,7 @@
   {
     "id": "PY-0539",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_HostVerifyGateMixin:2250-2802",
@@ -5051,7 +5051,7 @@
   {
     "id": "PY-0540",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_BrowserVerifyGateMixin:2805-3537",
@@ -5060,7 +5060,7 @@
   {
     "id": "PY-0541",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:finish_verify_passed:1383-1518",
@@ -5069,7 +5069,7 @@
   {
     "id": "PY-0542",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_host_verify_manifest_deliverable:1820-1866",
@@ -5078,7 +5078,7 @@
   {
     "id": "PY-0543",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_host_verify_deliverable:1871-1935",
@@ -5087,7 +5087,7 @@
   {
     "id": "PY-0544",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_governed_non_pass_disposition:2307-2423",
@@ -5096,7 +5096,7 @@
   {
     "id": "PY-0545",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_governed_non_pass_disposition:2307-2423",
@@ -5105,7 +5105,7 @@
   {
     "id": "PY-0546",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_governed_check_deliverables:2470-2567",
@@ -5114,7 +5114,7 @@
   {
     "id": "PY-0547",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:gate_host_verify:2643-2802",
@@ -5123,7 +5123,7 @@
   {
     "id": "PY-0548",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:gate_host_verify:2643-2802",
@@ -5132,7 +5132,7 @@
   {
     "id": "PY-0549",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_gate_verify_web_app:2917-3116",
@@ -5141,7 +5141,7 @@
   {
     "id": "PY-0550",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_gate_verify_web_app:2917-3116",
@@ -5150,7 +5150,7 @@
   {
     "id": "PY-0551",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:_browser_verify_delegated_to_host:3340-3381",
@@ -5159,7 +5159,7 @@
   {
     "id": "PY-0552",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:gate_browser_verify:3383-3537",
@@ -5168,7 +5168,7 @@
   {
     "id": "PY-0553",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:run_finish_verify_gates:3792-3969",
@@ -5177,7 +5177,7 @@
   {
     "id": "PY-0554",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:run_finish_verify_gates:3792-3969",
@@ -5186,7 +5186,7 @@
   {
     "id": "PY-0555",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/src/disco/core/loop/finish/verify_gates.py:<module>:1-3969",
@@ -6266,7 +6266,7 @@
   {
     "id": "PY-0675",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/trusted_components/verify.py:verify_trusted_components:103-256",
@@ -6275,7 +6275,7 @@
   {
     "id": "PY-0676",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/trusted_components/verify.py:verify_trusted_components:103-256",
@@ -6302,7 +6302,7 @@
   {
     "id": "PY-0679",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:aggregate_verification_receipts:1044-1143",
@@ -6311,7 +6311,7 @@
   {
     "id": "PY-0680",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:preview_binding_failure_result:1212-1302",
@@ -6320,7 +6320,7 @@
   {
     "id": "PY-0681",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:target_verification_result:1351-1435",
@@ -6329,7 +6329,7 @@
   {
     "id": "PY-0682",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:_basic_structured_claim_result:1455-1583",
@@ -6338,7 +6338,7 @@
   {
     "id": "PY-0683",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:_basic_structured_claim_result:1455-1583",
@@ -6347,7 +6347,7 @@
   {
     "id": "PY-0684",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:_extended_structured_claim_result:1586-1644",
@@ -6356,7 +6356,7 @@
   {
     "id": "PY-0685",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:structured_web_verification_result:1647-1807",
@@ -6365,7 +6365,7 @@
   {
     "id": "PY-0686",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:structured_web_verification_result:1647-1807",
@@ -6374,7 +6374,7 @@
   {
     "id": "PY-0687",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:apply_semantic_verifier_result:1810-1898",
@@ -6383,7 +6383,7 @@
   {
     "id": "PY-0688",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:from_structured:597-672",
@@ -6392,7 +6392,7 @@
   {
     "id": "PY-0689",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:_status_matches_required_claims:726-769",
@@ -6401,7 +6401,7 @@
   {
     "id": "PY-0690",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:authority_clauses:800-881",
@@ -6410,7 +6410,7 @@
   {
     "id": "PY-0691",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/core/src/disco/core/verification.py:<module>:1-1928",
@@ -6500,7 +6500,7 @@
   {
     "id": "PY-0701",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-FINISH",
     "location": "packages/core/tests/test_dictated_content_finish_gate.py:<module>:1-1601",
@@ -7436,7 +7436,7 @@
   {
     "id": "PY-0805",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/builtin/verify_app.py:VerifyWebAppTool:122-660",
@@ -7445,7 +7445,7 @@
   {
     "id": "PY-0806",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/builtin/verify_app.py:run:145-277",
@@ -7454,7 +7454,7 @@
   {
     "id": "PY-0807",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/builtin/verify_app.py:run:145-277",
@@ -7463,7 +7463,7 @@
   {
     "id": "PY-0808",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/builtin/verify_app.py:_fold_checks:335-402",
@@ -8129,7 +8129,7 @@
   {
     "id": "PY-0882",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/verify/heavy_validators.py:_member_stream_problem:76-199",
@@ -8138,7 +8138,7 @@
   {
     "id": "PY-0883",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/verify/heavy_validators.py:_member_stream_problem:76-199",
@@ -8147,7 +8147,7 @@
   {
     "id": "PY-0884",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/verify/heavy_validators.py:_opc_integrity_problems:202-338",
@@ -8156,7 +8156,7 @@
   {
     "id": "PY-0885",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/verify/heavy_validators.py:_opc_integrity_problems:202-338",
@@ -8165,7 +8165,7 @@
   {
     "id": "PY-0886",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-08-VERIFY",
     "location": "packages/tools/src/disco/tools/verify/web_app_probe.py:compute_verdict:211-358",

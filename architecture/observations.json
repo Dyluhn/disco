@@ -48,14 +48,6 @@
     "source_disposition_id": "DM-011"
   },
   {
-    "id": "DM-013",
-    "kind": "distributed_concern",
-    "location": "packages/agent-server/src/disco/agent_server/verify/host.py:HostWebAppVerifier._verify_via_client:230-275",
-    "concern": "executor-less fallback performs direct httpx verification outside the sandbox browser effect lane",
-    "owner_package": "PKG-08-VERIFY",
-    "source_disposition_id": "DM-013"
-  },
-  {
     "id": "DM-015",
     "kind": "distributed_concern",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:65-645",
