@@ -29,6 +29,7 @@ from disco.tools.builtin.verify_app import (
     compute_verdict as verify_app_compute_verdict,
 )
 
+from .evidence_source import EvidenceSource, _ensure_evidence_source
 from .probe import app_body_problem, collect_web_app_probe, compute_web_app_verdict
 
 _LOG = logging.getLogger(__name__)
@@ -51,7 +52,13 @@ class HostWebAppVerifier:
 
     def __init__(self, executor: Any | None = None, *, client: Any | None = None) -> None:
         self._executor = executor
-        self._client = client
+        # DM-013: the verifier never directly reaches a full HttpVerifyClient
+        # or product-private success endpoint.  The ``client=`` parameter is
+        # wrapped through a state-free :class:`ClientEvidenceAdapter` that
+        # exposes only the narrow :class:`EvidenceSource` port.  Only this
+        # verifier produces the typed ``HostVerificationResult``; the adapter
+        # cannot publish or upgrade a verdict.
+        self._evidence_source: EvidenceSource | None = _ensure_evidence_source(client)
         # BF1: one fixed host-verifier lane per verifier. Serializing it keeps
         # concurrent finish probes from sharing state while the daemon's agent
         # lane remains entirely independent.
@@ -140,8 +147,8 @@ class HostWebAppVerifier:
                                 exc_info=True,
                             )
 
-        if self._client is not None:
-            return await self._verify_via_client(deliverable)
+        if self._evidence_source is not None:
+            return await self._verify_via_evidence(deliverable)
 
         return self._unavailable_verdict(deliverable, "no host verifier context available")
 
@@ -227,18 +234,29 @@ class HostWebAppVerifier:
         ).model_dump(mode="json")
         return verdict
 
-    async def _verify_via_client(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
-        client = self._client
-        if client is None:  # caller guards; keep the method total for the checker
-            return self._unavailable_verdict(deliverable, "no client")
+    async def _verify_via_evidence(
+        self, deliverable: HostVerificationDeliverable
+    ) -> dict[str, Any]:
+        """Executor-less fallback that acquires immutable evidence through the
+        narrow :class:`EvidenceSource` port.
+
+        DM-013: this path never directly reaches an :class:`HttpVerifyClient`
+        or product-private success endpoint.  The evidence source is a
+        state-free adapter that can only fetch raw bytes; it cannot publish or
+        upgrade a verdict.  Only this verifier produces the typed
+        :class:`~disco.core.verification.HostVerificationResult`.
+        """
+        source = self._evidence_source
+        if source is None:  # caller guards; keep the method total for the checker
+            return self._unavailable_verdict(deliverable, "no evidence source")
         url = deliverable.deployment_url or (
             f"{ISOLATED_PATH_PREVIEW_PREFIX}/{deliverable.conversation_id}/"
         )
         if deliverable.deployment_url:
-            fetched = await client.fetch_app(deliverable.deployment_url)
+            fetched = await source.fetch_app(deliverable.deployment_url)
             label = deliverable.deployment_url
         else:
-            fetched = await client.fetch_preview(deliverable.conversation_id)
+            fetched = await source.fetch_preview(deliverable.conversation_id)
             label = deliverable.artifact_path or "preview"
 
         reachable = fetched is not None
