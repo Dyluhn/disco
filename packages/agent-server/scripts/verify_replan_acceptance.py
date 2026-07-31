@@ -23,6 +23,7 @@ import asyncio
 from disco.agent_server import ConversationRuntime
 from disco.core import (
     ActionEvent,
+    ConversationState,
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -32,6 +33,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.env import disco_env
+from disco.core.llm.config import RouterConfig
 from disco.core.llm.config_store import ConfigStore
 from disco.tools.sandbox import LocalSandboxService, SandboxConfig, SandboxSpec
 
@@ -104,15 +106,88 @@ async def _drive(runtime: ConversationRuntime, store, *, max_rounds: int, label:
     return len(await store.get_events(CID))
 
 
-async def main() -> None:
-    cfg = ConfigStore().load()
-    # Optional override of the driver's model_id (e.g. drop the flaky `:free`
-    # provider pool for a reliable acceptance). Same model family, paid pool.
+def _apply_model_override(cfg: RouterConfig) -> None:
+    """Optional override of the driver's model_id (e.g. drop the flaky `:free`
+    provider pool for a reliable acceptance). Same model family, paid pool.
+    Mutates cfg in place."""
     _ov = disco_env("ACCEPT_MODEL_ID", "")
     if _ov:
         key = cfg.default_model
         cfg.models[key] = cfg.models[key].model_copy(update={"model_id": _ov})
         print(f"driver model_id OVERRIDE → {_ov}")
+
+
+def _assert_b5(phase1: ConversationState) -> bool:
+    """B5: the completed build lands FINISHED, not PAUSED/actionless."""
+    b5 = phase1.execution_status == ConversationStatus.FINISHED
+    print(
+        f"  [{'PASS' if b5 else 'FAIL'}] B5  phase-1 build status = {phase1.execution_status.value} (want FINISHED, not PAUSED)"
+    )
+    return b5
+
+
+def _assert_b4(events: list) -> bool:
+    """B4: no FALSE c18 'missing'/'does not exist' advisory for files the agent
+    actually wrote (the container-backend bug)."""
+    advisories = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and (
+            "does not exist" in (e.message.content or "").lower()
+            or (
+                "c18" in (e.message.content or "").lower()
+                and "not met" in (e.message.content or "").lower()
+            )
+        )
+    ]
+    b4 = len(advisories) == 0
+    print(
+        f"  [{'PASS' if b4 else 'FAIL'}] B4  false file-missing/C18-not-met advisories = {len(advisories)} (want 0)"
+    )
+    for a in advisories[:3]:
+        print(f"        ! {a.message.content.strip()[:160]}")
+    return b4
+
+
+def _replan_precedes_execution(events: list, b1: int, first_replan_idx: int) -> bool:
+    """B2: True when the re-plan phase's first PlanEvent precedes its first
+    execution write (the agent plans first instead of free-building)."""
+    first_exec_idx = next(
+        (
+            i
+            for i, e in enumerate(events)
+            if i >= b1
+            and isinstance(e, ActionEvent)
+            and e.tool_call is not None
+            and e.tool_call.tool_name in _EXEC_WRITE_TOOLS
+        ),
+        None,
+    )
+    return first_exec_idx is None or first_replan_idx < first_exec_idx
+
+
+def _assert_b2_b6(events: list, b1: int) -> tuple[bool, bool]:
+    """B2+B6: a revision>=2 PlanEvent exists, AND it precedes any phase-2
+    execution write (i.e. the agent plans first — no infinite spinner)."""
+    plans = [(i, e) for i, e in enumerate(events) if isinstance(e, PlanEvent)]
+    replan_plans = [(i, e) for i, e in plans if getattr(e, "revision", 1) >= 2 and i >= b1]
+    b6 = len(replan_plans) > 0
+    b2 = False
+    if b6:
+        first_replan_idx = replan_plans[0][0]
+        b2 = _replan_precedes_execution(events, b1, first_replan_idx)
+    print(f"  [{'PASS' if b6 else 'FAIL'}] B6  re-plan emitted a revision>=2 plan = {b6}")
+    print(
+        f"  [{'PASS' if b2 else 'FAIL'}] B2  plan precedes execution in the re-plan phase = {b2} (no free-build / no infinite spinner)"
+    )
+    return b2, b6
+
+
+async def main() -> None:
+    cfg = ConfigStore().load()
+    _apply_model_override(cfg)
     print(
         f"driver default_model = {cfg.default_model} ({cfg.models[cfg.default_model].model_id})  (live disco-config.json)"
     )
@@ -152,56 +227,9 @@ async def main() -> None:
 
     # ---- assertions ----
     print("\n--- assertions ---")
-    # B5: phase-1 build landed FINISHED, not PAUSED.
-    b5 = phase1.execution_status == ConversationStatus.FINISHED
-    print(
-        f"  [{'PASS' if b5 else 'FAIL'}] B5  phase-1 build status = {phase1.execution_status.value} (want FINISHED, not PAUSED)"
-    )
-
-    # B4: no FALSE c18 'missing'/'does not exist' advisory for written files.
-    advisories = [
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.ENVIRONMENT
-        and (
-            "does not exist" in (e.message.content or "").lower()
-            or (
-                "c18" in (e.message.content or "").lower()
-                and "not met" in (e.message.content or "").lower()
-            )
-        )
-    ]
-    b4 = len(advisories) == 0
-    print(
-        f"  [{'PASS' if b4 else 'FAIL'}] B4  false file-missing/C18-not-met advisories = {len(advisories)} (want 0)"
-    )
-    for a in advisories[:3]:
-        print(f"        ! {a.message.content.strip()[:160]}")
-
-    # B2+B6: a revision>=2 PlanEvent exists, AND it precedes any phase-2 execution write.
-    plans = [(i, e) for i, e in enumerate(events) if isinstance(e, PlanEvent)]
-    replan_plans = [(i, e) for i, e in plans if getattr(e, "revision", 1) >= 2 and i >= b1]
-    b6 = len(replan_plans) > 0
-    b2 = False
-    if b6:
-        first_replan_idx = replan_plans[0][0]
-        first_exec_idx = next(
-            (
-                i
-                for i, e in enumerate(events)
-                if i >= b1
-                and isinstance(e, ActionEvent)
-                and e.tool_call is not None
-                and e.tool_call.tool_name in _EXEC_WRITE_TOOLS
-            ),
-            None,
-        )
-        b2 = first_exec_idx is None or first_replan_idx < first_exec_idx
-    print(f"  [{'PASS' if b6 else 'FAIL'}] B6  re-plan emitted a revision>=2 plan = {b6}")
-    print(
-        f"  [{'PASS' if b2 else 'FAIL'}] B2  plan precedes execution in the re-plan phase = {b2} (no free-build / no infinite spinner)"
-    )
+    b5 = _assert_b5(phase1)
+    b4 = _assert_b4(events)
+    b2, b6 = _assert_b2_b6(events, b1)
 
     ok = b2 and b4 and b5 and b6
     print(f"\n  final status: {final.execution_status.value}")
