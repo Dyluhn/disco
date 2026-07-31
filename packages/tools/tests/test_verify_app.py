@@ -818,3 +818,135 @@ async def test_eject_banner_reasserted_and_idempotent():
     await tool._append_eject_banner(_ctx(sb), lock, "auth-kit")
     assert sb.fs[guide_path] == after_first
     assert sb.fs[guide_path].count(b"**Ejected") == 1
+
+
+# ---- render/export mismatch: the rendered text must faithfully reflect the
+#      structured verdict state (the allowlisted _render surface owns this) ----
+
+
+def test_render_fail_verdict_does_not_render_as_pass():
+    """A FAIL verdict must render as FAIL, never as PASS — the rendered text is
+    the agent-facing export of the structured verdict, and a mismatch would let a
+    failing build present as passing."""
+    from disco.tools.builtin.verify_app_parts._render import _render as render
+
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=False,
+        http_status=0,
+        structured=None,
+        meaningful=False,
+    )
+    assert v["passed"] is False
+    text = render(v)
+    assert "FAIL" in text
+    assert "PASS" not in text
+
+
+def test_render_pass_verdict_renders_as_pass():
+    """Positive control: a PASS verdict renders as PASS — the rendered export
+    matches the structured state in both directions."""
+    from disco.tools.builtin.verify_app_parts._render import _render as render
+
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(),
+        meaningful=True,
+    )
+    assert v["passed"] is True
+    text = render(v)
+    assert "PASS" in text
+    assert "FAIL" not in text
+
+
+def test_render_degraded_verdict_never_claims_pass():
+    """A DEGRADED verdict is not a pass — the rendered text must not claim PASS."""
+    from disco.tools.builtin.verify_app_parts._render import _render as render
+
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(text="", elements=[]),
+        meaningful=False,
+    )
+    assert v["verdict"] == "degraded"
+    text = render(v)
+    assert "PASS" not in text
+
+
+# ---- evidence-not-verdict contract: target probes produce immutable evidence,
+#      never a typed HostVerificationResult ----
+
+
+def test_web_app_probe_verdict_is_plain_evidence_not_typed_receipt():
+    """Tools are evidence producers, not verdict authorities: compute_verdict
+    returns a plain dict, never a typed HostVerificationResult. A target probe
+    must not manufacture or upgrade a host verification receipt."""
+    from disco.core.verification import HostVerificationResult
+
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(),
+        meaningful=True,
+    )
+    assert isinstance(v, dict)
+    assert not isinstance(v, HostVerificationResult)
+
+
+def test_collect_web_app_probe_returns_plain_evidence_dict():
+    """The probe collector returns a plain evidence dict, not a typed receipt."""
+    from disco.core.verification import HostVerificationResult
+    from disco.tools.verify.web_app_probe import collect_web_app_probe
+
+    probe = collect_web_app_probe(_structured())
+    assert isinstance(probe, dict)
+    assert not isinstance(probe, HostVerificationResult)
+    # the evidence carries the deterministic diagnostics the host gate consumes
+    assert "failure_fingerprint" in probe
+    assert "console_errors" in probe
+    assert "network_failures" in probe
+
+
+# ---- valid target-specific positive controls: the web-app probe classifies
+#      real web target evidence correctly ----
+
+
+def test_web_app_probe_positive_control_clean_web_page():
+    """Positive control: a clean served web page with content, no console errors,
+    and no critical network failures classifies as PASS with a clean fingerprint."""
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(),
+        meaningful=True,
+    )
+    assert v["passed"] is True
+    assert v["verdict"] == "pass"
+    assert v["console_errors"] == []
+    assert v["network_failures"] == []
+    # the clean fingerprint is stable and non-empty
+    assert v["failure_fingerprint"] == _failure_fingerprint([], [])
+    assert v["failure_fingerprint"] != ""
+
+
+def test_web_app_probe_positive_control_console_error_classified():
+    """Positive control: a web page with a console error is classified as FAIL
+    with the error captured in the evidence."""
+    console = [{"level": "error", "text": "Uncaught TypeError: x is not a function"}]
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(console=console),
+        meaningful=True,
+    )
+    assert v["passed"] is False
+    assert v["verdict"] == "fail"
+    assert len(v["console_errors"]) == 1
+    assert "TypeError" in v["console_errors"][0]["text"]
