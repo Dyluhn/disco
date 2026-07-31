@@ -25,6 +25,7 @@ from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     CondensationEvent,
+    ConversationState,
     ConversationStatus,
     ErrorEvent,
     EventSource,
@@ -92,6 +93,61 @@ def _print_new(events: list, shown: int) -> int:
     return len(events)
 
 
+_READ_TOOLS = {"file_read", "file_list", "search", "extract"}
+
+
+def _round_stats(events: list) -> tuple[int, int]:
+    """Return (actions_count, planning_reads_count) computed from the trace so far.
+    planning_reads counts read actions that happened BEFORE a plan was proposed
+    (the exploration phase Claude Code calls "Phase 1: Initial Understanding")."""
+    actions_count = sum(
+        1 for e in events if isinstance(e, ActionEvent) and e.tool_call is not None
+    )
+    first_plan_seq = next(
+        (e.seq for e in events if isinstance(e, PlanEvent)),
+        None,
+    )
+    planning_reads = sum(
+        1
+        for e in events
+        if isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name in _READ_TOOLS
+        and first_plan_seq is not None
+        and (e.seq or 0) < first_plan_seq
+    )
+    return actions_count, planning_reads
+
+
+async def _handle_plan_gate(runtime: ConversationRuntime, *, auto_approve_plan: bool) -> bool:
+    """Handle AWAITING_PLAN_APPROVAL. Returns True to keep driving (continue), False
+    to hand control back to the caller (break)."""
+    if auto_approve_plan:
+        print("  [PLAN GATE] human would review here → auto-APPROVING")
+        await runtime.approve_plan(CID)
+        return True
+    print("  [PLAN GATE] returning to caller for handling")
+    return False
+
+
+async def _handle_action_gate(
+    runtime: ConversationRuntime, events: list, state: ConversationState
+) -> None:
+    """WAITING_FOR_CONFIRMATION: auto-approve the risky action mid-build (a human
+    would decide here) — defense in depth on top of the plan gate."""
+    pending = next(
+        (
+            e
+            for e in events
+            if isinstance(e, ActionEvent) and e.id == state.pending_action_id
+        ),
+        None,
+    )
+    risk = _get(pending.meta.get("risk_assessment") if pending else None, "risk")
+    print(f"  [ACTION GATE] risk={risk} — auto-APPROVING (human would decide here)")
+    await runtime.confirm(CID)
+
+
 async def _drive(
     runtime: ConversationRuntime, store: SqliteEventStore, *, auto_approve_plan: bool, shown: int
 ) -> tuple[int, dict]:
@@ -110,48 +166,17 @@ async def _drive(
                 break
         events = await store.get_events(CID)
         shown = _print_new(events, shown)
-        stats["actions"] = sum(
-            1 for e in events if isinstance(e, ActionEvent) and e.tool_call is not None
-        )
-        # Count read actions that happened BEFORE a plan was proposed (the
-        # exploration phase Claude Code calls "Phase 1: Initial Understanding").
-        _READ_TOOLS = {"file_read", "file_list", "search", "extract"}
-        first_plan_seq = next(
-            (e.seq for e in events if isinstance(e, PlanEvent)),
-            None,
-        )
-        stats["planning_reads"] = sum(
-            1
-            for e in events
-            if isinstance(e, ActionEvent)
-            and e.tool_call is not None
-            and e.tool_call.tool_name in _READ_TOOLS
-            and first_plan_seq is not None
-            and (e.seq or 0) < first_plan_seq
-        )
+        stats["actions"], stats["planning_reads"] = _round_stats(events)
         state = await store.get_state(CID)
 
         if state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL:
             stats["plan_gates"] += 1
-            if auto_approve_plan:
-                print("  [PLAN GATE] human would review here → auto-APPROVING")
-                await runtime.approve_plan(CID)
+            if await _handle_plan_gate(runtime, auto_approve_plan=auto_approve_plan):
                 continue
-            print("  [PLAN GATE] returning to caller for handling")
             break
         if state.execution_status == ConversationStatus.WAITING_FOR_CONFIRMATION:
-            pending = next(
-                (
-                    e
-                    for e in events
-                    if isinstance(e, ActionEvent) and e.id == state.pending_action_id
-                ),
-                None,
-            )
-            risk = _get(pending.meta.get("risk_assessment") if pending else None, "risk")
             stats["action_gates"] += 1
-            print(f"  [ACTION GATE] risk={risk} — auto-APPROVING (human would decide here)")
-            await runtime.confirm(CID)
+            await _handle_action_gate(runtime, events, state)
             continue
         if state.execution_status in (
             ConversationStatus.FINISHED,
