@@ -8,6 +8,8 @@ that rolls up the AppKit golden-path results — no live server, no browser.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,25 @@ from disco.agent_server.verify.appkit_dashboard import (
     main,
     render_html,
 )
+
+
+def test_private_dashboard_parts_import_without_facade_cycle() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from disco.agent_server.verify.appkit_dashboard_parts.collect "
+                "import build_row_for_dossier; print(build_row_for_dossier.__module__)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("appkit_dashboard_parts.collect")
+
 
 # ---------------------------------------------------------------------------
 # Dossier fixtures
