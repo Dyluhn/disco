@@ -39,6 +39,79 @@ _GAME_INTERACTION_EXPECTED = (
 )
 
 
+def _verification_medium(
+    deliverable: HostVerificationDeliverable,
+) -> Literal["web", "deck", "mobile", "game"]:
+    """Return the declared verification medium, defaulting to web."""
+    medium = deliverable.verification_medium
+    if medium in {"web", "deck", "mobile", "game"}:
+        return cast(Literal["web", "deck", "mobile", "game"], medium)
+    return "web"
+
+
+def _verification_target_url(deliverable: HostVerificationDeliverable) -> str | None:
+    """Resolve the URL to verify, or ``None`` when the binding cannot be honoured."""
+    selected = deliverable.preview_selection
+    if selected is None:
+        return deliverable.deployment_url or ""
+    return selected.verification_target_url(deliverable.artifact_path)
+
+
+def _game_steps_exact(
+    steps: Any, expected_profile: tuple[tuple[str, str | None], ...]
+) -> bool:
+    """Return whether observed steps match the declared profile exactly."""
+    if not isinstance(steps, list) or len(steps) != len(expected_profile):
+        return False
+    return all(
+        isinstance(step, dict)
+        and step.get("action") == action
+        and (key is None or step.get("key") == key)
+        and step.get("success") is True
+        and not step.get("error")
+        for step, (action, key) in zip(steps, expected_profile, strict=True)
+    )
+
+def _game_interaction_claims(
+    deliverable: HostVerificationDeliverable,
+    game_interaction: dict[str, Any],
+) -> dict[str, Any]:
+    """Evaluate the interaction profile the game medium declares.
+
+    This profile belongs to the game target alone. It is deliberately not
+    part of the shared typed-result assembler, so a future non-web target
+    supplies its own verifier and claim profile instead of inheriting web or
+    game assumptions.
+    """
+    steps = game_interaction.get("steps")
+    expected_profile: tuple[tuple[str, str | None], ...] = (
+        ("click", None),
+        ("press", "Space"),
+        ("press", "ArrowRight"),
+        ("screenshot", None),
+    )
+    exact_steps = bool(
+        _game_steps_exact(steps, expected_profile)
+        and game_interaction.get("before_screenshot_path")
+        and game_interaction.get("after_screenshot_path")
+    )
+    interaction_claims: dict[str, Any] = {}
+    for claim in deliverable.required_claims:
+        if (
+            claim.kind is VerificationClaimKind.INTERACTION
+            and claim.claim_id == _GAME_INTERACTION_CLAIM_ID
+            and claim.expected == _GAME_INTERACTION_EXPECTED
+        ):
+            interaction_claims[claim.claim_id] = {
+                "expected": claim.expected,
+                "passed": exact_steps,
+                "steps": steps if isinstance(steps, list) else [],
+                "before_screenshot_path": game_interaction.get("before_screenshot_path"),
+                "after_screenshot_path": game_interaction.get("after_screenshot_path"),
+            }
+    return interaction_claims
+
+
 class HostWebAppVerifier:
     """Host-side web verifier for REL-1 shadow mode.
 
@@ -65,92 +138,110 @@ class HostWebAppVerifier:
         self._browser_lane_lock = asyncio.Lock()
 
     async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]:
-        check = deliverable.verification_check
-        if check is not None and (
-            check.issuer_id != "disco.host_web_verifier@1"
-            or check.receipt_kind != "disco.web_functional@1"
-            or check.operation != "host.verify_deliverable"
-        ):
-            return self._unavailable_verdict(
-                deliverable,
-                "no registered host verifier adapter owns the admitted "
-                f"{check.receipt_kind} check from {check.issuer_id}",
-            )
+        """Publish the one host verification verdict for this deliverable.
+
+        This method is the sole verdict publisher. It admits the check, selects
+        an evidence acquisition path, and returns exactly one typed result; no
+        adapter or evidence source below it may publish or upgrade a verdict.
+        """
+        refusal = self._admission_refusal(deliverable)
+        if refusal is not None:
+            return refusal
         ctx_builder: Any = getattr(self._executor, "_build_context", None)
         if ctx_builder is not None:
-            async with self._browser_lane_lock:
-                ctx = None
-                try:
-                    agent_ctx = await ctx_builder(VerifyWebAppTool.definition)
-                    # The lane is host-selected and fixed; it is not present in
-                    # VerifyWebAppArgs or any model-facing tool schema.
-                    capture_pixels = any(
-                        claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
-                        for claim in deliverable.required_claims
-                    )
-                    ctx = agent_ctx.model_copy(
-                        update={
-                            "browser_lane": "host_verifier",
-                            "browser_capture_screenshot_b64": capture_pixels,
-                        }
-                    )
-                    live_match = await self._preview_live_match(deliverable, ctx)
-                    if not live_match:
-                        return self._artifact_binding_failure(deliverable)
-                    selected = deliverable.preview_selection
-                    target_url = (
-                        selected.verification_target_url(deliverable.artifact_path)
-                        if selected is not None
-                        else deliverable.deployment_url or ""
-                    )
-                    if selected is not None and target_url is None:
-                        return self._artifact_binding_failure(deliverable)
-                    outcome = await VerifyWebAppTool().run(
-                        VerifyWebAppArgs(
-                            url=target_url or "",
-                            medium=cast(
-                                Literal["web", "deck", "mobile", "game"],
-                                deliverable.verification_medium
-                                if deliverable.verification_medium
-                                in {"web", "deck", "mobile", "game"}
-                                else "web",
-                            ),
-                        ),
-                        ctx,
-                    )
-                    if outcome.success and outcome.structured:
-                        return self._with_typed_result(
-                            deliverable,
-                            dict(outcome.structured),
-                            preview_live_match=live_match,
-                        )
-                    return self._unavailable_verdict(
-                        deliverable,
-                        outcome.error or outcome.content or "host verifier produced no verdict",
-                    )
-                except Exception as exc:  # noqa: BLE001 — shadow verifier degrades to telemetry
-                    _LOG.warning(
-                        "host web verifier failed for %s:%s",
-                        deliverable.conversation_id,
-                        deliverable.artifact_path,
-                        exc_info=True,
-                    )
-                    return self._unavailable_verdict(deliverable, str(exc))
-                finally:
-                    if ctx is not None:
-                        try:
-                            await BrowserTool().close_host_verifier_lane(ctx)
-                        except Exception:  # noqa: BLE001 — cleanup is best-effort telemetry
-                            _LOG.warning(
-                                "host verifier lane cleanup failed for %s",
-                                deliverable.conversation_id,
-                                exc_info=True,
-                            )
-
+            return await self._verify_via_browser_lane(deliverable, ctx_builder)
         if self._evidence_source is not None:
             return await self._verify_via_evidence(deliverable)
-
         return self._unavailable_verdict(deliverable, "no host verifier context available")
+
+    def _admission_refusal(
+        self, deliverable: HostVerificationDeliverable
+    ) -> dict[str, Any] | None:
+        """Refuse any admitted check no registered host verifier adapter owns.
+
+        Returns the refusal verdict, or ``None`` when this verifier owns the
+        check and verification may proceed.
+        """
+        check = deliverable.verification_check
+        if check is None:
+            return None
+        if (
+            check.issuer_id == "disco.host_web_verifier@1"
+            and check.receipt_kind == "disco.web_functional@1"
+            and check.operation == "host.verify_deliverable"
+        ):
+            return None
+        return self._unavailable_verdict(
+            deliverable,
+            "no registered host verifier adapter owns the admitted "
+            f"{check.receipt_kind} check from {check.issuer_id}",
+        )
+
+    async def _verify_via_browser_lane(
+        self, deliverable: HostVerificationDeliverable, ctx_builder: Any
+    ) -> dict[str, Any]:
+        """Acquire evidence on the fixed host-verifier browser lane.
+
+        The lane is host-selected and serialized per verifier; it is never
+        present in any model-facing tool schema.
+        """
+        async with self._browser_lane_lock:
+            ctx = None
+            try:
+                agent_ctx = await ctx_builder(VerifyWebAppTool.definition)
+                # The lane is host-selected and fixed; it is not present in
+                # VerifyWebAppArgs or any model-facing tool schema.
+                capture_pixels = any(
+                    claim.kind is VerificationClaimKind.VISUAL_SEMANTIC
+                    for claim in deliverable.required_claims
+                )
+                ctx = agent_ctx.model_copy(
+                    update={
+                        "browser_lane": "host_verifier",
+                        "browser_capture_screenshot_b64": capture_pixels,
+                    }
+                )
+                live_match = await self._preview_live_match(deliverable, ctx)
+                if not live_match:
+                    return self._artifact_binding_failure(deliverable)
+                target_url = _verification_target_url(deliverable)
+                if target_url is None:
+                    return self._artifact_binding_failure(deliverable)
+                outcome = await VerifyWebAppTool().run(
+                    VerifyWebAppArgs(
+                        url=target_url,
+                        medium=_verification_medium(deliverable),
+                    ),
+                    ctx,
+                )
+                if outcome.success and outcome.structured:
+                    return self._with_typed_result(
+                        deliverable,
+                        dict(outcome.structured),
+                        preview_live_match=live_match,
+                    )
+                return self._unavailable_verdict(
+                    deliverable,
+                    outcome.error or outcome.content or "host verifier produced no verdict",
+                )
+            except Exception as exc:  # noqa: BLE001 — shadow verifier degrades to telemetry
+                _LOG.warning(
+                    "host web verifier failed for %s:%s",
+                    deliverable.conversation_id,
+                    deliverable.artifact_path,
+                    exc_info=True,
+                )
+                return self._unavailable_verdict(deliverable, str(exc))
+            finally:
+                if ctx is not None:
+                    try:
+                        await BrowserTool().close_host_verifier_lane(ctx)
+                    except Exception:  # noqa: BLE001 — cleanup is best-effort telemetry
+                        _LOG.warning(
+                            "host verifier lane cleanup failed for %s",
+                            deliverable.conversation_id,
+                            exc_info=True,
+                        )
 
     @staticmethod
     async def _preview_live_match(deliverable: HostVerificationDeliverable, ctx: Any) -> bool:
@@ -304,41 +395,9 @@ class HostWebAppVerifier:
             preview_live_match = not deliverable.preview_binding_required
         game_interaction = out.get("game_interaction")
         if deliverable.verification_medium == "game" and isinstance(game_interaction, dict):
-            steps = game_interaction.get("steps")
-            expected_profile = (
-                ("click", None),
-                ("press", "Space"),
-                ("press", "ArrowRight"),
-                ("screenshot", None),
+            interaction_claims = _game_interaction_claims(
+                deliverable, game_interaction
             )
-            exact_steps = bool(
-                isinstance(steps, list)
-                and len(steps) == len(expected_profile)
-                and all(
-                    isinstance(step, dict)
-                    and step.get("action") == action
-                    and (key is None or step.get("key") == key)
-                    and step.get("success") is True
-                    and not step.get("error")
-                    for step, (action, key) in zip(steps, expected_profile, strict=True)
-                )
-                and game_interaction.get("before_screenshot_path")
-                and game_interaction.get("after_screenshot_path")
-            )
-            interaction_claims: dict[str, Any] = {}
-            for claim in deliverable.required_claims:
-                if (
-                    claim.kind is VerificationClaimKind.INTERACTION
-                    and claim.claim_id == _GAME_INTERACTION_CLAIM_ID
-                    and claim.expected == _GAME_INTERACTION_EXPECTED
-                ):
-                    interaction_claims[claim.claim_id] = {
-                        "expected": claim.expected,
-                        "passed": exact_steps,
-                        "steps": steps if isinstance(steps, list) else [],
-                        "before_screenshot_path": game_interaction.get("before_screenshot_path"),
-                        "after_screenshot_path": game_interaction.get("after_screenshot_path"),
-                    }
             if interaction_claims:
                 out["interaction_claims"] = interaction_claims
         out["artifact_identity"] = {
