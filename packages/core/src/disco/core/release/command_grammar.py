@@ -735,6 +735,76 @@ def _head_family(head: str) -> str | None:
     return None
 
 
+def _declaration_env_ref(token: str, *, declared_names: frozenset[str], field: str) -> str | None:
+    """If `token` is a whole ``${NAME}``/``$NAME`` reference, return its NAME —
+    raising (value-free) if that NAME is not DECLARED. Returns ``None`` for a
+    token that is not a whole reference at all (the caller then tries the next
+    grammar rule)."""
+    ref = whole_env_ref(token)
+    if ref is None:
+        return None
+    if ref not in declared_names:
+        raise ValueError(
+            f"{field} references an env var that is not declared in required_env "
+            "(the only expandable token is a whole ${NAME} reference to a "
+            "declared var, or the $PORT contract)"
+        )
+    return ref
+
+
+def _declaration_flag_end_index(
+    argv: tuple[str, ...],
+    index: int,
+    token: str,
+    *,
+    known: frozenset[str],
+    declared_names: frozenset[str],
+    field: str,
+) -> int:
+    """Consume ONE flag token (`token` starts with ``-``) per the runtime grammar:
+    a known head flag, a ``--flag=${NAME}`` single token, or a ``--flag ${NAME}``
+    two-token pair, where every ``${NAME}`` must be DECLARED. Returns the index of
+    the NEXT unconsumed argv element; raises (value-free) on an unknown flag or an
+    inline literal flag value."""
+    name = token.split("=", 1)[0]
+    if name in known:
+        return index + 1
+    if "=" in token:
+        value_ref = whole_env_ref(token.split("=", 1)[1])
+        if value_ref is not None and value_ref in declared_names:
+            return index + 1
+        raise ValueError(
+            f"{field} carries an unknown flag or an inline literal value; a flag "
+            "value must be a whole ${NAME} reference to a declared env var"
+        )
+    following = argv[index + 1] if index + 1 < len(argv) else None
+    following_ref = whole_env_ref(following) if following is not None else None
+    if following_ref is not None and following_ref in declared_names:
+        return index + 2
+    raise ValueError(
+        f"{field} carries an unknown flag or an inline literal value; a flag "
+        "value must be a whole ${NAME} reference to a declared env var"
+    )
+
+
+def _check_declaration_positional(token: str, *, field: str) -> None:
+    # A non-flag operand (script / module / subcommand). It is hygiene-checked as a
+    # shell-inert literal — but "shell-inert" is NOT "harmless": a bare positional
+    # literal credential (`node MYSECRET server.js`, `npm config set … npm_XXXX`)
+    # would otherwise ride this slot and bake a shipped secret into the exported
+    # command (GAP G02). A credential-capable value must be a whole ${NAME} reference
+    # (accepted above), never a literal, so a positional operand that is credential
+    # material BY SHAPE is rejected here — value-free (the value can be the secret).
+    if looks_like_credential_literal(token):
+        raise ValueError(
+            f"{field} carries a bare positional literal that is credential material "
+            "by its structure (a recognized secret token format, or an opaque "
+            "high-entropy blob); pass a credential as a whole ${NAME} reference to a "
+            "declared env var, never as an inline literal operand baked into the "
+            "exported command"
+        )
+
+
 def check_declaration_argv(
     argv: tuple[str, ...], *, declared_names: frozenset[str], field: str
 ) -> None:
@@ -765,54 +835,15 @@ def check_declaration_argv(
     index = 1
     while index < len(argv):
         token = argv[index]
-        ref = whole_env_ref(token)
-        if ref is not None:
-            if ref not in declared_names:
-                raise ValueError(
-                    f"{field} references an env var that is not declared in required_env "
-                    "(the only expandable token is a whole ${NAME} reference to a "
-                    "declared var, or the $PORT contract)"
-                )
+        if _declaration_env_ref(token, declared_names=declared_names, field=field) is not None:
             index += 1
             continue
         if token.startswith("-"):
-            name = token.split("=", 1)[0]
-            if name in known:
-                index += 1
-                continue
-            if "=" in token:
-                value_ref = whole_env_ref(token.split("=", 1)[1])
-                if value_ref is not None and value_ref in declared_names:
-                    index += 1
-                    continue
-                raise ValueError(
-                    f"{field} carries an unknown flag or an inline literal value; a flag "
-                    "value must be a whole ${NAME} reference to a declared env var"
-                )
-            following = argv[index + 1] if index + 1 < len(argv) else None
-            following_ref = whole_env_ref(following) if following is not None else None
-            if following_ref is not None and following_ref in declared_names:
-                index += 2
-                continue
-            raise ValueError(
-                f"{field} carries an unknown flag or an inline literal value; a flag "
-                "value must be a whole ${NAME} reference to a declared env var"
+            index = _declaration_flag_end_index(
+                argv, index, token, known=known, declared_names=declared_names, field=field
             )
-        # A non-flag operand (script / module / subcommand). It is hygiene-checked as a
-        # shell-inert literal — but "shell-inert" is NOT "harmless": a bare positional
-        # literal credential (`node MYSECRET server.js`, `npm config set … npm_XXXX`)
-        # would otherwise ride this slot and bake a shipped secret into the exported
-        # command (GAP G02). A credential-capable value must be a whole ${NAME} reference
-        # (accepted above), never a literal, so a positional operand that is credential
-        # material BY SHAPE is rejected here — value-free (the value can be the secret).
-        if looks_like_credential_literal(token):
-            raise ValueError(
-                f"{field} carries a bare positional literal that is credential material "
-                "by its structure (a recognized secret token format, or an opaque "
-                "high-entropy blob); pass a credential as a whole ${NAME} reference to a "
-                "declared env var, never as an inline literal operand baked into the "
-                "exported command"
-            )
+            continue
+        _check_declaration_positional(token, field=field)
         index += 1
 
 

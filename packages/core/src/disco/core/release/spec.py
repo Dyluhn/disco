@@ -33,182 +33,70 @@ ONLY pydantic + the stdlib. In particular it does NOT import `disco.tools.*`
 fields MIRROR `disco.tools.projects.store.VersionRecord` (`seq: int`,
 `tree_digest: str`) by shape so a release can be pinned to an exact snapshot,
 without an upward import.
+
+This module is the state-free public compatibility/export facade. Cohesive
+private implementation lives under :mod:`disco.core.release.spec_parts` and is
+re-imported here so every public symbol keeps its import path.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import posixpath
-import re
-from collections.abc import Iterable
 from enum import Enum
-from typing import Annotated
 
 from disco.core.release.command_grammar import (
     check_health_path,
     check_persistent_path,
     check_sqlite_local_url,
-    check_token_hygiene,
     check_workspace_rel_path,
 )
 from pydantic import (
     BaseModel,
-    ConfigDict,
     Field,
-    StringConstraints,
-    ValidationError,
     field_validator,
     model_validator,
 )
 
-# ---- shared config ------------------------------------------------------------
-#
-# Reject unknown fields everywhere (a stray key is a typo / version skew we want
-# to fail loudly), and freeze every model. `frozen=True` blocks attribute
-# REASSIGNMENT; every collection field is a `tuple[...]`, not a `list[...]`, so an
-# element cannot be appended / replaced in place to smuggle a duplicate id or a
-# broken command past the cross-field validators and on to serialization. A
-# validated ReleaseSpec is therefore immutable end to end — see the AppKit spec
-# (`disco.core.appkit.spec`) this deliberately mirrors.
-#
-# `hide_input_in_errors=True` keeps pydantic from appending `input_value=...` to a
-# validation error message. These models are NAMES-ONLY value guards: a rejected
-# argv token (`API_TOKEN=hunter2`) or env NAME could itself carry a secret VALUE,
-# so the raw error must never echo the offending input — a `str(ValidationError)`
-# names the FIELD, never the value.
-_STRICT = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-
-# An environment variable NAME: UPPERCASE env-var style. A leading letter or
-# underscore, then letters / digits / underscores. This rejects the exact classes
-# the acceptance criteria call out — an '=', any whitespace, lower-case, a leading
-# digit, or any other punctuation — so a declared name is always a safe shell /
-# compose identifier.
-_ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-
-# A service / resource id (and the ids that reference them): snake/kebab-case,
-# starting with a lowercase letter — a safe compose service name and dependency
-# key. Letters, digits, underscore, hyphen.
-_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
-
-# A local volume name (compose/docker style): starts alphanumeric, then a small
-# safe charset.
-_VOLUME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
-
-# `tree_digest` mirrors `VersionRecord.tree_digest`, which the project store emits
-# as a BARE lowercase sha256 hexdigest (64 hex chars, no algorithm prefix). Pin
-# the exact shape so a spec can only bind to a real store digest.
-_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
-
-# ---- bounded string / collection caps -----------------------------------------
-#
-# Every free-form string is length-capped and every list is count-capped so a
-# schema-valid spec is bounded in size (validation cost + serialized bytes) and a
-# hostile/corrupt spec can't become a memory bomb — the same discipline the AppKit
-# specs use.
-_ID_MAX = 64
-_NAME_MAX = 200
-_SHORT_MAX = 120
-_PATH_MAX = 512
-_URL_MAX = 2048
-_ENV_NAME_MAX = 128
-_ARGV_ITEM_MAX = 2048
-_REASON_MAX = 2000
-_DIGEST_MAX = 64
-
-_MAX_SERVICES = 50
-_MAX_ENV = 300
-_MAX_RESOURCES = 50
-_MAX_ARGV = 200
-_MAX_LINKS = 50  # depends_on / consumers fan-out
-_MAX_TARGETS = 20
-_MAX_GENERATED_FILES = 500
-_MAX_EVIDENCE = 200
-
-_IdStr = Annotated[str, StringConstraints(max_length=_ID_MAX)]
-_NameStr = Annotated[str, StringConstraints(max_length=_NAME_MAX)]
-_ShortStr = Annotated[str, StringConstraints(max_length=_SHORT_MAX)]
-_PathStr = Annotated[str, StringConstraints(max_length=_PATH_MAX)]
-_UrlStr = Annotated[str, StringConstraints(max_length=_URL_MAX)]
-_EnvNameStr = Annotated[str, StringConstraints(max_length=_ENV_NAME_MAX)]
-_ArgvItemStr = Annotated[str, StringConstraints(max_length=_ARGV_ITEM_MAX)]
-_ReasonStr = Annotated[str, StringConstraints(max_length=_REASON_MAX)]
-_DigestStr = Annotated[str, StringConstraints(max_length=_DIGEST_MAX)]
-
-
-# ---- shared validation helpers ------------------------------------------------
-
-
-def _validate_env_var_name(value: str, *, field: str) -> str:
-    if not _ENV_NAME_RE.match(value):
-        raise ValueError(
-            f"{field} must be an UPPERCASE env-var name matching {_ENV_NAME_RE.pattern!r} "
-            "(a leading letter/underscore, then letters/digits/underscores; no '=', "
-            f"whitespace, lower-case or other punctuation), got {value!r}"
-        )
-    return value
-
-
-def _validate_id(value: str, *, field: str) -> str:
-    if not _ID_RE.match(value):
-        raise ValueError(
-            f"{field} must match {_ID_RE.pattern!r} (a lowercase letter, then "
-            f"letters/digits/underscore/hyphen), got {value!r}"
-        )
-    return value
-
-
-def _validate_argv(value: tuple[str, ...], *, field: str) -> tuple[str, ...]:
-    # An argv-list is a real exec vector (`["node", "server.js"]`), NOT a shell string.
-    # Each element must be a non-empty token (an empty token would exec an empty arg)
-    # AND must pass token hygiene (WO-C5): the ONLY expandable form is an ENTIRE typed
-    # env reference (`${NAME}`); a `$` outside a whole reference, command substitution,
-    # backticks, separators, redirections, quotes, backslashes, control characters, NUL,
-    # Unicode separators, an inline `NAME=value` assignment, or URL userinfo are all
-    # rejected — so a token can never smuggle a separator, substitution, partial
-    # interpolation, or inline credential. Every message is value-free (it could carry
-    # a secret), so a `str(ValidationError)` names the FIELD/rule, never the input.
-    for index, arg in enumerate(value):
-        if not arg.strip():
-            raise ValueError(f"{field} argv element {index} must be a non-empty token")
-        check_token_hygiene(arg, field=f"{field} argv element {index}")
-    return value
-
-
-def _reject_traversal(value: str, *, field: str) -> str:
-    if "\x00" in value:
-        raise ValueError(f"{field} must not contain a NUL byte")
-    if ".." in value.split("/"):
-        raise ValueError(f"{field} must not contain a '..' path segment, got {value!r}")
-    return value
-
-
-def _require_unique(values: Iterable[str], *, what: str) -> None:
-    seen: set[str] = set()
-    for item in values:
-        if item in seen:
-            raise ValueError(f"duplicate {what}: {item!r}")
-        seen.add(item)
-
-
-def _require_absolute_normalized_posix(value: str, *, field: str) -> None:
-    """A resource `persistent_path` (WO-C7 model invariant) must be an ABSOLUTE,
-    NORMALIZED POSIX path: it starts at the root (`/`), carries no `//` run, no
-    `/./` single-dot segment, no `..` traversal, and no trailing slash — i.e. it is
-    already in canonical form. A relative path, a double slash (including a leading
-    `//`, which POSIX/`posixpath.normpath` treats specially and would otherwise
-    survive normalization), or a `.`/`..` segment is rejected. Value-free: the
-    message names the RULE, never the path (a path could carry sensitive data)."""
-    if not value.startswith("/"):
-        raise ValueError(f"{field} must be an absolute POSIX path (a leading '/')")
-    if value.startswith("//"):
-        raise ValueError(f"{field} must not begin with a '//' run")
-    if value != posixpath.normpath(value):
-        raise ValueError(
-            f"{field} must be a NORMALIZED absolute POSIX path "
-            "(no '//' run, no '/./' segment, no '..' segment, no trailing slash)"
-        )
-
+from .spec_parts._constants import (
+    _HEX64_RE,
+    _MAX_ARGV,
+    _MAX_ENV,
+    _MAX_EVIDENCE,
+    _MAX_GENERATED_FILES,
+    _MAX_LINKS,
+    _MAX_RESOURCES,
+    _MAX_SERVICES,
+    _MAX_TARGETS,
+    _STRICT,
+    _VOLUME_RE,
+    _ArgvItemStr,
+    _DigestStr,
+    _EnvNameStr,
+    _IdStr,
+    _NameStr,
+    _PathStr,
+    _ReasonStr,
+    _ShortStr,
+    _UrlStr,
+)
+from .spec_parts._serialization import (
+    IntentUpgradeError,
+    load_release_spec,
+    parse_release_intent,
+    serialize_release_spec,
+    spec_digest,
+)
+from .spec_parts._validators import (
+    _reject_traversal,
+    _require_absolute_normalized_posix,
+    _require_unique,
+    _resolve_env_references,
+    _resolve_resource_consumers,
+    _resolve_service_depends_on,
+    _strip_file_scheme,
+    _validate_argv,
+    _validate_env_var_name,
+    _validate_id,
+)
 
 # ---- enums (small closed vocabularies) ----------------------------------------
 
@@ -533,10 +421,6 @@ class ResourceDecl(BaseModel):
         return self
 
 
-def _strip_file_scheme(url: str) -> str:
-    return url[len("file:") :] if url.startswith("file:") else url
-
-
 def local_mount_target(resource: ResourceDecl) -> str:
     """The container directory a resource's named volume mounts at — the REAL PARENT
     directory of its local path, so the emitted mount always BACKS the persistent path
@@ -737,65 +621,6 @@ class ReleaseIntent(BaseModel):
         return value
 
 
-class IntentUpgradeError(ValueError):
-    """A persisted intent sidecar declares a schema version this build cannot read
-    (a NEWER version, or a v1 shape that cannot be migrated without guessing). A
-    typed subclass of `ValueError` so callers can distinguish a version-gate refusal
-    (`intent_upgrade_required`, §8.11) from a plain malformed sidecar."""
-
-
-def parse_release_intent(raw: object) -> ReleaseIntent:
-    """Parse a PERSISTED release-intent sidecar payload into a `ReleaseIntent`,
-    version-gated per §8.11 so an older shape is never silently reinterpreted:
-
-    * ``schema_version == RELEASE_INTENT_SCHEMA_VERSION`` (or a legacy shape carrying
-      no version, treated as v1) is validated / migrated deterministically. An OLDER
-      shape (a v1/v2 payload, whose fields are a strict SUBSET of v3) migrates by
-      dropping the version tag and letting the new v3 fields default — a total,
-      deterministic adapter, so the same older bytes always yield the same v3 intent.
-    * a NEWER ``schema_version`` (one this build does not know) is REJECTED with
-      `IntentUpgradeError` rather than mis-read as the current schema.
-
-    Raises `IntentUpgradeError` for a version-gate refusal (a NEWER schema, or a v1
-    shape carrying a field the current schema forbids — an upgrade this build cannot
-    perform without guessing) and `ValueError` / pydantic `ValidationError` for a
-    genuinely malformed payload."""
-    if not isinstance(raw, dict):
-        raise ValueError(f"release intent must be a JSON object, got {type(raw).__name__}")
-    version_obj: object = raw.get("schema_version", 1)
-    if not isinstance(version_obj, int) or isinstance(version_obj, bool):
-        raise ValueError(f"release intent schema_version must be an int, got {version_obj!r}")
-    if version_obj > RELEASE_INTENT_SCHEMA_VERSION:
-        raise IntentUpgradeError(
-            f"release intent declares schema_version {version_obj}, newer than this "
-            f"build supports ({RELEASE_INTENT_SCHEMA_VERSION}); it cannot be read "
-            "without an upgrade and must not be silently reinterpreted."
-        )
-    if version_obj == RELEASE_INTENT_SCHEMA_VERSION:
-        return ReleaseIntent.model_validate(raw)
-    # v1 / v2 / legacy: migrate deterministically — drop the version tag; the older
-    # fields are a strict subset of v3, so the new fields default.
-    migrated = {key: value for key, value in raw.items() if key != "schema_version"}
-    try:
-        return ReleaseIntent.model_validate(migrated)
-    except ValidationError as exc:
-        # A well-formed legacy shape whose ONLY defect is a field the current schema
-        # FORBIDS (`extra_forbidden`) cannot be upgraded without guessing what that
-        # removed field meant — that is a version-gate refusal (`intent_upgrade_required`,
-        # §8.11), NOT a generic malformed sidecar, and NOT a field to silently drop. A
-        # payload carrying any OTHER validation error (a bad env name, a wrong type) is
-        # genuinely malformed and is re-raised as the `ValidationError` it is.
-        errors = exc.errors()
-        if errors and all(err.get("type") == "extra_forbidden" for err in errors):
-            raise IntentUpgradeError(
-                "release intent declares a legacy (v1) shape carrying field(s) the "
-                f"current schema (v{RELEASE_INTENT_SCHEMA_VERSION}) does not define; it "
-                "cannot be upgraded without guessing and must not be silently "
-                "reinterpreted."
-            ) from exc
-        raise
-
-
 # ---- the release spec ---------------------------------------------------------
 
 # The CURRENT schema version of the CONTRACT shape. WO-C7 adds the per-env
@@ -904,44 +729,9 @@ class ReleaseSpec(BaseModel):
     def _references_resolve(self) -> ReleaseSpec:
         service_ids = {service.id for service in self.services}
         resource_ids = {resource.id for resource in self.resources}
-        for service in self.services:
-            for dep in service.depends_on:
-                if dep not in service_ids:
-                    raise ValueError(f"service {service.id!r} depends_on unknown service {dep!r}")
-        for resource in self.resources:
-            # WO-C7: every resource must have at least one (valid) consumer — an
-            # orphan resource that no service uses is an ill-formed topology.
-            if not resource.consumers:
-                raise ValueError(
-                    f"resource {resource.id!r} declares no consumers; every resource must "
-                    "have at least one consumer service"
-                )
-            for consumer in resource.consumers:
-                if consumer not in service_ids:
-                    raise ValueError(
-                        f"resource {resource.id!r} names unknown consumer service {consumer!r}"
-                    )
-        for var in self.env:
-            if var.binding is not None and var.binding not in resource_ids:
-                raise ValueError(f"env var {var.name!r} binds unknown resource {var.binding!r}")
-            # WO-C7: a DECLARED per-env consumer scope must name at least one real
-            # service. `None` (no scope) is handled elsewhere (sole-ingress default /
-            # implicit-fan-out rejection); an EXPLICIT empty tuple `[]` is a distinct,
-            # fail-closed error — it is NOT "reaches every service", it would reach
-            # NONE, silently dropping a required var from every container (a
-            # broken-bundle false affordance). Reject it, and reject any named
-            # consumer that is not a real service.
-            if var.consumers is not None:
-                if not var.consumers:
-                    raise ValueError(
-                        f"env var {var.name!r} declares an empty consumer scope; a "
-                        "declared env consumer scope must name at least one service"
-                    )
-                for consumer in var.consumers:
-                    if consumer not in service_ids:
-                        raise ValueError(
-                            f"env var {var.name!r} names unknown consumer service {consumer!r}"
-                        )
+        _resolve_service_depends_on(self.services, service_ids)
+        _resolve_resource_consumers(self.resources, service_ids)
+        _resolve_env_references(self.env, service_ids, resource_ids)
         return self
 
     @model_validator(mode="after")
@@ -1043,80 +833,6 @@ class ReleaseSpec(BaseModel):
                     "consumer service(s)"
                 )
         return self
-
-
-# ---- digest + canonical serialization -----------------------------------------
-#
-# All digests are namespaced with their algorithm (`sha256:`) so a future switch
-# is self-describing on disk — the same convention AppKit's snapshot digests use.
-_ALGO = "sha256"
-
-
-def spec_digest(spec: ReleaseSpec) -> str:
-    """A stable content digest over a ReleaseSpec.
-
-    Canonical JSON — sorted keys, no insignificant whitespace — so two specs that
-    are EQUAL as data hash identically regardless of the order fields were
-    supplied in or of formatting, and ANY field change changes the digest. This is
-    a release's content identity."""
-    payload = json.dumps(
-        spec.model_dump(mode="json"),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return f"{_ALGO}:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
-
-
-def serialize_release_spec(spec: ReleaseSpec) -> str:
-    """Canonical, human-readable JSON text for a ReleaseSpec.
-
-    REVALIDATES first (a non-construction path such as `model_copy(update=...)` /
-    `model_construct(...)` can build an instance that skipped the cross-field
-    validators), then dumps canonically: sorted keys + a stable indent + a
-    trailing newline. Deterministic, so `serialize → load → serialize` is
-    byte-identical."""
-    validated = ReleaseSpec.model_validate(spec.model_dump(mode="json"))
-    return (
-        json.dumps(
-            validated.model_dump(mode="json"),
-            indent=2,
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-        + "\n"
-    )
-
-
-def load_release_spec(data: bytes | str) -> ReleaseSpec:
-    """Parse + schema-validate a ReleaseSpec from JSON bytes/str already in hand.
-
-    Version-gated (WO-C7 v1 read policy): a payload declaring a `schema_version`
-    NEWER than `RELEASE_SPEC_SCHEMA_VERSION` is REJECTED rather than mis-read under
-    the current schema. A v1 (or version-less legacy) payload is read as-is: it
-    carries no per-env `consumers`, so each var parses as `None` and the cross-field
-    invariants apply the documented v1 rule (sole-ingress default for a
-    single-service spec; a multi-service unbound-consumer-less var is refused, never
-    fanned out).
-
-    Raises `ValueError` on malformed JSON, a non-object payload, or a newer schema
-    version, and a pydantic `ValidationError` if the JSON violates the schema."""
-    raw = data.decode("utf-8") if isinstance(data, bytes) else data
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"ReleaseSpec is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"ReleaseSpec must be a JSON object, got {type(parsed).__name__}")
-    version = parsed.get("schema_version", 1)
-    if isinstance(version, int) and not isinstance(version, bool):
-        if version > RELEASE_SPEC_SCHEMA_VERSION:
-            raise ValueError(
-                f"ReleaseSpec declares schema_version {version}, newer than this build "
-                f"supports ({RELEASE_SPEC_SCHEMA_VERSION}); it must not be silently "
-                "reinterpreted under an older schema."
-            )
-    return ReleaseSpec.model_validate(parsed)
 
 
 __all__ = [
