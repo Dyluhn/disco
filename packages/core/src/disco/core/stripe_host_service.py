@@ -514,6 +514,64 @@ class _StripeRuntimeInputs:
     binding_secret: str
 
 
+@dataclass(frozen=True)
+class _StripeRuntimeConfig:
+    config: StripeAppConfig
+    origin: str
+
+
+def _resolve_stripe_runtime_config(
+    config_store: StripeAppConfigStore,
+    ctx: HostServiceContext,
+    plan_selector: str,
+) -> tuple[_StripeRuntimeConfig | None, str]:
+    """Look up the enabled app config for this plan and pin its return origin."""
+    config = config_store.get(ctx.owner_id, ctx.app_id)
+    if config is None or not config.enabled:
+        return None, "stripe_not_configured"
+    if plan_selector != config.plan_selector:
+        return None, "unknown_plan"
+    origin = _return_origin(ctx, config)
+    if origin is None:
+        return None, "return_origin_not_allowed"
+    return _StripeRuntimeConfig(config, origin), ""
+
+
+@dataclass(frozen=True)
+class _StripeRuntimeSecrets:
+    restricted_key: str
+    binding_secret: str
+    webhook_secret: str
+
+
+def _resolve_stripe_runtime_secrets(
+    secret_store: SecretStore,
+    ctx: HostServiceContext,
+) -> tuple[_StripeRuntimeSecrets | None, str]:
+    """Resolve the restricted key plus the per-app binding/webhook secrets."""
+    try:
+        secret = resolve_provider_secret(
+            STRIPE_SECRET_REF,
+            secret_store,
+            strong_required=True,
+        )
+        binding_secret = resolve_stripe_binding_secret(
+            secret_store,
+            ctx.owner_id,
+            ctx.app_id,
+        )
+        webhook_secret = resolve_stripe_webhook_secret(
+            secret_store,
+            ctx.owner_id,
+            ctx.app_id,
+        )
+    except RuntimeError:
+        return None, "stripe_credential_refused"
+    if secret is None or binding_secret is None or webhook_secret is None:
+        return None, "stripe_not_configured"
+    return _StripeRuntimeSecrets(secret, binding_secret, webhook_secret), ""
+
+
 def _runtime_inputs(
     ctx: HostServiceContext,
     plan_selector: str,
@@ -523,61 +581,44 @@ def _runtime_inputs(
     config_store = ctx.stripe_config_store
     if config_store is None or ctx.secret_store is None or ctx.approvals is None:
         return None, "stripe_not_configured"
-    config = config_store.get(ctx.owner_id, ctx.app_id)
-    if config is None or not config.enabled:
-        return None, "stripe_not_configured"
-    if plan_selector != config.plan_selector:
-        return None, "unknown_plan"
-    origin = _return_origin(ctx, config)
-    if origin is None:
-        return None, "return_origin_not_allowed"
-    try:
-        secret = resolve_provider_secret(
-            STRIPE_SECRET_REF,
-            ctx.secret_store,
-            strong_required=True,
-        )
-        binding_secret = resolve_stripe_binding_secret(
-            ctx.secret_store,
-            ctx.owner_id,
-            ctx.app_id,
-        )
-        webhook_secret = resolve_stripe_webhook_secret(
-            ctx.secret_store,
-            ctx.owner_id,
-            ctx.app_id,
-        )
-    except RuntimeError:
-        return None, "stripe_credential_refused"
-    if secret is None or binding_secret is None or webhook_secret is None:
-        return None, "stripe_not_configured"
-    expected_binding = stripe_runtime_proof(binding_secret, ctx.app_id, plan_selector)
-    expected_webhook = stripe_runtime_proof(webhook_secret, ctx.app_id, plan_selector)
+    secret_store = ctx.secret_store
+    approvals = ctx.approvals
+    runtime_config, error = _resolve_stripe_runtime_config(config_store, ctx, plan_selector)
+    if runtime_config is None:
+        return None, error
+    secrets_, error = _resolve_stripe_runtime_secrets(secret_store, ctx)
+    if secrets_ is None:
+        return None, error
+    expected_binding = stripe_runtime_proof(secrets_.binding_secret, ctx.app_id, plan_selector)
+    expected_webhook = stripe_runtime_proof(secrets_.webhook_secret, ctx.app_id, plan_selector)
     if not hmac.compare_digest(binding_proof, expected_binding) or not hmac.compare_digest(
         webhook_proof, expected_webhook
     ):
         return None, "stripe_runtime_stale"
     try:
-        validate_stripe_restricted_key(secret)
+        validate_stripe_restricted_key(secrets_.restricted_key)
     except StripeConfigurationError:
         return None, "stripe_credential_refused"
     if not secret_ref_allowed_for_origin(STRIPE_SECRET_REF, STRIPE_API_URL):
         return None, "stripe_origin_refused"
-    if not ctx.approvals.is_approved(
+    if not approvals.is_approved(
         STRIPE_API_URL,
         PAYMENTS_CHECKOUT_SERVICE_NAME,
         STRIPE_SECRET_REF,
     ):
         return None, "stripe_origin_not_approved"
-    return _StripeRuntimeInputs(config, secret, origin, binding_secret), ""
+    return (
+        _StripeRuntimeInputs(
+            runtime_config.config, secrets_.restricted_key, runtime_config.origin,
+            secrets_.binding_secret,
+        ),
+        "",
+    )
 
 
-def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
-    if not 200 <= response.status_code < 300:
-        return None
-    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
-        return None
+def _stripe_json_object(response: GuardedResponse) -> dict[str, Any] | None:
+    """Parse the checkout response body as a strict JSON object (no duplicate
+    keys, no NaN/Infinity) carrying a string ``url``; None on any failure."""
 
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -600,9 +641,16 @@ def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
         return None
     if not isinstance(body, dict) or not isinstance(body.get("url"), str):
         return None
-    checkout_url = body["url"]
-    if any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in checkout_url):
-        return None
+    return body
+
+
+def _is_stripe_safe_url_text(value: str) -> bool:
+    """Reject checkout URLs containing control or non-ASCII-printable bytes."""
+    return not any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in value)
+
+
+def _stripe_checkout_https_url(checkout_url: str) -> str | None:
+    """Parse and pin the checkout URL to Stripe's own hosted checkout origin."""
     try:
         parsed = urlsplit(checkout_url)
         port = parsed.port
@@ -618,6 +666,21 @@ def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
     ):
         return None
     return checkout_url
+
+
+def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
+    if not 200 <= response.status_code < 300:
+        return None
+    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/json":
+        return None
+    body = _stripe_json_object(response)
+    if body is None:
+        return None
+    checkout_url = body["url"]
+    if not _is_stripe_safe_url_text(checkout_url):
+        return None
+    return _stripe_checkout_https_url(checkout_url)
 
 
 async def _payments_checkout_handler(

@@ -169,11 +169,10 @@ async function stripeRuntimeProofs(
 """
 
 
-def _emit_stripe_verification_ts(meta: StripeMeta) -> str:
-    """Raw-body, signature, and envelope verification code."""
-    return (
-        _emit_stripe_runtime_ts(meta)
-        + f"""{""}function stripeJson(
+def _emit_stripe_signature_verify_ts() -> str:
+    """JSON reply helper, signature-header parsing, raw body read, and HMAC
+    signature verification — all envelope-independent."""
+    return f"""{""}function stripeJson(
   data: unknown,
   status = 200,
 ): Response {{
@@ -261,7 +260,12 @@ async function stripeSignatureValid(
   }}
   return false;
 }}
+"""
 
+
+def _emit_stripe_envelope_parse_ts() -> str:
+    """Trusted-envelope parsing plus source-id and user-id extraction."""
+    return f"""{""}
 function parseStripeEnvelope(body: Uint8Array): StripeEnvelope | null {{
   let value: unknown;
   try {{ value = JSON.parse(new TextDecoder("utf-8", {{ fatal: true }}).decode(body)); }} catch {{
@@ -300,6 +304,14 @@ function stripeUserId(event: StripeEnvelope): number | null {{
   return Number.isSafeInteger(value) ? value : null;
 }}
 """
+
+
+def _emit_stripe_verification_ts(meta: StripeMeta) -> str:
+    """Raw-body, signature, and envelope verification code."""
+    return (
+        _emit_stripe_runtime_ts(meta)
+        + _emit_stripe_signature_verify_ts()
+        + _emit_stripe_envelope_parse_ts()
     )
 
 
@@ -346,8 +358,8 @@ async function stripeCorrelationValid(
 """
 
 
-def _emit_stripe_fulfillment_ts() -> str:
-    """Atomic fulfillment/revocation and replay handling."""
+def _emit_stripe_fulfillment_lookup_ts() -> str:
+    """Replay-dedup and known-user lookups shared by fulfillment application."""
     return f"""{""}
 async function stripeEventAlreadyRecorded(
   db: D1DatabaseSession,
@@ -370,7 +382,13 @@ async function stripeKnownUserId(
   return row !== null && Number.isSafeInteger(row.user_id) && row.user_id > 0
     ? row.user_id : null;
 }}
+"""
 
+
+def _emit_stripe_apply_event_ts() -> str:
+    """Atomic grant/revoke application: dedupe insert, fulfillment upsert, and
+    the resulting user_role_grants write."""
+    return f"""{""}
 async function applyStripeEvent(env: Env, event: StripeEnvelope): Promise<Response> {{
   const sourceId = stripeSourceId(event);
   const isGrant = event.type === "checkout.session.completed"
@@ -456,7 +474,12 @@ async function applyStripeEvent(env: Env, event: StripeEnvelope): Promise<Respon
     return stripeJson({{ error: "fulfillment failed" }}, 500);
   }}
 }}
+"""
 
+
+def _emit_stripe_webhook_handler_ts() -> str:
+    """Signature verification, host-readiness gate, and event dispatch."""
+    return f"""{""}
 async function stripeWebhook(request: Request, env: Env): Promise<Response> {{
   if (env.STRIPE_RUNTIME_READY !== "1") {{
     return stripeJson({{ error: "payments unavailable" }}, 503);
@@ -480,6 +503,15 @@ async function stripeWebhook(request: Request, env: Env): Promise<Response> {{
   return applyStripeEvent(env, event);
 }}
 """
+
+
+def _emit_stripe_fulfillment_ts() -> str:
+    """Atomic fulfillment/revocation and replay handling."""
+    return (
+        _emit_stripe_fulfillment_lookup_ts()
+        + _emit_stripe_apply_event_ts()
+        + _emit_stripe_webhook_handler_ts()
+    )
 
 
 def _emit_stripe_endpoints_ts() -> str:
