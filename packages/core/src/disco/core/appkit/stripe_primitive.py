@@ -38,7 +38,7 @@ import html
 import json
 import re
 from collections.abc import Mapping
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -50,7 +50,15 @@ from .primitives import (
     register_primitive,
 )
 from .recipes import SiteRecipe
-from .spec import AppSpec, DesignSpec, Page, Section, SectionContent, serialize_app_spec
+from .spec import (
+    AppSpec,
+    DesignSpec,
+    Page,
+    Section,
+    SectionContent,
+    StripeMeta,
+    serialize_app_spec,
+)
 
 STRIPE_PRIMITIVE_ID = "stripe"
 
@@ -175,6 +183,72 @@ def _pending_body(spec: StripeSpec) -> str:
     )
 
 
+def _validate_stripe_apply(app: AppSpec, spec: StripeSpec) -> None:
+    """The two apply-time invariants: a records app needs a pre-existing
+    non-payment role, and the entitlement flag is immutable once applied."""
+    if app.app_kind == "records" and not app.roles:
+        raise ValueError("Stripe requires a records app with an existing non-payment role")
+    if app.stripe is not None and app.stripe.entitlement_flag != spec.entitlement_flag:
+        raise ValueError("Stripe entitlement_flag cannot change after initial application")
+
+
+def _stripe_pricing_section_payload(spec: StripeSpec) -> dict[str, object]:
+    """The folded ``stripe_pricing`` section dict: plan copy plus pending body."""
+    return {
+        "id": STRIPE_PRICING_SECTION_ID,
+        "kind": "pricing",
+        "variant_id": STRIPE_PRICING_VARIANT_ID,
+        "content": {
+            "heading": spec.plan_name,
+            "subheading": spec.price_display,
+            "body": _pending_body(spec),
+            "items": list(spec.features),
+        },
+    }
+
+
+def _merge_stripe_pricing_pages(pages: list[Any], section: dict[str, object]) -> list[Any]:
+    """Replace the ``stripe_pricing`` section in place on the first page (or
+    append it there), creating a single-page app when there are no pages yet."""
+    if not pages:
+        return [{"id": "home", "route": "/", "title": "Home", "sections": [section]}]
+    first = dict(pages[0])
+    sections = list(first.get("sections") or [])
+    for i, existing in enumerate(sections):
+        if isinstance(existing, dict) and existing.get("id") == STRIPE_PRICING_SECTION_ID:
+            sections[i] = section
+            break
+    else:
+        sections.append(section)
+    first["sections"] = sections
+    pages[0] = first
+    return pages
+
+
+def _merge_stripe_role(app: AppSpec, roles: list[Any], spec: StripeSpec) -> list[Any]:
+    """Append the entitlement flag as a role, refusing a name collision with an
+    existing role on first application."""
+    if app.stripe is None and spec.entitlement_flag in roles:
+        raise ValueError("Stripe entitlement_flag must be a new, payment-managed role")
+    if spec.entitlement_flag not in roles:
+        roles.append(spec.entitlement_flag)
+    return roles
+
+
+def _stripe_metadata_dict(app: AppSpec, spec: StripeSpec) -> dict[str, object]:
+    """The strict ``AppSpec.stripe`` metadata folded from this apply."""
+    return {
+        "app_binding": (
+            app.stripe.app_binding if app.stripe is not None else _stripe_app_binding(app)
+        ),
+        # The selector is deliberately NOT a Stripe price id.  The host maps
+        # this stable, validated identifier to its operator-owned price config.
+        "plan_selector": spec.entitlement_flag,
+        "entitlement_flag": spec.entitlement_flag,
+        "success_message": spec.success_message,
+    }
+
+
 def apply_stripe_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
     """Fold a validated StripeSpec into the AppSpec (house dance: dump → mutate →
     re-validate):
@@ -189,53 +263,12 @@ def apply_stripe_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
       ``AppSpec.stripe`` metadata consumed by the generated Worker."""
     if not isinstance(spec, StripeSpec):  # defensive: app_add_primitive validated it
         raise TypeError(f"apply_spec for {STRIPE_PRIMITIVE_ID!r} needs a StripeSpec")
-    if app.app_kind == "records" and not app.roles:
-        raise ValueError("Stripe requires a records app with an existing non-payment role")
-    if app.stripe is not None and app.stripe.entitlement_flag != spec.entitlement_flag:
-        raise ValueError("Stripe entitlement_flag cannot change after initial application")
-    section: dict[str, object] = {
-        "id": STRIPE_PRICING_SECTION_ID,
-        "kind": "pricing",
-        "variant_id": STRIPE_PRICING_VARIANT_ID,
-        "content": {
-            "heading": spec.plan_name,
-            "subheading": spec.price_display,
-            "body": _pending_body(spec),
-            "items": list(spec.features),
-        },
-    }
+    _validate_stripe_apply(app, spec)
+    section = _stripe_pricing_section_payload(spec)
     data = app.model_dump(mode="json")
-    pages = list(data.get("pages") or [])
-    if pages:
-        first = dict(pages[0])
-        sections = list(first.get("sections") or [])
-        for i, existing in enumerate(sections):
-            if isinstance(existing, dict) and existing.get("id") == STRIPE_PRICING_SECTION_ID:
-                sections[i] = section
-                break
-        else:
-            sections.append(section)
-        first["sections"] = sections
-        pages[0] = first
-    else:
-        pages = [{"id": "home", "route": "/", "title": "Home", "sections": [section]}]
-    data["pages"] = pages
-    roles = list(data.get("roles") or [])
-    if app.stripe is None and spec.entitlement_flag in roles:
-        raise ValueError("Stripe entitlement_flag must be a new, payment-managed role")
-    if spec.entitlement_flag not in roles:
-        roles.append(spec.entitlement_flag)
-    data["roles"] = roles
-    data["stripe"] = {
-        "app_binding": (
-            app.stripe.app_binding if app.stripe is not None else _stripe_app_binding(app)
-        ),
-        # The selector is deliberately NOT a Stripe price id.  The host maps
-        # this stable, validated identifier to its operator-owned price config.
-        "plan_selector": spec.entitlement_flag,
-        "entitlement_flag": spec.entitlement_flag,
-        "success_message": spec.success_message,
-    }
+    data["pages"] = _merge_stripe_pricing_pages(list(data.get("pages") or []), section)
+    data["roles"] = _merge_stripe_role(app, list(data.get("roles") or []), spec)
+    data["stripe"] = _stripe_metadata_dict(app, spec)
     return AppSpec.model_validate(data)
 
 
@@ -411,7 +444,8 @@ def _stripe_metadata_check(app: AppSpec | None) -> VerifyCheck:
     )
 
 
-def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyCheck:
+def _parse_stripe_provenance_record(tree: Mapping[str, str]) -> dict[str, Any] | VerifyCheck:
+    """Load, JSON-decode, and shape-check the on-disk provenance record."""
     raw = tree.get(_STRIPE_PROVENANCE_RELPATH)
     if raw is None:
         return VerifyCheck(
@@ -447,20 +481,24 @@ def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> Ve
         return VerifyCheck(
             "stripe_provenance_binding", False, "Stripe provenance applied_at is empty."
         )
+    return record
+
+
+def _stripe_provenance_spec(record: Mapping[str, Any]) -> StripeSpec | VerifyCheck:
+    """Validate the embedded StripeSpec; the broad except is deliberate — the
+    validation detail is safe declarative metadata, never a secret."""
     try:
-        spec = StripeSpec.model_validate(record.get("spec"))
+        return StripeSpec.model_validate(record.get("spec"))
     except Exception as exc:  # noqa: BLE001 - validation detail is safe declarative metadata
         return VerifyCheck(
             "stripe_provenance_binding", False, f"invalid Stripe provenance spec: {exc}"
         )
-    if app is None or app.stripe is None:
-        return VerifyCheck(
-            "stripe_provenance_binding",
-            False,
-            "Stripe provenance exists without AppSpec.stripe metadata (fail-closed).",
-        )
-    meta = app.stripe
-    section = next(
+
+
+def _stripe_provenance_pricing_section(app: AppSpec) -> Section | None:
+    """The exact ``stripe_pricing`` section id — no kind-based fallback (unlike
+    ``_stripe_section``, which is used for the standalone-page render path)."""
+    return next(
         (
             section
             for page in app.pages
@@ -469,6 +507,13 @@ def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> Ve
         ),
         None,
     )
+
+
+def _stripe_provenance_reasons(
+    meta: StripeMeta, spec: StripeSpec, section: Section | None
+) -> list[str]:
+    """Compare the validated provenance spec against the live AppSpec.stripe
+    metadata, entitlement role, and folded pricing section content."""
     expected_content = {
         "heading": spec.plan_name,
         "subheading": spec.price_display,
@@ -493,6 +538,26 @@ def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> Ve
         )
         if actual_content != expected_content:
             reasons.append("stripe_pricing content differs from the validated provenance spec")
+    return reasons
+
+
+def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyCheck:
+    record_or_failure = _parse_stripe_provenance_record(tree)
+    if isinstance(record_or_failure, VerifyCheck):
+        return record_or_failure
+    spec_or_failure = _stripe_provenance_spec(record_or_failure)
+    if isinstance(spec_or_failure, VerifyCheck):
+        return spec_or_failure
+    spec = spec_or_failure
+    if app is None or app.stripe is None:
+        return VerifyCheck(
+            "stripe_provenance_binding",
+            False,
+            "Stripe provenance exists without AppSpec.stripe metadata (fail-closed).",
+        )
+    meta = app.stripe
+    section = _stripe_provenance_pricing_section(app)
+    reasons = _stripe_provenance_reasons(meta, spec, section)
     return VerifyCheck(
         "stripe_provenance_binding",
         not reasons,
