@@ -40,11 +40,11 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, Field, computed_field
 
-from .reliability import aggregate_reliability_metrics, run_reliability_metrics
+from .reliability import aggregate_reliability_metrics
 
 # EPIC G structural checks, in canonical order (matches verify_appkit_app).
 _APPKIT_CHECK_ORDER: tuple[str, ...] = (
@@ -111,7 +111,7 @@ class DashboardSummary(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _read_json(path: Path) -> dict | None:
+def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -119,10 +119,10 @@ def _read_json(path: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _iter_events(events_path: Path) -> list[dict]:
+def _iter_events(events_path: Path) -> list[dict[str, Any]]:
     if not events_path.exists():
         return []
-    events: list[dict] = []
+    events: list[dict[str, Any]] = []
     try:
         for line in events_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -139,9 +139,11 @@ def _iter_events(events_path: Path) -> list[dict]:
     return events
 
 
-def _final_appkit_verdict(events: list[dict]) -> dict | None:
+def _final_appkit_verdict(
+    events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
     """The LAST successful verify_appkit_app structured verdict (authoritative)."""
-    verdict: dict | None = None
+    verdict: dict[str, Any] | None = None
     for evt in events:
         if evt.get("kind") != "observation":
             continue
@@ -154,7 +156,7 @@ def _final_appkit_verdict(events: list[dict]) -> dict | None:
     return verdict
 
 
-def _first_failing_check(verdict: dict) -> str | None:
+def _first_failing_check(verdict: dict[str, Any]) -> str | None:
     """First failing check by canonical EPIC G order (stable regardless of list order)."""
     checks = verdict.get("checks")
     if not isinstance(checks, list):
@@ -169,7 +171,7 @@ def _first_failing_check(verdict: dict) -> str | None:
     return next(iter(sorted(failed)), None) if failed else None
 
 
-def _app_name_from_events(events: list[dict]) -> str | None:
+def _app_name_from_events(events: list[dict[str, Any]]) -> str | None:
     """Best-effort app name from the first successful app_create observation."""
     for evt in events:
         if evt.get("kind") != "observation":
@@ -187,7 +189,7 @@ def _app_name_from_events(events: list[dict]) -> str | None:
     return None
 
 
-def _is_appkit_dossier(result_doc: dict) -> bool:
+def _is_appkit_dossier(result_doc: dict[str, Any]) -> bool:
     scenario = result_doc.get("scenario") or {}
     return bool(scenario.get("appkit_mode") or scenario.get("expect_appkit_verify"))
 
@@ -222,6 +224,32 @@ def _collect_ui_screenshots(cid: str, e2e_root: Path | None, out_dir: Path) -> l
     return shots
 
 
+def _e(text: object) -> str:
+    return html.escape(str(text), quote=True)
+
+
+# Pure projection/render helpers extracted into the parts package (PKG-08-VERIFY).
+# Imported after the models and low-level helpers above are defined so the parts
+# modules can import them from this module without a circular-init problem.
+from .appkit_dashboard_parts import (  # noqa: E402
+    RowProjectionPorts,
+    build_row_for_dossier,
+    render_rows_table,
+    render_summary_line,
+)
+
+_ROW_PROJECTION_PORTS = RowProjectionPorts(
+    row_factory=AppKitRunRow,
+    read_json=_read_json,
+    is_appkit_dossier=_is_appkit_dossier,
+    iter_events=_iter_events,
+    final_appkit_verdict=_final_appkit_verdict,
+    first_failing_check=_first_failing_check,
+    app_name_from_events=_app_name_from_events,
+    collect_ui_screenshots=_collect_ui_screenshots,
+)
+
+
 def collect_appkit_rows(
     verify_root: Path, *, out_dir: Path, e2e_root: Path | None = None
 ) -> list[AppKitRunRow]:
@@ -230,52 +258,14 @@ def collect_appkit_rows(
     if not verify_root.exists():
         return rows
     for run_dir in sorted(p for p in verify_root.iterdir() if p.is_dir()):
-        result_doc = _read_json(run_dir / "result.json")
-        if result_doc is None or not _is_appkit_dossier(result_doc):
-            continue
-        scenario = result_doc.get("scenario") or {}
-        result = result_doc.get("result") or {}
-        cid = str(result_doc.get("conversation_id", ""))
-        events = _iter_events(run_dir / "events.jsonl")
-        verdict = _final_appkit_verdict(events)
-        raw_reliability_metrics = result.get("reliability_metrics")
-        if isinstance(raw_reliability_metrics, dict):
-            reliability_metrics = cast(dict[str, Any], raw_reliability_metrics)
-        else:
-            reliability_metrics = dict(run_reliability_metrics(events))
-
-        appkit_passed: bool | None = None
-        first_fail: str | None = None
-        fingerprint: str | None = None
-        if verdict is not None:
-            appkit_passed = bool(verdict.get("passed"))
-            if not appkit_passed:
-                first_fail = _first_failing_check(verdict)
-                fp = verdict.get("failure_fingerprint")
-                fingerprint = str(fp) if fp else None
-
-        try:
-            dossier_rel: str = str(run_dir.resolve().relative_to(out_dir.resolve()))
-        except ValueError:
-            dossier_rel = str(run_dir.resolve())
-
-        rows.append(
-            AppKitRunRow(
-                run_id=str(result_doc.get("run_id", run_dir.name)),
-                scenario_id=str(result.get("scenario_id", scenario.get("id", "?"))),
-                conversation_id=cid,
-                terminal_status=str(result.get("terminal_status", "UNKNOWN")),
-                passed=bool(result.get("passed", False)),
-                appkit_verify_passed=appkit_passed,
-                first_failing_check=first_fail,
-                failure_fingerprint=fingerprint,
-                app_name=_app_name_from_events(events),
-                validator_problems=[str(p) for p in (result.get("validator_problems") or [])],
-                reliability_metrics=reliability_metrics,
-                dossier_path=dossier_rel,
-                ui_screenshots=_collect_ui_screenshots(cid, e2e_root, out_dir),
-            )
+        row = build_row_for_dossier(
+            run_dir,
+            out_dir=out_dir,
+            e2e_root=e2e_root,
+            ports=_ROW_PROJECTION_PORTS,
         )
+        if row is not None:
+            rows.append(row)
     rows.sort(key=lambda r: r.run_id)
     return rows
 
@@ -304,10 +294,6 @@ def build_summary(rows: list[AppKitRunRow]) -> DashboardSummary:
 # ---------------------------------------------------------------------------
 
 
-def _e(text: object) -> str:
-    return html.escape(str(text), quote=True)
-
-
 def render_html(summary: DashboardSummary) -> str:
     """A self-contained, dependency-free HTML dashboard (no JS, no external CSS)."""
     head = (
@@ -324,87 +310,12 @@ def render_html(summary: DashboardSummary) -> str:
         "ul{margin:4px 0;padding-left:18px}.shot{max-width:160px;margin:2px;border:1px solid #ccc}"
         "</style></head><body>"
     )
-    summary_line = (
-        f"<h1>AppKit Verified-App Regression Dashboard</h1>"
-        f'<div class="meta">generated {_e(summary.generated_at)} &middot; '
-        f'<span class="pass">{summary.passed} passed</span> / '
-        f'<span class="fail">{summary.failed} failed</span> '
-        f"of {summary.total} AppKit run(s)</div>"
+    return (
+        head
+        + render_summary_line(summary)
+        + render_rows_table(summary)
+        + "</body></html>"
     )
-    if summary.failing_checks:
-        chips = " ".join(
-            f"<code>{_e(name)}&times;{count}</code>"
-            for name, count in summary.failing_checks.items()
-        )
-        summary_line += f'<div class="meta">first-failing checks: {chips}</div>'
-    reliability = summary.reliability
-    totals = reliability.get("totals") if isinstance(reliability, dict) else None
-    if isinstance(totals, dict) and summary.total:
-        nonzero = {
-            str(k): v for k, v in totals.items() if isinstance(v, int) and v > 0 and k != "runs"
-        }
-        if nonzero:
-            chips = " ".join(
-                f"<code>{_e(name)}&times;{count}</code>" for name, count in sorted(nonzero.items())
-            )
-            stall_rate = reliability.get("stall_rate")
-            rate_text = (
-                f"{float(stall_rate):.1%}" if isinstance(stall_rate, int | float) else "0.0%"
-            )
-            summary_line += f'<div class="meta">reliability: stall rate {rate_text}; {chips}</div>'
-
-    rows_html = [
-        "<table><thead><tr>"
-        "<th>run</th><th>scenario</th><th>conversation</th><th>app</th>"
-        "<th>terminal</th><th>passed</th><th>verify_appkit_app</th>"
-        "<th>first failing check</th><th>problems</th><th>evidence</th>"
-        "</tr></thead><tbody>"
-    ]
-    for r in summary.rows:
-        # P1: the overall verdict is GREEN only when result.passed AND verify passed.
-        passed_cls = "pass" if r.green else "fail"
-        if r.appkit_verify_passed is True:
-            verify_cell = '<span class="pass">pass</span>'
-        elif r.appkit_verify_passed is False:
-            verify_cell = '<span class="fail">fail</span>'
-        else:
-            verify_cell = '<span class="muted">— (not run)</span>'
-        # Make the false-green case unmistakable: result.passed but verify did not pass.
-        if r.passed and not r.green:
-            verify_cell += ' <span class="fail">(false-green: result passed)</span>'
-        if r.first_failing_check:
-            ff = f"<code>{_e(r.first_failing_check)}</code>"
-            if r.failure_fingerprint:
-                ff += f' <span class="muted">{_e(r.failure_fingerprint)}</span>'
-        else:
-            ff = '<span class="muted">—</span>'
-        problems = (
-            "<ul>" + "".join(f"<li>{_e(p)}</li>" for p in r.validator_problems) + "</ul>"
-            if r.validator_problems
-            else '<span class="muted">none</span>'
-        )
-        evidence_bits = [f'<a href="{_e(r.dossier_path)}">dossier</a>']
-        for shot in r.ui_screenshots:
-            s = _e(shot)
-            evidence_bits.append(f'<a href="{s}"><img class="shot" src="{s}"></a>')
-        rows_html.append(
-            "<tr>"
-            f"<td>{_e(r.run_id)}</td>"
-            f"<td>{_e(r.scenario_id)}</td>"
-            f"<td>{_e(r.conversation_id)}</td>"
-            f"<td>{_e(r.app_name) if r.app_name else '<span class="muted">—</span>'}</td>"
-            f"<td>{_e(r.terminal_status)}</td>"
-            f'<td class="{passed_cls}">{"PASS" if r.green else "FAIL"}</td>'
-            f"<td>{verify_cell}</td>"
-            f"<td>{ff}</td>"
-            f"<td>{problems}</td>"
-            f"<td>{'<br>'.join(evidence_bits)}</td>"
-            "</tr>"
-        )
-    rows_html.append("</tbody></table>")
-    if not summary.rows:
-        rows_html.append('<p class="muted">No AppKit dossiers found.</p>')
-    return head + summary_line + "".join(rows_html) + "</body></html>"
 
 
 def generate_dashboard(
