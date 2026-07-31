@@ -186,6 +186,22 @@ PKG08_FINISH_RESOLVED_IDS = frozenset(
         "PY-0701",
     }
 )
+PKG09_RELEASE_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(634, 652)),
+        *(f"PY-{number:04d}" for number in range(893, 896)),
+        "PY-0897",
+        *(f"PY-{number:04d}" for number in range(899, 908)),
+    }
+)
+PKG09_CONNECTORS_RESOLVED_IDS = frozenset(
+    {
+        *(f"PY-{number:04d}" for number in range(167, 183)),
+        "PY-0287",
+        "PY-0288",
+        "PY-0360",
+    }
+)
 RESOLVED_IDS = (
     PKG02_RESOLVED_IDS
     | PKG03_HARNESS_TRANSPORT_RESOLVED_IDS
@@ -202,8 +218,10 @@ RESOLVED_IDS = (
     | PKG07_PREVIEW_RESOLVED_IDS
     | PKG08_VERIFY_RESOLVED_IDS
     | PKG08_FINISH_RESOLVED_IDS
+    | PKG09_RELEASE_RESOLVED_IDS
+    | PKG09_CONNECTORS_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 433
+EXPECTED_ACTIVE_DEBT_ROWS = 383
 EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,

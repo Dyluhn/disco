@@ -1694,7 +1694,7 @@
   {
     "id": "PY-0167",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_open_workspace_write_parent:679-777",
@@ -1703,7 +1703,7 @@
   {
     "id": "PY-0168",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_stage_deploy_tree:912-1015",
@@ -1712,7 +1712,7 @@
   {
     "id": "PY-0169",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_assert_no_secret_shaped_files:1278-1383",
@@ -1721,7 +1721,7 @@
   {
     "id": "PY-0170",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_has_ownership_record:1593-1679",
@@ -1730,7 +1730,7 @@
   {
     "id": "PY-0171",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:execute_deploy:2284-2436",
@@ -1739,7 +1739,7 @@
   {
     "id": "PY-0172",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:execute_deploy:2284-2436",
@@ -1748,7 +1748,7 @@
   {
     "id": "PY-0173",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_install_worker_bindings:2863-2983",
@@ -1757,7 +1757,7 @@
   {
     "id": "PY-0174",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_install_worker_bindings:2863-2983",
@@ -1766,7 +1766,7 @@
   {
     "id": "PY-0175",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_run_real_deploy:3147-3537",
@@ -1775,7 +1775,7 @@
   {
     "id": "PY-0176",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:_run_real_deploy:3147-3537",
@@ -1784,7 +1784,7 @@
   {
     "id": "PY-0177",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy.py:<module>:1-3804",
@@ -1793,7 +1793,7 @@
   {
     "id": "PY-0178",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/routes.py:make_cloudflare_router:639-852",
@@ -1802,7 +1802,7 @@
   {
     "id": "PY-0179",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/sandbox_build.py:build:288-443",
@@ -1811,7 +1811,7 @@
   {
     "id": "PY-0180",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/sandbox_build.py:build:288-443",
@@ -1820,7 +1820,7 @@
   {
     "id": "PY-0181",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/sandbox_build.py:_sync_output_back:445-561",
@@ -1829,7 +1829,7 @@
   {
     "id": "PY-0182",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/webhook_deploy.py:_read_snapshot:195-267",
@@ -2774,7 +2774,7 @@
   {
     "id": "PY-0287",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/routes/release.py:assess_release:348-511",
@@ -2783,7 +2783,7 @@
   {
     "id": "PY-0288",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/src/disco/agent_server/routes/release.py:assess_release:348-511",
@@ -3431,7 +3431,7 @@
   {
     "id": "PY-0360",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-CONNECTORS",
     "location": "packages/agent-server/tests/test_appkit_cloudflare.py:<module>:1-6417",
@@ -5897,7 +5897,7 @@
   {
     "id": "PY-0634",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/command_grammar.py:check_declaration_argv:738-816",
@@ -5906,7 +5906,7 @@
   {
     "id": "PY-0635",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_js_executable_view:708-1052",
@@ -5915,7 +5915,7 @@
   {
     "id": "PY-0636",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_js_executable_view:708-1052",
@@ -5924,7 +5924,7 @@
   {
     "id": "PY-0637",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_markup_regions:1127-1214",
@@ -5933,7 +5933,7 @@
   {
     "id": "PY-0638",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_jsx_expression_end:1217-1276",
@@ -5942,7 +5942,7 @@
   {
     "id": "PY-0639",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_jsx_tag_spans:1279-1331",
@@ -5951,7 +5951,7 @@
   {
     "id": "PY-0640",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_opening_tag_attribute_names:1334-1366",
@@ -5960,7 +5960,7 @@
   {
     "id": "PY-0641",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_vue_v_pre_spans:1369-1404",
@@ -5969,7 +5969,7 @@
   {
     "id": "PY-0642",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_vue_directive_expression_spans:1407-1458",
@@ -5978,7 +5978,7 @@
   {
     "id": "PY-0643",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_mask_jsx_text:1496-1548",
@@ -5987,7 +5987,7 @@
   {
     "id": "PY-0644",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_vite_env_reads_from_view:1614-1686",
@@ -5996,7 +5996,7 @@
   {
     "id": "PY-0645",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_uvicorn_start_contract:3068-3182",
@@ -6005,7 +6005,7 @@
   {
     "id": "PY-0646",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_uvicorn_start_contract:3068-3182",
@@ -6014,7 +6014,7 @@
   {
     "id": "PY-0647",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:_from_intent:3185-3299",
@@ -6023,7 +6023,7 @@
   {
     "id": "PY-0648",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/detect.py:<module>:1-3502",
@@ -6032,7 +6032,7 @@
   {
     "id": "PY-0649",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/local_compose.py:<module>:1-1348",
@@ -6041,7 +6041,7 @@
   {
     "id": "PY-0650",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/spec.py:_references_resolve:904-945",
@@ -6050,7 +6050,7 @@
   {
     "id": "PY-0651",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "packages/core/src/disco/core/release/spec.py:<module>:1-1147",
@@ -8228,7 +8228,7 @@
   {
     "id": "PY-0893",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/export_track1_candidate_receipt.py:check_proof_suite_binding:452-505",
@@ -8237,7 +8237,7 @@
   {
     "id": "PY-0894",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/export_track1_candidate_receipt.py:<module>:1-851",
@@ -8246,7 +8246,7 @@
   {
     "id": "PY-0895",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/gen_closeout_acceptance_manifest.py:<module>:1-1115",
@@ -8264,7 +8264,7 @@
   {
     "id": "PY-0897",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/self_host_data.py:restore_archive:222-283",
@@ -8282,7 +8282,7 @@
   {
     "id": "PY-0899",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_evaluate_structured_pytest_report:435-523",
@@ -8291,7 +8291,7 @@
   {
     "id": "PY-0900",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_run_frontend_lane:685-770",
@@ -8300,7 +8300,7 @@
   {
     "id": "PY-0901",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_scan_python_test:1174-1216",
@@ -8309,7 +8309,7 @@
   {
     "id": "PY-0902",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_scan_campaign_diff_suppressions:1414-1467",
@@ -8318,7 +8318,7 @@
   {
     "id": "PY-0903",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_finalize_live_evidence:1711-1822",
@@ -8327,7 +8327,7 @@
   {
     "id": "PY-0904",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:_finalize_live_evidence:1711-1822",
@@ -8336,7 +8336,7 @@
   {
     "id": "PY-0905",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:main:1964-2213",
@@ -8345,7 +8345,7 @@
   {
     "id": "PY-0906",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:main:1964-2213",
@@ -8354,7 +8354,7 @@
   {
     "id": "PY-0907",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-09-RELEASE",
     "location": "scripts/verify_export_track1_closeout.py:<module>:1-2217",
