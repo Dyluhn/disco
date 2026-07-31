@@ -1,14 +1,23 @@
-"""Definition-of-Done, dictated-content, and execution-nudge gates."""
+"""Definition-of-Done, dictated-content, and execution-nudge gates.
+
+`_ContentGateMixin` is the composed facade `FinishGate` binds to (see
+`finish/__init__.py`); it must keep exposing exactly the same methods with
+exactly the same behavior. The heavy, largely self-contained computations it
+used to inline — deliverable byte reading, bounded app-bundle traversal, DoD
+evaluator construction, plan-verifier failure fingerprinting, and the
+model-facing notice text — now live in `content_gate_parts/` as pure
+functions with explicit arguments (loop/sandbox/data in, result out). Each
+mixin method that used to hold that logic is now a thin delegator so the
+class stays a real orchestration surface rather than a place where policy
+gets duplicated.
+"""
 
 # ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
-from typing import cast
+from typing import TYPE_CHECKING
 
-from ...dod_evaluator import DoDPredicateResult
 from .common import *
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
@@ -25,6 +34,59 @@ from .common import (
     _plan_file_exists_paths,
     _safe_deliverable_file_path,
 )
+from .content_gate_parts.app_bundle import (
+    _DICTATED_CONTENT_BUNDLE_MAX_DEPTH,
+    _DICTATED_CONTENT_BUNDLE_MAX_DIRS,
+    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES,
+    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR,
+    _DICTATED_CONTENT_BUNDLE_MAX_FILES,
+    _DICTATED_CONTENT_BUNDLE_SKIP_DIRS,
+    bounded_app_bundle_paths,
+    resolve_sandboxed_app_entry,
+)
+from .content_gate_parts.deliverable_bytes import read_deliverable_bytes
+from .content_gate_parts.dictated_content_scan import (
+    first_dictated_content_miss,
+    is_text_candidate,
+)
+from .content_gate_parts.dod_evaluator_build import build_sandbox_dod_evaluator
+from .content_gate_parts.errors import _DictatedContentInspectionIncomplete
+from .content_gate_parts.notices import (
+    emit_dangling_plan_evidence_notice,
+    emit_dictated_content_cap_release_notice,
+    emit_dictated_content_inspection_incomplete_notice,
+    emit_dictated_content_refusal_notice,
+    emit_dod_workspace_unavailable_notice,
+    emit_execution_nudge,
+    emit_external_dod_cap_pause_notice,
+    emit_external_dod_unmet_notice,
+    emit_plan_verification_passed_notice,
+    emit_plan_verifier_failure_notice,
+    emit_plan_verifier_replan_required_notice,
+    land_execution_nudge_exhausted,
+)
+from .content_gate_parts.plan_verifier_failure import (
+    _failed_predicate_fingerprints,
+    build_plan_verifier_failure,
+)
+
+# These bundle-inspection limits and the plan-verifier fingerprint helper now
+# live in `content_gate_parts` (their real owner boundary — see the modules
+# above) and are no longer read by this module's own code. They are kept
+# importable here under their original names since content_gates.py used to
+# define them directly at module scope.
+_REEXPORTED_CONTENT_GATE_PART_NAMES = (
+    _DICTATED_CONTENT_BUNDLE_MAX_DEPTH,
+    _DICTATED_CONTENT_BUNDLE_MAX_DIRS,
+    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES,
+    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR,
+    _DICTATED_CONTENT_BUNDLE_MAX_FILES,
+    _DICTATED_CONTENT_BUNDLE_SKIP_DIRS,
+    _failed_predicate_fingerprints,
+)
+
+if TYPE_CHECKING:
+    from ..loop_facade_compat import _AgentLoopCompatibility as AgentLoop
 
 _DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
     {
@@ -64,43 +126,19 @@ _DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
         ".zip",
     }
 )
-_DICTATED_CONTENT_BUNDLE_SKIP_DIRS = frozenset(
-    {
-        ".disco",
-        ".git",
-        ".pmx",
-        ".venv",
-        "__pycache__",
-        # Node's module compile cache (the JS analogue of __pycache__): the
-        # sandbox homes node processes in the workspace, so node deposits a
-        # non-hidden `node-compile-cache/v<ver>-<arch>-<hash>/` tree with
-        # hundreds of flat entries that grows with every node execution. It is
-        # runtime state, never app content; left in the walk it nondeterministically
-        # trips the per-directory inspection bound whenever the handed-off entry
-        # lives at the workspace root (dev-mode serving) rather than in dist/
-        # (counted seed 440023).
-        "node-compile-cache",
-        "node_modules",
-        "venv",
-        "vendor",
-    }
-)
-_DICTATED_CONTENT_BUNDLE_MAX_DIRS = 64
-_DICTATED_CONTENT_BUNDLE_MAX_FILES = 512
-_DICTATED_CONTENT_BUNDLE_MAX_DEPTH = 8
-_DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR = 256
-_DICTATED_CONTENT_BUNDLE_MAX_ENTRIES = 1024
 _DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S = 60.0
 _DICTATED_CONTENT_MAX_FILE_BYTES = 32 * 1024 * 1024
 _DICTATED_CONTENT_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 
-class _DictatedContentInspectionIncomplete(RuntimeError):
-    """The gate could not inspect the declared app scope completely and safely."""
+class _DictatedContentShortCircuitPass(Exception):
+    """Internal signal: the gate passes NOW without touching the refusal counter.
 
-
-def _failed_predicate_fingerprints(results: list[DoDPredicateResult]) -> list[str]:
-    return [predicate_fingerprint(result.predicate) for result in results]
+    Distinct from "checked everything, nothing missing" (which DOES reset the
+    refusal counter) — this fires only for the "not yet applicable" shortcuts
+    (no selected app entry yet, no deliverable paths yet) that `dictated_content_gate_passed`
+    used to `return True` from directly, mid-computation.
+    """
 
 
 def _dictated_content_inspection_cause(exc: BaseException) -> dict[str, str | int]:
@@ -143,23 +181,93 @@ def _dictated_content_inspection_cause(exc: BaseException) -> dict[str, str | in
 def _dictated_content_text_candidate(path: str, data: bytes) -> bool:
     """Whether bytes may safely participate in a user-visible text floor.
 
-    Known binary extensions are always excluded. Unknown extensions must still
-    be valid NUL-free UTF-8, which protects binary artifacts without preventing
-    extensionless or uncommon text deliverables from carrying dictated copy.
-    Empty non-binary files remain candidates so missing content fails loudly.
+    Delegates to `is_text_candidate` (the single owner of this rule); kept
+    under its original name/signature since it is part of this module's
+    existing surface.
     """
 
-    if posixpath.splitext(path)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
-        return False
-    if not data:
-        return True
-    if b"\x00" in data:
-        return False
+    return is_text_candidate(path, data, binary_suffixes=_DICTATED_CONTENT_BINARY_SUFFIXES)
+
+
+def _selected_app_deliverable_present(events: list[Event]) -> bool:
+    return any(
+        isinstance(event, DeliverableEvent) and event.artifact_kind == "app" for event in events
+    )
+
+
+def _finish_alias(loop: AgentLoop) -> str | None:
+    return getattr(loop, "_finish_alias", None)
+
+
+def _contract_required_paths_for_alias(alias: str) -> list[str]:
+    """Required files of every registered contract whose finalizer matches `alias`."""
+
     try:
-        data.decode("utf-8", "strict")
-    except UnicodeDecodeError:
-        return False
-    return True
+        from ...contract.registry import BuildContractRegistry
+
+        reg = BuildContractRegistry.default()
+        out: list[str] = []
+        for kind in reg.kinds():
+            c = reg.get(kind)
+            if c is None or c.verify.finalizer != alias:
+                continue
+            for p in c.artifact.required_files:
+                safe = _safe_deliverable_file_path(p)
+                if safe is not None:
+                    out.append(safe)
+        return out
+    except Exception:  # noqa: BLE001 — finish gate degrades to other path sources
+        return []
+
+
+def _plan_predicates(plan: PlanEvent) -> list[Any]:
+    return [step.done_condition for step in plan.steps if step.done_condition is not None]
+
+
+def _plan_dod_spec(plan: PlanEvent | None) -> DoDSpec | None:
+    if plan is None:
+        return None
+    predicates = _plan_predicates(plan)
+    if not predicates:
+        return None
+    return DoDSpec(
+        predicates=predicates,
+        created_at=plan.timestamp.isoformat(),
+        note=f"approved-plan:{plan.id}:revision:{plan.revision}",
+    )
+
+
+async def _dictated_content_fallback_paths(loop: AgentLoop, events: list[Event]) -> list[str]:
+    """Deliverable-path sources used when no app has been explicitly selected yet."""
+
+    paths: list[str] = []
+    paths.extend(_plan_file_exists_paths(events))
+    paths.extend(_deliverable_event_paths(events))
+    spec = await loop.store.get_external_dod_spec(loop.conversation_id)
+    if spec is not None:
+        for pred in spec.predicates:
+            if isinstance(pred, FileExistsPredicate):
+                p = _safe_deliverable_file_path(pred.path)
+                if p is not None:
+                    paths.append(p)
+    alias = _finish_alias(loop)
+    if alias:
+        paths.extend(_contract_required_paths_for_alias(alias))
+    if _is_web_deliverable(events):
+        paths.append("index.html")
+    return paths
+
+
+def _dedupe_normalized_paths(paths: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        norm = posixpath.normpath(path)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
 
 
 class _ContentGateMixin(_FinishGateProto):
@@ -182,64 +290,19 @@ class _ContentGateMixin(_FinishGateProto):
             raise _DictatedContentInspectionIncomplete(
                 "the selected app handoff path is unsafe or invalid"
             )
-        # `serve` records an explicit entry FILE path. Older persisted events and
-        # direct integrations may still name an app directory, so retain a
-        # fail-closed compatibility bridge only when the sandbox positively
-        # proves the legacy directory's index file exists.
         sbx = getattr(self._loop.executor, "sandbox", None)
-        if sbx is not None and hasattr(sbx, "file_exists"):
-            try:
-                if await sbx.file_exists(selected_entry):
-                    return selected_entry
-                if (
-                    legacy_index is not None
-                    and legacy_index != selected_entry
-                    and await sbx.file_exists(legacy_index)
-                ):
-                    return legacy_index
-            except Exception as exc:  # noqa: BLE001 — strict selected-app evidence boundary
-                raise _DictatedContentInspectionIncomplete(
-                    "the selected app entry could not be verified as a regular file"
-                ) from exc
-            raise _DictatedContentInspectionIncomplete(
-                "the selected app entry does not exist as a regular file"
-            )
-        return selected_entry
+        return await resolve_sandboxed_app_entry(sbx, selected_entry, legacy_index)
 
     def _contract_required_deliverable_paths(self) -> list[str]:
-        """Best-effort bridge from a contract finalizer alias to required files.
+        """Best-effort bridge from a contract finalizer alias to required files."""
 
-        The loop only stores the finalizer alias, not the whole contract. When
-        present, match it against the registry and reuse the contract's required
-        files as primary deliverable candidates. No alias/no match is inert.
-        """
-
-        alias = getattr(self._loop, "_finish_alias", None)
+        alias = _finish_alias(self._loop)
         if not alias:
             return []
-        try:
-            from ...contract.registry import BuildContractRegistry
-
-            reg = BuildContractRegistry.default()
-            out: list[str] = []
-            for kind in reg.kinds():
-                c = reg.get(kind)
-                if c is None or c.verify.finalizer != alias:
-                    continue
-                for p in c.artifact.required_files:
-                    safe = _safe_deliverable_file_path(p)
-                    if safe is not None:
-                        out.append(safe)
-            return out
-        except Exception:  # noqa: BLE001 — finish gate degrades to other path sources
-            return []
+        return _contract_required_paths_for_alias(alias)
 
     async def _dictated_content_deliverable_paths(self, events: list[Event]) -> list[str]:
-        """Primary deliverable files for dictated-content checking.
-
-        Sources are declared files, handoffs, the web convention, and a bounded
-        traversal of an explicitly handed-off app root; arbitrary trees stay out.
-        """
+        """Primary deliverable files for dictated-content checking."""
 
         paths: list[str] = []
         selected_entry = await self._dictated_content_selected_app_entry(events)
@@ -255,28 +318,8 @@ class _ContentGateMixin(_FinishGateProto):
             paths.extend(await self._dictated_content_app_bundle_paths(events))
             paths.extend(_plan_file_exists_paths(events))
         else:
-            paths.extend(_plan_file_exists_paths(events))
-            paths.extend(_deliverable_event_paths(events))
-            spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
-            if spec is not None:
-                for pred in spec.predicates:
-                    if isinstance(pred, FileExistsPredicate):
-                        p = _safe_deliverable_file_path(pred.path)
-                        if p is not None:
-                            paths.append(p)
-            paths.extend(self._contract_required_deliverable_paths())
-            if _is_web_deliverable(events):
-                paths.append("index.html")
-
-        out: list[str] = []
-        seen: set[str] = set()
-        for path in paths:
-            norm = posixpath.normpath(path)
-            if norm in seen:
-                continue
-            seen.add(norm)
-            out.append(norm)
-        return out
+            paths.extend(await _dictated_content_fallback_paths(self._loop, events))
+        return _dedupe_normalized_paths(paths)
 
     async def _dictated_content_app_bundle_paths(self, events: list[Event]) -> list[str]:
         try:
@@ -291,13 +334,10 @@ class _ContentGateMixin(_FinishGateProto):
         self,
         events: list[Event],
     ) -> list[str]:
-        """Boundedly enumerate text candidates belonging to handed-off app roots.
+        """Resolve the handed-off app root, then delegate the bounded walk.
 
-        A multi-file app's explicit handoff names its entry file, not every external
-        CSS/JS/SVG/service-worker sibling. Treat that entry's directory as the bundle
-        root while excluding dependency, VCS, runtime-state, hidden, and known-binary
-        paths. The hard limits keep a large project from turning a finish check into an
-        unbounded workspace crawl.
+        The entry's directory is the bundle root; `bounded_app_bundle_paths`
+        owns the actual traversal and every hard limit.
         """
 
         roots: list[str] = []
@@ -306,147 +346,25 @@ class _ContentGateMixin(_FinishGateProto):
             roots.append(posixpath.dirname(entry) or ".")
         if not roots:
             return []
-
         sbx = getattr(self._loop.executor, "sandbox", None)
-        required = ("list_dir_bounded", "resolve_relpath")
-        if sbx is None or any(not hasattr(sbx, method) for method in required):
-            raise _DictatedContentInspectionIncomplete(
-                "the sandbox lacks bounded app-bundle inspection APIs"
-            )
-
-        for root in roots:
-            try:
-                resolved_root = posixpath.normpath(str(await sbx.resolve_relpath(root)))
-            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
-                raise _DictatedContentInspectionIncomplete(
-                    "the selected app root could not be resolved safely"
-                ) from exc
-            if resolved_root != posixpath.normpath(root):
-                raise _DictatedContentInspectionIncomplete(
-                    "the selected app root resolves through an alias"
-                )
-
-        files: list[str] = []
-        visited_dirs: set[str] = set()
-        stack = [(root, 0) for root in reversed(roots)]
-        entries_seen = 0
-        while stack:
-            directory, depth = stack.pop()
-            if directory in visited_dirs:
-                continue
-            if len(visited_dirs) >= _DICTATED_CONTENT_BUNDLE_MAX_DIRS:
-                raise _DictatedContentInspectionIncomplete(
-                    "the app bundle exceeds the directory inspection limit"
-                )
-            visited_dirs.add(directory)
-            try:
-                entries, truncated = await sbx.list_dir_bounded(
-                    directory,
-                    _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES_PER_DIR,
-                )
-            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
-                raise _DictatedContentInspectionIncomplete(
-                    "an app-bundle directory could not be listed safely"
-                ) from exc
-            if truncated:
-                raise _DictatedContentInspectionIncomplete(
-                    "an app-bundle directory exceeds the entry inspection limit"
-                )
-            entries_seen += len(entries)
-            if entries_seen > _DICTATED_CONTENT_BUNDLE_MAX_ENTRIES:
-                raise _DictatedContentInspectionIncomplete(
-                    "the app bundle exceeds the total entry inspection limit"
-                )
-            for raw_name, entry_kind in entries:
-                name = str(raw_name)
-                if (
-                    not name
-                    or name in {".", ".."}
-                    or name.startswith(".")
-                    or name in _DICTATED_CONTENT_BUNDLE_SKIP_DIRS
-                    or "/" in name
-                    or "\x00" in name
-                    or any(ord(character) < 32 or ord(character) == 127 for character in name)
-                ):
-                    continue
-                child = posixpath.normpath(posixpath.join(directory, name))
-                safe = _safe_deliverable_file_path(child)
-                if safe is None:
-                    continue
-                if entry_kind == "other":
-                    continue
-                if entry_kind == "file":
-                    if posixpath.splitext(safe)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
-                        continue
-                    if safe not in files:
-                        files.append(safe)
-                    if len(files) > _DICTATED_CONTENT_BUNDLE_MAX_FILES:
-                        raise _DictatedContentInspectionIncomplete(
-                            "the app bundle exceeds the file inspection limit"
-                        )
-                elif entry_kind != "directory":
-                    raise _DictatedContentInspectionIncomplete(
-                        "an app-bundle entry has an invalid type classification"
-                    )
-                elif depth >= _DICTATED_CONTENT_BUNDLE_MAX_DEPTH:
-                    raise _DictatedContentInspectionIncomplete(
-                        "the app bundle exceeds the depth inspection limit"
-                    )
-                else:
-                    stack.append((safe, depth + 1))
-        return files
+        return await bounded_app_bundle_paths(
+            sbx,
+            roots,
+            binary_suffixes=_DICTATED_CONTENT_BINARY_SUFFIXES,
+            safe_path=_safe_deliverable_file_path,
+        )
 
     async def _read_deliverable_bytes(self, path: str, *, strict: bool) -> bytes | None:
-        """Read one deliverable file, returning None only when no host/sandbox
-        read surface is available. Missing/empty files return b"" so the content
-        condition fails loudly against the named file."""
+        """Read one deliverable file via the sandbox, else the host workspace path."""
 
         sbx = getattr(self._loop.executor, "sandbox", None)
-        if sbx is not None and hasattr(sbx, "read_file"):
-            try:
-                data = await sbx.read_file(path)
-            except FileNotFoundError:
-                return b""
-            except Exception as exc:  # noqa: BLE001 — becomes visible unverifiable evidence
-                if not strict:
-                    _LOG.warning("dictated-content read failed for %s: %s", path, exc)
-                    return b""
-                raise _DictatedContentInspectionIncomplete(
-                    "a declared deliverable could not be read safely"
-                ) from exc
-            if isinstance(data, bytes):
-                return data
-            return str(data).encode("utf-8", "surrogatepass")
-
-        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-        if not workspace:
-            return None
-        from pathlib import Path
-
-        try:
-            root = Path(workspace).resolve()
-            candidate = (root / path).resolve()
-            root_s = str(root)
-            cand_s = str(candidate)
-            if not (cand_s == root_s or cand_s.startswith(root_s.rstrip("/") + "/")):
-                return b""
-            if not candidate.is_file():
-                return b""
-            if candidate.stat().st_size > _DICTATED_CONTENT_MAX_FILE_BYTES:
-                if not strict:
-                    _LOG.warning("dictated-content file exceeds inspection budget: %s", path)
-                    return b""
-                raise _DictatedContentInspectionIncomplete(
-                    "a text deliverable exceeds the per-file inspection budget"
-                )
-            return candidate.read_bytes()
-        except OSError as exc:
-            if not strict:
-                _LOG.warning("dictated-content workspace read failed for %s: %s", path, exc)
-                return b""
-            raise _DictatedContentInspectionIncomplete(
-                "a declared deliverable could not be read from the workspace"
-            ) from exc
+        return await read_deliverable_bytes(
+            sbx,
+            path,
+            strict=strict,
+            max_file_bytes=_DICTATED_CONTENT_MAX_FILE_BYTES,
+            log=_LOG,
+        )
 
     async def _first_dictated_content_miss(
         self,
@@ -455,57 +373,92 @@ class _ContentGateMixin(_FinishGateProto):
         *,
         strict: bool,
     ) -> tuple[DictatedContentCondition, list[str]] | None:
-        unresolved = list(conditions)
-        checked: list[str] = []
-        total_bytes = 0
-        for path in paths:
-            if posixpath.splitext(path)[1].lower() in _DICTATED_CONTENT_BINARY_SUFFIXES:
-                continue
-            data = await self._read_deliverable_bytes(path, strict=strict)
-            if data is None:
-                continue
-            if len(data) > _DICTATED_CONTENT_MAX_FILE_BYTES:
-                if not strict:
-                    continue
-                raise _DictatedContentInspectionIncomplete(
-                    "a text deliverable exceeds the per-file inspection budget"
+        return await first_dictated_content_miss(
+            conditions,
+            paths,
+            strict=strict,
+            read_bytes=lambda path: self._read_deliverable_bytes(path, strict=strict),
+            max_file_bytes=_DICTATED_CONTENT_MAX_FILE_BYTES,
+            max_total_bytes=_DICTATED_CONTENT_MAX_TOTAL_BYTES,
+            binary_suffixes=_DICTATED_CONTENT_BINARY_SUFFIXES,
+            log=_LOG,
+        )
+
+    async def _dictated_content_compute_miss(
+        self,
+        events: list[Event],
+        conditions: list[DictatedContentCondition],
+        *,
+        selected_app: bool,
+    ) -> tuple[DictatedContentCondition, list[str]] | None:
+        """Compute the first unmet condition, or raise the short-circuit-pass signal.
+
+        A selected app checks its authoritative entry first (existential proof
+        needs no sibling discovery), widening to the full bundle only if that
+        alone doesn't prove every literal; otherwise scans the ordinary
+        deliverable-path surface.
+        """
+
+        if not selected_app:
+            paths = await self._dictated_content_deliverable_paths(events)
+            if not paths:
+                raise _DictatedContentShortCircuitPass
+            return await self._first_dictated_content_miss(conditions, paths, strict=False)
+
+        async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
+            selected_entry = await self._dictated_content_selected_app_entry(events)
+            if selected_entry is None:
+                raise _DictatedContentShortCircuitPass
+            try:
+                entry_miss = await self._first_dictated_content_miss(
+                    conditions, [selected_entry], strict=True,
                 )
-            total_bytes += len(data)
-            if total_bytes > _DICTATED_CONTENT_MAX_TOTAL_BYTES:
-                if not strict:
-                    _LOG.warning("dictated-content files exceed total inspection budget")
-                    return None
-                raise _DictatedContentInspectionIncomplete(
-                    "the app bundle exceeds the total byte inspection budget"
-                )
-            if not _dictated_content_text_candidate(path, data):
-                continue
-            checked.append(path)
-            unresolved = [
-                condition
-                for condition in unresolved
-                if condition.literal.encode("utf-8", "surrogatepass") not in data
-            ]
-            if not unresolved:
+            except _DictatedContentInspectionIncomplete:
+                entry_miss = (conditions[0], [])
+            if entry_miss is None:
                 return None
-        if not checked:
-            if not strict:
-                _LOG.warning(
-                    "dictated-content conditions present but no readable non-app "
-                    "deliverable surface is available; skipping the compatibility gate"
-                )
-                return None
-            raise _DictatedContentInspectionIncomplete(
-                "no readable text deliverable surface was available"
-            )
-        return (unresolved[0], checked) if unresolved else None
+            paths = await self._dictated_content_deliverable_paths(events)
+            if not paths:
+                raise _DictatedContentShortCircuitPass
+            return await self._first_dictated_content_miss(conditions, paths, strict=True)
+
+    async def _dictated_content_report_inspection_incomplete(
+        self, inspection_error: _DictatedContentInspectionIncomplete
+    ) -> None:
+        inspection_cause = _dictated_content_inspection_cause(inspection_error)
+        _LOG.warning(
+            "dictated-content inspection incomplete: %s; cause=%s",
+            inspection_error,
+            inspection_cause or "unavailable",
+        )
+        await emit_dictated_content_inspection_incomplete_notice(
+            self._loop, inspection_error, inspection_cause
+        )
+        self._loop._pause_requested.set()
+
+    async def _dictated_content_handle_miss(
+        self,
+        cond: DictatedContentCondition,
+        checked_paths: list[str],
+    ) -> bool:
+        """Cap-bounded refusal: release loudly at the cap, else refuse and retry."""
+
+        file_word = "file" if len(checked_paths) == 1 else "files"
+        files = ", ".join(f"`{p}`" for p in checked_paths)
+        if self._loop._dictated_content_refusals >= _DICTATED_CONTENT_REFUSAL_CAP:
+            if self._loop._dictated_content_refusals == _DICTATED_CONTENT_REFUSAL_CAP:
+                await emit_dictated_content_cap_release_notice(self._loop, cond, file_word, files)
+                self._loop._dictated_content_refusals += 1
+            return True
+        self._loop._dictated_content_refusals += 1
+        await emit_dictated_content_refusal_notice(self._loop, cond, file_word, files)
+        return False
 
     async def dictated_content_gate_passed(self, events: list[Event]) -> bool:
         """REL-RC-O finish gate: quoted user literals must be present verbatim.
 
         Conditions are reconstructed from USER messages bound to PlanEvent
-        revisions. The current revision inherits all prior revisions, so a later
-        phase cannot silently drop content quoted earlier in the conversation.
+        revisions; the current revision inherits all prior ones.
         """
 
         if not self._loop._planning_tools or self._loop.mode == OperatingMode.PLANNING:
@@ -524,228 +477,76 @@ class _ContentGateMixin(_FinishGateProto):
         if not conditions:
             self._loop._dictated_content_refusals = 0
             return True
-        inspection_error: _DictatedContentInspectionIncomplete | None = None
+        selected_app = _selected_app_deliverable_present(events)
         miss: tuple[DictatedContentCondition, list[str]] | None = None
-        selected_app = any(
-            isinstance(event, DeliverableEvent) and event.artifact_kind == "app" for event in events
-        )
         try:
-            if selected_app:
-                async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
-                    selected_entry = await self._dictated_content_selected_app_entry(events)
-                    if selected_entry is None:
-                        return True
-                    # The content predicate is existential. When the authoritative
-                    # handoff itself proves every literal, sibling discovery cannot
-                    # invalidate that proof and must not become a redundant finish
-                    # dependency. If the entry is unreadable or incomplete, retain
-                    # the existing bounded, fail-closed whole-bundle inspection.
-                    try:
-                        entry_miss = await self._first_dictated_content_miss(
-                            conditions,
-                            [selected_entry],
-                            strict=True,
-                        )
-                    except _DictatedContentInspectionIncomplete:
-                        entry_miss = (conditions[0], [])
-                    if entry_miss is None:
-                        miss = None
-                    else:
-                        paths = await self._dictated_content_deliverable_paths(events)
-                        if not paths:
-                            return True
-                        miss = await self._first_dictated_content_miss(
-                            conditions,
-                            paths,
-                            strict=True,
-                        )
-            else:
-                paths = await self._dictated_content_deliverable_paths(events)
-                if not paths:
-                    return True
-                miss = await self._first_dictated_content_miss(
-                    conditions,
-                    paths,
-                    strict=False,
-                )
+            miss = await self._dictated_content_compute_miss(
+                events, conditions, selected_app=selected_app
+            )
+        except _DictatedContentShortCircuitPass:
+            return True
         except TimeoutError:
             inspection_error = _DictatedContentInspectionIncomplete(
                 "the complete app-content inspection exceeded its wall-clock limit"
             )
         except _DictatedContentInspectionIncomplete as exc:
             inspection_error = exc
+        else:
+            inspection_error = None
         if inspection_error is not None:
-            inspection_cause = _dictated_content_inspection_cause(inspection_error)
-            _LOG.warning(
-                "dictated-content inspection incomplete: %s; cause=%s",
-                inspection_error,
-                inspection_cause or "unavailable",
-            )
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail="dictated_content_inspection_incomplete",
-                    meta={"inspection_cause": inspection_cause},
-                )
-            )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\nThe dictated-content finish check could not "
-                            "inspect the selected app completely: "
-                            f"{inspection_error}. The task is NOT "
-                            "complete and has been paused fail-closed; repair the workspace "
-                            "or sandbox evidence surface before finishing.\n</system-reminder>"
-                        ),
-                    ),
-                )
-            )
-            self._loop._pause_requested.set()
+            await self._dictated_content_report_inspection_incomplete(inspection_error)
             return False
         if miss is None:
             self._loop._dictated_content_refusals = 0
             return True
-
         cond, checked_paths = miss
-        file_word = "file" if len(checked_paths) == 1 else "files"
-        files = ", ".join(f"`{p}`" for p in checked_paths)
-        literal = cond.literal
+        return await self._dictated_content_handle_miss(cond, checked_paths)
 
-        if self._loop._dictated_content_refusals >= _DICTATED_CONTENT_REFUSAL_CAP:
-            if self._loop._dictated_content_refusals == _DICTATED_CONTENT_REFUSAL_CAP:
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.RUNNING,
-                        detail="dictated_content_release",
-                    )
-                )
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "⚠ Finished despite missing dictated content after "
-                                f"{self._loop._dictated_content_refusals} refusals: "
-                                f"literal {literal!r} from plan revision {cond.revision} "
-                                f"still was not found in deliverable {file_word} {files}. "
-                                "Releasing the finish gate to avoid an unbounded loop; "
-                                "the deliverable may fail content review."
-                            ),
-                        ),
-                    )
-                )
-                self._loop._dictated_content_refusals += 1
-            return True
+    async def _reject_dangling_plan_evidence(
+        self, events: list[Event], plan: PlanEvent | None
+    ) -> bool:
+        """True (after pausing fail-closed) when approval exists without a plan."""
 
-        self._loop._dictated_content_refusals += 1
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "<system-reminder>\n"
-                        "You called finish, but a quoted user literal is missing "
-                        f"from the deliverable {file_word} {files}: {literal!r}.\n\n"
-                        f"This literal was dictated in the user instruction for plan "
-                        f"revision {cond.revision} and is carried forward into the "
-                        "current revision. The match is case-sensitive and exact. "
-                        "It needs to appear in one appropriate text deliverable, not "
-                        "in every listed file. Never add text to a binary asset. Update "
-                        "a suitable text deliverable so it contains that exact text, then "
-                        "finish again.\n"
-                        "</system-reminder>"
-                    ),
-                ),
-                # Typed provenance, matching this gate's sibling rejections
-                # (dod_unmet, plan_verification_evidence_invalid): a finish-gate
-                # refusal is a NEW proof obligation, and recovery-episode
-                # derivation must recognize it without parsing prose.
-                meta={"blocking": "user_literal_missing"},
-            )
-        )
-        return False
-
-    async def finish_dod_gate_passed(self) -> bool:
-        """Evaluate immutable external requirements and the current plan separately."""
-        events = await self._loop._events()
-        external_spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
-        plan = signals.latest_approved_plan(events)
         approval_exists = any(
             isinstance(event, StatusEvent) and event.detail == "plan_approved" for event in events
         )
-        if approval_exists and plan is None:
-            _LOG.error(
-                "Approved plan evidence for %s is dangling or fingerprint-mismatched; pausing.",
-                self._loop.conversation_id,
-            )
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail="plan_verification_evidence_invalid",
-                )
-            )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\nThe approved-plan verification record "
-                            "does not match a complete persisted PlanEvent. The task is "
-                            "NOT complete and has been paused fail-closed; repair the "
-                            "event evidence before continuing.\n</system-reminder>"
-                        ),
-                    ),
-                    meta={"blocking": "plan_verification_evidence_invalid"},
-                )
-            )
-            self._loop._pause_requested.set()
+        if not (approval_exists and plan is None):
             return False
-        plan_predicates = (
-            [step.done_condition for step in plan.steps if step.done_condition is not None]
-            if plan is not None
-            else []
+        _LOG.error(
+            "Approved plan evidence for %s is dangling or fingerprint-mismatched; pausing.",
+            self._loop.conversation_id,
         )
-        plan_spec = (
-            DoDSpec(
-                predicates=plan_predicates,
-                created_at=plan.timestamp.isoformat(),
-                note=f"approved-plan:{plan.id}:revision:{plan.revision}",
-            )
-            if plan_predicates and plan is not None
-            else None
-        )
-        if external_spec is None and plan_spec is None:
-            return True
+        await emit_dangling_plan_evidence_notice(self._loop)
+        self._loop._pause_requested.set()
+        return True
+
+    async def _dod_evaluator_or_pause(self) -> DoDEvaluator | None:
+        """Build the DoD evaluator; on workspace-unavailable, pause and return None."""
+
         try:
-            evaluator = await self.build_dod_evaluator()
+            return await self.build_dod_evaluator()
         except _DoDWorkspaceUnavailable as exc:
             _LOG.warning(
                 "Acceptance verification for %s has no workspace evidence; pausing: %s",
                 self._loop.conversation_id,
                 exc,
             )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\nThe acceptance requirements "
-                            "could not be evaluated because the sandbox evidence surface "
-                            "is unavailable. The task is NOT complete and has been paused "
-                            "fail-closed; repair the sandbox before continuing.\n"
-                            "</system-reminder>"
-                        ),
-                    ),
-                )
-            )
+            await emit_dod_workspace_unavailable_notice(self._loop)
             self._loop._pause_requested.set()
+            return None
+
+    async def finish_dod_gate_passed(self) -> bool:
+        """Evaluate immutable external requirements and the current plan separately."""
+        events = await self._loop._events()
+        external_spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
+        plan = signals.latest_approved_plan(events)
+        if await self._reject_dangling_plan_evidence(events, plan):
+            return False
+        plan_spec = _plan_dod_spec(plan)
+        if external_spec is None and plan_spec is None:
+            return True
+        evaluator = await self._dod_evaluator_or_pause()
+        if evaluator is None:
             return False
 
         if external_spec is not None:
@@ -764,17 +565,11 @@ class _ContentGateMixin(_FinishGateProto):
             conversation_id=self._loop.conversation_id,
         )
         if plan_verdict.passed:
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail="plan_verification_passed",
-                    plan_verifier_pass=PlanVerifierPass(
-                        plan_revision=plan.revision,
-                        plan_event_id=plan.id,
-                        predicate_fingerprints=predicate_fingerprints(plan_predicates),
-                        spec_fingerprint=plan_verdict.spec_fingerprint,
-                    ),
-                )
+            await emit_plan_verification_passed_notice(
+                self._loop,
+                plan,
+                predicate_fingerprints(_plan_predicates(plan)),
+                plan_verdict.spec_fingerprint,
             )
             return True
         return await self._record_plan_verifier_failure(plan, plan_verdict, events)
@@ -789,53 +584,11 @@ class _ContentGateMixin(_FinishGateProto):
                 self._loop._dod_refusals,
                 _DOD_REFUSAL_CAP,
             )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\nThe external Definition-of-Done is "
-                            "still unmet after the bounded retry budget. The task is NOT "
-                            "complete. This run is pausing for explicit user review rather "
-                            "than silently marking incomplete work done.\n</system-reminder>"
-                        ),
-                    ),
-                    meta={"blocking": "dod_unmet"},
-                )
-            )
+            await emit_external_dod_cap_pause_notice(self._loop)
             self._loop._pause_requested.set()
             return False
         self._loop._dod_refusals += 1
-        unmet_lines: list[str] = []
-        for result in verdict.results:
-            if result.passed:
-                continue
-            # The frozen predicate's repr names kind + fields. Pair with
-            # the verdict's reason (the human explanation).
-            label = "could not verify" if result.unverifiable else "reason"
-            unmet_lines.append(f"  - {result.predicate!r}\n      {label}: {result.reason}")
-        unmet_block = "\n".join(unmet_lines) if unmet_lines else "  - (no per-predicate results)"
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "<system-reminder>\n"
-                        "You called finish, but the external Definition-of-Done "
-                        f"evaluator found {len(verdict.unmet)} unmet acceptance "
-                        f"predicate(s) (spec fingerprint {verdict.spec_fingerprint}):\n\n"
-                        f"{unmet_block}\n\n"
-                        "The task is NOT complete. These predicates were captured at "
-                        "an external authority and live outside the agent's tool surface — "
-                        "a plan revision cannot edit, remove, or shadow them. Fix what they "
-                        "surface (the predicates name the gap), then finish again.\n"
-                        "</system-reminder>"
-                    ),
-                ),
-            )
-        )
+        await emit_external_dod_unmet_notice(self._loop, verdict)
         return False
 
     async def _record_plan_verifier_failure(
@@ -845,107 +598,10 @@ class _ContentGateMixin(_FinishGateProto):
         events: list[Event],
     ) -> bool:
         """Record a typed plan failure, then bound repair → replan → STUCK."""
-        predicate_fps = predicate_fingerprints(
-            [step.done_condition for step in plan.steps if step.done_condition is not None]
-        )
-        failed_results = [result for result in verdict.results if not result.passed]
-        failure_kinds = [
-            (
-                "timeout"
-                if bool(result.details.get("timed_out"))
-                else "denied"
-                if bool(result.details.get("denied"))
-                else "unverifiable"
-                if result.unverifiable
-                else str(result.details.get("kind") or result.predicate.kind)
-            )
-            for result in failed_results
-        ]
-        failure_payload = [
-            {
-                "predicate": predicate_fingerprint(result.predicate),
-                "kind": failure_kinds[index],
-                "reason": result.reason,
-                "exit_code": result.details.get("exit_code"),
-                "status_code": result.details.get("status_code"),
-                "timed_out": bool(result.details.get("timed_out")),
-            }
-            for index, result in enumerate(failed_results)
-        ]
-        failure_fingerprint = (
-            "sha256:"
-            + hashlib.sha256(
-                json.dumps(failure_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            ).hexdigest()
-        )
-        prior_same_plan = [
-            event.plan_verifier_failure
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.plan_verifier_failure is not None
-            and event.plan_verifier_failure.plan_event_id == plan.id
-        ]
-        approvals_with_same_predicates = sum(
-            1
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.plan_verification_transition is not None
-            and event.plan_verification_transition.new_predicate_fingerprints == predicate_fps
-        )
-        prior_same_set_failures = sum(
-            1
-            for event in events
-            if isinstance(event, StatusEvent)
-            and event.plan_verifier_failure is not None
-            and event.plan_verifier_failure.predicate_fingerprints == predicate_fps
-        )
-        replan_exhausted = approvals_with_same_predicates >= 2 and prior_same_set_failures + 1 >= 3
-        failure = PlanVerifierFailure(
-            plan_revision=plan.revision,
-            plan_event_id=plan.id,
-            predicate_fingerprints=predicate_fps,
-            failed_predicate_fingerprints=_failed_predicate_fingerprints(failed_results),
-            spec_fingerprint=verdict.spec_fingerprint,
-            failure_fingerprint=failure_fingerprint,
-            failure_kinds=failure_kinds,
-            attempt_for_approved_plan=len(prior_same_plan) + 1,
-            approvals_with_same_predicates=max(1, approvals_with_same_predicates),
-            replan_allowed=not replan_exhausted,
-        )
-        await self._loop._emit(
-            StatusEvent(
-                status=ConversationStatus.RUNNING,
-                detail="plan_verification_failed",
-                plan_verifier_failure=failure,
-            )
-        )
-        unmet_block = "\n".join(
-            f"  - {result.predicate!r}\n      reason: {result.reason}" for result in failed_results
-        )
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "<system-reminder>\nThe current approved plan's verification "
-                        f"conditions failed (plan revision {plan.revision}, "
-                        f"failure {failure_fingerprint}):\n\n{unmet_block}\n\n"
-                        "The task is NOT complete. These conditions belong only to the "
-                        "current plan revision. Fix the deliverable and retry, or submit a "
-                        "revised plan for approval; a newer approved plan may replace these "
-                        "plan-owned conditions but cannot alter external acceptance requirements.\n"
-                        "</system-reminder>"
-                    ),
-                ),
-                meta={
-                    "blocking": "plan_verifier_failed",
-                    "failure_fingerprint": failure_fingerprint,
-                },
-            )
-        )
+        failure, failed_results = build_plan_verifier_failure(plan, verdict, events)
+        await emit_plan_verifier_failure_notice(self._loop, plan, failure, failed_results)
 
-        if replan_exhausted:
+        if not failure.replan_allowed:
             await self._loop._land_blocked(
                 reason="unchanged plan verifier failed after approved replan",
                 guidance=(
@@ -958,44 +614,19 @@ class _ContentGateMixin(_FinishGateProto):
             )
             return False
 
-        if len(prior_same_plan) + 1 >= 2:
+        if failure.attempt_for_approved_plan >= 2:
             self._loop.mode = OperatingMode.PLANNING
             self._loop._plan_explore_reads = 0
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.RUNNING,
-                    detail="planning",
-                )
-            )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\nThe same unchanged plan-owned verifier "
-                            "has failed twice. Re-planning is now required. Submit a corrected "
-                            "plan; it must preserve every external requirement.\n"
-                            "</system-reminder>"
-                        ),
-                    ),
-                    meta={"blocking": "plan_verifier_replan_required"},
-                )
-            )
+            await emit_plan_verifier_replan_required_notice(self._loop)
         return False
 
     async def build_dod_evaluator(self) -> DoDEvaluator:
-        """Construct the DoDEvaluator. Two paths:
+        """Construct the DoDEvaluator.
 
-          * `_dod_evaluator_factory` is set (test seam): call it, ignore args.
-          * Otherwise: use the sandbox's own file/command/HTTP surfaces. A host
-            workspace path is optional; container backends are graded inside
-            their namespace rather than silently skipping the gate.
-
-        The factory is the dependency-injection point — tests close over
-        a tmp_path + fake command_runner / http_probe and return a fully
-        configured `DoDEvaluator`. Production callers leave the factory
-        None and the engine does the workspace resolution here.
+        Two paths: a test-seam factory (`_dod_evaluator_factory`, the
+        dependency-injection point — tests close over a fake command_runner /
+        http_probe there), or production, where `build_sandbox_dod_evaluator`
+        resolves the sandbox's own file/command/HTTP surfaces from the executor.
         """
         if self._loop._dod_evaluator_factory is not None:
             # The factory is an async-callable in the common case (tests
@@ -1015,163 +646,7 @@ class _ContentGateMixin(_FinishGateProto):
             # branch), so the awaited-away Coroutine lingers in the static type;
             # at runtime `result` is always the resolved DoDEvaluator here.
             return cast(DoDEvaluator, result)
-        sbx = getattr(self._loop.executor, "sandbox", None)
-        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-        sandbox_evidence = sbx is not None and all(
-            hasattr(sbx, method) for method in ("file_exists", "exec_shell", "resolve_relpath")
-        )
-        if not workspace and not sandbox_evidence:
-            raise _DoDWorkspaceUnavailable(
-                f"no sandbox evidence API on executor {type(self._loop.executor).__name__}"
-            )
-        from pathlib import Path
-
-        file_checker = None
-        if (
-            sbx is not None
-            and hasattr(sbx, "file_exists")
-            and hasattr(sbx, "exec_shell")
-            and hasattr(sbx, "resolve_relpath")
-        ):
-            import shlex
-
-            from ...dod_evaluator import DoDPredicateResult
-
-            async def _in_sandbox_file_checker(
-                predicate: FileExistsPredicate,
-            ) -> DoDPredicateResult:
-                try:
-                    exists = await sbx.file_exists(predicate.path)
-                except Exception as exc:  # noqa: BLE001 — fail closed with evidence
-                    return DoDPredicateResult(
-                        predicate=predicate,
-                        passed=False,
-                        reason=f"sandbox file check failed: {type(exc).__name__}: {exc}",
-                        unverifiable=True,
-                        details={"kind": "file_exists", "path": predicate.path},
-                    )
-                if not exists:
-                    return DoDPredicateResult(
-                        predicate=predicate,
-                        passed=False,
-                        reason=f"file does not exist as a regular workspace file: {predicate.path}",
-                        details={"kind": "file_exists", "path": predicate.path},
-                    )
-                try:
-                    relpath = await sbx.resolve_relpath(predicate.path)
-                    res = await sbx.exec_shell(
-                        shlex.join(["sh", "-c", 'test -s "$1"', "disco", relpath]),
-                        timeout_s=5,
-                    )
-                except Exception as exc:  # noqa: BLE001 — fail closed with evidence
-                    return DoDPredicateResult(
-                        predicate=predicate,
-                        passed=False,
-                        reason=f"sandbox non-empty check failed: {type(exc).__name__}: {exc}",
-                        unverifiable=True,
-                        details={"kind": "file_exists", "path": predicate.path},
-                    )
-                passed = int(res.exit_code) == 0
-                return DoDPredicateResult(
-                    predicate=predicate,
-                    passed=passed,
-                    reason=(
-                        f"regular non-empty workspace file exists: {predicate.path}"
-                        if passed
-                        else f"workspace file is empty: {predicate.path}"
-                    ),
-                    details={
-                        "kind": "file_exists",
-                        "path": predicate.path,
-                        "exit_code": int(res.exit_code),
-                    },
-                )
-
-            file_checker = _in_sandbox_file_checker
-
-        # An `http_ok` serve-check must probe from INSIDE the sandbox: a build's dev
-        # server binds the SANDBOX's localhost, not the host's. The default host-side
-        # urlopen would hit the agent-server (404 on `/`), false-failing every sandboxed
-        # serve and spinning the model into re-serve/re-verify loops. Route the probe
-        # through `exec_shell` + curl when the backend supports it; otherwise fall back
-        # to the default host probe (e.g. the process backend shares the host network).
-        http_probe = None
-        if sbx is not None and hasattr(sbx, "exec_shell"):
-            import shlex
-
-            async def _in_sandbox_http_probe(url: str, expected_status: int) -> HttpProbeResult:
-                cmd = "curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + shlex.quote(url)
-                try:
-                    res = await sbx.exec_shell(cmd, timeout_s=15)
-                except Exception as exc:  # noqa: BLE001 — a probe failure is "not probed", never a crash
-                    return HttpProbeResult(
-                        status_code=None,
-                        error_message=f"sandbox http probe failed: {exc}",
-                    )
-                out = (res.stdout or "").strip()
-                if not out.isdigit() or out == "000":
-                    return HttpProbeResult(
-                        status_code=None,
-                        error_message=(
-                            f"sandbox curl produced no HTTP status "
-                            f"(got {out!r}, exit {res.exit_code})"
-                        ),
-                    )
-                return HttpProbeResult(status_code=int(out))
-
-            http_probe = _in_sandbox_http_probe
-
-        # W3 C-2/C-4: a DoD `command` predicate is model-authored (it is copied
-        # from the plan's `done_condition`). It must NEVER run as a host-side
-        # `subprocess(shell=True)` — the DoDEvaluator's default runner does exactly
-        # that. Mirror the http probe: route the command through the box via
-        # `exec_shell`, so on a container backend it executes in the sandbox and
-        # on the process backend it at least stays behind the hard-deny floor
-        # (the deeper guarantee is OS isolation on the container backends). Without
-        # this, `command: "curl … | sh"` in a plan step ran on the host at `finish`.
-        command_runner = None
-        if sbx is not None and hasattr(sbx, "exec_shell"):
-            from ...dod_evaluator import CommandResult
-            from ...dod_util import _hard_deny_reason
-
-            async def _in_sandbox_command_runner(command: str) -> CommandResult:
-                deny = _hard_deny_reason(command)
-                if deny is not None:
-                    return CommandResult(
-                        exit_code=None,
-                        error_message=f"hard-denied: {deny}",
-                        denied=True,
-                        deny_reason=deny,
-                    )
-                try:
-                    res = await sbx.exec_shell(command, timeout_s=30)
-                except Exception as exc:  # noqa: BLE001 — a check failure is "not run", never a crash
-                    return CommandResult(
-                        exit_code=None,
-                        error_message=f"sandbox exec error: {type(exc).__name__}: {exc}",
-                    )
-                if getattr(res, "timed_out", False):
-                    return CommandResult(
-                        exit_code=None,
-                        stdout=res.stdout or "",
-                        stderr=res.stderr or "",
-                        error_message="timeout after 30s in sandbox",
-                        timed_out=True,
-                    )
-                return CommandResult(
-                    exit_code=int(res.exit_code),
-                    stdout=res.stdout or "",
-                    stderr=res.stderr or "",
-                )
-
-            command_runner = _in_sandbox_command_runner
-
-        return DoDEvaluator(
-            Path(workspace) if workspace else Path("."),
-            command_runner=command_runner,
-            http_probe=http_probe,
-            file_checker=file_checker,
-        )
+        return await build_sandbox_dod_evaluator(self._loop.executor)
 
     async def gate_execution_nudge(self, step: AgentStep, events: list[Event]) -> Disp:
         # PLAN-MODE EXECUTION GATE — a forcing function, NOT a prompt. If
@@ -1204,40 +679,17 @@ class _ContentGateMixin(_FinishGateProto):
                     _EXECUTION_NUDGE_CAP,
                     self._loop.conversation_id,
                 )
-                await self._loop._land_blocked(
-                    reason="approve_plan_no_execution",
-                    guidance=(
-                        "Plan approved but no execution action was taken after "
-                        f"{self._loop._execution_nudges} execution reminders. "
-                        "The plan was not executed."
-                    ),
-                    legacy_status=ConversationStatus.STUCK,
-                    legacy_detail="approve_plan_no_execution",
-                )
+                await land_execution_nudge_exhausted(self._loop, self._loop._execution_nudges)
                 return Disp.HALT
 
             self._loop._execution_nudges += 1  # telemetry + cap counter
-            # Surface the model's reasoning before nudging (don't
-            # discard it) — mirror the plan-nudge sibling.
-            if step.thought.strip():
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.AGENT,
-                        message=LLMMessage(role="assistant", content=step.thought),
-                    )
-                )
-            else:
-                # An empty finish-step persists nothing, so it's
-                # invisible to every event-derived detector; the
-                # instance counter has to carry it (the (g) no-op
-                # path does the same).
+            # Surface the model's reasoning before nudging (don't discard
+            # it — mirror the plan-nudge sibling); an empty finish-step
+            # persists nothing, so it's invisible to every event-derived
+            # detector and the instance counter has to carry it (the (g)
+            # no-op path does the same).
+            if not await emit_execution_nudge(self._loop, step.thought, _EXECUTION_NUDGE):
                 self._loop._invisible_steps += 1
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_EXECUTION_NUDGE),
-                )
-            )
             # The execution-nudge cap (_EXECUTION_NUDGE_CAP) is the
             # backstop for this path: after N nudges the gate emits
             # FINISHED and halts above. The old noop valve call has
