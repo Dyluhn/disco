@@ -219,6 +219,75 @@ def _verified_manifest(raw: bytes) -> dict[str, object]:
     return manifest
 
 
+def _extract_archive_members(
+    source: BinaryIO, staging: Path
+) -> tuple[bytes, dict[PurePosixPath, int]]:
+    """Validate and extract every archive member into ``staging``.
+
+    Returns the raw manifest bytes and the per-directory mode recorded for
+    each directory member (streaming extraction does not reliably apply it).
+    """
+    manifest_raw: bytes | None = None
+    seen: set[str] = set()
+    directory_modes: dict[PurePosixPath, int] = {}
+    with tarfile.open(fileobj=source, mode="r|gz") as archive:
+        for member in archive:
+            _safe_member(member)
+            if member.name in seen:
+                raise DataLifecycleError(f"duplicate archive member: {member.name!r}")
+            seen.add(member.name)
+            if member.name == _MANIFEST_NAME:
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise DataLifecycleError("backup manifest is not a regular file")
+                manifest_raw = extracted.read()
+                continue
+            if not member.name.startswith(_DATA_PREFIX):
+                raise DataLifecycleError(f"unexpected archive member: {member.name!r}")
+            if member.isdir():
+                relative = PurePosixPath(member.name).relative_to(PurePosixPath(_DATA_PREFIX))
+                directory_modes[relative] = member.mode
+            archive.extract(member, path=staging, filter="data")
+    if manifest_raw is None:
+        raise DataLifecycleError("backup archive has no manifest")
+    return manifest_raw, directory_modes
+
+
+def _apply_directory_modes(extracted_data: Path, directory_modes: dict[PurePosixPath, int]) -> None:
+    # Streaming TarFile.extract() creates existing parent directories with
+    # the process umask and does not reliably apply their archived mode.
+    # Reapply the safe member metadata before comparing it to the manifest;
+    # a tar/manifest disagreement still fails the exact row comparison.
+    for relative, mode in sorted(
+        directory_modes.items(), key=lambda item: len(item[0].parts), reverse=True
+    ):
+        (extracted_data / relative).chmod(mode)
+
+
+def _verify_restored_entries(extracted_data: Path, manifest: dict[str, object]) -> None:
+    actual = [item.manifest_row() for item in _scan_items(extracted_data)]
+    expected = manifest["entries"]
+    if actual != expected:
+        raise DataLifecycleError("backup entry checksums or metadata do not match the manifest")
+
+
+def _verify_restored_database(extracted_data: Path) -> None:
+    with sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True) as check:
+        result = check.execute("PRAGMA integrity_check").fetchone()
+    if result != ("ok",):
+        raise DataLifecycleError(f"restored SQLite integrity check failed: {result!r}")
+    # A database whose persisted journal mode is WAL may create fresh empty
+    # sidecars even for the integrity-check connection. They are not backup
+    # data and must not be promoted into the restored volume.
+    for sidecar in _DB_SIDECARS:
+        (extracted_data / sidecar).unlink(missing_ok=True)
+
+
+def _promote_restored_data(extracted_data: Path, data_dir: Path) -> None:
+    for child in sorted(extracted_data.iterdir(), key=lambda item: item.name):
+        child.replace(data_dir / child.name)
+
+
 def restore_archive(source: BinaryIO, data_dir: Path) -> dict[str, object]:
     """Validate and restore ``source`` into an existing empty data directory."""
 
@@ -227,57 +296,16 @@ def restore_archive(source: BinaryIO, data_dir: Path) -> dict[str, object]:
     if _data_children(data_dir):
         raise DataLifecycleError(f"restore target is not empty: {data_dir}")
     staging = Path(tempfile.mkdtemp(prefix=".disco-restore-", dir=data_dir))
-    manifest_raw: bytes | None = None
-    seen: set[str] = set()
-    directory_modes: dict[PurePosixPath, int] = {}
     try:
-        with tarfile.open(fileobj=source, mode="r|gz") as archive:
-            for member in archive:
-                _safe_member(member)
-                if member.name in seen:
-                    raise DataLifecycleError(f"duplicate archive member: {member.name!r}")
-                seen.add(member.name)
-                if member.name == _MANIFEST_NAME:
-                    extracted = archive.extractfile(member)
-                    if extracted is None:
-                        raise DataLifecycleError("backup manifest is not a regular file")
-                    manifest_raw = extracted.read()
-                    continue
-                if not member.name.startswith(_DATA_PREFIX):
-                    raise DataLifecycleError(f"unexpected archive member: {member.name!r}")
-                if member.isdir():
-                    relative = PurePosixPath(member.name).relative_to(PurePosixPath(_DATA_PREFIX))
-                    directory_modes[relative] = member.mode
-                archive.extract(member, path=staging, filter="data")
-        if manifest_raw is None:
-            raise DataLifecycleError("backup archive has no manifest")
+        manifest_raw, directory_modes = _extract_archive_members(source, staging)
         manifest = _verified_manifest(manifest_raw)
         extracted_data = staging / _ARCHIVE_ROOT / "data"
         if not (extracted_data / _DB_NAME).is_file():
             raise DataLifecycleError("backup archive has no SQLite database")
-        # Streaming TarFile.extract() creates existing parent directories with
-        # the process umask and does not reliably apply their archived mode.
-        # Reapply the safe member metadata before comparing it to the manifest;
-        # a tar/manifest disagreement still fails the exact row comparison.
-        for relative, mode in sorted(
-            directory_modes.items(), key=lambda item: len(item[0].parts), reverse=True
-        ):
-            (extracted_data / relative).chmod(mode)
-        actual = [item.manifest_row() for item in _scan_items(extracted_data)]
-        expected = manifest["entries"]
-        if actual != expected:
-            raise DataLifecycleError("backup entry checksums or metadata do not match the manifest")
-        with sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True) as check:
-            result = check.execute("PRAGMA integrity_check").fetchone()
-        if result != ("ok",):
-            raise DataLifecycleError(f"restored SQLite integrity check failed: {result!r}")
-        # A database whose persisted journal mode is WAL may create fresh empty
-        # sidecars even for the integrity-check connection. They are not backup
-        # data and must not be promoted into the restored volume.
-        for sidecar in _DB_SIDECARS:
-            (extracted_data / sidecar).unlink(missing_ok=True)
-        for child in sorted(extracted_data.iterdir(), key=lambda item: item.name):
-            child.replace(data_dir / child.name)
+        _apply_directory_modes(extracted_data, directory_modes)
+        _verify_restored_entries(extracted_data, manifest)
+        _verify_restored_database(extracted_data)
+        _promote_restored_data(extracted_data, data_dir)
         return manifest
     finally:
         shutil.rmtree(staging, ignore_errors=True)

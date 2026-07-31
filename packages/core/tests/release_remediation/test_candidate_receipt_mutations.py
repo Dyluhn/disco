@@ -45,7 +45,17 @@ def _load_receipt() -> Any:
     The module MUST be registered in ``sys.modules`` before ``exec_module``:
     ``@dataclass`` resolves its own class's module out of ``sys.modules`` while
     processing annotations, and raises on a module that is not yet registered.
+
+    ``scripts/`` is also put on ``sys.path`` so the receipt's private
+    ``track1_receipt_parts`` package resolves exactly as it does under the real
+    invocation ``python scripts/export_track1_candidate_receipt.py``, which puts
+    that directory on ``sys.path[0]``.  Loading by path alone would simulate an
+    environment that never occurs in production.  This affects only how the
+    module is loaded; every mutation proof below still drives the REAL gate
+    functions and the REAL ``main()``.
     """
+    if str(_RECEIPT_PATH.parent) not in sys.path:
+        sys.path.insert(0, str(_RECEIPT_PATH.parent))
     spec = importlib.util.spec_from_file_location("_recovery_receipt_under_test", _RECEIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
