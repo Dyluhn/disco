@@ -2,18 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
 from dataclasses import dataclass
 
-from ..stuck import successful_mutation_with_receipt
 from .common import (
     _APP_VERIFY_PREFIX,
-    _FINISH_SEAL_CAP,
-    _FINISH_VERIFY_CAP,
-    _LOG,
     _STATIC_VERIFY_PREFIX,
-    ActionEvent,
     AgentStep,
     ConversationState,
     ConversationStatus,
@@ -22,16 +15,15 @@ from .common import (
     EventSource,
     LLMMessage,
     MessageEvent,
-    ObservationEvent,
     StatusEvent,
     ToolCall,
     VerifierVerdictEvent,
     _app_verify_command,
     _FinishGateProto,
     _static_verify_command,
-    predicate_fingerprints,
     signals,
 )
+from .finalize_parts import finish_step, seal_gate
 
 
 @dataclass(frozen=True)
@@ -163,111 +155,15 @@ class _FinalizeMixin(_FinishGateProto):
             verify_cmd = ""
 
         if verify_cmd:
-            # An already-failing authoritative plan gate comes before repeated
-            # optional model verification when no trusted repair has landed.
-            if await self._preflight_failed_plan_verifier(events):
-                return step, Disp.CONTINUE
-
-            if await self._reuse_finish_verify_receipt(verify_cmd, events):
-                passed, malformed = True, False
-            else:
-                passed, malformed = await self.finish_verify_passed(verify_cmd)
-            if passed:
-                self._loop._finish_verify_refusals = 0  # reset streak on clean pass
-            elif malformed and self._loop._finish_verify_strips < 3:
-                # Broken CHECK, not a failed task → auto-strip and finish.
-                self._loop._finish_verify_strips += 1
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "<system-reminder>\n"
-                                f"Your verify command `{verify_cmd}` is not runnable "
-                                "(syntax error / command-not-found) — that is a broken "
-                                "CHECK, not a failed task, so it is "
-                                "being ignored and the "
-                                "run is finishing. Next time pass a "
-                                "valid shell command "
-                                "if you want real verification.\n"
-                                "</system-reminder>"
-                            ),
-                        ),
-                    )
-                )
-                # fall through to finish
-            elif self._loop._finish_verify_refusals < _FINISH_VERIFY_CAP:
-                # Real failure: refuse + keep working (the forcing function).
-                self._loop._finish_verify_refusals += 1
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "<system-reminder>\n"
-                                f"You called finish, but the verify "
-                                f"command `{verify_cmd}` "
-                                "did not pass (see the result above). The task is NOT "
-                                "complete. Fix what it surfaced, then "
-                                "finish again — or "
-                                "finish without a verify command if "
-                                "the check itself is "
-                                "wrong.\n"
-                                "</system-reminder>"
-                            ),
-                        ),
-                    )
-                )
-                return step, Disp.CONTINUE
-            else:
-                # Cap reached: LOUD release — don't grind forever on a gate the
-                # model can't satisfy (mirrors the browser-verify valve). The
-                # failure stays visible (status detail + reminder + summary).
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.RUNNING,
-                        detail="finish_verify_release",
-                    )
-                )
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "<system-reminder>\n"
-                                f"The verify command `{verify_cmd}` has failed "
-                                f"{self._loop._finish_verify_refusals} times. "
-                                "Finishing anyway "
-                                "so the run does not loop forever — "
-                                "but the deliverable "
-                                "may be incomplete. Note this clearly "
-                                "in your summary.\n"
-                                "</system-reminder>"
-                            ),
-                        ),
-                    )
-                )
-                # ⚠ human-facing: surfaces in the UI as a warning chip so the
-                # user knows the run finished with a failing check.
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "⚠ Finished despite the verification check failing "
-                                f"{self._loop._finish_verify_refusals}× — "
-                                "the deliverable may "
-                                "be incomplete; review it."
-                            ),
-                        ),
-                    )
-                )
-                self._loop._finish_verify_refusals = 0
-                # fall through to finish
+            disp = await finish_step.resolve_finish_verify_disposition(
+                self._loop,
+                verify_cmd,
+                events,
+                finish_verify_passed=self.finish_verify_passed,
+                finish_dod_gate_passed=self.finish_dod_gate_passed,
+            )
+            if disp is not None:
+                return step, disp
         # C1c — external DoD evaluator gate. Runs AFTER the
         # agent's own verify check (which grades the agent's
         # own command) but BEFORE the step is committed to a
@@ -295,236 +191,21 @@ class _FinalizeMixin(_FinishGateProto):
         )
         return step, Disp.FALLTHROUGH
 
-    async def _reuse_finish_verify_receipt(self, verify_cmd: str, events: list[Event]) -> bool:
-        """Reuse one exact, immediately preceding executor-backed shell result.
-
-        When the most recent ActionEvent of any tool matches the resolved
-        verify command exactly and its correlated ObservationEvent succeeded,
-        and no ``plan_verifier_failure`` intervened after that observation,
-        skip re-execution and emit an audit marker.
-        """
-        most_recent_action: ActionEvent | None = None
-        for ev in reversed(events):
-            if isinstance(ev, ActionEvent):
-                most_recent_action = ev
-                break
-        if most_recent_action is None:
-            return False
-
-        if most_recent_action.tool_call.tool_name != "shell":
-            return False
-        if most_recent_action.tool_call.arguments.get("command") != verify_cmd:
-            return False
-
-        # The receipt must be the one-and-only correlated observation after
-        # the action.  An earlier, duplicate, or mismatched record is not an
-        # executor receipt for this action and cannot authorize reuse.
-        action_index = events.index(most_recent_action)
-        correlated = [
-            ev
-            for ev in events[action_index + 1 :]
-            if isinstance(ev, ObservationEvent) and ev.action_id == most_recent_action.id
-        ]
-        if len(correlated) != 1:
-            return False
-        observation = correlated[0]
-        result = observation.tool_result
-        if not (
-            result.call_id == most_recent_action.tool_call.call_id
-            and result.tool_name == "shell"
-            and result.success
-        ):
-            return False
-
-        observation_index = events.index(observation)
-        for ev in events[observation_index + 1 :]:
-            if isinstance(ev, StatusEvent) and ev.plan_verifier_failure is not None:
-                return False
-
-        fingerprint = hashlib.sha256(verify_cmd.encode()).hexdigest()
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "<system-reminder>\n"
-                        "Finish verify receipt reused from prior successful "
-                        "shell execution — the correlated observation's success "
-                        "is carried forward without re-executing the command.\n"
-                        "</system-reminder>"
-                    ),
-                ),
-                meta={
-                    "finish_verify_receipt_reused": True,
-                    "prior_action_id": most_recent_action.id,
-                    "command_fingerprint_sha256": fingerprint,
-                },
-            )
-        )
-        return True
-
-    async def _preflight_failed_plan_verifier(self, events: list[Event]) -> bool:
-        """Recheck an unchanged failing plan gate before optional verification.
-
-        Find the currently approved plan predicate fingerprints. If the same
-        predicate set has a prior typed ``plan_verifier_failure`` and no
-        successful trusted mutation receipt after the latest such failure, call
-        ``finish_dod_gate_passed`` first. If it returns False, return True so
-        the caller returns ``Disp.CONTINUE`` before the optional verifier.
-
-        Returns True when the optional shell verifier must be skipped (the
-        caller should return CONTINUE).
-        """
-        plan = signals.latest_approved_plan(events)
-        if plan is None:
-            return False
-        plan_predicates = [
-            step.done_condition for step in plan.steps if step.done_condition is not None
-        ]
-        if not plan_predicates:
-            return False
-        current_predicate_fps = predicate_fingerprints(plan_predicates)
-
-        latest_failure_seq: int | None = None
-        for ev in reversed(events):
-            if isinstance(ev, StatusEvent) and ev.plan_verifier_failure is not None:
-                if ev.plan_verifier_failure.predicate_fingerprints == current_predicate_fps:
-                    latest_failure_seq = ev.seq
-                    break
-        if latest_failure_seq is None:
-            return False
-
-        action_by_id = {
-            ev.id: ev for ev in events if isinstance(ev, ActionEvent) and ev.tool_call is not None
-        }
-        for ev in events:
-            if (ev.seq or 0) <= latest_failure_seq or not isinstance(ev, ObservationEvent):
-                continue
-            action = action_by_id.get(ev.action_id) if ev.action_id is not None else None
-            if successful_mutation_with_receipt(ev, action):
-                return False
-
-        if not await self.finish_dod_gate_passed():
-            return True
-
-        return False
-
     async def seal_gate_allows_finish(self) -> bool:
         """REL-27 (F-27) — finish-time workspace sealability gate.
 
         Called immediately before EVERY affirmative FINISHED emission: the
         finish battery's finalize, the completed-via-notify path, and the
-        browserless honest-static valve. Non-delivery terminals deliberately
-        bypass it — forced ``noop_limit`` and the workflow-control
-        ``workflow_skipped`` finish — because neither claims a deliverable
-        workspace, and the post-terminal honestly-unsealed disclosure remains
-        their backstop. (A future workflow surface that DOES ship files must
-        route through an affirmative site or add its own gate call.)
-
-        Semantics:
-          • no probe injected → True (legacy byte-identical);
-          • probe sealable → True (streak reset);
-          • probe blocking, streak < cap → emit a refusal naming the EXACT
-            blocking entries and the remedy, return False (caller CONTINUEs —
-            the constraint reaches the model BEFORE the last point it can act,
-            unlike the post-terminal persistence note that F-27 exposed);
-          • probe blocking, streak ≥ cap → loud ``unsealed_release`` marker +
-            visible warning, then True: the commit-time strict seal will still
-            refuse and disclose. Breaking the loop must not fabricate a seal;
-          • probe error/timeout → True with a log line. The probe is an
-            affordance; the commit-time seal remains the sole publication
-            authority, and a broken probe must never cage a valid terminal.
-
-        The default ``finish_seal_timeout_s`` (150 s) deliberately exceeds the
-        Podman workspace-export timeout (120 s) so the probe reaches a verdict
-        — or the inner export's own timeout — rather than silently
-        self-disabling on exactly the large workspaces where an unsealable
-        finish matters most.
+        browserless honest-static valve. The full behavioral contract
+        (semantics for no-probe / sealable / blocking-under-cap /
+        blocking-at-cap / probe-error) lives on
+        ``finalize_parts.seal_gate.seal_gate_allows_finish``, which owns
+        this policy; this method is a thin delegator so every external
+        caller (finalize_finish, the completed-via-notify path, and the
+        browserless honest-static valve) keeps calling
+        ``self.seal_gate_allows_finish()`` unchanged.
         """
-        probe = self._loop._finish_sealability_probe
-        if probe is None:
-            return True
-        try:
-            result = await asyncio.wait_for(probe(), timeout=self._loop._finish_seal_timeout_s)
-        except Exception:  # noqa: BLE001 — advisory probe; seal authority is at commit
-            _LOG.warning(
-                "finish sealability probe failed; the commit-time seal remains authoritative",
-                exc_info=True,
-            )
-            return True
-        if result.sealable:
-            self._loop._finish_seal_refusals = 0
-            return True
-        blocking = [str(entry) for entry in result.blocking]
-        shown = "\n".join(f"  - {entry}" for entry in blocking[:8])
-        if len(blocking) > 8:
-            shown += f"\n  … and {len(blocking) - 8} more"
-        if self._loop._finish_seal_refusals < _FINISH_SEAL_CAP:
-            self._loop._finish_seal_refusals += 1
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "<system-reminder>\n"
-                            "You called finish, but the final workspace cannot be "
-                            "sealed for delivery — these entries would be missing "
-                            "from the saved/exported project:\n"
-                            f"{shown}\n"
-                            "The live preview resolves them, but only regular, "
-                            "uniquely-linked files are preserved durably. Replace "
-                            "each with real content (for a symlink: delete the "
-                            "link and copy its target into place, e.g. "
-                            "`rm <link> && cp -r <target> <link-path>`), then "
-                            "finish again.\n"
-                            "</system-reminder>"
-                        ),
-                    ),
-                    # `blocking` follows the loop-wide meta convention: a STRING
-                    # reason tag (signals.py treats any such message as a typed
-                    # blocking proof obligation). The entry list rides under its
-                    # own key.
-                    meta={
-                        "blocking": "finish_seal_refused",
-                        "seal_blocking": blocking[:32],
-                    },
-                )
-            )
-            return False
-        # Cap reached: LOUD release — mirror the verify/browser valves. The
-        # terminal stays reachable; the unsealed truth stays visible (marker +
-        # human-facing warning now, strict-seal refusal + typed persistence
-        # disclosure at commit).
-        await self._loop._emit(
-            StatusEvent(
-                status=ConversationStatus.RUNNING,
-                detail="unsealed_release",
-            )
-        )
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "⚠ Finished with an UNSEALABLE workspace after "
-                        f"{self._loop._finish_seal_refusals} refusals — these "
-                        "entries cannot be preserved in the durable project:\n"
-                        f"{shown}\n"
-                        "The saved/exported project will be missing them; "
-                        "review the workspace."
-                    ),
-                ),
-                meta={
-                    "unsealed_release": True,
-                    "seal_blocking": blocking[:32],
-                },
-            )
-        )
-        self._loop._finish_seal_refusals = 0
-        return True
+        return await seal_gate.seal_gate_allows_finish(self._loop)
 
     async def finalize_finish(
         self, step: AgentStep, state: ConversationState, events: list[Event]
