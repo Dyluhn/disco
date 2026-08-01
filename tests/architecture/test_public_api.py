@@ -887,8 +887,9 @@ class TestFrontendPublicApi:
 
         # 34 at PKG-02 bootstrap; 74 after Epics 7-10 published 40 typed
         # *_parts packages; 85 after Epic 11-A's AppKit decomposition published
-        # 11 more. Update at each accepted regeneration.
-        assert len(initializers) == 85
+        # 11 more; 87 after Epic 11-B published _deep_research_service_parts and
+        # deep_research/_engine_parts. Update at each accepted regeneration.
+        assert len(initializers) == 87
         assert [row["path"] for row in initializers] == sorted(row["path"] for row in initializers)
         for row in initializers:
             assert set(row) == {
@@ -935,10 +936,16 @@ class TestFrontendPublicApi:
         # changed origin.
         assert baseline["additive_transitions"]
         assert baseline["compatibility_bridges"] == []
-        assert len(baseline["member_transitions"]) == 2
+        # 2 through Epic 10-D; 5 after Epic 11-B moved authority off three
+        # config classes onto collaborators at an UNCHANGED origin — the exact
+        # case no compatibility bridge can express.
+        assert len(baseline["member_transitions"]) == 5
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
+            "ConfigState",
+            "ConfigStore",
+            "SecretStore",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.
