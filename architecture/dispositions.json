@@ -7715,7 +7715,7 @@
   {
     "id": "PY-0836",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-PROJECTS",
     "location": "packages/tools/src/disco/tools/projects/store.py:ProjectStore:443-852",
@@ -7805,7 +7805,7 @@
   {
     "id": "PY-0846",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:ContainerInstance:414-780",
@@ -8048,7 +8048,7 @@
   {
     "id": "PY-0873",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/process.py:ProcessSandboxInstance:214-591",
@@ -8084,7 +8084,7 @@
   {
     "id": "PY-0877",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/session.py:SandboxSession:80-457",

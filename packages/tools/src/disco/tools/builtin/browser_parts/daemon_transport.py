@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import re
 
-    from ..anatomy import ToolContext, ToolOutcome
+    from ...anatomy import ToolContext, ToolOutcome
     from ..browser import BrowserTool
 
 

@@ -81,6 +81,34 @@ def is_protocol_non_violation(
     return False
 
 
+def adjudicated_width_non_violations(policy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the owner-adjudicated public-width non-violation classifications.
+
+    Distinct from ``protocol_non_violations``, which classifies a typed Protocol
+    *declaration* with zero mutable state. These entries classify a concrete
+    *implementation* whose public width is inherited from a contract it
+    faithfully satisfies, or is intrinsic to a single authority the mission
+    requires. Registration is owner-adjudicated per
+    ``PROTOCOL-WIDTH-DECISION-2026-07-31.md``; ``budget`` proves every entry
+    against the live scan and fails closed.
+    """
+    return policy["typed_classifications"].get("adjudicated_width_non_violations", [])
+
+
+def is_adjudicated_width_non_violation(
+    policy: dict[str, Any], path: str, symbol: str, rule: str
+) -> bool:
+    """Check whether a (path, symbol, rule) triple is an adjudicated width row."""
+    for entry in adjudicated_width_non_violations(policy):
+        if (
+            entry["path"] == path
+            and entry["symbol"] == symbol
+            and entry["rule"] == rule
+        ):
+            return True
+    return False
+
+
 def collaborator_rules(policy: dict[str, Any]) -> dict[str, Any]:
     """Return the collaborator rules from the policy."""
     return policy["collaborator_rules"]

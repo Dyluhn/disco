@@ -21,7 +21,8 @@ from .daemon_transport import daemon_healthy, process_daemon_url
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from ..anatomy import ToolContext
+    from ...anatomy import ToolContext
+    from ..browser import BrowserUnavailableError
 
 
 async def _current_url_if_healthy(
@@ -40,6 +41,10 @@ async def _ship_daemon_files(
     live_view_src_path: Path,
     daemon_target_path: str,
 ) -> None:
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
     daemon_src = daemon_src_path.read_text()
     await ctx.sandbox.write_file(daemon_target_path, daemon_src.encode("utf-8"))
 
@@ -59,6 +64,10 @@ async def _build_launch_command(
     chromium_executable: Callable[[], str | None],
     playwright_runtime: Callable[[], tuple[str, str] | None],
 ) -> str:
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
     process_backend = getattr(ctx.sandbox, "shares_host_network", False) is True
     if not process_backend:
         return f"python3 {daemon_target_path}"
@@ -93,8 +102,13 @@ async def _start_daemon_session(
     *,
     unavailable_message: str,
     bounded_startup_diagnostic: Callable[..., str],
-    browser_unavailable_error: type[Exception],
+    browser_unavailable_error: type[BrowserUnavailableError],
 ) -> None:
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
+    assert ctx.sessions is not None
     started = await ctx.sessions.exec("__browser", command, None)
     if getattr(started, "running", None) is False:
         diagnostic = bounded_startup_diagnostic(
@@ -126,6 +140,11 @@ async def _poll_for_health(
 async def _startup_failure_diagnostic(
     ctx: ToolContext, *, bounded_startup_diagnostic: Callable[..., str]
 ) -> str:
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
+    assert ctx.sessions is not None
     diagnostic = "browser daemon did not publish a healthy endpoint"
     try:
         view = await ctx.sessions.view("__browser")
@@ -149,7 +168,7 @@ async def ensure_daemon(
     playwright_runtime: Callable[[], tuple[str, str] | None],
     bounded_startup_diagnostic: Callable[..., str],
     unavailable_message: str,
-    browser_unavailable_error: type[Exception],
+    browser_unavailable_error: type[BrowserUnavailableError],
 ) -> str:
     """Former ``BrowserTool._ensure_daemon``."""
     assert ctx.sandbox is not None

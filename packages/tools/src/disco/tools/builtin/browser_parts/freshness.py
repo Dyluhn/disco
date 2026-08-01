@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import re
 
-    from ..anatomy import ToolContext
+    from ...anatomy import ToolContext
     from ..browser import BrowserTool
 
 
@@ -31,12 +31,23 @@ def _is_legacy_unversioned_exempt(ctx: ToolContext, raw: Any) -> bool:
     return raw is None and ctx.browser_workspace_epoch is None and ctx.browser_lane == "agent"
 
 
-def _schema_error(raw: Any, *, freshness_keys: frozenset[str]) -> str | None:
+def _schema_error(
+    raw: Any, *, freshness_keys: frozenset[str]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return ``(validated, error)``; ``validated`` is None only with an error.
+
+    Returns the proven mapping rather than just a verdict: the extraction moved
+    this shape check out of ``_freshness_response_error``, so the downstream
+    validators can no longer see the ``isinstance`` that establishes their
+    ``dict[str, Any]`` parameter. Handing back the proven value keeps that
+    guarantee expressible without a cast, matching
+    ``_daemon_identity_error``'s existing ``(value, error)`` shape.
+    """
     if not isinstance(raw, dict) or set(raw) != freshness_keys:
-        return "freshness acknowledgement schema mismatch"
+        return None, "freshness acknowledgement schema mismatch"
     if raw.get("schema_version") != 1:
-        return "freshness acknowledgement version mismatch"
-    return None
+        return None, "freshness acknowledgement version mismatch"
+    return raw, None
 
 
 def _daemon_identity_error(
@@ -177,24 +188,28 @@ def response_error(
     raw = data.get("freshness")
     if _is_legacy_unversioned_exempt(ctx, raw):
         return None
-    error = _schema_error(raw, freshness_keys=freshness_keys)
+    validated, error = _schema_error(raw, freshness_keys=freshness_keys)
+    if validated is None:
+        return error
+    daemon_id, error = _daemon_identity_error(
+        cls, ctx, validated, expected_daemon_id, token_re=token_re
+    )
     if error is not None:
         return error
-    daemon_id, error = _daemon_identity_error(cls, ctx, raw, expected_daemon_id, token_re=token_re)
+    error = _protocol_fields_error(ctx, validated, request_nonce, browser_lanes=browser_lanes)
     if error is not None:
         return error
-    error = _protocol_fields_error(ctx, raw, request_nonce, browser_lanes=browser_lanes)
+    error = _epoch_fields_error(data, ctx, validated)
     if error is not None:
         return error
-    error = _epoch_fields_error(data, ctx, raw)
-    if error is not None:
-        return error
-    error = _page_kind_error(raw)
+    error = _page_kind_error(validated)
     if error is not None:
         return error
     # Direct validators without a live preflight establish continuity only
     # after every acknowledgement invariant is proven; malformed responses
-    # cannot poison the bounded generation pin.
-    if expected_daemon_id is None:
+    # cannot poison the bounded generation pin. `_daemon_identity_error`
+    # guarantees a non-None id whenever it reports no error (its docstring);
+    # the explicit check makes that documented invariant provable here.
+    if expected_daemon_id is None and daemon_id is not None:
         cls._pin_daemon_identity(ctx.browser_generation, daemon_id)
     return None

@@ -238,7 +238,7 @@ RESOLVED_IDS = (
 # the tree-count offset stays at the standing +2 (EventStore, BuildKernel).
 # Reconciliation at the 10-B seal: 209 python tree violations + 62 TypeScript
 # rows = 271 = 308 - 37.
-EXPECTED_ACTIVE_DEBT_ROWS = 271
+EXPECTED_ACTIVE_DEBT_ROWS = 267
 EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,

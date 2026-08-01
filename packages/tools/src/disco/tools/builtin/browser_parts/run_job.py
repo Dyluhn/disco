@@ -21,8 +21,8 @@ from .daemon_transport import current_daemon_identity
 if TYPE_CHECKING:
     import re
 
-    from ..anatomy import ToolContext, ToolOutcome
-    from ..browser import BrowserArgs, BrowserTool
+    from ...anatomy import ToolContext, ToolOutcome
+    from ..browser import BrowserArgs, BrowserTool, BrowserUnavailableError
 
 
 async def _resolve_daemon_identity(
@@ -56,6 +56,10 @@ async def _submit_job(
     *,
     vision_mode: Callable[[], bool],
 ):
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
     job: dict[str, Any] = {
         "action": args.action,
         "url": args.url,
@@ -158,6 +162,10 @@ async def _finalize_success(
     max_network_lines: int,
     tool_outcome: Callable[..., ToolOutcome],
 ) -> ToolOutcome:
+    # `BrowserTool.run` proves the sandbox before dispatching; the extraction
+    # moved this code out of that narrowed scope, so restate the parent's own
+    # invariant (it carried this same assert at browser.py:373/735/795/808/821).
+    assert ctx.sandbox is not None
     content = tool._render_observation(data)
     structured: dict[str, Any] = data
     # CXT-5: console/network rendering is capped (max_console_lines /
@@ -206,7 +214,7 @@ async def run(
     failure_recipe: str,
     max_console_lines: int,
     max_network_lines: int,
-    browser_unavailable_error: type[Exception],
+    browser_unavailable_error: type[BrowserUnavailableError],
     tool_outcome: Callable[..., ToolOutcome],
 ) -> ToolOutcome:
     """Former ``BrowserTool.run``."""

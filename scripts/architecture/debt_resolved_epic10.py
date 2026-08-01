@@ -95,8 +95,53 @@ PKG10_SANDBOX_TOOLS_RESOLVED_IDS = frozenset(
 # EXPECTED_ACTIVE_DEBT_ROWS 308 -> 271.
 EPIC10B_RESOLVED_IDS = PKG10_SANDBOX_TOOLS_RESOLVED_IDS
 
+# --- Epic 10-C (sealed 2026-08-01) — Epic 10 closes here --------------------
+
+# The four owner-ADJUDICATED public-width rows. These are NOT resolved in
+# source: every class still exceeds the 12-public-method cap, which is exactly
+# what adjudication means. They leave the active ledger and are simultaneously
+# registered in `architecture/policy.json` under
+# `typed_classifications.adjudicated_width_non_violations`, where
+# `budget.check_adjudicated_width_non_violations` re-proves each entry against
+# the live scan on every run and fails closed on stale entries, value drift,
+# unknown ids, or an id still active in the ledger.
+#
+# The registry is REQUIRED, not decorative: `debt.check_shrink_only` rejects
+# "a current violation without a debt row", so removing these rows while their
+# symbols still breach the cap would turn the budget gate red. Registering and
+# filtering them is the same treatment `EventStore` (PY-0664) and `BuildKernel`
+# (PY-0188) already receive via `protocol_non_violations` — root measured that
+# those two are filtered OUT of the tree count, not carried in it as the
+# documented "+2 offset" claimed.
+#
+# Two sets, because two different evidence bars were satisfied.
+
+# Protocol-width: all three faithfully implement the 11-member `SandboxInstance`
+# Protocol, which alone fills 11 of the cap's 12, so no seam can reach it.
+# Adjudicated under Amendment 2 of PROTOCOL-WIDTH-DECISION-2026-07-31.md.
+# PY-0877's `ensure_service` / `tracked_services` /
+# `peek_recovered_memory_facts` are owner-retained-dormant; the wire-or-withdraw
+# obligation stays OPEN as DEFERRED-PRODUCT-FINDINGS.md #1 (owner: Program 2)
+# and does NOT close with this row.
+PKG10_PROTOCOL_WIDTH_ADJUDICATED_IDS = frozenset({"PY-0846", "PY-0873", "PY-0877"})
+
+# Intrinsic width: `ProjectStore` implements no Protocol at all (Amendment 1
+# corrected the decision doc's premise), and its width is cohesive under the
+# single `_version_transaction` authority over one physical project root.
+# `release_intent_for` is owner-sanctioned test-only — 8 of its 13 referencing
+# files are SHA-256-pinned in docs/export-track1-closeout-acceptance.sha256, so
+# migrating it would edit ratified acceptance evidence, which Amendment 1
+# item 3 prohibits as a class of action.
+PKG10_INTRINSIC_WIDTH_ADJUDICATED_IDS = frozenset({"PY-0836"})
+
+EPIC10_ADJUDICATED_IDS = (
+    PKG10_PROTOCOL_WIDTH_ADJUDICATED_IDS | PKG10_INTRINSIC_WIDTH_ADJUDICATED_IDS
+)
+
 # --- Epic 10 aggregate -----------------------------------------------------
 # `generate_debt.py` imports ONLY this name, so sealing 10-B and 10-C means
 # adding their sets above and unioning them in here — the generator itself
 # never has to change again for Epic 10, and stays inside its 700-line budget.
-EPIC10_RESOLVED_IDS = EPIC10A_RESOLVED_IDS | EPIC10B_RESOLVED_IDS
+EPIC10_RESOLVED_IDS = (
+    EPIC10A_RESOLVED_IDS | EPIC10B_RESOLVED_IDS | EPIC10_ADJUDICATED_IDS
+)

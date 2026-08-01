@@ -124,8 +124,11 @@ class BrowserPageState:
         self.console_logs = []
         self.network_fails = []
         self.document_content_type = ""
-        self.executor_generation = None
-        self.synchronized_epoch = None
+        # Annotated because PY-0729 moved generation/epoch ownership out to
+        # `LaneLifecycle` and the dispatch table: an inference taken from the
+        # `None` initializer alone would forbid every external assignment.
+        self.executor_generation: str | None = None
+        self.synchronized_epoch: int | None = None
 
     def reset_freshness(self):
         self.executor_generation = None
@@ -152,7 +155,9 @@ class BrowserState:
         # the Playwright ownership boundary for cookies, local/session storage,
         # cache, and service workers; separate pages alone are insufficient.
         self.context = None
-        self.host_context = None
+        # Annotated for the same reason as the lane fields above: `LaneLifecycle`
+        # provisions the host verifier's context from outside this class.
+        self.host_context: Any | None = None
         self._lanes = {name: BrowserPageState() for name in _LANES}
         # Lane page-provisioning/generation-recycling and nonce replay-defense
         # are each a distinct authority from Playwright process ownership —

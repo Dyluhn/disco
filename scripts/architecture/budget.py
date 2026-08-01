@@ -16,6 +16,8 @@ from . import debt as debt_mod
 from . import python_scan, source_governance, typescript_scan
 from .policy import (
     REPO_ROOT,
+    adjudicated_width_non_violations,
+    is_adjudicated_width_non_violation,
     is_protocol_non_violation,
     load_ownership,
     load_policy,
@@ -40,6 +42,8 @@ def collect_current_violations(
             symbol = v["symbol"]
             rule = v["rule"]
             if is_protocol_non_violation(policy, path, symbol, rule):
+                continue
+            if is_adjudicated_width_non_violation(policy, path, symbol, rule):
                 continue
             violations.append(
                 {
@@ -174,6 +178,150 @@ def check_protocol_non_violations(root: Path) -> list[str]:
                 f"class {symbol} has mutable implementation state"
             )
             continue
+
+    return problems
+
+
+_ADJUDICATED_FIELDS = frozenset(
+    {
+        "path",
+        "symbol",
+        "rule",
+        "disposition_id",
+        "width_kind",
+        "observed_at_adjudication",
+        "criterion",
+        "decision_record",
+        "accepting_receipt",
+    }
+)
+_ADJUDICATED_WIDTH_KINDS = frozenset({"protocol", "intrinsic"})
+
+
+def _adjudicated_shape_problem(entry: dict[str, Any], label: str) -> str | None:
+    """Static shape validation for one registry entry: fields, emptiness, kind."""
+    if set(entry) != _ADJUDICATED_FIELDS:
+        return (
+            f"adjudicated width non-violation {label}: field set must be "
+            f"exactly {sorted(_ADJUDICATED_FIELDS)}"
+        )
+    if any(value == "" or value is None for value in entry.values()):
+        return f"adjudicated width non-violation {label}: empty field"
+    if entry["width_kind"] not in _ADJUDICATED_WIDTH_KINDS:
+        return (
+            f"adjudicated width non-violation {label}: width_kind "
+            f"{entry['width_kind']!r} not in {sorted(_ADJUDICATED_WIDTH_KINDS)}"
+        )
+    return None
+
+
+def _adjudicated_ast_problem(
+    entry: dict[str, Any], label: str, root: Path
+) -> str | None:
+    """Prove the registered class still exists at the registered path."""
+    full = _resolve_path(entry["path"], root)
+    if not full.is_file():
+        return f"adjudicated width non-violation {label}: file absent: {entry['path']}"
+    try:
+        tree = _load_py_module(full, root)
+    except (SyntaxError, UnicodeDecodeError) as exc:
+        return f"adjudicated width non-violation {label}: file unparseable: {exc!r}"
+    if _find_class(tree, entry["symbol"]) is None:
+        return (
+            f"adjudicated width non-violation {label}: class "
+            f"{entry['symbol']} not found in {entry['path']}"
+        )
+    return None
+
+
+def _adjudicated_live_problems(
+    entry: dict[str, Any],
+    label: str,
+    observed: dict[tuple[str, str, str], int],
+    active_debt_ids: set[str],
+    known_ids: set[str],
+) -> list[str]:
+    """Prove the entry still matches the live scan and has left the ledger."""
+    key = (entry["path"], entry["symbol"], entry["rule"])
+    if key not in observed:
+        return [
+            f"adjudicated width non-violation {label}: stale entry — the "
+            f"scanner no longer reports {entry['rule']} for {entry['symbol']}; "
+            "resolve the row in source instead of adjudicating it"
+        ]
+    problems: list[str] = []
+    if observed[key] != entry["observed_at_adjudication"]:
+        problems.append(
+            f"adjudicated width non-violation {label}: value drift — "
+            f"adjudicated at {entry['observed_at_adjudication']}, "
+            f"currently {observed[key]}; re-adjudicate rather than absorb"
+        )
+    if entry["disposition_id"] not in known_ids:
+        problems.append(
+            f"adjudicated width non-violation {label}: unknown disposition id"
+        )
+    if entry["disposition_id"] in active_debt_ids:
+        problems.append(
+            f"adjudicated width non-violation {label}: still an ACTIVE debt "
+            "row — register it as adjudicated before filtering it"
+        )
+    return problems
+
+
+def check_adjudicated_width_non_violations(
+    root: Path, py_result: dict[str, Any]
+) -> list[str]:
+    """Verify every adjudicated width row is still EXACTLY as adjudicated.
+
+    An adjudicated row leaves the active ledger while its symbol keeps
+    breaching the cap — that is the whole point of adjudicating rather than
+    fixing it. ``collect_current_violations`` therefore filters these triples
+    out, or ``check_shrink_only`` would report each as "new violation without
+    debt row". Filtering is only safe if every entry is re-proven against the
+    live scan on each run, so all of the following fail closed:
+
+      1. the exact field set is present and no value is empty;
+      2. ``width_kind`` is one of the two sanctioned evidence bars;
+      3. the class still exists at the registered path;
+      4. the scanner still reports the registered (path, symbol, rule) — a
+         stale entry means the class was fixed and must be resolved in source,
+         never carried as an adjudication;
+      5. the live value equals ``observed_at_adjudication`` exactly. This is
+         the ratchet: an adjudicated class may not grow, and a shrink must be
+         re-adjudicated rather than silently absorbed;
+      6. the disposition id is real and has genuinely left the active ledger.
+
+    There are no wildcards and no blanket waivers: an entry authorizes exactly
+    one triple at exactly one measured value.
+    """
+    problems: list[str] = []
+    policy = load_policy(root)
+    entries = adjudicated_width_non_violations(policy)
+    if not entries:
+        return problems
+
+    observed: dict[tuple[str, str, str], int] = {}
+    for module in py_result.get("modules", []):
+        for violation in module.get("violations", []):
+            key = (module["path"], violation["symbol"], violation["rule"])
+            observed[key] = violation["value"]
+
+    active_debt_ids = {row["id"] for row in debt_mod.load_debt(root)}
+    known_ids = set(debt_mod.load_disposition_ids(root))
+
+    for entry in entries:
+        label = str(entry.get("disposition_id", "<no disposition_id>"))
+        blocking = _adjudicated_shape_problem(entry, label) or _adjudicated_ast_problem(
+            entry, label, root
+        )
+        if blocking is not None:
+            problems.append(blocking)
+            continue
+        problems.extend(
+            _adjudicated_live_problems(
+                entry, label, observed, active_debt_ids, known_ids
+            )
+        )
 
     return problems
 
@@ -617,6 +765,7 @@ def run_budget_check(
 
     # Executable registry checks (AST-plus-registry)
     problems.extend(check_protocol_non_violations(root_path))
+    problems.extend(check_adjudicated_width_non_violations(root_path, py_result))
     problems.extend(check_constructor_collaborator_caps(root_path))
     problems.extend(check_dependency_aggregate_caps(root_path))
     problems.extend(check_composition_roots(root_path))
