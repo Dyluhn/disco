@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _helpers import (
     assert_dependency_aggregate_alias_boundaries,
@@ -42,6 +44,36 @@ from architecture import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def synthetic_legacy_row(
+    path: str,
+    *,
+    symbol: str = "Bad",
+    parameter: str = "services",
+    annotation: str = "dict",
+) -> dict[str, str]:
+    """Return one well-formed ``legacy_disguised_collaborators`` row.
+
+    The live registry is legitimately empty — the campaign removed every
+    legacy disguise — so mutation tests must synthesize the row they intend
+    to corrupt instead of borrowing ``legacy[0]``. Borrowing made these tests
+    silently dependent on a defect existing in production, and they raised
+    ``IndexError`` the first time the suite ran after the last one was fixed.
+    """
+    return {
+        "path": path,
+        "symbol": symbol,
+        "parameter": parameter,
+        "annotation": annotation,
+        "disposition_id": "DM-001",
+        "owner_package": "PKG-06-RUNTIME",
+        "removal_package": "PKG-06-RUNTIME",
+        "reason": (
+            "DM-001 runtime back-reference exposes ConversationRuntime "
+            "collaborators through self._rt"
+        ),
+    }
 
 
 def write_budget_authority(
@@ -315,8 +347,10 @@ class TestDisguisePatterns:
 
         tmp = make_temp_repo()
         root = Path(tmp.name)
-        malformed = [dict(row) for row in legacy]
-        malformed[0].pop("reason")
+        malformed = [*(dict(row) for row in legacy), synthetic_legacy_row(
+            "packages/core/src/disco/core/bad.py"
+        )]
+        malformed[-1].pop("reason")
         write_budget_authority(
             root,
             legacy_disguised_collaborators=malformed,
@@ -535,14 +569,27 @@ class TestEffectOwners:
             if row["kind"] == "route_adapter_effect_violation"
         ]
         assert len(rows) == 1
-        assert rows[0]["path"].endswith("/routes/projects.py")
+        # PKG-07 extracted the import mechanics out of routes/projects.py into
+        # routes/projects_import.py and renamed the handlers. The registry
+        # followed; this assertion did not, because the suite was never run.
+        assert rows[0]["path"].endswith("/routes/projects_import.py")
         assert rows[0]["symbols"] == [
-            "_clone_git_url",
             "_copy_scanned_tree",
-            "_handle_import_project",
-            "_materialize_zip",
+            "_extract_zip_entries",
+            "clone_git_url",
+            "_materialize_source",
+            "import_project",
         ]
         assert rows[0]["frozen_observation"] is True
+        # Frozen strings rot silently. Bind them to live source so the next
+        # rename fails here instead of going unnoticed for three epics.
+        source = (REPO_ROOT / rows[0]["path"]).read_text(encoding="utf-8")
+        defined = {
+            node.name
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert set(rows[0]["symbols"]) <= defined
 
     def test_frontend_transport_confined(self):
         """Frontend raw transport must be confined to frontend/src/api/."""
@@ -682,7 +729,10 @@ class TestStateOwners:
         symbols = [o["symbol"] for o in owners]
         assert "EventStore" in symbols
         assert "ConversationRuntime" in symbols
-        assert "WorkspaceService" in symbols
+        # The workspace state owner is the class WorkspaceCoordinator, which
+        # lives in workspace_service.py; "WorkspaceService" is the module, not
+        # a symbol, and no such class exists anywhere in the tree.
+        assert "WorkspaceCoordinator" in symbols
 
     def test_evidence_owners_listed(self):
         ownership_data = json.loads(
@@ -998,7 +1048,9 @@ class TestDisguisedCollaboratorEnforcement:
         assert_problem_contains(problems, "unregistered disguised collaborator")
         tmp.cleanup()
 
-    def test_any_disguise_produces_violation(self) -> None:
+    def test_any_disguise_produces_violation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A constructor using ``Any`` as a service bag must be flagged."""
         tmp = make_temp_repo()
         root = Path(tmp.name)
@@ -1014,15 +1066,19 @@ class TestDisguisedCollaboratorEnforcement:
         problems = budget.check_constructor_collaborator_caps(root)
         assert_problem_contains(problems, "disguised collaborator", "ctx")
 
-        legacy_path = (
-            root
-            / "packages/agent-server/src/disco/agent_server/appkit_ejection.py"
+        legacy_rel = (
+            "packages/agent-server/src/disco/agent_server/appkit_ejection.py"
         )
+        legacy_path = root / legacy_rel
         collaborators = ", ".join(
             f"service{index}: Service{index}" for index in range(11)
         )
-        write(
-            legacy_path,
+        # write_and_track, not write: the collaborator scanner enumerates via
+        # `git ls-files`, so an untracked new file is invisible and the cap
+        # assertion below could never have fired.
+        write_and_track(
+            root,
+            legacy_rel,
             "from typing import Any\n\n"
             "class AppKitEjectionService:\n"
             f"    def __init__(self, runtime: Any, {collaborators}) -> None:\n"
@@ -1035,6 +1091,27 @@ class TestDisguisedCollaboratorEnforcement:
             "AppKitEjectionService",
             "cap 10",
         )
+
+        # A row only becomes "registered" when its tuple is in the frozen
+        # module constant, which is now legitimately empty — so the staleness
+        # path is unreachable from live data. Register one synthetic tuple to
+        # exercise the mechanism itself.
+        legacy_row = synthetic_legacy_row(
+            legacy_rel,
+            symbol="AppKitEjectionService",
+            parameter="runtime",
+            annotation="Any",
+        )
+        legacy_key = (legacy_rel, "AppKitEjectionService", "runtime")
+        monkeypatch.setattr(
+            source_governance,
+            "LEGACY_DISGUISED_COLLABORATORS",
+            {legacy_key: legacy_row},
+        )
+        ownership_path = root / "architecture/ownership.json"
+        ownership = json.loads(ownership_path.read_text())
+        ownership["legacy_disguised_collaborators"] = [legacy_row]
+        write(ownership_path, json.dumps(ownership))
 
         write(
             legacy_path,
@@ -1064,8 +1141,9 @@ class TestDisguisedCollaboratorEnforcement:
 
         ownership_path = root / "architecture/ownership.json"
         ownership = json.loads(ownership_path.read_text())
-        ownership["legacy_disguised_collaborators"].append(
-            dict(ownership["legacy_disguised_collaborators"][0])
+        duplicated = synthetic_legacy_row(path)
+        ownership["legacy_disguised_collaborators"].extend(
+            [duplicated, dict(duplicated)]
         )
         write(ownership_path, json.dumps(ownership))
         assert_problem_contains(
