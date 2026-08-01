@@ -62,8 +62,8 @@ from ._scan_helpers import _ext_of
 from ._suppression import _justified_keys
 
 if TYPE_CHECKING:
-    from ..anatomy import ToolContext
-    from ..sandbox.base import SandboxInstance
+    from ...anatomy import ToolContext
+    from ...sandbox.base import SandboxInstance
 
 
 async def _bounded_read(sandbox: SandboxInstance, path: str, cap: int) -> bytes | None:
