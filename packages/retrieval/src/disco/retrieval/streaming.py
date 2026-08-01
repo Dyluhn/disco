@@ -14,10 +14,11 @@ cited answers from real sources.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
@@ -117,10 +118,96 @@ def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
 _strip_think_spans = strip_think_spans
 
 
+def _is_gfm_table_divider(line: str) -> bool:
+    """A GFM table divider row: ``| --- | :--: | ---: |``-shaped."""
+    line = line.strip()
+    if not line.startswith("|") or not line.endswith("|"):
+        return False
+    # Must contain at least one dash/colon per cell
+    parts = [p.strip() for p in line.split("|")][1:-1]
+    return all(re.match(r"^[:\- ]+$", p) and "-" in p for p in parts)
+
+
+def _parse_table_row(line: str) -> list[str]:
+    return [p.strip() for p in line.strip().split("|")][1:-1]
+
+
+def _consume_fence(lines: list[str], i: int, n: int) -> tuple[dict, int]:
+    """Parse a fenced block starting at ``lines[i]`` (a line opening a ```` ``` ````
+    fence). Returns the block — a ``chart`` block when the fence language is
+    ``chart`` and its JSON validates, a ``code`` block otherwise — and the
+    index just past the closing fence."""
+    lang = lines[i].strip().lstrip("`").strip() or "text"
+    i += 1
+    code_lines: list[str] = []
+    while i < len(lines) and not lines[i].strip().startswith("```"):
+        code_lines.append(lines[i])
+        i += 1
+    i += 1  # skip closing fence
+    code_str = "\n".join(code_lines)
+    if lang == "chart":
+        try:
+            payload = json.loads(code_str)
+            if isinstance(payload, dict) and "chart_type" in payload:
+                return {
+                    "kind": "chart",
+                    "id": f"b{n}",
+                    "chart_type": payload.get("chart_type"),
+                    "data": payload.get("data"),
+                    "title": payload.get("title"),
+                    "x_label": payload.get("x_label"),
+                    "y_label": payload.get("y_label"),
+                    "cited_passage_ids": sorted(set(_CITE.findall(code_str))),
+                }, i
+        except Exception:  # noqa: BLE001
+            pass  # fall back to code block
+    return {"kind": "code", "id": f"b{n}", "language": lang, "code": code_str}, i
+
+
+def _consume_table(lines: list[str], i: int, n: int) -> tuple[dict, int] | None:
+    """Try to parse a GFM table (header | divider | data rows) starting at
+    ``lines[i]``. Returns the table block + the index just past it, or None
+    if this isn't a real table — the caller then falls through to heading/
+    prose handling for the same line."""
+    if not (lines[i].strip().startswith("|") and i + 2 < len(lines)):
+        return None
+    if not _is_gfm_table_divider(lines[i + 1]):
+        return None
+    header = _parse_table_row(lines[i])
+    if not header:
+        return None
+    j = i + 2
+    rows: list[list[str]] = []
+    while j < len(lines) and lines[j].strip().startswith("|"):
+        row = _parse_table_row(lines[j])
+        if len(row) == 0:
+            break
+        # Pad or truncate row to match header length
+        if len(row) < len(header):
+            row += [""] * (len(header) - len(row))
+        else:
+            row = row[: len(header)]
+        rows.append(row)
+        j += 1
+    if not rows:
+        return None
+    # Extract citations from all cells (header + all rows)
+    cells = header + [c for r in rows for c in r]
+    cited_ids = sorted(set(_CITE.findall(" ".join(cells))))
+    block = {
+        "kind": "table",
+        "id": f"b{n}",
+        "columns": header,
+        "rows": rows,
+        "cited_passage_ids": cited_ids,
+    }
+    return block, j
+
+
 def _to_blocks(text: str) -> list[dict]:
     """Split the generated markdown into the frontend's AnswerBlock shape. Minimal:
-    headings (#..), fenced code, else prose; prose keeps its [[id]] markers and the
-    cited_passage_ids parsed from them."""
+    headings (#..), fenced code, GFM tables, else prose; prose keeps its [[id]]
+    markers and the cited_passage_ids parsed from them."""
     blocks: list[dict] = []
     lines = text.split("\n")
     i = 0
@@ -142,93 +229,23 @@ def _to_blocks(text: str) -> list[dict]:
             )
             n += 1
 
-    def is_table_divider(line: str) -> bool:
-        line = line.strip()
-        if not line.startswith("|") or not line.endswith("|"):
-            return False
-        # Must contain at least one dash/colon per cell
-        parts = [p.strip() for p in line.split("|")][1:-1]
-        return all(re.match(r"^[:\- ]+$", p) and "-" in p for p in parts)
-
-    def parse_table_row(line: str) -> list[str]:
-        return [p.strip() for p in line.strip().split("|")][1:-1]
-
     while i < len(lines):
         line = lines[i]
-        # 1. Fenced code
+        # 1. Fenced code (and chart-fence specialization)
         if line.strip().startswith("```"):
             flush_prose()
-            lang = line.strip().lstrip("`").strip() or "text"
-            i += 1
-            code_lines: list[str] = []
-            while i < len(lines) and not lines[i].strip().startswith("```"):
-                code_lines.append(lines[i])
-                i += 1
-            i += 1  # skip closing fence
-            code_str = "\n".join(code_lines)
-            if lang == "chart":
-                try:
-                    import json
-
-                    payload = json.loads(code_str)
-                    if isinstance(payload, dict) and "chart_type" in payload:
-                        blocks.append(
-                            {
-                                "kind": "chart",
-                                "id": f"b{n}",
-                                "chart_type": payload.get("chart_type"),
-                                "data": payload.get("data"),
-                                "title": payload.get("title"),
-                                "x_label": payload.get("x_label"),
-                                "y_label": payload.get("y_label"),
-                                "cited_passage_ids": sorted(set(_CITE.findall(code_str))),
-                            }
-                        )
-                        n += 1
-                        continue
-                except Exception:  # noqa: BLE001
-                    pass  # fall back to code block
-            blocks.append({"kind": "code", "id": f"b{n}", "language": lang, "code": code_str})
+            block, i = _consume_fence(lines, i, n)
+            blocks.append(block)
             n += 1
             continue
         # 2. GFM Table
-        if line.strip().startswith("|") and i + 2 < len(lines):
-            # Potential table: header | divider | data
-            if is_table_divider(lines[i + 1]):
-                header = parse_table_row(lines[i])
-                if header:
-                    j = i + 2
-                    rows = []
-                    while j < len(lines) and lines[j].strip().startswith("|"):
-                        row = parse_table_row(lines[j])
-                        if len(row) > 0:
-                            # Pad or truncate row to match header length
-                            if len(row) < len(header):
-                                row += [""] * (len(header) - len(row))
-                            else:
-                                row = row[: len(header)]
-                            rows.append(row)
-                            j += 1
-                        else:
-                            break
-                    if rows:
-                        flush_prose()
-                        # Extract citations from all cells (header + all rows)
-                        cells = header + [c for r in rows for c in r]
-                        table_text = " ".join(cells)
-                        cited_ids = sorted(set(_CITE.findall(table_text)))
-                        blocks.append(
-                            {
-                                "kind": "table",
-                                "id": f"b{n}",
-                                "columns": header,
-                                "rows": rows,
-                                "cited_passage_ids": cited_ids,
-                            }
-                        )
-                        n += 1
-                        i = j
-                        continue
+        table = _consume_table(lines, i, n)
+        if table is not None:
+            flush_prose()
+            block, i = table
+            blocks.append(block)
+            n += 1
+            continue
         # 3. Headings
         m = re.match(r"^(#{1,3})\s+(.*)", line.strip())
         if m:
@@ -425,6 +442,34 @@ def _unreadable_sources_message(hits: Sequence[SearchHit], docs: Sequence[Extrac
     )
 
 
+def _drain_think_buffer(carry: str, in_think: bool) -> tuple[str, str, bool]:
+    """Incrementally strip ``<think>...</think>`` spans from a growing token
+    buffer. Returns the visible text to emit right now, plus the
+    ``carry``/``in_think`` state to resume with on the next chunk — a whole
+    retrieved chunk can straddle a tag boundary, so both the trailing partial
+    tag and the open/closed state must survive across calls."""
+    emit = ""
+    while carry:
+        if in_think:
+            end = carry.lower().find("</think>")
+            if end == -1:
+                carry = carry[-16:]
+                break
+            carry = carry[end + len("</think>") :]
+            in_think = False
+            continue
+        start = carry.lower().find("<think>")
+        if start == -1:
+            keep = max(0, len(carry) - 8)
+            emit += carry[:keep]
+            carry = carry[keep:]
+            break
+        emit += carry[:start]
+        carry = carry[start + len("<think>") :]
+        in_think = True
+    return emit, carry, in_think
+
+
 async def _generate_visible_answer(
     router: LLMRouter,
     query: str,
@@ -468,25 +513,7 @@ async def _generate_visible_answer(
                 continue
             raw_answer += chunk.delta_text
             carry += chunk.delta_text
-            emit = ""
-            while carry:
-                if in_think:
-                    end = carry.lower().find("</think>")
-                    if end == -1:
-                        carry = carry[-16:]
-                        break
-                    carry = carry[end + len("</think>") :]
-                    in_think = False
-                    continue
-                start = carry.lower().find("<think>")
-                if start == -1:
-                    keep = max(0, len(carry) - 8)
-                    emit += carry[:keep]
-                    carry = carry[keep:]
-                    break
-                emit += carry[:start]
-                carry = carry[start + len("<think>") :]
-                in_think = True
+            emit, carry, in_think = _drain_think_buffer(carry, in_think)
             if emit:
                 token_frames.append({"type": "token", "token": emit, "block_id": "answer"})
 
@@ -501,6 +528,171 @@ async def _generate_visible_answer(
         if generation_attempt == 1:
             _LOG.warning("Research answerer returned no visible text; running one bounded repair")
     return "", []
+
+
+class _ResearchAborted(Exception):
+    """Internal signal: one of `stream_research_answer`'s three honest-failure
+    exits (no search hits, no readable passages, no visible answer) fired
+    inside `_run_research_round`. Always caught inside
+    `stream_research_answer` itself — the caller yields ONE error frame with
+    this exception's exact message (no type-name prefix) and stops; it never
+    escapes to the generic `except Exception` handler below, which DOES
+    prefix the message and exists only for genuinely unexpected failures."""
+
+
+class _RoundResult(NamedTuple):
+    """Everything `stream_research_answer` needs from one accepted or
+    rejected discover→extract→rerank→generate→verify round."""
+
+    blocks: list[dict]
+    claims: list[dict]
+    top: list[Passage]
+    all_hits: list[dict]
+    supported: int
+    this_round_urls: frozenset[str]
+    token_frames: list[dict[str, Any]]
+    answer_text: str
+
+
+async def _discover_round(
+    search: SearchProvider,
+    current_query: str,
+    domains_deny: frozenset[str],
+    discover_limit: int,
+) -> list[SearchHit]:
+    """Search for this round (honoring the denied domains from re-scope);
+    raises `_ResearchAborted` on zero hits."""
+    hits = await search.search(
+        current_query, limit=discover_limit, domains_deny=domains_deny or None
+    )
+    if not hits:
+        raise _ResearchAborted("No search results were found for this query.")
+    return hits
+
+
+def _passages_from_docs(docs: Sequence[ExtractedDoc]) -> list[Passage]:
+    return [p for d in docs if d.fetched_ok for p in d.passages]
+
+
+async def _extract_round_passages(
+    extraction: ExtractionProvider,
+    hits: Sequence[SearchHit],
+    exclude_urls: frozenset[str],
+    *,
+    extract_cap: int,
+    discover_limit: int,
+) -> tuple[list[ExtractedDoc], list[Passage], list[dict], frozenset[str]]:
+    """Extract readable passages for this round's hits (with provenance +
+    honest failure status). Extraction failures cluster under load (Crawl4AI
+    does real browser crawls), so a whole batch can blip to empty — retry
+    once with a wider net (more hits) before giving up, since the next
+    results are usually readable too. On re-search rounds, previously-
+    extracted URLs are skipped so the round fetches fresh sources."""
+    candidate_hits: list[SearchHit] = [
+        h for h in hits if h.url not in exclude_urls
+    ] or list(hits)
+    docs = await extract_discovered_hits(extraction, candidate_hits[:extract_cap])
+    passages = _passages_from_docs(docs)
+    if not passages and len(candidate_hits) > extract_cap:
+        extra = await extract_discovered_hits(
+            extraction, candidate_hits[extract_cap:discover_limit]
+        )
+        docs = docs + extra
+        passages = _passages_from_docs(docs)
+    status_by_url = {d.url: d.status for d in docs}
+    all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
+    this_round_urls = frozenset(h.url for h in hits)
+    return docs, passages, all_hits, this_round_urls
+
+
+async def _run_research_round(
+    current_query: str,
+    *,
+    search: SearchProvider,
+    extraction: ExtractionProvider,
+    reranker: Reranker,
+    router: LLMRouter,
+    nli: _NLILike,
+    think: bool,
+    domains_deny: frozenset[str],
+    discover_limit: int,
+    extract_cap: int,
+    top_k: int,
+    exclude_urls: frozenset[str],
+    seed_passages: Sequence[Passage],
+    corpus_ids: frozenset[str],
+    embedder: Embedder | None,
+    vector_store: VectorStore | None,
+) -> _RoundResult:
+    """Run one discover → extract → rerank → generate → verify round. Raises
+    `_ResearchAborted` for any of the pipeline's three honest-failure exits;
+    the caller (`stream_research_answer`) yields the error frame and stops."""
+    hits = await _discover_round(search, current_query, domains_deny, discover_limit)
+    docs, passages, all_hits, this_round_urls = await _extract_round_passages(
+        extraction, hits, exclude_urls, extract_cap=extract_cap, discover_limit=discover_limit
+    )
+
+    # Inject local evidence BEFORE the empty-passage early-exit so uploads and
+    # Spaces can answer even when web extraction fails.
+    passages = await _with_local_corpus_passages(
+        passages,
+        current_query=current_query,
+        top_k=top_k,
+        seed_passages=seed_passages,
+        corpus_ids=corpus_ids,
+        embedder=embedder,
+        vector_store=vector_store,
+    )
+    if not passages:
+        raise _ResearchAborted(_unreadable_sources_message(hits, docs))
+
+    # rerank to the working set (web passages + any seeds that survived the
+    # dedup above).
+    top = await reranker.rerank(current_query, passages, top_k=top_k)
+    by_id = {p.id: p for p in top}
+
+    # constrained generation.
+    answer_text, token_frames = await _generate_visible_answer(
+        router, current_query, top, think=think
+    )
+    if not answer_text:
+        _LOG.error("Research answerer returned no visible text after bounded repair")
+        raise _ResearchAborted(
+            "The answer model returned no visible answer after one bounded "
+            "repair. Try another model or retry the search."
+        )
+
+    # structure + verify. The NLI verifier is SYNC (blocking httpx), so run it
+    # in a thread — otherwise its many calls freeze the event loop and the
+    # WebSocket's keepalive pings time out, dropping the connection mid-answer.
+    blocks = _to_blocks(answer_text)
+    claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
+    # F1 no-answer signal: zero supported claims after NLI verification. Also
+    # catches an all-unsupported/neutral answer (equally "not grounded").
+    supported = sum(1 for c in claims if c["verdict"] == "supported")
+
+    return _RoundResult(
+        blocks=blocks,
+        claims=claims,
+        top=top,
+        all_hits=all_hits,
+        supported=supported,
+        this_round_urls=this_round_urls,
+        token_frames=token_frames,
+        answer_text=answer_text,
+    )
+
+
+def _build_final_answer(query: str, result: _RoundResult, follow_ups: list[str]) -> dict[str, Any]:
+    return {
+        "query": query,
+        "blocks": result.blocks,
+        "claims": result.claims,
+        "passages": [p.model_dump() for p in result.top],
+        "all_hits": result.all_hits,
+        "unsupported_count": sum(1 for c in result.claims if c["verdict"] == "unsupported"),
+        "follow_ups": follow_ups,
+    }
 
 
 async def stream_research_answer(
@@ -552,98 +744,35 @@ async def stream_research_answer(
         for round_idx in range(1 + bounded_extra):
             is_last_round = round_idx == bounded_extra
 
-            # 1. discovery (honoring the denied domains from re-scope)
-            hits = await search.search(
-                current_query, limit=discover_limit, domains_deny=domains_deny or None
-            )
-            if not hits:
-                yield {"type": "error", "message": "No search results were found for this query."}
-                return
-
-            # 2. extraction (with provenance + honest failure status). Extraction
-            # failures cluster under load (Crawl4AI does real browser crawls), so a
-            # whole batch can blip to empty — retry once with a wider net (more hits)
-            # before giving up, since the next results are usually readable too.
-            # On re-search rounds, skip URLs already extracted in prior rounds so we
-            # fetch fresh sources.
-            candidate_hits = [h for h in hits if h.url not in exclude_urls] or hits
-            docs = await extract_discovered_hits(extraction, candidate_hits[:extract_cap])
-            passages = [p for d in docs if d.fetched_ok for p in d.passages]
-            if not passages and len(candidate_hits) > extract_cap:
-                extra = await extract_discovered_hits(
-                    extraction, candidate_hits[extract_cap:discover_limit]
+            try:
+                result = await _run_research_round(
+                    current_query,
+                    search=search,
+                    extraction=extraction,
+                    reranker=reranker,
+                    router=router,
+                    nli=nli,
+                    think=think,
+                    domains_deny=domains_deny,
+                    discover_limit=discover_limit,
+                    extract_cap=extract_cap,
+                    top_k=top_k,
+                    exclude_urls=exclude_urls,
+                    seed_passages=seed_passages,
+                    corpus_ids=corpus_ids,
+                    embedder=embedder,
+                    vector_store=vector_store,
                 )
-                docs = docs + extra
-                passages = [p for d in docs if d.fetched_ok for p in d.passages]
-            status_by_url = {d.url: d.status for d in docs}
-            all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
-            this_round_urls = frozenset(h.url for h in hits)
-
-            # 3a. Inject local evidence BEFORE the empty-passage early-exit so
-            # uploads and Spaces can answer even when web extraction fails.
-            passages = await _with_local_corpus_passages(
-                passages,
-                current_query=current_query,
-                top_k=top_k,
-                seed_passages=seed_passages,
-                corpus_ids=corpus_ids,
-                embedder=embedder,
-                vector_store=vector_store,
-            )
-
-            if not passages:
-                yield {
-                    "type": "error",
-                    "message": _unreadable_sources_message(hits, docs),
-                }
+            except _ResearchAborted as aborted:
+                yield {"type": "error", "message": str(aborted)}
                 return
 
-            # 3b. rerank to the working set (web passages + any seeds that
-            # survived the dedup above).
-            top = await reranker.rerank(current_query, passages, top_k=top_k)
-            by_id = {p.id: p for p in top}
-
-            # 4. constrained generation — buffer tokens; only emit on the accepted round.
-            # This keeps a doomed first draft off the wire while still letting the final
-            # accepted answer stream token-by-token to the frontend.
-            answer_text, token_frames = await _generate_visible_answer(
-                router, current_query, top, think=think
-            )
-            if not answer_text:
-                _LOG.error("Research answerer returned no visible text after bounded repair")
-                yield {
-                    "type": "error",
-                    "message": (
-                        "The answer model returned no visible answer after one bounded "
-                        "repair. Try another model or retry the search."
-                    ),
-                }
-                return
-
-            # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
-            # it in a thread — otherwise its many calls freeze the event loop and the
-            # WebSocket's keepalive pings time out, dropping the connection mid-answer.
-            blocks = _to_blocks(answer_text)
-            claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
-
-            # F1 no-answer signal: zero supported claims after NLI verification.
-            # Also catches an all-unsupported/neutral answer (equally "not grounded").
-            supported = sum(1 for c in claims if c["verdict"] == "supported")
-
-            if supported > 0 or rewriter is None or is_last_round:
+            if result.supported > 0 or rewriter is None or is_last_round:
                 # Accepted round — emit the buffered tokens, then the final frames.
-                for frame in token_frames:
+                for frame in result.token_frames:
                     yield frame
-                follow_ups = await _follow_ups(router, query, answer_text)
-                answer = {
-                    "query": query,
-                    "blocks": blocks,
-                    "claims": claims,
-                    "passages": [p.model_dump() for p in top],
-                    "all_hits": all_hits,
-                    "unsupported_count": sum(1 for c in claims if c["verdict"] == "unsupported"),
-                    "follow_ups": follow_ups,
-                }
+                follow_ups = await _follow_ups(router, query, result.answer_text)
+                answer = _build_final_answer(query, result, follow_ups)
                 if drop_weak:
                     answer = _drop_weak(answer)
                 yield {"type": "final", "answer": answer}
@@ -651,7 +780,7 @@ async def stream_research_answer(
                 return
 
             # No supported claims + rewriter available + rounds remain → reformulate.
-            exclude_urls = exclude_urls | this_round_urls
+            exclude_urls = exclude_urls | result.this_round_urls
             yield {"type": "phase", "phase": "reformulating"}
             new_qs = await rewriter.rewrite(current_query, n=1)
             current_query = new_qs[0] if new_qs else current_query

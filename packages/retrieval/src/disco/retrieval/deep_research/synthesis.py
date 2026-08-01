@@ -44,6 +44,7 @@ from ..models import Passage
 from ..ranking import Embedder
 from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
 from ..vectorstore import VectorStore
+from . import _synthesis_parts
 from .gather import GatherLegContext, SubQuestionResult
 
 
@@ -222,35 +223,6 @@ async def _complete_with_transient_retry(
         return await cast(_RouterWithCtx, router).complete(request, context=context)
 
 
-_DELIM_CELL_RE = re.compile(r"^\s*:?-{1,}:?\s*$")
-
-
-def _is_delimiter_row(line: str) -> bool:
-    """A GFM table delimiter row — every cell is ``-``/``:--``/``--:``/``:-:``."""
-    s = line.strip()
-    if "|" not in s or "-" not in s:
-        return False
-    inner = s.strip("|")
-    cells = inner.split("|")
-    return bool(cells) and all(_DELIM_CELL_RE.match(c) for c in cells)
-
-
-def _normalize_table_row(line: str, ncols: int) -> str:
-    """Re-emit a pipe row with leading/trailing pipes and exactly ``ncols``
-    cells (pad short, clip long) so remark-gfm parses it."""
-    inner = line.strip()
-    if inner.startswith("|"):
-        inner = inner[1:]
-    if inner.endswith("|"):
-        inner = inner[:-1]
-    cells = [c.strip() for c in inner.split("|")]
-    if len(cells) < ncols:
-        cells += [""] * (ncols - len(cells))
-    elif len(cells) > ncols:
-        cells = cells[:ncols]
-    return "| " + " | ".join(cells) + " |"
-
-
 def _repair_tables(markdown: str) -> str:
     """BW-07 — repair malformed GFM tables so remark-gfm parses them instead of
     falling back to a literal-pipe paragraph.
@@ -261,57 +233,13 @@ def _repair_tables(markdown: str) -> str:
     with no delimiter. A lone single pipe line (a truncated/header-only fragment,
     or just prose that happens to contain a ``|``) is left untouched — we only
     rewrite a run we are confident is a real table (>= 2 rows, header has >= 2
-    cells, or it already carries a delimiter)."""
-    lines = markdown.split("\n")
-    out: list[str] = []
-    in_fence = False
-    i = 0
-    n = len(lines)
-    while i < n:
-        line = lines[i]
-        stripped = line.lstrip()
-        if stripped.startswith("```"):
-            in_fence = not in_fence
-            out.append(line)
-            i += 1
-            continue
-        if in_fence or "|" not in line:
-            out.append(line)
-            i += 1
-            continue
+    cells, or it already carries a delimiter).
 
-        # Gather a run of consecutive pipe-bearing, non-fence, non-blank lines.
-        run: list[str] = []
-        j = i
-        while j < n:
-            lj = lines[j]
-            if lj.lstrip().startswith("```") or "|" not in lj or not lj.strip():
-                break
-            run.append(lj)
-            j += 1
-
-        has_delim = any(_is_delimiter_row(r) for r in run)
-        header_cells = len([c for c in run[0].strip().strip("|").split("|")])
-        is_table = has_delim or (len(run) >= 2 and header_cells >= 2)
-        if not is_table:
-            out.extend(run)
-            i = j
-            continue
-
-        # Real table: normalize. Determine column count from the header row.
-        ncols = max(2, header_cells)
-        rebuilt: list[str] = [_normalize_table_row(run[0], ncols)]
-        body = run[1:]
-        if body and _is_delimiter_row(body[0]):
-            rebuilt.append("| " + " | ".join(["---"] * ncols) + " |")
-            body = body[1:]
-        else:
-            rebuilt.append("| " + " | ".join(["---"] * ncols) + " |")
-        for r in body:
-            rebuilt.append(_normalize_table_row(r, ncols))
-        out.extend(rebuilt)
-        i = j
-    return "\n".join(out)
+    Implementation lives in `_synthesis_parts` (extracted to clear this
+    module's size cap); this is the preserved import path
+    (`disco.retrieval.deep_research.synthesis._repair_tables`) that
+    `test_synthesis_repair.py` imports directly."""
+    return _synthesis_parts.repair_tables(markdown)
 
 
 _SECTION_PROMPT = (
@@ -560,6 +488,105 @@ async def _normalize_section_markup(
     return _repair_tables(markdown)
 
 
+async def _initial_section_completion(
+    router: LLMRouter,
+    leg_messages: list[LLMMessage],
+    *,
+    leg_context: GatherLegContext,
+) -> CompletionResponse:
+    """First completion attempt, plus the EMPTY-RESPONSE RETRY. A section's
+    `content` can come back empty even on a successful call. The dominant
+    cause in production is a REASONING model (the rag_answerer is
+    MiniMax/Qwen-class): the model spends its whole token budget on hidden
+    reasoning and returns `finish_reason=="length"` with an EMPTY content
+    channel. A blank generation or a soft refusal (`finish_reason=="stop"`,
+    empty text) is the other path. Either way the empty body was previously
+    stored verbatim and the UI rendered a titled section card with NO content
+    (the blank last-section bug).
+
+    Retry ONCE. When the empty was length-exhaustion, give the reasoning room
+    to finish AND still emit prose by widening the budget; otherwise reissue
+    at the normal cap. The final empty-section guard (after post-processing,
+    in `synthesize_section`) still catches anything that stays empty.
+
+    Emptiness is judged POST think-strip: a think-only response (the whole
+    budget spent inside <think>) is exactly the length-exhaustion case this
+    retry exists for — raw-text non-emptiness must not mask it."""
+    resp = await _complete_with_transient_retry(
+        router,
+        CompletionRequest(
+            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+            messages=leg_messages,
+            temperature=_SYNTHESIS_TEMPERATURE,
+            max_tokens=1400,
+        ),
+        context=leg_context.call_context,
+        transient_backoff_s=_INITIAL_TRANSIENT_BACKOFF_S,
+    )
+    if not strip_think_spans(resp.text):
+        _retry_tokens = 2800 if resp.finish_reason == "length" else 1400
+        try:
+            resp = await _complete_with_transient_retry(
+                router,
+                CompletionRequest(
+                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                    messages=leg_messages,
+                    temperature=_SYNTHESIS_TEMPERATURE,
+                    max_tokens=_retry_tokens,
+                ),
+                context=leg_context.call_context,
+                transient_backoff_s=_EMPTY_RETRY_TRANSIENT_BACKOFF_S,
+            )
+        except Exception:  # noqa: BLE001 — handled by the empty-section guard
+            pass
+    return resp
+
+
+async def _generate_section_markdown(
+    router: LLMRouter,
+    instruction: str,
+    leg_messages: list[LLMMessage],
+    *,
+    leg_context: GatherLegContext,
+    passages: list[Passage],
+) -> str:
+    """Generate + repair one section's markdown: the initial completion (with
+    its empty-response widened-budget retry), the BW-07 truncation-
+    continuation loop (bounded, resumes a `finish_reason=="length"` section
+    from its exact cut point), then chart/citation/table normalization.
+    Exceptions propagate to the caller's extractive-fallback handling."""
+    resp = await _initial_section_completion(router, leg_messages, leg_context=leg_context)
+    # NOTE: accumulate the RAW text (do NOT strip yet) — the trailing
+    # whitespace IS the cut boundary the continuation join relies on.
+    markdown = strip_think_spans(resp.text, keep_edge_whitespace=True)
+    markdown = await _synthesis_parts.continue_truncated_section(
+        router, instruction, markdown, resp, leg_context=leg_context
+    )
+    markdown = markdown.strip()
+    return await _normalize_section_markup(
+        markdown,
+        router=router,
+        instruction=instruction,
+        leg_context=leg_context,
+        passage_ids={passage.id for passage in passages},
+    )
+
+
+async def _score_section_markdown(
+    markdown: str, passages: list[Passage], nli: Any
+) -> tuple[list[dict], _Confidence, int, list[str], list[str]]:
+    """Per-claim NLI verification (reuse the existing verifier — same shape as
+    the standard-answer flow) + confidence/disputed-notes/cited-ids rollup for
+    a finished section body."""
+    by_id = {p.id: p for p in passages}
+    claims = await asyncio.to_thread(_verify_claims, markdown, by_id, nli)
+    confidence, unsupported = _confidence_from_claims(claims)
+    disputed_notes = _extract_disputed_notes(markdown)
+    # the cited passage ids actually mentioned in the body (regex extract)
+    cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})
+    return claims, confidence, unsupported, disputed_notes, cited_ids
+
+
 async def synthesize_section(
     sub_result: SubQuestionResult,
     *,
@@ -624,149 +651,21 @@ async def synthesize_section(
     leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
     used_extractive_fallback = False
     try:
-        resp = await _complete_with_transient_retry(
-            router,
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=leg_messages,
-                temperature=_SYNTHESIS_TEMPERATURE,
-                max_tokens=1400,
-            ),
-            context=leg_context.call_context,
-            transient_backoff_s=_INITIAL_TRANSIENT_BACKOFF_S,
+        markdown = await _generate_section_markdown(
+            router, instruction, leg_messages, leg_context=leg_context, passages=passages
         )
-        # EMPTY-RESPONSE RETRY. A section's `content` can come back empty even on a
-        # successful call. The dominant cause in production is a REASONING model
-        # (the rag_answerer is MiniMax/Qwen-class): the model spends its whole token
-        # budget on hidden reasoning and returns `finish_reason=="length"` with an
-        # EMPTY content channel — the truncation guard below can't recover it because
-        # each continuation also reasons to exhaustion. A blank generation or a soft
-        # refusal (`finish_reason=="stop"`, empty text) is the other path. Either way
-        # the empty body was stored verbatim and the UI rendered a titled section
-        # card with NO content (the blank last-section bug — observed live as a
-        # stored section with markdown='' / cited=[] / confidence=low).
-        #
-        # Retry ONCE. When the empty was length-exhaustion, give the reasoning room
-        # to finish AND still emit prose by widening the budget; otherwise reissue at
-        # the normal cap. The final empty-section guard (after post-processing) still
-        # catches anything that stays empty.
-        #
-        # Emptiness is judged POST think-strip: a think-only response (the whole
-        # budget spent inside <think>) is exactly the length-exhaustion case this
-        # retry exists for — raw-text non-emptiness must not mask it.
-        if not strip_think_spans(resp.text):
-            _retry_tokens = 2800 if resp.finish_reason == "length" else 1400
-            try:
-                resp = await _complete_with_transient_retry(
-                    router,
-                    CompletionRequest(
-                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                        messages=leg_messages,
-                        temperature=_SYNTHESIS_TEMPERATURE,
-                        max_tokens=_retry_tokens,
-                    ),
-                    context=leg_context.call_context,
-                    transient_backoff_s=_EMPTY_RETRY_TRANSIENT_BACKOFF_S,
-                )
-            except Exception:  # noqa: BLE001 — handled by the empty-section guard
-                pass
-        # BW-07 (2) — TRUNCATION GUARD. The section cap is small; when a section
-        # is cut off mid-content (`finish_reason=="length"`, often mid-table)
-        # remark-gfm receives a half-table and renders raw pipes. Continue from
-        # the cut point (bounded) so the section terminates on a clean boundary.
-        #
-        # NOTE: accumulate the RAW text (do NOT strip yet) — the trailing
-        # whitespace IS the cut boundary. Stripping first makes
-        # `markdown[-1:].isspace()` permanently False, so every continuation
-        # glues directly and merges adjacent rows/words ("| a | 10 |" + "| b |"
-        # -> "| a | 10 || b |", losing the row break). The final strip happens
-        # once, after the loop. (Think spans are stripped span-only here so the
-        # trailing cut boundary survives.)
-        markdown = strip_think_spans(resp.text, keep_edge_whitespace=True)
-        _cont = 0
-        while resp.finish_reason == "length" and _cont < 2:
-            _cont += 1
-            try:
-                resp = await cast(_RouterWithCtx, router).complete(
-                    CompletionRequest(
-                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                        messages=[
-                            LLMMessage(role="user", content=instruction),
-                            LLMMessage(role="assistant", content=markdown.rstrip()),
-                            LLMMessage(
-                                role="user",
-                                content=(
-                                    "Your previous reply was cut off. Continue "
-                                    "EXACTLY where you stopped — do not repeat any "
-                                    "earlier text and do not add a preamble. If you "
-                                    "were mid-table, finish the table."
-                                ),
-                            ),
-                        ],
-                        temperature=_SYNTHESIS_TEMPERATURE,
-                        max_tokens=1400,
-                    ),
-                    context=leg_context.call_context,
-                )
-            except Exception:  # noqa: BLE001 — keep the partial section
-                break
-            extra = strip_think_spans(resp.text, keep_edge_whitespace=True)
-            if not extra.strip():
-                break
-            stripped_extra = extra.lstrip()
-            if markdown[-1:].isspace():
-                # Cut fell on a line/word boundary — start the continuation on a
-                # fresh line so a new table row or paragraph never merges into the
-                # last one (the half-table case BW-07 exists to fix).
-                markdown = markdown.rstrip() + "\n" + stripped_extra
-            elif markdown[-1:] == "|" and stripped_extra[:1] == "|":
-                # Cut landed AFTER a complete table row but BEFORE its trailing
-                # newline: the previous chunk ends on a row-closing pipe and the
-                # continuation opens a NEW row with a leading pipe. A direct glue
-                # would fuse the two rows on one line ("| Alpha | 90 |" +
-                # "| Beta | 85 |" -> "| Alpha | 90 || Beta | 85 |"); the adjacent
-                # `||` across the boundary is the tell of a wrongly merged row.
-                # Join on a fresh line so each row stays a distinct row. (A cut
-                # mid-cell ends on a value, not a pipe — "| Alpha | 9" — and its
-                # continuation opens on the value too — "0 |" — so it never trips
-                # this branch and still glues directly below.)
-                markdown = markdown + "\n" + stripped_extra
-            else:
-                # Cut landed mid-token/mid-cell — glue the fragments with no
-                # separator so the partial token/cell completes ("| a | 10" +
-                # "0 |" -> "| a | 100 |"), never inserting a spurious space.
-                markdown = markdown + stripped_extra
-        markdown = markdown.strip()
-
-        markdown = await _normalize_section_markup(
-            markdown,
-            router=router,
-            instruction=instruction,
-            leg_context=leg_context,
-            passage_ids={passage.id for passage in passages},
-        )
-
     except Exception as exc:  # noqa: BLE001 — preserve gathered evidence below
-        markdown = _grounded_extractive_fallback(passages)
+        markdown, early_return = await _synthesis_parts.fallback_section_or_markdown(
+            passages,
+            section_id=section_id,
+            title=sub_result.subq.title,
+            emit=emit,
+            reason=f"exception:{type(exc).__name__}",
+            empty_markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
+        )
         used_extractive_fallback = bool(markdown)
-        try:
-            await emit(
-                "synthesize_section_fallback",
-                {
-                    "section": sub_result.subq.title,
-                    "reason": f"exception:{type(exc).__name__}",
-                    "passages_preserved": min(len(passages), 3),
-                },
-            )
-        except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
-            pass
-        if not markdown:
-            return ReportSection(
-                id=section_id,
-                title=sub_result.subq.title,
-                markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
-                confidence="low",
-            )
+        if early_return is not None:
+            return early_return
 
     # EMPTY-SECTION GUARD (final). If the body is STILL empty after the
     # empty-response retry + the truncation/chart/table post-processing (e.g. the
@@ -776,38 +675,23 @@ async def synthesize_section(
     # so an empty markdown shows as a titled card with no content (a false
     # affordance). This says plainly that the section had no usable output.
     if not markdown.strip():
-        markdown = _grounded_extractive_fallback(passages)
+        markdown, early_return = await _synthesis_parts.fallback_section_or_markdown(
+            passages,
+            section_id=section_id,
+            title=sub_result.subq.title,
+            emit=emit,
+            reason="empty_after_retry",
+            empty_markdown="*(This section could not be generated from the gathered sources.)*",
+        )
         used_extractive_fallback = bool(markdown)
-        try:
-            await emit(
-                "synthesize_section_fallback",
-                {
-                    "section": sub_result.subq.title,
-                    "reason": "empty_after_retry",
-                    "passages_preserved": min(len(passages), 3),
-                },
-            )
-        except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
-            pass
-        if not markdown:
-            return ReportSection(
-                id=section_id,
-                title=sub_result.subq.title,
-                markdown="*(This section could not be generated from the gathered sources.)*",
-                confidence="low",
-            )
+        if early_return is not None:
+            return early_return
 
-    # per-claim NLI verification (reuse the existing verifier — same shape
-    # as the standard-answer flow, applied to this section's body + this
-    # section's passages).
-    by_id = {p.id: p for p in passages}
-    claims = await asyncio.to_thread(_verify_claims, markdown, by_id, nli)
-    confidence, unsupported = _confidence_from_claims(claims)
+    claims, confidence, unsupported, disputed_notes, cited_ids = await _score_section_markdown(
+        markdown, passages, nli
+    )
     if used_extractive_fallback:
         confidence = "low"
-    disputed_notes = _extract_disputed_notes(markdown)
-    # the cited passage ids actually mentioned in the body (regex extract)
-    cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})
 
     return ReportSection(
         id=section_id,

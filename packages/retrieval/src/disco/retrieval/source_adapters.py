@@ -266,6 +266,18 @@ class SemanticScholarSearchProvider:
         time_filter: str | None = None,
     ) -> list[SearchHit]:
         del time_filter
+        papers = await self._fetch_papers(query, limit)
+        hits: list[SearchHit] = []
+        for i, paper in enumerate(papers):
+            hit = self._paper_to_hit(paper, i, domains_allow, domains_deny)
+            if hit is None:
+                continue
+            hits.append(hit)
+            if len(hits) >= limit:
+                break
+        return hits
+
+    async def _fetch_papers(self, query: str, limit: int) -> list:
         params = {
             "query": query,
             "limit": limit,
@@ -282,33 +294,33 @@ class SemanticScholarSearchProvider:
             if resp.status_code >= 400:
                 return []
             payload = json.loads(resp.text)
-            papers = payload.get("data", []) if isinstance(payload, dict) else []
+            return payload.get("data", []) if isinstance(payload, dict) else []
         except (EgressDenied, OSError, ValueError, httpx.HTTPError):
             return []
 
-        hits: list[SearchHit] = []
-        for i, paper in enumerate(papers):
-            if not isinstance(paper, dict):
-                continue
-            paper_id = str(paper.get("paperId") or "")
-            url = str(paper.get("url") or "")
-            if not url and paper_id:
-                url = f"https://www.semanticscholar.org/paper/{paper_id}"
-            if not url or not _allowed(url, domains_allow, domains_deny):
-                continue
-            title = str(paper.get("title") or url)
-            hits.append(
-                SearchHit(
-                    url=url,
-                    title=title,
-                    snippet=str(paper.get("abstract") or ""),
-                    source_engine="semantic_scholar",
-                    rank=i,
-                )
-            )
-            if len(hits) >= limit:
-                break
-        return hits
+    @staticmethod
+    def _paper_to_hit(
+        paper: object,
+        i: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+    ) -> SearchHit | None:
+        if not isinstance(paper, dict):
+            return None
+        paper_id = str(paper.get("paperId") or "")
+        url = str(paper.get("url") or "")
+        if not url and paper_id:
+            url = f"https://www.semanticscholar.org/paper/{paper_id}"
+        if not url or not _allowed(url, domains_allow, domains_deny):
+            return None
+        title = str(paper.get("title") or url)
+        return SearchHit(
+            url=url,
+            title=title,
+            snippet=str(paper.get("abstract") or ""),
+            source_engine="semantic_scholar",
+            rank=i,
+        )
 
 
 class SiteScopedSearchProvider:
@@ -382,6 +394,27 @@ class MultiSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        rows_by_provider = await self._gather_rows(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
+        if not rows_by_provider:
+            return []
+        by_url, ordered_urls = self._merge_by_url(rows_by_provider)
+        return self._finalize(by_url, ordered_urls, limit)
+
+    async def _gather_rows(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> list[list[SearchHit]]:
         if not self._providers or limit <= 0:
             return []
         gathered = await asyncio.gather(
@@ -402,9 +435,12 @@ class MultiSearchProvider:
             if isinstance(result, BaseException) or not result:
                 continue
             rows_by_provider.append(list(result))
-        if not rows_by_provider:
-            return []
+        return rows_by_provider
 
+    @staticmethod
+    def _merge_by_url(
+        rows_by_provider: list[list[SearchHit]],
+    ) -> tuple[dict[str, tuple[SearchHit, int, list[str]]], list[str]]:
         by_url: dict[str, tuple[SearchHit, int, list[str]]] = {}
         ordered_urls: list[str] = []
         max_len = max(len(rows) for rows in rows_by_provider)
@@ -415,20 +451,35 @@ class MultiSearchProvider:
                 hit = rows[idx]
                 if not hit.url:
                     continue
-                labels = _source_labels(hit.source_engine)
-                current = by_url.get(hit.url)
-                if current is None:
-                    by_url[hit.url] = (hit, hit.rank, labels)
-                    ordered_urls.append(hit.url)
-                    continue
-                best_hit, best_rank, engines = current
-                for label in labels:
-                    if label not in engines:
-                        engines.append(label)
-                if hit.rank < best_rank:
-                    best_hit, best_rank = hit, hit.rank
-                by_url[hit.url] = (best_hit, best_rank, engines)
+                MultiSearchProvider._merge_hit(by_url, ordered_urls, hit)
+        return by_url, ordered_urls
 
+    @staticmethod
+    def _merge_hit(
+        by_url: dict[str, tuple[SearchHit, int, list[str]]],
+        ordered_urls: list[str],
+        hit: SearchHit,
+    ) -> None:
+        labels = _source_labels(hit.source_engine)
+        current = by_url.get(hit.url)
+        if current is None:
+            by_url[hit.url] = (hit, hit.rank, labels)
+            ordered_urls.append(hit.url)
+            return
+        best_hit, best_rank, engines = current
+        for label in labels:
+            if label not in engines:
+                engines.append(label)
+        if hit.rank < best_rank:
+            best_hit, best_rank = hit, hit.rank
+        by_url[hit.url] = (best_hit, best_rank, engines)
+
+    @staticmethod
+    def _finalize(
+        by_url: dict[str, tuple[SearchHit, int, list[str]]],
+        ordered_urls: list[str],
+        limit: int,
+    ) -> list[SearchHit]:
         out: list[SearchHit] = []
         for url in ordered_urls:
             hit, _best_rank, engines = by_url[url]

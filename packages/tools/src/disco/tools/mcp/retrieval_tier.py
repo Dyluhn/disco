@@ -312,58 +312,104 @@ class CompositeSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        batches: list[tuple[Any, list[SearchHit]]] = []
-        for provider in self._providers:
-            try:
-                hits = await provider.search(
-                    query,
-                    limit=limit,
-                    domains_allow=domains_allow,
-                    domains_deny=domains_deny,
-                    time_filter=time_filter,
-                )
-            except TypeError:
-                # An MCP provider with a narrower signature — call positionally.
-                hits = await provider.search(query, limit=limit)
-            except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
-                _LOG.warning(
-                    "Composite search: provider %r failed: %s",
-                    getattr(provider, "name", "?"),
-                    exc,
-                )
-                continue
-            batches.append((provider, hits))
-
+        batches = await self._gather_batches(
+            query,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+            time_filter=time_filter,
+        )
         merged: list[SearchHit] = []
         seen: dict[str, int] = {}
         max_batch = max((len(hits) for _provider, hits in batches), default=0)
         for rank in range(max_batch):
-            for provider, hits in batches:
-                if rank >= len(hits):
-                    continue
-                hit = hits[rank]
-                if hit.url and hit.url in seen:
-                    # Dedup the candidate URL, but not its provenance. Provider
-                    # affinity is required downstream: an MCP fetch tool may be
-                    # the only extractor able to read a URL that bundled search
-                    # also happened to discover.
-                    index = seen[hit.url]
-                    existing = merged[index]
-                    source = hit.source_engine or getattr(provider, "name", "")
-                    engines = [part for part in existing.source_engine.split("|") if part]
-                    if source and source not in engines:
-                        merged[index] = existing.model_copy(
-                            update={"source_engine": "|".join([*engines, source])}
-                        )
-                    continue
-                if hit.url:
-                    seen[hit.url] = len(merged)
-                merged.append(hit)
+            self._merge_rank(rank, batches, merged, seen)
             # Finish the whole rank bucket before truncating so a duplicate from
             # a later provider can still attach provenance to an included hit.
             if len(merged) >= limit:
                 return merged[:limit]
         return merged[:limit]
+
+    async def _gather_batches(
+        self,
+        query: str,
+        *,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> list[tuple[Any, list[SearchHit]]]:
+        batches: list[tuple[Any, list[SearchHit]]] = []
+        for provider in self._providers:
+            hits = await self._search_one(
+                provider, query, limit, domains_allow, domains_deny, time_filter
+            )
+            if hits is None:
+                continue
+            batches.append((provider, hits))
+        return batches
+
+    @staticmethod
+    async def _search_one(
+        provider: Any,
+        query: str,
+        limit: int,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        time_filter: str | None,
+    ) -> list[SearchHit] | None:
+        try:
+            return await provider.search(
+                query,
+                limit=limit,
+                domains_allow=domains_allow,
+                domains_deny=domains_deny,
+                time_filter=time_filter,
+            )
+        except TypeError:
+            # An MCP provider with a narrower signature — call positionally.
+            return await provider.search(query, limit=limit)
+        except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
+            _LOG.warning(
+                "Composite search: provider %r failed: %s",
+                getattr(provider, "name", "?"),
+                exc,
+            )
+            return None
+
+    @staticmethod
+    def _merge_rank(
+        rank: int,
+        batches: list[tuple[Any, list[SearchHit]]],
+        merged: list[SearchHit],
+        seen: dict[str, int],
+    ) -> None:
+        for provider, hits in batches:
+            if rank >= len(hits):
+                continue
+            CompositeSearchProvider._record_hit(provider, hits[rank], merged, seen)
+
+    @staticmethod
+    def _record_hit(
+        provider: Any, hit: SearchHit, merged: list[SearchHit], seen: dict[str, int]
+    ) -> None:
+        if hit.url and hit.url in seen:
+            # Dedup the candidate URL, but not its provenance. Provider
+            # affinity is required downstream: an MCP fetch tool may be
+            # the only extractor able to read a URL that bundled search
+            # also happened to discover.
+            index = seen[hit.url]
+            existing = merged[index]
+            source = hit.source_engine or getattr(provider, "name", "")
+            engines = [part for part in existing.source_engine.split("|") if part]
+            if source and source not in engines:
+                merged[index] = existing.model_copy(
+                    update={"source_engine": "|".join([*engines, source])}
+                )
+            return
+        if hit.url:
+            seen[hit.url] = len(merged)
+        merged.append(hit)
 
 
 class CompositeExtractionProvider:

@@ -85,11 +85,19 @@ class SearxngSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
+        params = self._build_params(query, time_filter)
+        results = await self._fetch_results(params)
+        return self._to_hits(results, domains_allow, domains_deny, limit)
+
+    def _build_params(self, query: str, time_filter: str | None) -> dict:
         # DR-3 E1: SearXNG uses `time_range` param; accept "month"/"week".
         # "day" is avoided per spec (near-zero results).
         params: dict = {"q": query, "format": "json"}
         if time_filter in {"month", "week"}:
             params["time_range"] = time_filter
+        return params
+
+    async def _fetch_results(self, params: dict) -> list:
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout,
@@ -99,10 +107,17 @@ class SearxngSearchProvider:
             ) as client:
                 resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
-                results = resp.json().get("results", [])
+                return resp.json().get("results", [])
         except (httpx.HTTPError, ValueError):
             return []  # discovery failure degrades to no hits (pipeline still runs)
 
+    def _to_hits(
+        self,
+        results: list,
+        domains_allow: frozenset[str] | None,
+        domains_deny: frozenset[str] | None,
+        limit: int,
+    ) -> list[SearchHit]:
         deny = {d.lower() for d in (domains_deny or frozenset())}
         allow = {d.lower() for d in domains_allow} if domains_allow else None
         hits: list[SearchHit] = []
@@ -110,10 +125,7 @@ class SearxngSearchProvider:
             url = res.get("url") or ""
             if not url:
                 continue
-            host = _host(url)
-            if any(d in host for d in deny):
-                continue
-            if allow is not None and not any(d in host for d in allow):
+            if not self._domain_ok(_host(url), allow, deny):
                 continue
             hits.append(
                 SearchHit(
@@ -127,6 +139,12 @@ class SearxngSearchProvider:
             if len(hits) >= limit:
                 break
         return hits
+
+    @staticmethod
+    def _domain_ok(host: str, allow: set[str] | None, deny: set[str]) -> bool:
+        if any(d in host for d in deny):
+            return False
+        return allow is None or any(d in host for d in allow)
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------
@@ -572,6 +590,48 @@ def _make_search(provider: str, base_url: str, api_key: str):
     return DdgsSearchProvider()  # default / "ddgs"
 
 
+# B2 dispatch table: source id -> (provider name, cfg key for base_url, cfg key
+# for api_key, cfg key that gates inclusion). An empty spec slot means "no such
+# field" (cfg.get("", "") always resolves to ""); an empty gate key means
+# "always included" (bundled sources need no key/url).
+_MULTI_SEARCH_SPEC: dict[str, tuple[str, str, str, str]] = {
+    "ddgs": ("ddgs", "", "", ""),
+    "arxiv": ("arxiv", "", "", ""),
+    "news": ("news", "", "", ""),
+    "semantic_scholar": ("semantic_scholar", "", "ss_key", ""),
+    "searxng": ("searxng", "searxng_url", "", "searxng_url"),
+    "tavily": ("tavily", "", "tavily_key", "tavily_key"),
+    "brave": ("brave", "brave_url", "brave_key", "brave_key"),
+    "site_scoped": ("site_scoped", "site_scoped_sites", "", "site_scoped_sites"),
+}
+
+
+def _multi_search_candidate(source_id: str, cfg: Mapping[str, str]) -> SearchProvider | None:
+    spec = _MULTI_SEARCH_SPEC.get(source_id)
+    if spec is None:
+        return None
+    provider, url_key, key_key, gate_key = spec
+    if gate_key and not cfg[gate_key]:
+        return None
+    return _make_search(provider, cfg.get(url_key, ""), cfg.get(key_key, ""))
+
+
+def _collect_multi_search_providers(
+    sources: Sequence[str], cfg: Mapping[str, str]
+) -> list[SearchProvider]:
+    providers: list[SearchProvider] = []
+    seen: set[str] = set()
+    for raw in sources:
+        source_id = str(raw).strip().lower()
+        if not source_id or source_id in seen:
+            continue
+        seen.add(source_id)
+        candidate = _multi_search_candidate(source_id, cfg)
+        if candidate is not None:
+            providers.append(candidate)
+    return providers
+
+
 def build_multi_search(
     sources: Sequence[str],
     *,
@@ -586,29 +646,15 @@ def build_multi_search(
     from .bundled_providers import DdgsSearchProvider
     from .source_adapters import MultiSearchProvider
 
-    providers: list[SearchProvider] = []
-    seen: set[str] = set()
-    for raw in sources:
-        source_id = str(raw).strip().lower()
-        if not source_id or source_id in seen:
-            continue
-        seen.add(source_id)
-        if source_id == "ddgs":
-            providers.append(_make_search("ddgs", "", ""))
-        elif source_id == "arxiv":
-            providers.append(_make_search("arxiv", "", ""))
-        elif source_id == "news":
-            providers.append(_make_search("news", "", ""))
-        elif source_id == "semantic_scholar":
-            providers.append(_make_search("semantic_scholar", "", ss_key))
-        elif source_id == "searxng" and searxng_url:
-            providers.append(_make_search("searxng", searxng_url, ""))
-        elif source_id == "tavily" and tavily_key:
-            providers.append(_make_search("tavily", "", tavily_key))
-        elif source_id == "brave" and brave_key:
-            providers.append(_make_search("brave", brave_url, brave_key))
-        elif source_id == "site_scoped" and site_scoped_sites:
-            providers.append(_make_search("site_scoped", site_scoped_sites, ""))
+    cfg = {
+        "searxng_url": searxng_url,
+        "tavily_key": tavily_key,
+        "ss_key": ss_key,
+        "brave_key": brave_key,
+        "brave_url": brave_url,
+        "site_scoped_sites": site_scoped_sites,
+    }
+    providers = _collect_multi_search_providers(sources, cfg)
     if not providers:
         return DdgsSearchProvider()
     if len(providers) == 1:
@@ -626,6 +672,115 @@ def _make_extraction(provider: str, base_url: str, api_key: str):
     if provider == "firecrawl":
         return FirecrawlExtractionProvider(api_key, base_url or "https://api.firecrawl.dev")
     return LocalExtractionProvider()  # default / "local"
+
+
+def _env_url(e: Mapping[str, str], key: str) -> str:
+    """DISCO_<X> preferred; legacy PMX_<X> honored; else the LAN default."""
+    v = e.get(key)
+    if v is None and key.startswith("DISCO_"):
+        v = e.get("PMX_" + key[len("DISCO_") :])
+    return v if v is not None else _DEFAULTS[key]
+
+
+def _resolve_remote_flag(remote: bool | None, e: Mapping[str, str]) -> bool:
+    if remote is not None:
+        return remote
+    encoders = e.get("DISCO_ENCODERS")
+    if encoders is None:
+        encoders = e.get("PMX_ENCODERS", "local")
+    return encoders.lower() == "remote"
+
+
+def _resolve_search_wiring(
+    search_provider: str,
+    search_base_url: str,
+    search_api_key: str,
+    search_secret_ref: str,
+    e: Mapping[str, str],
+    approved: Callable[[str, str, str | None], bool],
+) -> tuple[str, str, str]:
+    # B2 — pluggable discovery. Bundled (ddgs) by default so a fresh install works
+    # keyless; searxng self-hosts (base_url, empty -> env default); tavily/brave/
+    # semantic_scholar are resolved against an approved trust origin.
+    search_url = search_base_url or (
+        _env_url(e, "DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
+    )
+    search_trust_url = {
+        "tavily": "https://api.tavily.com",
+        "brave": search_url or "https://api.search.brave.com",
+        "semantic_scholar": search_url or "https://api.semanticscholar.org",
+    }.get(search_provider, search_url)
+    if search_trust_url and not approved(
+        search_trust_url, f"search:{search_provider}", search_secret_ref
+    ):
+        return "ddgs", "", ""
+    return search_provider, search_url, search_api_key
+
+
+def _resolve_extraction_wiring(
+    extraction_provider: str,
+    extraction_base_url: str,
+    extraction_api_key: str,
+    extraction_secret_ref: str,
+    e: Mapping[str, str],
+    approved: Callable[[str, str, str | None], bool],
+) -> tuple[str, str, str]:
+    # B1 — pluggable extraction. Bundled (local) by default; crawl4ai self-hosts
+    # (base_url, empty -> env default); firecrawl is paid (resolved api_key).
+    if extraction_provider == "crawl4ai":
+        extraction_url = extraction_base_url or _env_url(e, "DISCO_CRAWL4AI_URL")
+    elif extraction_provider == "firecrawl":
+        extraction_url = extraction_base_url or "https://api.firecrawl.dev"
+    else:
+        extraction_url = extraction_base_url
+    if extraction_provider != "local" and not approved(
+        extraction_url,
+        f"extraction:{extraction_provider}",
+        extraction_secret_ref,
+    ):
+        return "local", "", ""
+    return extraction_provider, extraction_url, extraction_api_key
+
+
+def _resolve_encoder_urls(
+    reranker_url: str, embedder_url: str, nli_url: str, e: Mapping[str, str]
+) -> tuple[str, str, str]:
+    # config override (non-empty) wins; else the env/default for that endpoint
+    return (
+        reranker_url or _env_url(e, "DISCO_RERANKER_URL"),
+        embedder_url or _env_url(e, "DISCO_EMBEDDER_URL"),
+        nli_url or _env_url(e, "DISCO_NLI_URL"),
+    )
+
+
+def _build_encoder_providers(
+    use_remote: bool,
+    r_url: str,
+    e_url: str,
+    n_url: str,
+    approved: Callable[[str, str, str | None], bool],
+) -> dict[str, Any]:
+    if use_remote:
+        # config override (non-empty) wins; else the env/default for that endpoint
+        use_remote = (
+            approved(r_url, "encoder:reranker", "")
+            and approved(e_url, "encoder:embedder", "")
+            and approved(n_url, "encoder:nli", "")
+        )
+    if use_remote:
+        return {
+            "reranker": TeiReranker(r_url),
+            "embedder": OpenAIEmbedder(e_url),
+            "nli": SidecarNLIVerifier(n_url),
+        }
+    # In-process ONNX/CPU encoders (imported lazily — models load on first use).
+    from .local_encoders import FastEmbedEmbedder, FastEmbedNLIVerifier, FastEmbedReranker
+
+    return {
+        "reranker": FastEmbedReranker(),
+        "embedder": FastEmbedEmbedder(),
+        "nli": FastEmbedNLIVerifier(),
+    }
 
 
 def build_live_retrieval(
@@ -663,70 +818,23 @@ def build_live_retrieval(
     PMX_*_URL env default — so a remote user who hasn't typed URLs still resolves."""
     e = os.environ if env is None else env
     approved = origin_approved or (lambda *_: False)
+    use_remote = _resolve_remote_flag(remote, e)
 
-    def url(key: str) -> str:
-        # DISCO_<X> preferred; legacy PMX_<X> honored; else the LAN default.
-        v = e.get(key)
-        if v is None and key.startswith("DISCO_"):
-            v = e.get("PMX_" + key[len("DISCO_") :])
-        return v if v is not None else _DEFAULTS[key]
-
-    if remote is None:
-        encoders = e.get("DISCO_ENCODERS")
-        if encoders is None:
-            encoders = e.get("PMX_ENCODERS", "local")
-        remote = encoders.lower() == "remote"
-    use_remote = remote
-    # B1/B2 — pluggable discovery + extraction. Bundled (ddgs/local) by default so a
-    # fresh install works keyless; searxng/crawl4ai self-host (base_url, empty → env
-    # default); tavily/firecrawl are paid (resolved api_key passed in by the runtime).
-    search_url = search_base_url or (
-        url("DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
+    search_provider, search_url, search_api_key = _resolve_search_wiring(
+        search_provider, search_base_url, search_api_key, search_secret_ref, e, approved
     )
-    search_trust_url = {
-        "tavily": "https://api.tavily.com",
-        "brave": search_url or "https://api.search.brave.com",
-        "semantic_scholar": search_url or "https://api.semanticscholar.org",
-    }.get(search_provider, search_url)
-    if search_trust_url and not approved(
-        search_trust_url, f"search:{search_provider}", search_secret_ref
-    ):
-        search_provider, search_url, search_api_key = "ddgs", "", ""
-    if extraction_provider == "crawl4ai":
-        extraction_url = extraction_base_url or url("DISCO_CRAWL4AI_URL")
-    elif extraction_provider == "firecrawl":
-        extraction_url = extraction_base_url or "https://api.firecrawl.dev"
-    else:
-        extraction_url = extraction_base_url
-    if extraction_provider != "local" and not approved(
-        extraction_url,
-        f"extraction:{extraction_provider}",
+    extraction_provider, extraction_url, extraction_api_key = _resolve_extraction_wiring(
+        extraction_provider,
+        extraction_base_url,
+        extraction_api_key,
         extraction_secret_ref,
-    ):
-        extraction_provider, extraction_url, extraction_api_key = "local", "", ""
+        e,
+        approved,
+    )
     providers: dict[str, Any] = {
         "search": search_override or _make_search(search_provider, search_url, search_api_key),
         "extraction": _make_extraction(extraction_provider, extraction_url, extraction_api_key),
     }
-    r_url = reranker_url or url("DISCO_RERANKER_URL")
-    e_url = embedder_url or url("DISCO_EMBEDDER_URL")
-    n_url = nli_url or url("DISCO_NLI_URL")
-    if use_remote:
-        # config override (non-empty) wins; else the env/default for that endpoint
-        use_remote = (
-            approved(r_url, "encoder:reranker", "")
-            and approved(e_url, "encoder:embedder", "")
-            and approved(n_url, "encoder:nli", "")
-        )
-    if use_remote:
-        providers["reranker"] = TeiReranker(r_url)
-        providers["embedder"] = OpenAIEmbedder(e_url)
-        providers["nli"] = SidecarNLIVerifier(n_url)
-    else:
-        # In-process ONNX/CPU encoders (imported lazily — models load on first use).
-        from .local_encoders import FastEmbedEmbedder, FastEmbedNLIVerifier, FastEmbedReranker
-
-        providers["reranker"] = FastEmbedReranker()
-        providers["embedder"] = FastEmbedEmbedder()
-        providers["nli"] = FastEmbedNLIVerifier()
+    r_url, e_url, n_url = _resolve_encoder_urls(reranker_url, embedder_url, nli_url, e)
+    providers.update(_build_encoder_providers(use_remote, r_url, e_url, n_url, approved))
     return providers

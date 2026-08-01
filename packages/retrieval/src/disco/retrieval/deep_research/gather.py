@@ -37,7 +37,7 @@ from disco.core.llm import (
 from disco.core.think import strip_think_spans
 
 from ..engine import RetrievalEngine
-from ..models import Passage, RetrievalRequest, SearchHit
+from ..models import Passage, RetrievalRequest, RetrievalResult, SearchHit
 from ..ranking import Embedder
 from ..vectorstore import VectorStore
 from .decompose import SubQuestion
@@ -201,6 +201,153 @@ async def _gap_reason(
     return False, [next_query], rationale
 
 
+def _build_search_payload(
+    subq: SubQuestion, query: str, round_idx: int, bound: DepthBound
+) -> dict[str, object]:
+    """Build the `search` event payload for one gather round. Broken out of
+    `gather_for_subquestion` so the round loop owns one decision (the
+    optional `label`) per symbol instead of folding it into the loop body."""
+    payload: dict[str, object] = {
+        "subquestion": subq.title,
+        "query": query,
+        "round": round_idx + 1,
+        "rounds_max": bound.max_rounds_per_subq,
+    }
+    if subq.label is not None:
+        payload["label"] = subq.label
+    return payload
+
+
+async def _run_retrieval_round(
+    engine: RetrievalEngine,
+    subq: SubQuestion,
+    query: str,
+    round_idx: int,
+    remaining_source_budget: int,
+    bound: DepthBound,
+    recency_window: Literal["month", "week"] | None,
+    corpus_ids: frozenset[str],
+    emit: EmitFn,
+) -> RetrievalResult | None:
+    """Issue one round's retrieval call. Returns `None` (after emitting a
+    failure `observation`) when the engine raises, so the caller can treat a
+    retrieval failure as "stop this leg's rounds" without its own try/except."""
+    try:
+        req = RetrievalRequest(
+            query=query,
+            depth="standard",  # we already do the multi-round shape
+            top_k=min(bound.rerank_top_k, remaining_source_budget),
+            # DR-3 E2: thread recency_window so the engine's search call
+            # applies a time filter when the user selected one.
+            recency_window=recency_window,
+            corpus_ids=corpus_ids,
+        )
+        return await engine.retrieve(req)
+    except Exception as exc:  # noqa: BLE001 — retrieval failure is recoverable
+        await emit(
+            "observation",
+            {
+                "subquestion": subq.title,
+                "round": round_idx + 1,
+                "ok": False,
+                "detail": f"retrieval failed: {type(exc).__name__}: {exc}",
+            },
+        )
+        return None
+
+
+def _accumulate_fresh_passages(
+    retrieval: RetrievalResult, seen_passage_ids: set[str]
+) -> list[Passage]:
+    """Dedup this round's passages by id against everything seen so far
+    (across every round of this leg), marking the new ones seen in place.
+    Returns just the fresh ones."""
+    fresh: list[Passage] = []
+    for p in retrieval.passages:
+        if p.id in seen_passage_ids:
+            continue
+        seen_passage_ids.add(p.id)
+        fresh.append(p)
+    return fresh
+
+
+def _accumulate_fresh_hits(
+    retrieval: RetrievalResult, seen_urls: set[str], result: SubQuestionResult
+) -> None:
+    """Dedup this round's search hits by url against everything seen so far,
+    appending the new ones onto `result.all_hits` in place."""
+    for h in retrieval.all_hits:
+        if h.url not in seen_urls:
+            seen_urls.add(h.url)
+            result.all_hits.append(h)
+
+
+def _build_round_observation(
+    subq: SubQuestion,
+    round_idx: int,
+    added: int,
+    result: SubQuestionResult,
+    remaining_source_budget: int,
+) -> dict[str, object]:
+    """Build the `observation` event payload for one successful gather round."""
+    return {
+        "subquestion": subq.title,
+        "round": round_idx + 1,
+        "ok": True,
+        "added": added,
+        "total_for_subq": len(result.passages),
+        "remaining_budget": remaining_source_budget,
+    }
+
+
+async def _gap_reason_checkpoint(
+    router: LLMRouter,
+    subq: SubQuestion,
+    result: SubQuestionResult,
+    leg_context: GatherLegContext,
+    emit: EmitFn,
+) -> tuple[bool, list[str]]:
+    """Run one gap-reasoning checkpoint between rounds and emit the
+    `gap_reason` event. Returns `(sufficient, follow_up_queries)`.
+
+    Per-leg isolation: passes this leg's CallContext so the router tracks
+    this leg's cost/model independently. `_gap_reason` builds its own
+    message list internally (no shared mutable list)."""
+    sufficient, follow_ups, rationale = await _gap_reason(
+        router, subq, result.passages, leg_context.call_context
+    )
+    await emit(
+        "gap_reason",
+        {
+            "subquestion": subq.title,
+            "sufficient": sufficient,
+            "rationale": rationale,
+            "follow_ups": follow_ups,
+        },
+    )
+    return sufficient, follow_ups
+
+
+async def _upsert_fresh_passages(
+    embedder: Embedder | None,
+    vector_store: VectorStore,
+    namespace: str,
+    fresh: list[Passage],
+) -> None:
+    """Embed + upsert this round's fresh passages into the per-run vector
+    store so the synthesis phase can retrieve relevant corpus subsets per
+    section. Embedder is optional — if absent (hermetic tests) this is a
+    no-op; the synth phase falls back to per-subq passages directly (no
+    global retrieve)."""
+    if embedder is None or not fresh:
+        return
+    try:
+        vectors = await embedder.embed([p.text for p in fresh])
+        await vector_store.upsert(namespace, fresh, vectors)
+    except Exception:  # noqa: BLE001 — embedding failure is non-fatal
+        pass
+
+
 async def gather_for_subquestion(
     subq: SubQuestion,
     *,
@@ -235,7 +382,12 @@ async def gather_for_subquestion(
     pre-attached upload passages so they are available for synthesis alongside
     web-retrieved passages. ``corpus_ids`` scopes durable Space retrieval through
     the engine's existing RetrievalRequest path. The OFF-path (empty list/default)
-    is byte-identical to the pre-DR-4 code."""
+    is byte-identical to the pre-DR-4 code.
+
+    The per-round mechanics (building the search event, issuing the retrieval
+    call, deduping fresh passages/hits, upserting into the vector store) are
+    each a single-purpose helper above so this loop owns only the round's
+    control flow — one decision per stopping condition."""
     # G1/DR-4 F2: seed the leg's working set with upload passages (if any).
     # Dedup by id so a passage the retrieval engine also finds isn't doubled.
     result = SubQuestionResult(subq=subq)
@@ -253,61 +405,29 @@ async def gather_for_subquestion(
         # retrieval engine's own concern, not ours.
         query = current_queries[0]
         result.issued_queries.append(query)
-        _search_payload: dict[str, object] = {
-            "subquestion": subq.title,
-            "query": query,
-            "round": round_idx + 1,
-            "rounds_max": bound.max_rounds_per_subq,
-        }
-        if subq.label is not None:
-            _search_payload["label"] = subq.label
-        await emit("search", _search_payload)
-        try:
-            req = RetrievalRequest(
-                query=query,
-                depth="standard",  # we already do the multi-round shape
-                top_k=min(bound.rerank_top_k, remaining_source_budget),
-                # DR-3 E2: thread recency_window so the engine's search call
-                # applies a time filter when the user selected one.
-                recency_window=recency_window,
-                corpus_ids=corpus_ids,
-            )
-            retrieval = await engine.retrieve(req)
-        except Exception as exc:  # noqa: BLE001 — retrieval failure is recoverable
-            await emit(
-                "observation",
-                {
-                    "subquestion": subq.title,
-                    "round": round_idx + 1,
-                    "ok": False,
-                    "detail": f"retrieval failed: {type(exc).__name__}: {exc}",
-                },
-            )
+        await emit("search", _build_search_payload(subq, query, round_idx, bound))
+
+        retrieval = await _run_retrieval_round(
+            engine,
+            subq,
+            query,
+            round_idx,
+            remaining_source_budget,
+            bound,
+            recency_window,
+            corpus_ids,
+            emit,
+        )
+        if retrieval is None:
             break
 
         # accumulate fresh passages + hits (dedup by id / url)
-        fresh: list[Passage] = []
-        for p in retrieval.passages:
-            if p.id in seen_passage_ids:
-                continue
-            seen_passage_ids.add(p.id)
-            fresh.append(p)
-        for h in retrieval.all_hits:
-            if h.url not in seen_urls:
-                seen_urls.add(h.url)
-                result.all_hits.append(h)
+        fresh = _accumulate_fresh_passages(retrieval, seen_passage_ids)
+        _accumulate_fresh_hits(retrieval, seen_urls, result)
 
         # upsert the fresh passages into the per-run vector store so the
         # synthesis phase can retrieve relevant corpus subsets per section.
-        # Embedder is optional — if absent (hermetic tests) we still accumulate
-        # in `result.passages` but the synth phase will fall back to per-subq
-        # passages directly (no global retrieve).
-        if embedder is not None and fresh:
-            try:
-                vectors = await embedder.embed([p.text for p in fresh])
-                await vector_store.upsert(namespace, fresh, vectors)
-            except Exception:  # noqa: BLE001 — embedding failure is non-fatal
-                pass
+        await _upsert_fresh_passages(embedder, vector_store, namespace, fresh)
         result.passages.extend(fresh)
         # budget bookkeeping
         added = len(fresh)
@@ -315,14 +435,7 @@ async def gather_for_subquestion(
         result.rounds_run = round_idx + 1
         await emit(
             "observation",
-            {
-                "subquestion": subq.title,
-                "round": round_idx + 1,
-                "ok": True,
-                "added": added,
-                "total_for_subq": len(result.passages),
-                "remaining_budget": remaining_source_budget,
-            },
+            _build_round_observation(subq, round_idx, added, result, remaining_source_budget),
         )
         if remaining_source_budget <= 0:
             break
@@ -331,20 +444,8 @@ async def gather_for_subquestion(
         if round_idx + 1 >= bound.max_rounds_per_subq:
             result.bounded_by_rounds = True
             break
-        # Per-leg isolation: pass this leg's CallContext so the router tracks
-        # this leg's cost/model independently. _gap_reason builds its own
-        # message list internally (no shared mutable list).
-        sufficient, follow_ups, rationale = await _gap_reason(
-            router, subq, result.passages, leg_context.call_context
-        )
-        await emit(
-            "gap_reason",
-            {
-                "subquestion": subq.title,
-                "sufficient": sufficient,
-                "rationale": rationale,
-                "follow_ups": follow_ups,
-            },
+        sufficient, follow_ups = await _gap_reason_checkpoint(
+            router, subq, result, leg_context, emit
         )
         if sufficient:
             break
