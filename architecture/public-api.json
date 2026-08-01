@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "3fc45f025c1d93826b8259e8cdc265d000fa5fe1",
+  "source_identity": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -5888,6 +5888,78 @@
       }
     },
     {
+      "path": "packages/core/src/disco/core/appkit/analytics_primitive_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/feature_flags_primitive_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/form_primitive_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/generator_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/local_verify_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/primitive_verify_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/records_primitive_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/spec_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/appkit/worker_inspect_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/core/src/disco/core/brand/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -9512,6 +9584,14 @@
       }
     },
     {
+      "path": "packages/core/src/disco/core/design/directions_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/core/src/disco/core/evidence/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -9740,6 +9820,14 @@
           "signature": "def lead_form_appspec(title: str) -> AppSpec"
         }
       }
+    },
+    {
+      "path": "packages/core/src/disco/core/kits/starter_assets_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/core/src/disco/core/llm/__init__.py",

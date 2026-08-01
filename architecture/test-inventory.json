@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "3fc45f025c1d93826b8259e8cdc265d000fa5fe1",
+  "source_identity": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
   "collected": {
     "counts": {
       "packages": 9870,
       "harness": 1236,
       "integrations": 9,
-      "tests": 328
+      "tests": 333
     },
-    "total": 11443,
+    "total": 11448,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11419,6 +11419,11 @@
         "tests/architecture/test_test_inventory.py::TestMappingStatic::test_mapping_static_forbidden_todo_marker_fails",
         "tests/architecture/test_test_inventory.py::TestMappingStatic::test_mapping_static_forbidden_xfail_marker_fails",
         "tests/architecture/test_test_inventory.py::TestMappingStatic::test_mapping_static_skip_marker_count_drift_fails",
+        "tests/architecture/test_test_inventory.py::TestNullAdvance::test_count_change_is_refused",
+        "tests/architecture/test_test_inventory.py::TestNullAdvance::test_empty_collected_roots_is_refused",
+        "tests/architecture/test_test_inventory.py::TestNullAdvance::test_missing_root_is_refused",
+        "tests/architecture/test_test_inventory.py::TestNullAdvance::test_pinned_null_row_is_accepted",
+        "tests/architecture/test_test_inventory.py::TestNullAdvance::test_relocation_is_refused",
         "tests/architecture/test_test_inventory.py::TestSandboxDeselections::test_five_sandbox_deselections_listed",
         "tests/architecture/test_test_inventory.py::TestSandboxDeselections::test_sandbox_deselections_are_specific_files",
         "tests/architecture/test_typescript_scan.py::TestCompilerCheck::test_compiler_mismatch_raises",
@@ -11464,9 +11469,9 @@
     }
   },
   "mapping_static": {
-    "identity": "3fc45f025c1d93826b8259e8cdc265d000fa5fe1",
+    "identity": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
     "python_test_file_count": 786,
-    "python_static_test_id_count": 9336,
+    "python_static_test_id_count": 9341,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -21537,7 +21542,9 @@
       "tests/architecture/test_test_inventory.py::test_collection_uses_not_sandbox_integration_marker",
       "tests/architecture/test_test_inventory.py::test_collector_failure_detected_in_temp_repo",
       "tests/architecture/test_test_inventory.py::test_command_drift_rule_present",
+      "tests/architecture/test_test_inventory.py::test_count_change_is_refused",
       "tests/architecture/test_test_inventory.py::test_deselection_rule_present",
+      "tests/architecture/test_test_inventory.py::test_empty_collected_roots_is_refused",
       "tests/architecture/test_test_inventory.py::test_five_sandbox_deselections_listed",
       "tests/architecture/test_test_inventory.py::test_frontend_collection_counts",
       "tests/architecture/test_test_inventory.py::test_frontend_collection_drift_fails",
@@ -21551,6 +21558,9 @@
       "tests/architecture/test_test_inventory.py::test_mapping_static_forbidden_todo_marker_fails",
       "tests/architecture/test_test_inventory.py::test_mapping_static_forbidden_xfail_marker_fails",
       "tests/architecture/test_test_inventory.py::test_mapping_static_skip_marker_count_drift_fails",
+      "tests/architecture/test_test_inventory.py::test_missing_root_is_refused",
+      "tests/architecture/test_test_inventory.py::test_pinned_null_row_is_accepted",
+      "tests/architecture/test_test_inventory.py::test_relocation_is_refused",
       "tests/architecture/test_test_inventory.py::test_sandbox_deselections_are_specific_files",
       "tests/architecture/test_test_inventory.py::test_valid_test_file_collects_ids",
       "tests/architecture/test_typescript_scan.py::test_compiler_mismatch_raises",
@@ -28530,6 +28540,38 @@
           "tests/architecture/test_typescript_scan.py::test_small_ts_module_passes",
           "tests/architecture/test_typescript_scan.py::test_ts_context_cycle_detected",
           "tests/architecture/test_typescript_scan.py::test_ts_parse_error_collected"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-11-BUILD-SPECS",
+      "root": "tests",
+      "source_identity_before": "3fc45f025c1d93826b8259e8cdc265d000fa5fe1",
+      "source_identity_after": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
+      "collected_roots": {
+        "tests": {
+          "before_count": 328,
+          "after_count": 333,
+          "added_ids": [
+            "tests/architecture/test_test_inventory.py::TestNullAdvance::test_count_change_is_refused",
+            "tests/architecture/test_test_inventory.py::TestNullAdvance::test_empty_collected_roots_is_refused",
+            "tests/architecture/test_test_inventory.py::TestNullAdvance::test_missing_root_is_refused",
+            "tests/architecture/test_test_inventory.py::TestNullAdvance::test_pinned_null_row_is_accepted",
+            "tests/architecture/test_test_inventory.py::TestNullAdvance::test_relocation_is_refused"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "tests/architecture/test_test_inventory.py::test_count_change_is_refused",
+          "tests/architecture/test_test_inventory.py::test_empty_collected_roots_is_refused",
+          "tests/architecture/test_test_inventory.py::test_missing_root_is_refused",
+          "tests/architecture/test_test_inventory.py::test_pinned_null_row_is_accepted",
+          "tests/architecture/test_test_inventory.py::test_relocation_is_refused"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

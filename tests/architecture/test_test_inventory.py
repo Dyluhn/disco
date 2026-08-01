@@ -15,9 +15,11 @@ from typing import Any
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _helpers import assert_problem_contains, write
+from _helpers import assert_problem_contains, null_advance_row, write
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from architecture.test_inventory_parts import _transitions  # noqa: E402
+
 from architecture import inventory_static, test_inventory  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -232,7 +234,7 @@ class TestMappingStatic:
         mapping = baseline["mapping_static"]
         expected_counts = {
             "python_test_file_count": 786,
-            "python_static_test_id_count": 9336,
+            "python_static_test_id_count": 9341,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
         }
@@ -521,11 +523,11 @@ class TestCollectedCounts:
             "packages": 9870,
             "harness": 1236,
             "integrations": 9,
-            "tests": 328,
+            "tests": 333,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11443 == sum(expected.values())
+        assert collected["total"] == 11448 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -541,7 +543,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11443}
+        assert result == {"collected_total": 11448}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -560,9 +562,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9336,
+            "python_static_ids": 9341,
             "typescript_static_ids": 1200,
-            "collected_total": 11443,
+            "collected_total": 11448,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -633,6 +635,11 @@ class TestBaselineValidation:
             }
         }
         later_transition["mapping_static_additions"]["python_static_test_ids"] = [later_static]
+        # Mutating a row in place changes its canonical key, so the list must be
+        # re-sorted exactly as it was after the append above; the authority
+        # requires canonical order and this fixture must satisfy it to exercise
+        # the assertion below rather than the sort check.
+        advanced["additive_transitions"].sort(key=_canonical_row)
         result = _check_exact_live(monkeypatch, advanced, advanced)
         assert result["ok"] is True, result["problems"]
 
@@ -1269,3 +1276,43 @@ class TestDeselectionDetection:
         ids, error = test_inventory._collect_pytest_ids(tmp_path, "tests")
         assert error == ""
         assert ids == ["tests/test_normal.py::test_normal"]
+
+
+class TestNullAdvance:
+    """A row owning no addition must PIN every root, never assert nothing."""
+
+    def _counts(self) -> dict[str, int]:
+        return dict.fromkeys(sorted(_transitions.PYTHON_ROOTS), 7)
+
+    def _problems(self, row: dict[str, Any]) -> list[str]:
+        problems: list[str] = []
+        _transitions.check_null_advance(row, problems)
+        return problems
+
+    def test_pinned_null_row_is_accepted(self):
+        assert self._problems(null_advance_row(self._counts())) == []
+
+    def test_empty_collected_roots_is_refused(self):
+        row = null_advance_row(self._counts())
+        row["collected_roots"] = {}
+        assert_problem_contains(self._problems(row), "pin every collected root")
+
+    def test_missing_root_is_refused(self):
+        counts = self._counts()
+        del counts["harness"]
+        row = null_advance_row(counts)
+        assert_problem_contains(self._problems(row), "pin every collected root")
+
+    def test_count_change_is_refused(self):
+        row = null_advance_row(self._counts())
+        row["collected_roots"]["tests"]["after_count"] = 8
+        assert_problem_contains(
+            self._problems(row), "collected_roots.tests", "must not change its collected count"
+        )
+
+    def test_relocation_is_refused(self):
+        row = null_advance_row(self._counts())
+        row["collected_roots"]["packages"]["relocated_count"] = 1
+        assert_problem_contains(
+            self._problems(row), "collected_roots.packages", "must not relocate a test"
+        )

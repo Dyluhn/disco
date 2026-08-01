@@ -24,7 +24,28 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Insert scripts/ so ``from architecture import ...`` resolves in every test.
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from architecture.test_inventory_parts import _transitions  # noqa: E402
+
 from architecture import source_governance  # noqa: E402
+
+
+def null_advance_row(counts: dict[str, int]) -> dict[str, Any]:
+    """Build an additive-transition row that owns no addition at all.
+
+    Lives here rather than in ``test_test_inventory.py`` because that module is
+    a frozen ``_PKG02_TEST_PATHS`` entry sitting close to its 1200-line cap.
+    """
+    return {
+        "package": "PKG-11-BUILD-SPECS",
+        "root": "multiple",
+        "source_identity_before": "a" * 40,
+        "source_identity_after": "b" * 40,
+        "collected_roots": {
+            name: {"before_count": n, "after_count": n, "added_ids": []}
+            for name, n in counts.items()
+        },
+        "mapping_static_additions": dict.fromkeys(_transitions.MAPPING_ADDITION_KEYS, []),
+    }
 
 
 def write(path: Path, content: str) -> Path:
