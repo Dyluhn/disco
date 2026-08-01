@@ -229,7 +229,7 @@ def test_mcp_invalid_config_edit_is_transactional(client, config_store, config_s
     )
     assert created.status_code == 201, created.text
     approved_hash = _approve_config(client, "transactional")
-    assert config_state._store.origin_approved(
+    assert config_state._store.approvals.origin_approved(
         "https://old.example.com/other",
         "mcp:transactional",
         "",
@@ -245,7 +245,7 @@ def test_mcp_invalid_config_edit_is_transactional(client, config_store, config_s
     persisted = config_store.load().mcp.servers["transactional"]
     assert persisted["url"] == "https://old.example.com/mcp"
     assert _connection(client, "transactional")["config_hash"] == approved_hash
-    assert config_state._store.origin_approved(
+    assert config_state._store.approvals.origin_approved(
         "https://old.example.com/other",
         "mcp:transactional",
         "",
@@ -308,7 +308,7 @@ def test_mcp_config_edit_immediately_revokes_stale_signed_origin(client, store, 
     assert created.status_code == 201, created.text
     _approve_config(client, "edit_srv")
     _approve_tools(client, store, "edit_srv", _hash("echo"))
-    assert config_state._store.origin_approved(
+    assert config_state._store.approvals.origin_approved(
         "https://old.example.com/other",
         "mcp:edit_srv",
         "",
@@ -324,13 +324,13 @@ def test_mcp_config_edit_immediately_revokes_stale_signed_origin(client, store, 
     assert changed.json()["status"] == "approval_required"
     assert changed.json()["config_hash"] is None
     assert changed.json()["new_config_hash"] is not None
-    assert not config_state._store.origin_approved(
+    assert not config_state._store.approvals.origin_approved(
         "https://old.example.com/other",
         "mcp:edit_srv",
         "",
         secret_store=config_state._secrets,
     )
-    assert not config_state._store.origin_approved(
+    assert not config_state._store.approvals.origin_approved(
         "https://new.example.com/other",
         "mcp:edit_srv",
         "",
@@ -345,7 +345,7 @@ def test_mcp_config_edit_immediately_revokes_stale_signed_origin(client, store, 
     )
 
     _approve_config(client, "edit_srv")
-    assert config_state._store.origin_approved(
+    assert config_state._store.approvals.origin_approved(
         "https://new.example.com/other",
         "mcp:edit_srv",
         "",
@@ -408,7 +408,7 @@ def test_mcp_revoke_clears_database_and_signed_egress_approvals(client, store, c
     assert created.status_code == 201, created.text
     _approve_config(client, "revoke_me")
     _approve_tools(client, store, "revoke_me", _hash("echo"))
-    assert config_state._store.origin_approved(
+    assert config_state._store.approvals.origin_approved(
         "https://tools.example.com/other",
         "mcp:revoke_me",
         "",
@@ -428,7 +428,7 @@ def test_mcp_revoke_clears_database_and_signed_egress_approvals(client, store, c
             ("revoke_me",),
         ).fetchone()[0]
         assert count == 0
-    assert not config_state._store.origin_approved(
+    assert not config_state._store.approvals.origin_approved(
         "https://tools.example.com/other",
         "mcp:revoke_me",
         "",

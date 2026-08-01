@@ -521,7 +521,7 @@ async def generate_deck(
         store = ConfigStore()
         cfg = store.load()
         purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
-        if not store.origin_approved(llm_url, purpose, api_key_env):
+        if not store.approvals.origin_approved(llm_url, purpose, api_key_env):
             return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
             return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None, None

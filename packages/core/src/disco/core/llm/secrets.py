@@ -253,7 +253,8 @@ class SecretStore:
     # `api_key_env` var name (e.g. "OPENAI_API_KEY", "DISCO_SEARCH_API_KEY"), so
     # the agent-server can overlay the decrypted value into that env var at
     # build time — exactly the OpenRouter mechanism, generalized. "openrouter"
-    # is a reserved legacy slot (see the wrappers below).
+    # is a reserved legacy slot; the named-slot convenience functions for it
+    # live in `secret_refs.py` (PY-0473) — this store only owns storage.
 
     def _require_strong(self, name: str) -> None:
         """Hard gate for high-value deploy credentials."""
@@ -308,20 +309,6 @@ class SecretStore:
             if isinstance(token, str) and token and self._box.decrypt(token) is None:
                 bad.append(name)
         return bad
-
-    # -- OpenRouter convenience wrappers (the reserved "openrouter" slot) ------
-
-    def has_openrouter_key(self) -> bool:
-        return self.has_secret("openrouter")
-
-    def get_openrouter_key(self) -> str | None:
-        return self.get_secret("openrouter")
-
-    def set_openrouter_key(self, plaintext: str) -> None:
-        self.set_secret("openrouter", plaintext)
-
-    def clear_openrouter_key(self) -> None:
-        self.clear_secret("openrouter")
 
     # -- internals ------------------------------------------------------------
 

@@ -30,7 +30,7 @@ def _runtime(tmp_path) -> ConversationRuntime:
     cfg = config_store.load()
     entry = cfg.models["driver-local"]
     assert entry.base_url is not None
-    config_store.approve_origin(
+    config_store.approvals.approve_origin(
         entry.base_url,
         f"model:{entry.provider}",
         entry.api_key_env or "",

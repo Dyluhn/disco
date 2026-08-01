@@ -406,7 +406,7 @@ def test_endpoint_recovers_length_stop_and_serves_complete_unique_transcript(
 
 
 def test_report_http_adapter_preserves_provider_finish_reason(monkeypatch) -> None:
-    from disco.core.llm import ConfigStore
+    from disco.core.llm.config_approvals import ConfigOriginApprovals
 
     class _Response:
         def raise_for_status(self) -> None:
@@ -432,7 +432,7 @@ def test_report_http_adapter_preserves_provider_finish_reason(monkeypatch) -> No
         async def post(self, *_args: object, **_kwargs: object) -> _Response:
             return _Response()
 
-    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *_args: True)
+    monkeypatch.setattr(ConfigOriginApprovals, "origin_approved", lambda *_args: True)
     monkeypatch.setattr(report_audio_mod.httpx, "AsyncClient", lambda **_kwargs: _Client())
     result = asyncio.run(
         report_audio_mod._authenticated_call_llm(

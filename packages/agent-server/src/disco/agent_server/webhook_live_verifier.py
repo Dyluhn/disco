@@ -244,7 +244,7 @@ class _WebhookVerifyRun:
             enabled=True,
             secret_store=self.secret_store,
         )
-        approvals = self.config_store.approval_store(secret_store=self.secret_store)
+        approvals = self.config_store.approvals.approval_store(secret_store=self.secret_store)
         approvals.approve(target, WEBHOOK_PURPOSE, config.secret_ref)
         ctx = HostServiceContext(
             secret_store=self.secret_store,

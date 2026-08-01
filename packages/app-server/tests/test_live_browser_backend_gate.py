@@ -15,8 +15,8 @@ from disco.core.llm.config_store import ConfigStore
 
 def _state(tmp_path, *, backend: str, enabled: bool = False) -> ConfigState:
     store = ConfigStore(tmp_path / "config.json")
-    store.save_sandbox(SandboxSettings(backend=backend))
-    store.save_live_browser(LiveBrowserSettings(enabled=enabled))
+    store.sections.save_sandbox(SandboxSettings(backend=backend))
+    store.sections.save_live_browser(LiveBrowserSettings(enabled=enabled))
     return ConfigState(store=store)
 
 

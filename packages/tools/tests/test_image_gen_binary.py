@@ -614,8 +614,7 @@ def test_select_image_backend_raises_when_openai_has_no_key(monkeypatch):
         def load(self):
             return _MockConfig()
 
-        def origin_approved(self, *_args, **_kwargs):
-            return True
+        approvals = type("A", (), {"origin_approved": lambda s, *a, **kw: True})()
 
     # Mock SecretStore to return no secret
     class _MockSecrets:
@@ -647,8 +646,7 @@ def test_select_image_backend_raises_when_comfyui_has_no_url(monkeypatch):
         def load(self):
             return _MockConfig()
 
-        def origin_approved(self, *_args, **_kwargs):
-            return True
+        approvals = type("A", (), {"origin_approved": lambda s, *a, **kw: True})()
 
     monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
 
@@ -676,8 +674,7 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
         def load(self):
             return _MockConfig()
 
-        def origin_approved(self, *_args, **_kwargs):
-            return True
+        approvals = type("A", (), {"origin_approved": lambda s, *a, **kw: True})()
 
     class _MockSecrets:
         def get_secret(self, name):
@@ -713,8 +710,7 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
         def load(self):
             return _MockConfig()
 
-        def origin_approved(self, *_args, **_kwargs):
-            return True
+        approvals = type("A", (), {"origin_approved": lambda s, *a, **kw: True})()
 
     monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: _MockStore())
 
@@ -1222,13 +1218,16 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
         lambda: type(
             "S",
             (),
-            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+            {
+                "load": lambda s: _Cfg(),
+                "approvals": type("A", (), {"origin_approved": lambda s, *a, **kw: True})(),
+            },
         )(),
     )
 
     class _Secret:
-        def get_openrouter_key(self):
-            return "sk-or-reserved"
+        def get_secret(self, name):
+            return "sk-or-reserved" if name == "openrouter" else None
 
     monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore", lambda: _Secret())
 
@@ -1263,12 +1262,17 @@ def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
         lambda: type(
             "S",
             (),
-            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+            {
+                "load": lambda s: _Cfg(),
+                "approvals": type("A", (), {"origin_approved": lambda s, *a, **kw: True})(),
+            },
         )(),
     )
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.SecretStore",
-        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+        lambda: type(
+            "K", (), {"get_secret": lambda s, name: "sk-or" if name == "openrouter" else None}
+        )(),
     )
 
     with pytest.raises(ImageGenNotConfigured):
@@ -1296,12 +1300,17 @@ def test_select_image_backend_openrouter_whitespace_model_raises(monkeypatch):
         lambda: type(
             "S",
             (),
-            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+            {
+                "load": lambda s: _Cfg(),
+                "approvals": type("A", (), {"origin_approved": lambda s, *a, **kw: True})(),
+            },
         )(),
     )
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.SecretStore",
-        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+        lambda: type(
+            "K", (), {"get_secret": lambda s, name: "sk-or" if name == "openrouter" else None}
+        )(),
     )
 
     with pytest.raises(ImageGenNotConfigured):
@@ -1333,13 +1342,15 @@ def test_select_openrouter_ignores_stale_base_url(monkeypatch):
             (),
             {
                 "load": lambda s: _Cfg(),
-                "origin_approved": lambda s, *a, **kw: True,
+                "approvals": type("A", (), {"origin_approved": lambda s, *a, **kw: True})(),
             },
         )(),
     )
     monkeypatch.setattr(
         "disco.tools.builtin.image_gen.SecretStore",
-        lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})(),
+        lambda: type(
+            "K", (), {"get_secret": lambda s, name: "sk-or" if name == "openrouter" else None}
+        )(),
     )
     be = select_image_backend()
     assert isinstance(be, _OpenRouterImageBackend)

@@ -58,6 +58,29 @@ _PINNED_REF_ORIGINS: dict[str, frozenset[str]] = {
 }
 
 
+# -- named-slot convenience over the reserved "openrouter" store slot ---------
+# PY-0473: SecretStore owns storage only; these four one-line functions own the
+# named reference to the reserved slot — "exactly the OpenRouter mechanism,
+# generalized" (the old in-class docstring), just relocated to where the other
+# named-reference resolution already lives.
+
+
+def has_openrouter_key(store: SecretStore) -> bool:
+    return store.has_secret(OPENROUTER_REF)
+
+
+def get_openrouter_key(store: SecretStore) -> str | None:
+    return store.get_secret(OPENROUTER_REF)
+
+
+def set_openrouter_key(store: SecretStore, plaintext: str) -> None:
+    store.set_secret(OPENROUTER_REF, plaintext)
+
+
+def clear_openrouter_key(store: SecretStore) -> None:
+    store.clear_secret(OPENROUTER_REF)
+
+
 def is_control_secret_ref(ref: str | None) -> bool:
     return bool(ref and ref.strip() in _CONTROL_REFS)
 
@@ -82,7 +105,7 @@ def resolve_provider_secret(
     if name in {OPENROUTER_REF, OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY}:
         if strong_required:
             return secret_store.get_secret(OPENROUTER_REF, strong_required=True)
-        return secret_store.get_openrouter_key()
+        return get_openrouter_key(secret_store)
     if strong_required:
         return secret_store.get_secret(name, strong_required=True)
     return secret_store.get_secret(name)
@@ -200,6 +223,6 @@ def _import_env_secret(
         diagnostics.append(f"cannot migrate {target_ref!r}: SecretStore is unavailable or locked")
         return
     if target_ref == OPENROUTER_REF:
-        store.set_openrouter_key(value)
+        set_openrouter_key(store, value)
     else:
         store.set_secret(target_ref, value)

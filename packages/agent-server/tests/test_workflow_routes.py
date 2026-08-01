@@ -68,7 +68,7 @@ def _definition(*, tools: list[str] | None = None) -> dict:
 def _app(project_root: Path) -> FastAPI:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(project_root / "config.json")
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
     runtime = ConversationRuntime(store, config_store=cfg_store)
     app = FastAPI()
     app.include_router(make_workflows_router(store, runtime))
@@ -116,7 +116,7 @@ def _quiet_startup(runtime: ConversationRuntime) -> None:
 def _runtime_for_project_root(project_root: Path | str, config_path: Path) -> ConversationRuntime:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(config_path)
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
     runtime = ConversationRuntime(store, config_store=cfg_store)
     _quiet_startup(runtime)
     return runtime
@@ -237,7 +237,7 @@ async def test_workflow_review_advertises_verify_only_with_explicit_shell(
 async def test_workflow_authoring_context_lists_pickable_inventory(tmp_path: Path) -> None:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(tmp_path / "config.json")
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
     runtime = ConversationRuntime(store, config_store=cfg_store)
     rt = cast(Any, runtime)
     rt._mcp._http_tools = {
@@ -329,7 +329,7 @@ async def test_workflow_draft_from_description_persists_unapproved_review(
 ) -> None:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(tmp_path / "config.json")
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
     router = _FakeDraftRouter(_draft_model_json())
     runtime = ConversationRuntime(
         store,
@@ -371,7 +371,7 @@ async def test_workflow_draft_from_description_strips_think_spans(
 ) -> None:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(tmp_path / "config.json")
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
     router = _FakeDraftRouter(f"<think>plan the workflow</think>{_draft_model_json()}")
     runtime = ConversationRuntime(
         store,
@@ -533,7 +533,7 @@ async def test_workflow_run_rejects_unapproved_instance(tmp_path: Path) -> None:
 async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(tmp_path / "config.json")
-    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    cfg_store.sections.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
 
     class RecordingRuntime(ConversationRuntime):
         created_spec: ScheduleSpec | None = None

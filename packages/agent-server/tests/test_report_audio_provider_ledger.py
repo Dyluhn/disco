@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from disco.agent_server import report_audio
-from disco.core.llm import ConfigStore
+from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.builtin import audio_overview
 
 
@@ -94,7 +94,7 @@ def _configure_real_adapter(monkeypatch: pytest.MonkeyPatch, factory: _HTTPFacto
             8192,
         ),
     )
-    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *_args: True)
+    monkeypatch.setattr(ConfigOriginApprovals, "origin_approved", lambda *_args: True)
 
     from disco.core.llm import secret_refs
 
@@ -293,7 +293,7 @@ async def test_audio_ledger_unset_and_write_failure_are_best_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     factory = _HTTPFactory(lambda _payload, _attempt: _Response("ok"))
-    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *_args: True)
+    monkeypatch.setattr(ConfigOriginApprovals, "origin_approved", lambda *_args: True)
     monkeypatch.setattr(report_audio.httpx, "AsyncClient", factory)
     monkeypatch.delenv("DISCO_PROVIDER_LEDGER", raising=False)
 

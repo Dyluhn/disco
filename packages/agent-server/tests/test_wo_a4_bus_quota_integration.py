@@ -17,10 +17,14 @@ from disco.core.quota import QuotaConfig, SqliteQuotaStore
 from fastapi.testclient import TestClient
 
 
-class _ApprovalsConfig:
+class _Approvals:
     def approval_store(self, *, secret_store: object) -> None:
         del secret_store
         return None
+
+
+class _ApprovalsConfig:
+    approvals = _Approvals()
 
 
 class _Router:

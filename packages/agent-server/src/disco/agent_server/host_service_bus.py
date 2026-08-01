@@ -298,7 +298,7 @@ def make_host_service_context_factory(
                 webhook_config_store=webhook_config_store,
             )
         secret_store = runtime._secret_store
-        approvals = runtime._config_store.approval_store(secret_store=secret_store)
+        approvals = runtime._config_store.approvals.approval_store(secret_store=secret_store)
         return HostServiceContext(
             secret_store=secret_store,
             approvals=approvals,
@@ -375,11 +375,7 @@ async def _parse_bus_payload(
         if quota_error is not None:
             return quota_error
         status = (
-            413
-            if exc.reason == "oversize_body"
-            else 415
-            if exc.reason == "content_type"
-            else 400
+            413 if exc.reason == "oversize_body" else 415 if exc.reason == "content_type" else 400
         )
         return _error_response(status, exc.reason)
 
@@ -478,9 +474,7 @@ async def _invoke_bus_service(
     try:
         result = await asyncio.wait_for(
             call_host_service(validated_service, payload, ctx),
-            timeout=(
-                definition.timeout_s if _HANDLER_TIMEOUT_S is None else _HANDLER_TIMEOUT_S
-            ),
+            timeout=(definition.timeout_s if _HANDLER_TIMEOUT_S is None else _HANDLER_TIMEOUT_S),
         )
     except TimeoutError:
         settle(estimate)

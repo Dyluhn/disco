@@ -240,7 +240,7 @@ class StackManager:
             store = ConfigStore(self.config_path)
             config = store.load()
             if self.default_model is not None:
-                config = store.save_assignments(self.default_model, config.assignments)
+                config = store.sections.save_assignments(self.default_model, config.assignments)
             sandbox = config.sandbox
             if not self.preserve_seed_sandbox:
                 selected_backend = self.sandbox_backend or "process"

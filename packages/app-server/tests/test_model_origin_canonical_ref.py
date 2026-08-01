@@ -52,11 +52,11 @@ def test_add_openrouter_model_approves_canonical_slot_ref(tmp_path, monkeypatch)
     )
 
     # The approval MUST be under the canonical ref wiring + the env-import check.
-    assert state._store.origin_approved(
+    assert state._store.approvals.origin_approved(
         OPENROUTER_BASE, "model:or-deepseek-x", "openrouter", secret_store=state._secrets
     )
     # ...and NOT under the raw submitted ref (the pre-fix behaviour that broke wiring).
-    assert not state._store.origin_approved(
+    assert not state._store.approvals.origin_approved(
         OPENROUTER_BASE,
         "model:or-deepseek-x",
         "DISCO_OPENROUTER_API_KEY",

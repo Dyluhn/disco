@@ -385,7 +385,7 @@ class DriverRuntime:
         purpose: str,
         secret_ref: str | None = "",
     ) -> bool:
-        return self._config_store.origin_approved(
+        return self._config_store.approvals.origin_approved(
             url,
             purpose,
             secret_ref,

@@ -41,7 +41,9 @@ def _resolve_slides_llm() -> tuple[str, str, str | None]:
         if (
             entry
             and entry.base_url
-            and store.origin_approved(entry.base_url, f"model:{entry.provider}", entry.api_key_env)
+            and store.approvals.origin_approved(
+                entry.base_url, f"model:{entry.provider}", entry.api_key_env
+            )
             and secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url)
         ):
             return entry.base_url.rstrip("/"), entry.model_id, _resolve_llm_key(entry.api_key_env)

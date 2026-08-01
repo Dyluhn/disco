@@ -327,7 +327,7 @@ class _StripeVerifyRun:
         )
 
         # Origin approval must exist before the checkout handler will egress.
-        approval_store = self.config_store.approval_store(secret_store=self.secret_store)
+        approval_store = self.config_store.approvals.approval_store(secret_store=self.secret_store)
         approval_store.approve(
             STRIPE_API_URL,
             PAYMENTS_CHECKOUT_SERVICE_NAME,

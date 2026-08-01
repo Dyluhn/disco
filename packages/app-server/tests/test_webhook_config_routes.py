@@ -84,7 +84,7 @@ def test_outbound_target_is_owner_scoped_approved_and_secret_is_write_only(
     assert config.secret_ref == ref
     assert config.event_types == frozenset({"order.created", "order.cancelled"})
     assert secrets.get_secret(ref, strong_required=True) == _OUTBOUND_SECRET
-    assert config_store.approval_store(secret_store=secrets).is_approved(
+    assert config_store.approvals.approval_store(secret_store=secrets).is_approved(
         "https://hooks.example.com/disco",
         WEBHOOK_PURPOSE,
         ref,

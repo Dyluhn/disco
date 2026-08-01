@@ -12,6 +12,12 @@ from pathlib import Path
 
 import pytest
 from disco.core.llm import SecretBox, SecretStore, ensure_process_secret_key
+from disco.core.llm.secret_refs import (
+    clear_openrouter_key,
+    get_openrouter_key,
+    has_openrouter_key,
+    set_openrouter_key,
+)
 from disco.core.llm.secrets import _default_secrets_path
 
 
@@ -37,13 +43,13 @@ def test_unavailable_box_cannot_encrypt_or_decrypt():
 def test_store_persists_encrypted_and_plaintext_not_on_disk(tmp_path):
     path = tmp_path / "secrets.json"
     store = SecretStore(path, box=SecretBox("app-secret"))
-    store.set_openrouter_key("sk-or-v1-PLAINTEXT")
+    set_openrouter_key(store, "sk-or-v1-PLAINTEXT")
     # the file holds only ciphertext
     raw = path.read_text()
     assert "PLAINTEXT" not in raw
     # a fresh store with the same app secret reads it back (survives "restart")
     assert (
-        SecretStore(path, box=SecretBox("app-secret")).get_openrouter_key() == "sk-or-v1-PLAINTEXT"
+        get_openrouter_key(SecretStore(path, box=SecretBox("app-secret"))) == "sk-or-v1-PLAINTEXT"
     )
 
 
@@ -73,9 +79,9 @@ def test_openrouter_wrappers_use_the_reserved_slot(tmp_path):
     'openrouter' name — back-compat with existing secrets.json files."""
     path = tmp_path / "secrets.json"
     store = SecretStore(path, box=SecretBox("app-secret"))
-    store.set_openrouter_key("sk-or-v1-KEY")
+    set_openrouter_key(store, "sk-or-v1-KEY")
     assert store.get_secret("openrouter") == "sk-or-v1-KEY"
-    assert store.get_openrouter_key() == "sk-or-v1-KEY"
+    assert get_openrouter_key(store) == "sk-or-v1-KEY"
     assert "openrouter" in store.secret_names()
 
 
@@ -129,7 +135,7 @@ def test_secrets_file_and_dir_are_owner_only(tmp_path):
     secret_dir = tmp_path / "cfg"
     path = secret_dir / "secrets.json"
     store = SecretStore(path, box=SecretBox("app-secret"))
-    store.set_openrouter_key("sk-or-v1-PLAINTEXT")
+    set_openrouter_key(store, "sk-or-v1-PLAINTEXT")
 
     file_mode = stat.S_IMODE(path.stat().st_mode)
     dir_mode = stat.S_IMODE(secret_dir.stat().st_mode)
@@ -141,19 +147,19 @@ def test_secrets_file_and_dir_are_owner_only(tmp_path):
 
 def test_store_locked_without_app_secret(tmp_path):
     path = tmp_path / "secrets.json"
-    SecretStore(path, box=SecretBox("app-secret")).set_openrouter_key("sk-or-v1-key")
+    set_openrouter_key(SecretStore(path, box=SecretBox("app-secret")), "sk-or-v1-key")
     # restart WITHOUT the app secret: key is present but locked, yields None
     locked = SecretStore(path, box=SecretBox(None))
-    assert locked.has_openrouter_key()
+    assert has_openrouter_key(locked)
     assert locked.locked
-    assert locked.get_openrouter_key() is None
+    assert get_openrouter_key(locked) is None
 
 
 def test_cannot_store_without_app_secret(tmp_path):
     store = SecretStore(tmp_path / "secrets.json", box=SecretBox(None))
     assert not store.can_store
     try:
-        store.set_openrouter_key("sk-or-v1-key")
+        set_openrouter_key(store, "sk-or-v1-key")
         raise AssertionError("expected RuntimeError")
     except RuntimeError as exc:
         assert "DISCO_SECRET_KEY" in str(exc)
@@ -162,10 +168,10 @@ def test_cannot_store_without_app_secret(tmp_path):
 def test_clear_removes_the_key(tmp_path):
     path = tmp_path / "secrets.json"
     store = SecretStore(path, box=SecretBox("app-secret"))
-    store.set_openrouter_key("sk-or-v1-key")
-    store.clear_openrouter_key()
-    assert not store.has_openrouter_key()
-    assert store.get_openrouter_key() is None
+    set_openrouter_key(store, "sk-or-v1-key")
+    clear_openrouter_key(store)
+    assert not has_openrouter_key(store)
+    assert get_openrouter_key(store) is None
 
 
 # ---- default path: out of the project tree (security defense-in-depth) -------

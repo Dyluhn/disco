@@ -97,7 +97,7 @@ def test_health_route_reflects_active_backend(cfg_path, monkeypatch):
     backend (re-permitted for dev) → reachable=True with backend=process, proving
     the health route reads the SAME config the run path builds from."""
     monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
-    ConfigStore(cfg_path).save_sandbox(
+    ConfigStore(cfg_path).sections.save_sandbox(
         SandboxSettings(backend="process", workspace_root=str(cfg_path.parent / "ws"))
     )
     client = _runtime_client(cfg_path)
@@ -123,7 +123,7 @@ def test_health_route_reports_injected_backend_not_persisted(cfg_path, monkeypat
     not the stale persisted one — or it points the user at the wrong thing. Regression
     for the probe-active-sandbox backend-label fix (codex defect #2)."""
     monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
-    ConfigStore(cfg_path).save_sandbox(SandboxSettings(backend="local"))
+    ConfigStore(cfg_path).sections.save_sandbox(SandboxSettings(backend="local"))
 
     class _FakeGvisor:
         name = "gvisor"

@@ -286,7 +286,7 @@ def _resolve_driver_llm(ctx: ToolContext) -> tuple[str, str, str | None, str | N
         store = ConfigStore()
         cfg = store.load()
         purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
-        if not store.origin_approved(llm_url, purpose, api_key_env):
+        if not store.approvals.origin_approved(llm_url, purpose, api_key_env):
             return "", model, None, "LLM origin not approved"
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
             return "", model, None, "LLM secret_ref not allowed"

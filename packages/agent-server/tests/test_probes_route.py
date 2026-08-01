@@ -35,13 +35,13 @@ def client() -> TestClient:
 
 
 def test_tts_disabled_reports_disabled(client, cfg_path):
-    ConfigStore(cfg_path).save_tts(TtsSettings(enabled=False))
+    ConfigStore(cfg_path).sections.save_tts(TtsSettings(enabled=False))
     body = client.post("/api/tts/test").json()
     assert body["ok"] is False and body["status"] == "disabled"
 
 
 def test_tts_openai_without_key_is_misconfigured(client, cfg_path):
-    ConfigStore(cfg_path).save_tts(
+    ConfigStore(cfg_path).sections.save_tts(
         TtsSettings(enabled=True, provider="openai", api_key_env="OPENAI_API_KEY")
     )
     body = client.post("/api/tts/test").json()
@@ -50,7 +50,7 @@ def test_tts_openai_without_key_is_misconfigured(client, cfg_path):
 
 def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch):
     store = ConfigStore(cfg_path)
-    store.save_tts(
+    store.sections.save_tts(
         TtsSettings(enabled=True, provider="openai", api_key_env="openai", model="tts-1")
     )
     # store the key so resolution succeeds
@@ -64,7 +64,7 @@ def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch)
 
     import disco.tools.builtin.audio_overview as ao
 
-    store.approve_origin("https://api.openai.com", "tts:openai", "openai")
+    store.approvals.approve_origin("https://api.openai.com", "tts:openai", "openai")
     monkeypatch.setattr(ao, "_synthesize_remote", fake_remote)
     body = client.post("/api/tts/test").json()
     assert body["ok"] is True and body["status"] == "ok"
@@ -77,7 +77,7 @@ def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch)
 def test_image_remote_without_config_reports_misconfigured(client, cfg_path):
     """W-50: comfyui selected but no base URL → select_image_backend raises
     ImageGenNotConfigured; the probe SAYS `misconfigured` (no procedural fallback)."""
-    ConfigStore(cfg_path).save_image_gen(ImageGenSettings(provider="comfyui", base_url=""))
+    ConfigStore(cfg_path).sections.save_image_gen(ImageGenSettings(provider="comfyui", base_url=""))
     body = client.post("/api/image-gen/test").json()
     assert body["ok"] is False and body["status"] == "misconfigured"
     assert body["procedural"] is False

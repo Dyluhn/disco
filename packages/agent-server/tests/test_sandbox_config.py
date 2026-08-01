@@ -113,18 +113,18 @@ def test_dev_opt_out_re_enables_process_backend(monkeypatch):
 def test_runtime_reads_backend_from_the_shared_store(tmp_path):
     # the app-server writes the selection; the agent-server reads the SAME store.
     store = ConfigStore(tmp_path / "config.json")
-    store.save_sandbox(SandboxSettings(backend="gvisor", image="x:y"))
+    store.sections.save_sandbox(SandboxSettings(backend="gvisor", image="x:y"))
     rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store)
     assert isinstance(rt._sandbox_service_now(), GvisorSandboxService)
 
     # flipping the selection is picked up on the next request (no restart).
-    store.save_sandbox(SandboxSettings(backend="local"))
+    store.sections.save_sandbox(SandboxSettings(backend="local"))
     assert isinstance(rt._sandbox_service_now(), LocalSandboxService)
 
 
 def test_injected_sandbox_overrides_the_persisted_config(tmp_path):
     store = ConfigStore(tmp_path / "config.json")
-    store.save_sandbox(SandboxSettings(backend="gvisor"))
+    store.sections.save_sandbox(SandboxSettings(backend="gvisor"))
     rt = ConversationRuntime(
         SqliteEventStore(":memory:"), config_store=store, sandbox_service=ProcessSandboxService()
     )
@@ -622,7 +622,7 @@ async def test_build_restart_without_managed_intent_never_fabricates_static_prev
 
 def test_sandbox_settings_round_trip_on_disk(tmp_path):
     store = ConfigStore(tmp_path / "config.json")
-    store.save_sandbox(
+    store.sections.save_sandbox(
         SandboxSettings(backend="gvisor", docker_socket="ssh://sandbox@host", runtime="runsc")
     )
     reloaded = ConfigStore(tmp_path / "config.json").load()

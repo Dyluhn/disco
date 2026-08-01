@@ -43,7 +43,7 @@ def test_save_then_load_round_trips_and_drives_model_for(tmp_path):
     # the full set with RAG reassigned to a different existing key.
     full = dict(base.assignments)
     full[ModelRole.RAG_ANSWERER] = "summarizer-local"
-    store.save_assignments(base.default_model, full)
+    store.sections.save_assignments(base.default_model, full)
     cfg = store.load()
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == "summarizer-local"
     assert cfg.model_for(ModelRole.QUERY_REWRITER) == base.model_for(ModelRole.QUERY_REWRITER)
@@ -56,9 +56,9 @@ def test_save_then_load_round_trips_and_drives_model_for(tmp_path):
 def test_save_rejects_unknown_model_key(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError, match="unknown model"):
-        store.save_assignments("driver-local", {ModelRole.RAG_ANSWERER: "gpt-9-ultra"})
+        store.sections.save_assignments("driver-local", {ModelRole.RAG_ANSWERER: "gpt-9-ultra"})
     with pytest.raises(ValueError, match="unknown default_model"):
-        store.save_assignments("nope", {})
+        store.sections.save_assignments("nope", {})
 
 
 def test_corrupt_overlay_falls_back_to_base(tmp_path):
@@ -133,7 +133,7 @@ def test_added_model_becomes_assignable_and_routes(tmp_path):
     store.add_model("my-llama", _entry(model_id="llama.gguf", provider="my-llama"))
     full = dict(default_config().assignments)
     full[ModelRole.RAG_ANSWERER] = "my-llama"
-    store.save_assignments(default_config().default_model, full)
+    store.sections.save_assignments(default_config().default_model, full)
     cfg = store.load()
     assert cfg.model_for(ModelRole.RAG_ANSWERER) == "my-llama"
     assert cfg.entry_for("my-llama").base_url == "http://x/v1"
@@ -165,11 +165,15 @@ def test_save_search_ddgs_clears_stale_base_url(tmp_path):
     so a stale searxng LAN address cannot silently re-engage later."""
     store = _store(tmp_path)
     # Simulate a prior searxng selection with a LAN URL
-    store.save_search(SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888"))
+    store.sections.save_search(
+        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
+    )
     assert store.load().search.base_url == "http://192.168.1.202:8888"
 
     # Flip to bundled — even if the caller passes the old URL it must be cleared
-    store.save_search(SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888"))
+    store.sections.save_search(
+        SearchSettings(provider="ddgs", base_url="http://192.168.1.202:8888")
+    )
     cfg = store.load()
     assert cfg.search.provider == "ddgs"
     assert cfg.search.base_url == ""
@@ -178,7 +182,9 @@ def test_save_search_ddgs_clears_stale_base_url(tmp_path):
 def test_save_search_selfhost_preserves_base_url(tmp_path):
     """Switching TO searxng (self-host) must keep the supplied base_url intact."""
     store = _store(tmp_path)
-    store.save_search(SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888"))
+    store.sections.save_search(
+        SearchSettings(provider="searxng", base_url="http://192.168.1.202:8888")
+    )
     cfg = store.load()
     assert cfg.search.provider == "searxng"
     assert cfg.search.base_url == "http://192.168.1.202:8888"
@@ -188,13 +194,13 @@ def test_save_extraction_local_clears_stale_base_url(tmp_path):
     """Switching to the bundled local tier must zero out any persisted base_url
     so a stale crawl4ai LAN address cannot silently re-engage later."""
     store = _store(tmp_path)
-    store.save_extraction(
+    store.sections.save_extraction(
         ExtractionSettings(provider="crawl4ai", base_url="http://192.168.1.237:11235")
     )
     assert store.load().extraction.base_url == "http://192.168.1.237:11235"
 
     # Flip to bundled — even if the caller passes the old URL it must be cleared
-    store.save_extraction(
+    store.sections.save_extraction(
         ExtractionSettings(provider="local", base_url="http://192.168.1.237:11235")
     )
     cfg = store.load()
@@ -205,7 +211,7 @@ def test_save_extraction_local_clears_stale_base_url(tmp_path):
 def test_save_extraction_selfhost_preserves_base_url(tmp_path):
     """Switching TO crawl4ai (self-host) must keep the supplied base_url intact."""
     store = _store(tmp_path)
-    store.save_extraction(
+    store.sections.save_extraction(
         ExtractionSettings(provider="crawl4ai", base_url="http://192.168.1.237:11235")
     )
     cfg = store.load()
@@ -253,7 +259,7 @@ def test_build_kernel_default_is_disco(tmp_path):
 @pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
 def test_save_build_kernel_normalizes_legacy_to_disco(tmp_path, legacy):
     store = _kernel_store(tmp_path)
-    store.save_build_kernel(legacy)
+    store.sections.save_build_kernel(legacy)
     written = json.loads((tmp_path / "cfg.json").read_text())
     assert written["build_kernel"] == "disco"
     assert store.load().build_kernel == "disco"

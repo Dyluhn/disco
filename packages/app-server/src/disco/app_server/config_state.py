@@ -17,6 +17,12 @@ from typing import TYPE_CHECKING, Any
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings, ProviderSettings
+from disco.core.llm.secret_refs import (
+    clear_openrouter_key,
+    get_openrouter_key,
+    has_openrouter_key,
+    set_openrouter_key,
+)
 from disco.core.quota import SqliteQuotaStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
@@ -242,8 +248,8 @@ class ConfigState(_McpConfigStateMixin):
         # availability, and it gates the env-secret import so it must stay lenient).
         # Compute the DISPLAY status here from a real decrypt attempt so the UI shows
         # "re-enter the key" instead of a false green over an unusable key.
-        present = self._secrets.has_openrouter_key()
-        usable = present and bool(self._secrets.get_openrouter_key())
+        present = has_openrouter_key(self._secrets)
+        usable = present and bool(get_openrouter_key(self._secrets))
         return OpenRouterKeyStatus(
             configured=present,
             locked=present and not usable,
@@ -256,13 +262,13 @@ class ConfigState(_McpConfigStateMixin):
         if not key.strip():
             raise ValueError("key is empty")
         try:
-            self._secrets.set_openrouter_key(key.strip())
+            set_openrouter_key(self._secrets, key.strip())
         except RuntimeError as exc:
             raise ValueError(str(exc)) from exc
         return self.openrouter_key_status()
 
     def clear_openrouter_key(self) -> OpenRouterKeyStatus:
-        self._secrets.clear_openrouter_key()
+        clear_openrouter_key(self._secrets)
         return self.openrouter_key_status()
 
     # provider objects (definition + encrypted key + catalogue model toggles) -
@@ -635,7 +641,7 @@ class ConfigState(_McpConfigStateMixin):
         if patch.roles:
             for role_str, key in patch.roles.items():
                 assignments[ModelRole(role_str)] = key  # ValueError on a bad role
-        new_cfg = self._store.save_assignments(default_model, assignments)
+        new_cfg = self._store.sections.save_assignments(default_model, assignments)
         return _assignments_from(new_cfg)
 
     # sandbox backend (persisted; the agent-server maps it to the live backend) ----
@@ -677,7 +683,7 @@ class ConfigState(_McpConfigStateMixin):
                 detail=f"Can't save the {dto.backend} sandbox: {reason}.",
             )
 
-        self._store.save_sandbox(
+        self._store.sections.save_sandbox(
             SandboxSettings(
                 backend=dto.backend,
                 docker_socket=dto.docker_socket,
@@ -760,7 +766,7 @@ class ConfigState(_McpConfigStateMixin):
         when this changes, so the toggle takes effect on the NEXT research run."""
         from disco.core.llm import EncodersSettings
 
-        self._store.save_encoders(
+        self._store.sections.save_encoders(
             EncodersSettings(
                 remote=dto.remote,
                 reranker_url=dto.reranker_url.strip(),
@@ -782,7 +788,7 @@ class ConfigState(_McpConfigStateMixin):
         lets the agent-server unload the Kokoro model to free RAM."""
         from disco.core.llm import TtsSettings
 
-        self._store.save_tts(
+        self._store.sections.save_tts(
             TtsSettings(
                 enabled=dto.enabled,
                 provider=dto.provider,
@@ -810,7 +816,7 @@ class ConfigState(_McpConfigStateMixin):
         met — until then image generation fails NOT CONFIGURED (W-50, no placeholder)."""
         from disco.core.llm import ImageGenSettings
 
-        self._store.save_image_gen(
+        self._store.sections.save_image_gen(
             ImageGenSettings(
                 provider=dto.provider,
                 base_url=dto.base_url.strip(),
@@ -835,14 +841,14 @@ class ConfigState(_McpConfigStateMixin):
         its research providers when these change → effective on the NEXT research run."""
         from disco.core.llm import ExtractionSettings, SearchSettings
 
-        self._store.save_search(
+        self._store.sections.save_search(
             SearchSettings(
                 provider=dto.search_provider,
                 base_url=dto.search_base_url.strip(),
                 api_key_env=dto.search_api_key_env.strip(),
             )
         )
-        self._store.save_extraction(
+        self._store.sections.save_extraction(
             ExtractionSettings(
                 provider=dto.extraction_provider,
                 base_url=dto.extraction_base_url.strip(),
@@ -900,7 +906,7 @@ class ConfigState(_McpConfigStateMixin):
                 "incomplete_role_fallback",
                 detail="Role fallback needs both a base URL and a model when enabled.",
             )
-        self._store.save_role_fallback(
+        self._store.sections.save_role_fallback(
             RoleFallbackSettings(
                 enabled=dto.enabled,
                 base_url=base_url,
@@ -941,7 +947,7 @@ class ConfigState(_McpConfigStateMixin):
                     ),
                 )
 
-        self._store.save_live_browser(LiveBrowserSettings(enabled=dto.enabled))
+        self._store.sections.save_live_browser(LiveBrowserSettings(enabled=dto.enabled))
         return _live_browser_from(self._store.load())
 
     # Build kernel selector (persisted; agent-server reads it per request) --------
@@ -952,7 +958,7 @@ class ConfigState(_McpConfigStateMixin):
 
     def update_build_kernel_config(self, dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:
         """Persist the vestigial Build kernel selector."""
-        self._store.save_build_kernel(dto.kind)
+        self._store.sections.save_build_kernel(dto.kind)
         return self.build_kernel_config()
 
     # Build-project storage path (persisted; agent-server reads it per request) ---
@@ -983,7 +989,7 @@ class ConfigState(_McpConfigStateMixin):
                     reason=status.value,
                     detail=f"projects_root {raw!r}: {status.value}",
                 )
-        self._store.save_projects(ProjectStorageSettings(projects_root=raw))
+        self._store.sections.save_projects(ProjectStorageSettings(projects_root=raw))
         return _projects_from(self._store.load())
 
     # skills — real, persistent .md files (PMX_SKILLS_DIR) -------------------

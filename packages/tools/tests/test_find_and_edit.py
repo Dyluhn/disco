@@ -7,7 +7,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from disco.core.llm import ConfigStore, ModelExecutionPolicy
+from disco.core.llm import ModelExecutionPolicy
+from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.appkit_scope import APPKIT_MUTATORS, APPKIT_PROBES, APPKIT_READ_TOOLS
 from disco.tools.builtin import FindAndEditTool, build_default_registry
@@ -89,7 +90,7 @@ def _args(**kwargs: Any):
 
 @pytest.fixture(autouse=True)
 def _clean_read_tracker(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ConfigOriginApprovals, "origin_approved", lambda *args, **kwargs: True)
     reset_read_tracker()
     yield
     reset_read_tracker()

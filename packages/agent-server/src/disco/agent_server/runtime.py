@@ -330,7 +330,6 @@ class ConversationRuntime:
         def list_recent_schedule_runs(self, *, owner_id: str, limit: int=50) -> list[dict]: ...
         # fmt: on
 
-
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
 
     def __init__(
@@ -374,7 +373,7 @@ class ConversationRuntime:
         purpose: str,
         secret_ref: str | None = "",
     ) -> bool:
-        return self._config_store.origin_approved(
+        return self._config_store.approvals.origin_approved(
             url,
             purpose,
             secret_ref,

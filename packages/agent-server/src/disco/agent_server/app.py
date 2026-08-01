@@ -104,9 +104,7 @@ def _webhook_approvals(
 
     if runtime is None:
         return None
-    result = runtime._config_store.approval_store(
-        secret_store=runtime._secret_store
-    )
+    result = runtime._config_store.approvals.approval_store(secret_store=runtime._secret_store)
     return result if isinstance(result, OriginApprovalStore) else None
 
 

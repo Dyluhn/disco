@@ -115,7 +115,7 @@ def _resolve_remote_params(
     from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 
     secret_ref = api_key_env if provider == "openai" else ""
-    if not ConfigStore().origin_approved(effective_base, f"tts:{provider}", secret_ref):
+    if not ConfigStore().approvals.origin_approved(effective_base, f"tts:{provider}", secret_ref):
         raise TtsBackendError("TTS origin not approved")
     if not secret_ref_allowed_for_origin(api_key_env, effective_base):
         raise TtsBackendError("TTS secret_ref not allowed for this origin")
@@ -275,7 +275,7 @@ async def _authenticated_call_llm(
 
     from disco.core.llm import ConfigStore
 
-    if not ConfigStore().origin_approved(llm_url, purpose, api_key_env or ""):
+    if not ConfigStore().approvals.origin_approved(llm_url, purpose, api_key_env or ""):
         raise RuntimeError("LLM origin not approved")
 
     headers = {"Content-Type": "application/json"}
@@ -425,9 +425,7 @@ def _resolve_tts_voice_params(
     return voice_a, voice_b, is_remote, remote_base, remote_key, remote_model, backend
 
 
-async def _ensure_voice_model_ready(
-    is_remote: bool, on_progress: ProgressCallback | None
-) -> None:
+async def _ensure_voice_model_ready(is_remote: bool, on_progress: ProgressCallback | None) -> None:
     """Step 1b: voice-model download (bundled only, first run).
 
     W-08: only signal "downloading voice model…" when a download is GENUINELY

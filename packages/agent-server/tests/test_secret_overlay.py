@@ -3,7 +3,7 @@ from __future__ import annotations
 from disco.agent_server import ConversationRuntime
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
-from disco.core.llm.secret_refs import OPENROUTER_REF
+from disco.core.llm.secret_refs import OPENROUTER_REF, set_openrouter_key
 from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY
 
 
@@ -11,7 +11,7 @@ def _runtime(tmp_path) -> ConversationRuntime:
     store = SecretStore(tmp_path / "secrets.json", box=SecretBox("app-secret"))
     store.set_secret("openai", "sk-openai-STORED")
     store.set_secret("search-tavily", "tvly-STORED")
-    store.set_openrouter_key("sk-or-v1-STORED")
+    set_openrouter_key(store, "sk-or-v1-STORED")
     return ConversationRuntime(
         SqliteEventStore(":memory:"),
         config_store=ConfigStore(tmp_path / "config.json"),

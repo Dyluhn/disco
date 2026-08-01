@@ -74,7 +74,7 @@ def _make_origin_approver(
         purpose: str,
         secret_ref: str | None = "",
     ) -> bool:
-        return config_store.origin_approved(
+        return config_store.approvals.origin_approved(
             url,
             purpose,
             secret_ref,
@@ -187,7 +187,7 @@ class DeepResearchProvider:
             extraction_purpose,
             ext.api_key_env,
         )
-        approval_key = self._config_store.approval_store(
+        approval_key = self._config_store.approvals.approval_store(
             secret_store=self._secret_store
         ).verified()
         key = (
@@ -248,9 +248,7 @@ class DeepResearchProvider:
         sources: Sequence[str] | None,
     ) -> Any | None:
         """Build a multi-search override for per-run source selection."""
-        clean = tuple(
-            str(source).strip() for source in (sources or ()) if str(source).strip()
-        )
+        clean = tuple(str(source).strip() for source in (sources or ()) if str(source).strip())
         if not clean:
             return None
         cfg = self._config_store.load()

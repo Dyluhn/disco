@@ -24,7 +24,7 @@ def approve_origin(
 ) -> None:
     origin = url.strip()
     if origin:
-        store.approve_origin(
+        store.approvals.approve_origin(
             origin,
             purpose.strip(),
             secret_ref or "",
@@ -65,7 +65,7 @@ def approve_provider_origin(store: ConfigStore, secrets: SecretStore, provider: 
 
 
 def provider_origin_approved(store: ConfigStore, secrets: SecretStore, provider: Any) -> bool:
-    if not store.origin_approved(
+    if not store.approvals.origin_approved(
         provider.base_url,
         f"provider:{provider.id}",
         provider.secret_name,
@@ -168,7 +168,7 @@ def approve_mcp_server_origin(
     store: ConfigStore, secrets: SecretStore, name: str, srv: dict
 ) -> None:
     if srv.get("transport") == "streamable_http":
-        store.replace_origin_purpose(
+        store.approvals.replace_origin_purpose(
             str(srv.get("url") or ""),
             f"mcp:{name}",
             mcp_secret_refs(srv),
@@ -177,7 +177,7 @@ def approve_mcp_server_origin(
 
 
 def revoke_mcp_server_origin(store: ConfigStore, secrets: SecretStore, name: str) -> int:
-    return store.revoke_origin_purpose(f"mcp:{name}", secret_store=secrets)
+    return store.approvals.revoke_origin_purpose(f"mcp:{name}", secret_store=secrets)
 
 
 def mcp_secret_refs(srv: dict) -> tuple[str, ...]:
@@ -198,7 +198,7 @@ def probe_approval_gate(
     require_secret_ref_allowed: bool = False,
 ) -> ProbeResult | None:
     purpose = f"model:{provider}" if kind == "model" else f"{kind}:{provider}"
-    if not store.origin_approved(url, purpose, secret_ref or "", secret_store=secrets):
+    if not store.approvals.origin_approved(url, purpose, secret_ref or "", secret_store=secrets):
         return ProbeResult(
             ok=False,
             status="misconfigured",

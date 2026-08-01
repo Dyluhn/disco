@@ -77,7 +77,7 @@ def test_owner_can_configure_app_without_secret_ever_returning(configured_client
     config = stripe_configs.get("owner-a", "app-1")
     assert config is not None and config.enabled
     assert config.stripe_price_id == "price_ABCdef123456"
-    assert config_store.approval_store(secret_store=secrets).is_approved(
+    assert config_store.approvals.approval_store(secret_store=secrets).is_approved(
         STRIPE_API_URL,
         PAYMENTS_CHECKOUT_SERVICE_NAME,
         STRIPE_SECRET_REF,
@@ -158,7 +158,7 @@ def test_default_app_config_is_visible_to_separate_agent_store_and_handler(
             config = agent_configs.get("owner-a", "app-1")
             assert config is not None
             secrets = SecretStore()
-            approvals = ConfigStore().approval_store(secret_store=secrets)
+            approvals = ConfigStore().approvals.approval_store(secret_store=secrets)
             binding_secret = secrets.get_secret(
                 stripe_binding_secret_ref("owner-a", "app-1"), strong_required=True
             )

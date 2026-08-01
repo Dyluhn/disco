@@ -22,22 +22,18 @@ from pathlib import Path
 
 from ..env import disco_env
 from ..host_egress import origin_for_url
-from ..origin_approvals import OriginApprovalStore
 from .config import (
-    EncodersSettings,
     ExtractionSettings,
     ImageGenSettings,
-    LiveBrowserSettings,
     ModelEntry,
-    ProjectStorageSettings,
-    RoleFallbackSettings,
     RouterConfig,
-    SandboxSettings,
     SearchSettings,
     TtsSettings,
     apply_runtime_capabilities,
     default_config,
 )
+from .config_approvals import ConfigOriginApprovals
+from .config_sections import ConfigSectionWriter
 from .secret_refs import migrate_legacy_secret_ref
 from .secrets import SecretStore
 from .types import ModelRole
@@ -67,51 +63,18 @@ class ConfigStore:
         # (llama.cpp /props.modalities.vision, OpenRouter input_modalities) over the
         # static table.
         self._vision_probe: dict[str, bool | None] | None = None
+        # Per-section persistence (PY-0459): a config-file writer is a distinct
+        # authority from this document core. Plain attribute, not a @property —
+        # see config_sections.py.
+        self.sections = ConfigSectionWriter(self)
+        # Origin-approval authority (PY-0459): an approval registry is not a
+        # config-file writer. Plain attribute, not a @property — see
+        # config_approvals.py.
+        self.approvals = ConfigOriginApprovals(self._path)
 
     @property
     def path(self) -> Path:
         return self._path
-
-    def approval_store(self, *, secret_store: SecretStore | None = None) -> OriginApprovalStore:
-        return OriginApprovalStore(config_path=self._path, secret_store=secret_store)
-
-    def origin_approved(
-        self,
-        url: str,
-        purpose: str,
-        secret_ref: str | None = "",
-        *,
-        secret_store: SecretStore | None = None,
-    ) -> bool:
-        return self.approval_store(secret_store=secret_store).is_approved(url, purpose, secret_ref)
-
-    def approve_origin(
-        self,
-        url: str,
-        purpose: str,
-        secret_ref: str | None = "",
-        *,
-        secret_store: SecretStore | None = None,
-    ) -> None:
-        self.approval_store(secret_store=secret_store).approve(url, purpose, secret_ref)
-
-    def replace_origin_purpose(
-        self,
-        url: str,
-        purpose: str,
-        secret_refs: tuple[str, ...] = ("",),
-        *,
-        secret_store: SecretStore | None = None,
-    ) -> None:
-        self.approval_store(secret_store=secret_store).replace_purpose(url, purpose, secret_refs)
-
-    def revoke_origin_purpose(
-        self,
-        purpose: str,
-        *,
-        secret_store: SecretStore | None = None,
-    ) -> int:
-        return self.approval_store(secret_store=secret_store).revoke_purpose(purpose)
 
     def apply_vision_probe(self, results: dict[str, bool | None]) -> None:
         """V2/V4 (§2): install the startup vision-probe results as a process-lifetime
@@ -133,14 +96,14 @@ class ConfigStore:
         if data is None:
             cfg = base
         elif "models" in data:  # full config
-            data, build_kernel_changed = self._normalize_build_kernel_data(data)
+            data, build_kernel_changed = _normalize_build_kernel_data(data)
             try:
                 cfg = RouterConfig.model_validate(data)
             except Exception:  # noqa: BLE001 — a corrupt/stale file must not crash routing
                 cfg = base
                 build_kernel_changed = False
         else:
-            cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
+            cfg = _apply_overlay(base, data)  # legacy {default_model, assignments}
         # Legacy build-kernel write-through. This is intentionally before runtime
         # capability overlays so probe/env-derived fields are never baked into the
         # user's file.
@@ -155,136 +118,17 @@ class ConfigStore:
         else:
             cfg = self._with_security_diagnostics(cfg)
         cfg = apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
-        return self._gate_build_kernel(cfg)
-
-    def _normalize_build_kernel(self, build_kernel: str) -> str:
-        """Normalize legacy/unknown build-kernel choices to the only live kernel."""
-        return "disco" if build_kernel != "disco" else build_kernel
-
-    def _normalize_build_kernel_data(self, data: dict) -> tuple[dict, bool]:
-        if "build_kernel" not in data:
-            return data, False
-        normalized = self._normalize_build_kernel(str(data["build_kernel"]))
-        if normalized == data["build_kernel"]:
-            return data, False
-        return {**data, "build_kernel": normalized}, True
-
-    def _gate_build_kernel(self, cfg: RouterConfig) -> RouterConfig:
-        """Normalize any legacy in-memory value to the only live kernel."""
-        normalized = self._normalize_build_kernel(cfg.build_kernel)
-        if normalized != cfg.build_kernel:
-            return cfg.model_copy(update={"build_kernel": normalized})
-        return cfg
+        return _gate_build_kernel(cfg)
 
     def save(self, config: RouterConfig) -> RouterConfig:
         """Persist the full config (atomically) and return it.
 
         Normalizes `build_kernel` first so legacy/unknown values never persist."""
-        normalized = self._normalize_build_kernel(config.build_kernel)
+        normalized = _normalize_build_kernel(config.build_kernel)
         if normalized != config.build_kernel:
             config = config.model_copy(update={"build_kernel": normalized})
         self._write(config.model_dump(mode="json"))
         return config
-
-    # -- sandbox backend ------------------------------------------------------
-
-    def save_sandbox(self, sandbox: SandboxSettings) -> RouterConfig:
-        """Persist the active sandbox backend + connection over the current config.
-
-        PRESERVES every backend's saved connection block: the incoming settings carry
-        the now-ACTIVE backend's flat fields, and `with_preserved_connections` folds in
-        the previously-persisted per-backend map so switching the active backend never
-        clears the inactive backends' setup (the gVisor-socket-blanking outage)."""
-        previous = self.load().sandbox
-        merged = sandbox.with_preserved_connections(previous)
-        return self.save(self.load().model_copy(update={"sandbox": merged}))
-
-    def save_encoders(self, encoders: EncodersSettings) -> RouterConfig:
-        """Persist the encoder mode (bundled-local vs remote) over the current config.
-        The agent-server reloads per-request, so a change drives the NEXT research run."""
-        cfg = self.load()
-        return self.save(cfg.model_copy(update={"encoders": encoders}))
-
-    def save_tts(self, tts: TtsSettings) -> RouterConfig:
-        """Persist the audio-overview TTS settings (toggle, bundled-vs-remote, voices).
-        The agent-server reloads per-request; disabling it also frees the model."""
-        cfg = self.load()
-        return self.save(cfg.model_copy(update={"tts": tts}))
-
-    def save_image_gen(self, image_gen: ImageGenSettings) -> RouterConfig:
-        """Persist the image generation provider (comfyui/openai/openrouter — W-50: no
-        bundled procedural tier). The agent-server reloads per-request; a change takes
-        effect on the NEXT image-gen. OpenRouter has a FIXED origin + uses the reserved
-        OpenRouter key, so its base_url/api_key_env are cleared — a stale value from
-        another provider must never carry over and get the OpenRouter Bearer key sent to
-        the wrong host."""
-        if image_gen.provider == "openrouter":
-            image_gen = image_gen.model_copy(update={"base_url": "", "api_key_env": ""})
-        cfg = self.load()
-        return self.save(cfg.model_copy(update={"image_gen": image_gen}))
-
-    def save_search(self, search: SearchSettings) -> RouterConfig:
-        """Persist the configured web-discovery provider over the config.
-
-        When the provider is the bundled in-process tier (ddgs), the persisted
-        base_url is cleared so a stale self-host LAN URL (e.g. from a previous
-        searxng selection) cannot silently re-engage if the user later switches
-        back to searxng without re-entering the URL."""
-        if search.provider == "ddgs":
-            search = search.model_copy(update={"base_url": ""})
-        cfg = self.load()
-        return self.save(cfg.model_copy(update={"search": search}))
-
-    def save_role_fallback(self, settings: RoleFallbackSettings) -> None:
-        """Persist auxiliary-role local fallback settings over the current config."""
-        cfg = self.load()
-        self.save(cfg.model_copy(update={"role_fallback": settings}))
-
-    def save_extraction(self, extraction: ExtractionSettings) -> RouterConfig:
-        """Persist the extraction provider (local/crawl4ai/firecrawl) over the config.
-
-        When the provider is the bundled in-process tier (local), the persisted
-        base_url is cleared so a stale self-host LAN URL (e.g. from a previous
-        crawl4ai selection) cannot silently re-engage if the user later switches
-        back to crawl4ai without re-entering the URL."""
-        if extraction.provider == "local":
-            extraction = extraction.model_copy(update={"base_url": ""})
-        cfg = self.load()
-        return self.save(cfg.model_copy(update={"extraction": extraction}))
-
-    def save_live_browser(self, live_browser: LiveBrowserSettings) -> RouterConfig:
-        """Persist the live-browser enable toggle. The agent-server reloads per-request."""
-        return self.save(self.load().model_copy(update={"live_browser": live_browser}))
-
-    def save_build_kernel(self, build_kernel: str) -> RouterConfig:
-        """Persist the vestigial Build kernel selector after legacy normalization."""
-        build_kernel = self._normalize_build_kernel(build_kernel)
-        return self.save(self.load().model_copy(update={"build_kernel": build_kernel}))
-
-    # -- Build-project persistence --------------------------------------------
-
-    def save_projects(self, projects: ProjectStorageSettings) -> RouterConfig:
-        """Persist the user-chosen Build-project storage path over the current config.
-        Same atomic write as save_sandbox; the agent-server reloads per-request so a
-        new path drives the NEXT snapshot/rehydrate."""
-        return self.save(self.load().model_copy(update={"projects": projects}))
-
-    # -- assignments ----------------------------------------------------------
-
-    def save_assignments(
-        self, default_model: str, assignments: dict[ModelRole, str]
-    ) -> RouterConfig:
-        """Persist new assignments over the current catalogue. Raises ValueError on
-        a key that isn't in the catalogue (routing couldn't resolve it)."""
-        cfg = self.load()
-        if default_model not in cfg.models:
-            raise ValueError(f"unknown default_model {default_model!r}")
-        for role, key in assignments.items():
-            if key not in cfg.models:
-                raise ValueError(f"unknown model {key!r} for role {role.value}")
-        return self.save(
-            cfg.model_copy(update={"default_model": default_model, "assignments": assignments})
-        )
 
     # -- catalogue CRUD -------------------------------------------------------
 
@@ -316,19 +160,6 @@ class ConfigStore:
 
     # -- internals ------------------------------------------------------------
 
-    def _apply_overlay(self, base: RouterConfig, overlay: dict) -> RouterConfig:
-        default_model = overlay.get("default_model")
-        if not isinstance(default_model, str) or default_model not in base.models:
-            default_model = base.default_model
-        assignments = dict(base.assignments)
-        raw = overlay.get("assignments")
-        if isinstance(raw, dict):
-            for role_str, key in raw.items():
-                role = _role(role_str)
-                if role is not None and isinstance(key, str) and key in base.models:
-                    assignments[role] = key
-        return base.model_copy(update={"default_model": default_model, "assignments": assignments})
-
     def _read(self) -> dict | None:
         try:
             return json.loads(self._path.read_text())
@@ -348,8 +179,8 @@ class ConfigStore:
 
         models = dict(cfg.models)
         for key, entry in cfg.models.items():
-            slot = self._model_secret_slot(key, entry)
-            purpose = self._model_purpose(entry)
+            slot = _model_secret_slot(key, entry)
+            purpose = _model_purpose(entry)
             new_ref = migrate_legacy_secret_ref(
                 entry.api_key_env,
                 slot=slot,
@@ -357,7 +188,7 @@ class ConfigStore:
                 purpose=purpose,
                 store=store,
                 diagnostics=diagnostics,
-                origin_approved=self.origin_approved,
+                origin_approved=self.approvals.origin_approved,
             )
             if new_ref != (entry.api_key_env or ""):
                 models[key] = entry.model_copy(update={"api_key_env": new_ref or None})
@@ -380,28 +211,28 @@ class ConfigStore:
                 "search",
                 cfg.search,
                 cfg.search.provider,
-                self._search_url(cfg.search),
+                _search_url(cfg.search),
                 f"search:{cfg.search.provider}",
             ),
             (
                 "extraction",
                 cfg.extraction,
                 cfg.extraction.provider,
-                self._extraction_url(cfg.extraction),
+                _extraction_url(cfg.extraction),
                 f"extraction:{cfg.extraction.provider}",
             ),
             (
                 "tts",
                 cfg.tts,
                 "openai" if cfg.tts.provider == "openai" else cfg.tts.provider,
-                self._tts_url(cfg.tts),
+                _tts_url(cfg.tts),
                 f"tts:{cfg.tts.provider}",
             ),
             (
                 "image_gen",
                 cfg.image_gen,
                 "openai" if cfg.image_gen.provider == "openai" else cfg.image_gen.provider,
-                self._image_url(cfg.image_gen),
+                _image_url(cfg.image_gen),
                 f"image:{cfg.image_gen.provider}",
             ),
             (
@@ -421,7 +252,7 @@ class ConfigStore:
                 purpose=purpose,
                 store=store,
                 diagnostics=diagnostics,
-                origin_approved=self.origin_approved,
+                origin_approved=self.approvals.origin_approved,
             )
             if new_ref != (ref or ""):
                 updates[field] = settings.model_copy(update={"api_key_env": new_ref})
@@ -431,141 +262,21 @@ class ConfigStore:
         self, cfg: RouterConfig, extra: list[str] | None = None
     ) -> RouterConfig:
         diagnostics = list(extra or [])
-        for label, url, purpose, secret_ref in self._operator_approvals(cfg):
+        for label, url, purpose, secret_ref in _operator_approvals(cfg):
             origin = origin_for_url(url)
-            if origin and not self.origin_approved(url, purpose, secret_ref):
+            if origin and not self.approvals.origin_approved(url, purpose, secret_ref):
                 diagnostics.append(f"{label} origin {origin} awaiting operator approval")
         diagnostics = sorted(set(diagnostics))
         return cfg.model_copy(update={"security_diagnostics": tuple(diagnostics)})
 
-    def _operator_approvals(self, cfg: RouterConfig) -> list[tuple[str, str, str, str]]:
-        urls: list[tuple[str, str, str, str]] = []
-        for key, entry in cfg.models.items():
-            if entry.base_url:
-                urls.append(
-                    (
-                        f"model:{key}",
-                        entry.base_url,
-                        self._model_purpose(entry),
-                        entry.api_key_env or "",
-                    )
-                )
-        if cfg.role_fallback.enabled and cfg.role_fallback.base_url.strip():
-            urls.append(
-                (
-                    "role_fallback",
-                    cfg.role_fallback.base_url.strip(),
-                    "role_fallback",
-                    cfg.role_fallback.api_key_env.strip(),
-                )
-            )
-        if cfg.encoders.remote:
-            for name, url in (
-                ("reranker", cfg.encoders.reranker_url),
-                ("embedder", cfg.encoders.embedder_url),
-                ("nli", cfg.encoders.nli_url),
-            ):
-                if url.strip():
-                    urls.append((name, url.strip(), f"encoder:{name}", ""))
-        if search_url := self._search_url(cfg.search):
-            urls.append(
-                (
-                    f"search:{cfg.search.provider}",
-                    search_url,
-                    f"search:{cfg.search.provider}",
-                    cfg.search.api_key_env.strip(),
-                )
-            )
-        if extraction_url := self._extraction_url(cfg.extraction):
-            urls.append(
-                (
-                    f"extraction:{cfg.extraction.provider}",
-                    extraction_url,
-                    f"extraction:{cfg.extraction.provider}",
-                    cfg.extraction.api_key_env.strip(),
-                )
-            )
-        if tts_url := self._tts_url(cfg.tts):
-            urls.append(
-                (
-                    f"tts:{cfg.tts.provider}",
-                    tts_url,
-                    f"tts:{cfg.tts.provider}",
-                    cfg.tts.api_key_env.strip(),
-                )
-            )
-        if image_url := self._image_url(cfg.image_gen):
-            secret_ref = (
-                "openrouter"
-                if cfg.image_gen.provider == "openrouter"
-                else cfg.image_gen.api_key_env
-            )
-            urls.append(
-                (
-                    f"image:{cfg.image_gen.provider}",
-                    image_url,
-                    f"image:{cfg.image_gen.provider}",
-                    secret_ref.strip(),
-                )
-            )
-        for name, raw in cfg.mcp.servers.items():
-            if (
-                isinstance(raw, dict)
-                and raw.get("transport") == "streamable_http"
-                and raw.get("url")
-            ):
-                raw_headers = raw.get("headers")
-                headers = raw_headers if isinstance(raw_headers, dict) else {}
-                refs = tuple(
-                    sorted(str(v).strip() for v in headers.values() if str(v).strip())
-                ) or ("",)
-                for ref in refs:
-                    urls.append((f"mcp:{name}", str(raw["url"]), f"mcp:{name}", ref))
-        return urls
 
-    def _model_secret_slot(self, key: str, entry: ModelEntry) -> str:
-        if entry.provider == "openrouter" or key.startswith("or-"):
-            return "openrouter"
-        if entry.provider == "gemma" or "gemma" in entry.model_id.lower():
-            return "gemma"
-        return entry.provider or key
-
-    def _model_purpose(self, entry: ModelEntry) -> str:
-        return f"model:{entry.provider or 'unknown'}"
-
-    def _search_url(self, search: SearchSettings) -> str:
-        if search.provider == "tavily":
-            return "https://api.tavily.com"
-        if search.provider == "brave":
-            return search.base_url.strip() or "https://api.search.brave.com"
-        if search.provider == "semantic_scholar":
-            return search.base_url.strip() or "https://api.semanticscholar.org"
-        if search.provider == "searxng":
-            return search.base_url.strip()
-        return ""
-
-    def _extraction_url(self, extraction: ExtractionSettings) -> str:
-        if extraction.provider == "crawl4ai":
-            return extraction.base_url.strip()
-        if extraction.provider == "firecrawl":
-            return extraction.base_url.strip() or "https://api.firecrawl.dev"
-        return ""
-
-    def _tts_url(self, tts: TtsSettings) -> str:
-        if tts.provider == "speaches":
-            return tts.base_url.strip()
-        if tts.provider == "openai":
-            return tts.base_url.strip() or "https://api.openai.com"
-        return ""
-
-    def _image_url(self, image_gen: ImageGenSettings) -> str:
-        if image_gen.provider == "openrouter":
-            return "https://openrouter.ai/api/v1"
-        if image_gen.provider == "openai":
-            return image_gen.base_url.strip() or "https://api.openai.com"
-        if image_gen.provider == "comfyui":
-            return image_gen.base_url.strip()
-        return ""
+# -- module-level helpers ------------------------------------------------------
+# Everything below is a pure function of its arguments (no ConfigStore instance
+# state) — build-kernel normalization, the legacy-overlay merge, and the
+# per-section URL/diagnostics derivation used by both the security-diagnostics
+# pass and the legacy secret-ref migration above. Kept at module scope rather
+# than as bound methods: they were never state-dependent, and this is what
+# keeps `ConfigStore` itself under the class-size cap (PY-0458).
 
 
 def _role(value: str) -> ModelRole | None:
@@ -573,3 +284,210 @@ def _role(value: str) -> ModelRole | None:
         return ModelRole(value)
     except ValueError:
         return None
+
+
+def _normalize_build_kernel(build_kernel: str) -> str:
+    """Normalize legacy/unknown build-kernel choices to the only live kernel."""
+    return "disco" if build_kernel != "disco" else build_kernel
+
+
+def _normalize_build_kernel_data(data: dict) -> tuple[dict, bool]:
+    if "build_kernel" not in data:
+        return data, False
+    normalized = _normalize_build_kernel(str(data["build_kernel"]))
+    if normalized == data["build_kernel"]:
+        return data, False
+    return {**data, "build_kernel": normalized}, True
+
+
+def _gate_build_kernel(cfg: RouterConfig) -> RouterConfig:
+    """Normalize any legacy in-memory value to the only live kernel."""
+    normalized = _normalize_build_kernel(cfg.build_kernel)
+    if normalized != cfg.build_kernel:
+        return cfg.model_copy(update={"build_kernel": normalized})
+    return cfg
+
+
+def _apply_overlay(base: RouterConfig, overlay: dict) -> RouterConfig:
+    default_model = overlay.get("default_model")
+    if not isinstance(default_model, str) or default_model not in base.models:
+        default_model = base.default_model
+    assignments = dict(base.assignments)
+    raw = overlay.get("assignments")
+    if isinstance(raw, dict):
+        for role_str, key in raw.items():
+            role = _role(role_str)
+            if role is not None and isinstance(key, str) and key in base.models:
+                assignments[role] = key
+    return base.model_copy(update={"default_model": default_model, "assignments": assignments})
+
+
+def _model_secret_slot(key: str, entry: ModelEntry) -> str:
+    if entry.provider == "openrouter" or key.startswith("or-"):
+        return "openrouter"
+    if entry.provider == "gemma" or "gemma" in entry.model_id.lower():
+        return "gemma"
+    return entry.provider or key
+
+
+def _model_purpose(entry: ModelEntry) -> str:
+    return f"model:{entry.provider or 'unknown'}"
+
+
+def _search_url(search: SearchSettings) -> str:
+    if search.provider == "tavily":
+        return "https://api.tavily.com"
+    if search.provider == "brave":
+        return search.base_url.strip() or "https://api.search.brave.com"
+    if search.provider == "semantic_scholar":
+        return search.base_url.strip() or "https://api.semanticscholar.org"
+    if search.provider == "searxng":
+        return search.base_url.strip()
+    return ""
+
+
+def _extraction_url(extraction: ExtractionSettings) -> str:
+    if extraction.provider == "crawl4ai":
+        return extraction.base_url.strip()
+    if extraction.provider == "firecrawl":
+        return extraction.base_url.strip() or "https://api.firecrawl.dev"
+    return ""
+
+
+def _tts_url(tts: TtsSettings) -> str:
+    if tts.provider == "speaches":
+        return tts.base_url.strip()
+    if tts.provider == "openai":
+        return tts.base_url.strip() or "https://api.openai.com"
+    return ""
+
+
+def _image_url(image_gen: ImageGenSettings) -> str:
+    if image_gen.provider == "openrouter":
+        return "https://openrouter.ai/api/v1"
+    if image_gen.provider == "openai":
+        return image_gen.base_url.strip() or "https://api.openai.com"
+    if image_gen.provider == "comfyui":
+        return image_gen.base_url.strip()
+    return ""
+
+
+def _operator_approvals(cfg: RouterConfig) -> list[tuple[str, str, str, str]]:
+    """Every URL in `cfg` that needs an operator origin-approval, as
+    (label, url, purpose, secret_ref) tuples — one category per helper so
+    each stays independently simple (PY-0460)."""
+    urls: list[tuple[str, str, str, str]] = []
+    urls.extend(_model_operator_approvals(cfg))
+    if entry := _role_fallback_operator_approval(cfg):
+        urls.append(entry)
+    urls.extend(_encoder_operator_approvals(cfg))
+    for probe in (
+        _search_operator_approval,
+        _extraction_operator_approval,
+        _tts_operator_approval,
+        _image_operator_approval,
+    ):
+        if entry := probe(cfg):
+            urls.append(entry)
+    urls.extend(_mcp_operator_approvals(cfg))
+    return urls
+
+
+def _model_operator_approvals(cfg: RouterConfig) -> list[tuple[str, str, str, str]]:
+    urls: list[tuple[str, str, str, str]] = []
+    for key, entry in cfg.models.items():
+        if entry.base_url:
+            urls.append(
+                (
+                    f"model:{key}",
+                    entry.base_url,
+                    _model_purpose(entry),
+                    entry.api_key_env or "",
+                )
+            )
+    return urls
+
+
+def _role_fallback_operator_approval(cfg: RouterConfig) -> tuple[str, str, str, str] | None:
+    if cfg.role_fallback.enabled and cfg.role_fallback.base_url.strip():
+        return (
+            "role_fallback",
+            cfg.role_fallback.base_url.strip(),
+            "role_fallback",
+            cfg.role_fallback.api_key_env.strip(),
+        )
+    return None
+
+
+def _encoder_operator_approvals(cfg: RouterConfig) -> list[tuple[str, str, str, str]]:
+    urls: list[tuple[str, str, str, str]] = []
+    if cfg.encoders.remote:
+        for name, url in (
+            ("reranker", cfg.encoders.reranker_url),
+            ("embedder", cfg.encoders.embedder_url),
+            ("nli", cfg.encoders.nli_url),
+        ):
+            if url.strip():
+                urls.append((name, url.strip(), f"encoder:{name}", ""))
+    return urls
+
+
+def _search_operator_approval(cfg: RouterConfig) -> tuple[str, str, str, str] | None:
+    if search_url := _search_url(cfg.search):
+        return (
+            f"search:{cfg.search.provider}",
+            search_url,
+            f"search:{cfg.search.provider}",
+            cfg.search.api_key_env.strip(),
+        )
+    return None
+
+
+def _extraction_operator_approval(cfg: RouterConfig) -> tuple[str, str, str, str] | None:
+    if extraction_url := _extraction_url(cfg.extraction):
+        return (
+            f"extraction:{cfg.extraction.provider}",
+            extraction_url,
+            f"extraction:{cfg.extraction.provider}",
+            cfg.extraction.api_key_env.strip(),
+        )
+    return None
+
+
+def _tts_operator_approval(cfg: RouterConfig) -> tuple[str, str, str, str] | None:
+    if tts_url := _tts_url(cfg.tts):
+        return (
+            f"tts:{cfg.tts.provider}",
+            tts_url,
+            f"tts:{cfg.tts.provider}",
+            cfg.tts.api_key_env.strip(),
+        )
+    return None
+
+
+def _image_operator_approval(cfg: RouterConfig) -> tuple[str, str, str, str] | None:
+    if image_url := _image_url(cfg.image_gen):
+        secret_ref = (
+            "openrouter" if cfg.image_gen.provider == "openrouter" else cfg.image_gen.api_key_env
+        )
+        return (
+            f"image:{cfg.image_gen.provider}",
+            image_url,
+            f"image:{cfg.image_gen.provider}",
+            secret_ref.strip(),
+        )
+    return None
+
+
+def _mcp_operator_approvals(cfg: RouterConfig) -> list[tuple[str, str, str, str]]:
+    urls: list[tuple[str, str, str, str]] = []
+    for name, raw in cfg.mcp.servers.items():
+        if isinstance(raw, dict) and raw.get("transport") == "streamable_http" and raw.get("url"):
+            raw_headers = raw.get("headers")
+            headers = raw_headers if isinstance(raw_headers, dict) else {}
+            refs = tuple(sorted(str(v).strip() for v in headers.values() if str(v).strip())) or (
+                "",
+            )
+            for ref in refs:
+                urls.append((f"mcp:{name}", str(raw["url"]), f"mcp:{name}", ref))
+    return urls

@@ -243,7 +243,7 @@ def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
     cfg = config_store.load()
     qwen = cfg.models["driver-local"]
     assert qwen.base_url is not None
-    config_store.approve_origin(
+    config_store.approvals.approve_origin(
         qwen.base_url,
         f"model:{qwen.provider}",
         qwen.api_key_env or "",

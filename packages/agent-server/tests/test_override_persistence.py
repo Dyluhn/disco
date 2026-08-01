@@ -153,7 +153,7 @@ async def _runtime_with_projects(tmp_path, monkeypatch, root: str = ""):
     store = SqliteEventStore(":memory:")
     cfg = ConfigStore(tmp_path / "config.json")
     if root:
-        cfg.save_projects(ProjectStorageSettings(projects_root=root))
+        cfg.sections.save_projects(ProjectStorageSettings(projects_root=root))
     rt = ConversationRuntime(
         store,
         config_store=cfg,

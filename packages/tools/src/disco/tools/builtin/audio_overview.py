@@ -265,7 +265,7 @@ class AudioOverviewTool:
 
             store = ConfigStore()
             secret_ref = tts.api_key_env if tts.provider == "openai" else ""
-            if not store.origin_approved(remote_base, f"tts:{tts.provider}", secret_ref):
+            if not store.approvals.origin_approved(remote_base, f"tts:{tts.provider}", secret_ref):
                 return None, ToolOutcome(
                     success=False,
                     content=(
@@ -470,7 +470,9 @@ class AudioOverviewTool:
         llm_url = entry.base_url.rstrip("/")
         llm_model = entry.model_id
         api_key_env = entry.api_key_env
-        if not store.origin_approved(llm_url, f"model:{entry.provider}", api_key_env or ""):
+        if not store.approvals.origin_approved(
+            llm_url, f"model:{entry.provider}", api_key_env or ""
+        ):
             return "", llm_model, "", entry.max_output_tokens, "LLM origin not approved"
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
             return (

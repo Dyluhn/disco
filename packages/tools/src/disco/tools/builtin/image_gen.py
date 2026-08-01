@@ -291,7 +291,7 @@ def select_image_backend() -> ImageBackend:
             base_url = base_url[: -len("/v1")]
         api_key_env = settings.api_key_env
 
-        if not store.origin_approved(base_url, "image:openai", api_key_env):
+        if not store.approvals.origin_approved(base_url, "image:openai", api_key_env):
             raise ImageGenNotConfigured(
                 "Image generation endpoint is not operator-approved. Save the Image "
                 "generation settings to approve this exact origin."
@@ -312,7 +312,7 @@ def select_image_backend() -> ImageBackend:
     # SecretStore slot, the same one the LLM router uses), NOT a user-named api_key_env.
     if provider == "openrouter":
         openrouter_base = "https://openrouter.ai/api/v1"
-        if not store.origin_approved(openrouter_base, "image:openrouter", "openrouter"):
+        if not store.approvals.origin_approved(openrouter_base, "image:openrouter", "openrouter"):
             raise ImageGenNotConfigured(
                 "OpenRouter image generation origin is not operator-approved."
             )
@@ -335,7 +335,7 @@ def select_image_backend() -> ImageBackend:
     if provider == "comfyui":
         base_url = settings.base_url
         if base_url:
-            if not store.origin_approved(base_url, "image:comfyui", ""):
+            if not store.approvals.origin_approved(base_url, "image:comfyui", ""):
                 raise ImageGenNotConfigured(
                     "ComfyUI endpoint is not operator-approved. Save the Image "
                     "generation settings to approve this exact origin."

@@ -24,7 +24,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from disco.core.llm import ConfigStore
+from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
 from disco.tools.builtin._pptx_render import render_html
@@ -60,7 +60,7 @@ def tmp_workspace():
 
 @pytest.fixture(autouse=True)
 def _approve_mocked_llm_origins(monkeypatch):
-    monkeypatch.setattr(ConfigStore, "origin_approved", lambda *args, **kwargs: True)
+    monkeypatch.setattr(ConfigOriginApprovals, "origin_approved", lambda *args, **kwargs: True)
 
 
 def _jailed_sandbox(workspace: Path) -> ProcessSandboxInstance:
@@ -1091,12 +1091,13 @@ async def test_call_llm_sends_bearer_when_api_key_present():
 def test_resolve_slides_llm_resolves_remote_key(monkeypatch, tmp_path):
     """_resolve_slides_llm returns the AGENT_DRIVER entry's resolved api_key so the
     deck author authenticates to a remote endpoint (the gap that 401'd paid drivers)."""
+    from disco.core.llm.secret_refs import set_openrouter_key
     from disco.core.llm.secrets import SecretStore
     from disco.tools.builtin import _slides_pipeline as sp
 
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     monkeypatch.setenv("DISCO_SECRET_KEY", "slides-test-secret-key-32-bytes")
-    SecretStore().set_openrouter_key("sk-live-123")
+    set_openrouter_key(SecretStore(), "sk-live-123")
 
     class _Entry:
         base_url = "https://openrouter.ai/api/v1"
@@ -1110,12 +1111,15 @@ def test_resolve_slides_llm_resolves_remote_key(monkeypatch, tmp_path):
         def model_for(self, _role):
             return "driver"
 
-    class _Store:
-        def load(self):
-            return _Cfg()
-
+    class _Approvals:
         def origin_approved(self, *_args, **_kwargs):
             return True
+
+    class _Store:
+        approvals = _Approvals()
+
+        def load(self):
+            return _Cfg()
 
     monkeypatch.setattr("disco.core.llm.ConfigStore", lambda: _Store())
     url, model, key = sp._resolve_slides_llm()
@@ -1135,10 +1139,10 @@ def test_resolve_llm_key_reads_reserved_openrouter_slot(monkeypatch):
 
     class _Store:
         def get_secret(self, name):
-            return None  # NOT stored under the env-var name
-
-        def get_openrouter_key(self):
-            return "sk-or-reserved"  # the reserved "openrouter" slot
+            # Only the reserved "openrouter" slot resolves — NOT the raw
+            # env-var name — proving resolution goes through the reserved
+            # slot, not a plain get_secret(api_key_env) lookup.
+            return "sk-or-reserved" if name == "openrouter" else None
 
     monkeypatch.setattr("disco.core.llm.secrets.SecretStore", lambda: _Store())
     assert sp._resolve_llm_key(OPENROUTER_API_KEY_ENV) == "sk-or-reserved"

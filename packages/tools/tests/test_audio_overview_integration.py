@@ -33,6 +33,7 @@ import httpx
 import numpy as np
 import pytest
 from disco.core.llm import ConfigStore, TtsSettings, default_config
+from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.anatomy import ToolContext
 from disco.tools.builtin.audio_overview import (
     AudioOverviewArgs,
@@ -114,7 +115,7 @@ def _patch_tts(tts: TtsSettings):
     cfg = default_config().model_copy(update={"tts": tts})
     with (
         mock.patch.object(ConfigStore, "load", return_value=cfg),
-        mock.patch.object(ConfigStore, "origin_approved", return_value=True),
+        mock.patch.object(ConfigOriginApprovals, "origin_approved", return_value=True),
     ):
         yield
 

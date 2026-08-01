@@ -78,7 +78,7 @@ async def _tts_synthesize_speaches(
     from disco.tools.builtin.audio_overview import _synthesize_remote
 
     base = (tts.base_url or SPEACHES_URL).rstrip("/")
-    if not store.origin_approved(base, "tts:speaches", ""):
+    if not store.approvals.origin_approved(base, "tts:speaches", ""):
         return ProbeResult(
             ok=False,
             status="misconfigured",
@@ -93,7 +93,7 @@ async def _tts_synthesize_openai(store: Any, tts: Any, provider: str, word: str,
     from disco.tools.builtin.audio_overview import _synthesize_remote
 
     base = (tts.base_url or "https://api.openai.com").rstrip("/")
-    if not store.origin_approved(base, "tts:openai", tts.api_key_env):
+    if not store.approvals.origin_approved(base, "tts:openai", tts.api_key_env):
         return ProbeResult(
             ok=False,
             status="misconfigured",
@@ -227,7 +227,8 @@ def _mcp_origin_approved(url: str, name: str, refs: tuple[str, ...]) -> bool:
     store = ConfigStore()
     purpose = f"mcp:{name}"
     return all(
-        store.origin_approved(url, purpose, ref) and secret_ref_allowed_for_origin(ref, url)
+        store.approvals.origin_approved(url, purpose, ref)
+        and secret_ref_allowed_for_origin(ref, url)
         for ref in refs
     )
 
@@ -365,9 +366,7 @@ async def _run_mcp_probe(store: Any, body: McpTestBody) -> ProbeResult:
         # anyio BaseExceptionGroup on a failed handshake (and a cross-task
         # teardown RuntimeError); classify a connection refusal honestly.
         text = str(exc) or type(exc).__name__
-        unreachable = any(
-            tok in text for tok in ("Connect", "connection", "refused", "timeout")
-        )
+        unreachable = any(tok in text for tok in ("Connect", "connection", "refused", "timeout"))
         return ProbeResult(
             ok=False,
             status="unreachable" if unreachable else "error",
