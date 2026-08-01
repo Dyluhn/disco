@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "1b9bce12615cf37959f07543ff56f35454c16585",
+  "source_identity": "3fc45f025c1d93826b8259e8cdc265d000fa5fe1",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -337,6 +337,14 @@
       }
     },
     {
+      "path": "packages/agent-server/src/disco/agent_server/appkit_cloudflare/deploy_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/agent-server/src/disco/agent_server/build_kernel/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -454,6 +462,22 @@
           "signature": "def select_kernel(runtime: Any, *, disco: DiscoKernel, selected: str | None) -> BuildKernel"
         }
       }
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/host_proxy_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/host_token_store_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/agent-server/src/disco/agent_server/routes/__init__.py",
@@ -818,11 +842,41 @@
       }
     },
     {
+      "path": "packages/agent-server/src/disco/agent_server/stripe_verification/__init__.py",
+      "has_all": true,
+      "explicit_all": [
+        "StripeLiveVerifierError"
+      ],
+      "public_names": [
+        "StripeLiveVerifierError"
+      ],
+      "import_origins": [
+        {
+          "public_name": "StripeLiveVerifierError",
+          "name": "StripeLiveVerifierError",
+          "module": "evidence",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        }
+      ],
+      "public_signatures": {
+        "StripeLiveVerifierError": {
+          "kind": "class",
+          "signature": "class StripeLiveVerifierError(RuntimeError)",
+          "members": [],
+          "fields": []
+        }
+      }
+    },
+    {
       "path": "packages/agent-server/src/disco/agent_server/verify/__init__.py",
       "has_all": true,
       "explicit_all": [
         "AbstractVerifyClient",
         "Check",
+        "ClientEvidenceAdapter",
+        "EvidenceSource",
         "HostVerifierDispatcher",
         "HostWebAppVerifier",
         "HttpVerifyClient",
@@ -843,6 +897,8 @@
       "public_names": [
         "AbstractVerifyClient",
         "Check",
+        "ClientEvidenceAdapter",
+        "EvidenceSource",
         "HostVerifierDispatcher",
         "HostWebAppVerifier",
         "HttpVerifyClient",
@@ -929,6 +985,22 @@
           "public_name": "HostVerifierDispatcher",
           "name": "HostVerifierDispatcher",
           "module": "dispatcher",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "ClientEvidenceAdapter",
+          "name": "ClientEvidenceAdapter",
+          "module": "evidence_source",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "EvidenceSource",
+          "name": "EvidenceSource",
+          "module": "evidence_source",
           "level": 1,
           "alias": null,
           "kind": "from"
@@ -1037,6 +1109,25 @@
             "status: Status"
           ]
         },
+        "ClientEvidenceAdapter": {
+          "kind": "class",
+          "signature": "class ClientEvidenceAdapter()",
+          "members": [
+            "async def fetch_app(self, url: str) -> tuple[int, bytes] | None",
+            "async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None",
+            "def __init__(self, client: EvidenceSource) -> None"
+          ],
+          "fields": []
+        },
+        "EvidenceSource": {
+          "kind": "class",
+          "signature": "class EvidenceSource(Protocol)",
+          "members": [
+            "async def fetch_app(self, url: str) -> tuple[int, bytes] | None",
+            "async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None"
+          ],
+          "fields": []
+        },
         "HostVerifierDispatcher": {
           "kind": "class",
           "signature": "class HostVerifierDispatcher()",
@@ -1060,7 +1151,6 @@
           "kind": "class",
           "signature": "class HttpVerifyClient(AbstractVerifyClient)",
           "members": [
-            "async def authenticated_request(self, method: str, path: str, *, timeout: float=30.0, **kwargs: Any) -> httpx.Response",
             "async def create_conversation(self, surface: str, model_override: str | None, *, appkit_mode: bool=False) -> str",
             "async def download_artifact(self, cid: str, path: str) -> bytes | None",
             "async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None",
@@ -1073,7 +1163,6 @@
             "async def get_trace(self, cid: str) -> dict[str, Any] | None",
             "async def poll_until_terminal(self, cid: str, *, timeout_s: float) -> dict[str, Any]",
             "async def run_ws_exchange(self, cid: str, prompt: str, *, approve_plan: bool, timeout_s: float, ws_commands: list[dict[str, Any]] | None=None, auto_answer: str | None=None, send_build_brief: bool=False) -> None",
-            "async def websocket_credentials(self) -> tuple[Origin, dict[str, str]]",
             "def __init__(self, base_url: str, *, _transport: httpx.AsyncBaseTransport | None=None) -> None"
           ],
           "fields": []
@@ -1166,6 +1255,161 @@
           "signature": "async def run_scenario(scenario: Scenario, *, agent_base: str='http://127.0.0.1:8000', timeout_s: float=600, dossier_base: Path | None=None, _client: AbstractVerifyClient | None=None) -> VerifyResult"
         }
       }
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "has_all": true,
+      "explicit_all": [
+        "RowProjectionPorts",
+        "build_row_for_dossier",
+        "render_row",
+        "render_rows_table",
+        "render_summary_line"
+      ],
+      "public_names": [
+        "RowProjectionPorts",
+        "build_row_for_dossier",
+        "render_row",
+        "render_rows_table",
+        "render_summary_line"
+      ],
+      "import_origins": [
+        {
+          "public_name": "RowProjectionPorts",
+          "name": "RowProjectionPorts",
+          "module": "collect",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "build_row_for_dossier",
+          "name": "build_row_for_dossier",
+          "module": "collect",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "render_row",
+          "name": "render_row",
+          "module": "render",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "render_rows_table",
+          "name": "render_rows_table",
+          "module": "render",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "render_summary_line",
+          "name": "render_summary_line",
+          "module": "render",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        }
+      ],
+      "public_signatures": {
+        "RowProjectionPorts": {
+          "kind": "class",
+          "signature": "class RowProjectionPorts()",
+          "members": [],
+          "fields": [
+            "app_name_from_events: Callable[[EventList], str | None]",
+            "collect_ui_screenshots: Callable[[str, Path | None, Path], list[str]]",
+            "final_appkit_verdict: Callable[[EventList], JsonObject | None]",
+            "first_failing_check: Callable[[JsonObject], str | None]",
+            "is_appkit_dossier: Callable[[JsonObject], bool]",
+            "iter_events: Callable[[Path], EventList]",
+            "read_json: Callable[[Path], JsonObject | None]",
+            "row_factory: Callable[..., Any]"
+          ]
+        },
+        "build_row_for_dossier": {
+          "kind": "function",
+          "signature": "def build_row_for_dossier(run_dir: Path, *, out_dir: Path, ports: RowProjectionPorts, e2e_root: Path | None=None) -> Any | None"
+        },
+        "render_row": {
+          "kind": "function",
+          "signature": "def render_row(row: Any) -> str"
+        },
+        "render_rows_table": {
+          "kind": "function",
+          "signature": "def render_rows_table(summary: Any) -> str"
+        },
+        "render_summary_line": {
+          "kind": "function",
+          "signature": "def render_summary_line(summary: Any) -> str"
+        }
+      }
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/verify/operator_parts/__init__.py",
+      "has_all": true,
+      "explicit_all": [
+        "assemble_gate_context",
+        "fold_view_events",
+        "scan_gate_events"
+      ],
+      "public_names": [
+        "assemble_gate_context",
+        "fold_view_events",
+        "scan_gate_events"
+      ],
+      "import_origins": [
+        {
+          "public_name": "assemble_gate_context",
+          "name": "assemble_gate_context",
+          "module": "gate_context",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "scan_gate_events",
+          "name": "scan_gate_events",
+          "module": "gate_context",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "fold_view_events",
+          "name": "fold_view_events",
+          "module": "view",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        }
+      ],
+      "public_signatures": {
+        "assemble_gate_context": {
+          "kind": "function",
+          "signature": "def assemble_gate_context(status: str | None, plan: dict[str, Any] | None, question: Any, alternatives: Any, ctx: dict[str, Any]) -> dict[str, Any]"
+        },
+        "fold_view_events": {
+          "kind": "function",
+          "signature": "def fold_view_events(status: str | None, events: list[dict[str, Any]]) -> dict[str, Any]"
+        },
+        "scan_gate_events": {
+          "kind": "function",
+          "signature": "def scan_gate_events(events: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, Any, Any, dict[str, Any]]"
+        }
+      }
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/verify/runner_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/app-server/src/disco/app_server/__init__.py",
@@ -11858,6 +12102,38 @@
       }
     },
     {
+      "path": "packages/core/src/disco/core/loop/finish/_common_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/loop/finish/content_gate_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/loop/finish/finalize_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/loop/finish/verify_gate_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/core/src/disco/core/release/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -12264,6 +12540,30 @@
           "signature": "def spec_digest(spec: ReleaseSpec) -> str"
         }
       }
+    },
+    {
+      "path": "packages/core/src/disco/core/release/detect_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/release/local_compose_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/release/spec_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/core/src/disco/core/security/__init__.py",
@@ -12684,6 +12984,14 @@
           ]
         }
       }
+    },
+    {
+      "path": "packages/core/src/disco/core/verification_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/core/src/disco/core/workflow/__init__.py",
@@ -14845,17 +15153,14 @@
             "async def kill(self) -> None",
             "def __init__(self, registry: ToolRegistry, scope: ToolScope, *, sandbox: SandboxInstance | None=None, broker: CapabilityBroker | None=None, owner_id: str='local', conversation_id: str | None=None, default_timeout_s: int=300, model_policy: ModelExecutionPolicy=_STANDARD_POLICY, driver_llm: tuple[str, str, str | None] | None=None, read_char_budget: int | None=None, scope_guard: ContractScopeGuard | None=None, on_tool_success: Callable[[str], None] | None=None, starter_kit: str | None=None, workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None=None, primitive_live_verifier: PrimitiveLiveVerifier | None=None, workspace_lock: asyncio.Lock | None=None, workspace_fence: Callable[[], AbstractAsyncContextManager[None]] | None=None, execution_admission: Callable[[str | None], Awaitable[str | None]] | None=None, release_intent_writer: ReleaseIntentWriter | None=None) -> None",
             "def action_profile_for_call(self, tool_name: str, arguments: dict[str, Any]) -> ActionProfile | None",
-            "def assert_behavior_complete(self) -> None",
             "def available_tools(self) -> list[ToolSpec]",
             "def callable_tool_names(self) -> frozenset[str]",
             "def known_tool_names_for_requery(self) -> frozenset[str]",
             "def note_grounding_read(self, path: str) -> None",
             "def readonly_tool_names(self) -> frozenset[str]",
             "def sandbox(self) -> SandboxInstance | None",
-            "def tool_names_with_capability(self, capability: EffectCapability) -> frozenset[str]",
             "def tool_scope(self, tool_name: str) -> str",
-            "def tool_scope_for_call(self, tool_name: str, arguments: dict[str, Any]) -> str",
-            "def unclassified_tool_names(self) -> frozenset[str]"
+            "def tool_scope_for_call(self, tool_name: str, arguments: dict[str, Any]) -> str"
           ],
           "fields": []
         },
@@ -16075,6 +16380,118 @@
       }
     },
     {
+      "path": "packages/tools/src/disco/tools/builtin/_audio_overview_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/_browser_daemon_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/_deck_schema_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/_pptx_render_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/_slides_pipeline_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/browser_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/design_lint_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/files_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/find_and_edit_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/image_gen_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/run_script_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/slides_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/verify_app_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/executor_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/tools/src/disco/tools/mcp/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -16686,6 +17103,22 @@
       }
     },
     {
+      "path": "packages/tools/src/disco/tools/projects/archive_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/projects/store_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/tools/src/disco/tools/sandbox/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -17284,7 +17717,79 @@
       }
     },
     {
+      "path": "packages/tools/src/disco/tools/sandbox/_container_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/gvisor_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/kernel_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/podman_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/process_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/session_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/sandbox/shell_sessions_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/tools/src/disco/tools/verify/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/verify/verification_validators/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/verify/web_app_probe_parts/__init__.py",
       "has_all": false,
       "explicit_all": null,
       "public_names": [],
@@ -22679,7 +23184,147 @@
       "path": "docs/architecture.generated.md"
     }
   ],
-  "additive_transitions": [],
+  "additive_transitions": [
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/stripe_verification/__init__.py",
+      "public_name": "StripeLiveVerifierError",
+      "target_sha256": "a89350bcb6d613460f58bd11bdca9c3bb3d9fa77fdb8abb7a559ba7345dd1600",
+      "owner_package": "PKG-05-CONTEXT",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/__init__.py",
+      "public_name": "ClientEvidenceAdapter",
+      "target_sha256": "27d4735a195bdd35a77d73864ebb185cda47c88e3feb735b4659b149c12a3614",
+      "owner_package": "PKG-05-CONTEXT",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/__init__.py",
+      "public_name": "EvidenceSource",
+      "target_sha256": "79af88e635c9e59008bf8a8340dc255229c8e0678d52d74059170414ece4f128",
+      "owner_package": "PKG-05-CONTEXT",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/__init__.py",
+      "public_name": "HttpVerifyClient",
+      "target_sha256": "ad0eeb7f3971fff604172eb2883f1af6194bcae4edafc996043f17ced0fb3ff6",
+      "owner_package": "PKG-05-CONTEXT",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "public_name": "RowProjectionPorts",
+      "target_sha256": "ec2a8a1eefc5dcf46859836f387f34670a18720bad579f2556147a39be7c658b",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "public_name": "build_row_for_dossier",
+      "target_sha256": "de05253197361b7d450843ba9a5d5a4ff3e09538a7f7056daaca1098b204ee70",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "public_name": "render_row",
+      "target_sha256": "13438adde676fb4728b279cee40cc2715745bd524624a56117b77498ee7af633",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "public_name": "render_rows_table",
+      "target_sha256": "87475aa292fa4f6feeb2ec9a789cc1e601fd9822ad8b2c624866e70c4e9e4200",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/appkit_dashboard_parts/__init__.py",
+      "public_name": "render_summary_line",
+      "target_sha256": "acc2d77f864c62871a456160d562c68471780ae58011c449051c1d4f01971349",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/operator_parts/__init__.py",
+      "public_name": "assemble_gate_context",
+      "target_sha256": "4da7cd872b90e643a4dfa64668dbc91703a7c274bd0fb75ee8ccdcb6c2286de8",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/operator_parts/__init__.py",
+      "public_name": "fold_view_events",
+      "target_sha256": "1cb3a19f08e437571373cd19cda098e9f1ac5f4da0bc3e039e2280e3948613ce",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/operator_parts/__init__.py",
+      "public_name": "scan_gate_events",
+      "target_sha256": "94f7f0b705f36b83a1ab532b300b38f2270e63ac34a986264f5eebb6fd3da353",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "DefaultToolExecutor",
+      "target_sha256": "9e257797372141e7988df5a6ae1fd94d91b12c80f7b16a653debd9873aa12d87",
+      "owner_package": "PKG-08-VERIFY",
+      "reason": "Epic 7-10 decomposition: typed interior parts package published by its owning module's accepted extraction"
+    }
+  ],
   "compatibility_bridges": [],
-  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13."
+  "member_transitions": [
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/__init__.py",
+      "public_name": "DefaultToolExecutor",
+      "origin": "disco.tools.executor.DefaultToolExecutor",
+      "removed_members": [
+        "def assert_behavior_complete(self) -> None",
+        "def tool_names_with_capability(self, capability: EffectCapability) -> frozenset[str]",
+        "def unclassified_tool_names(self) -> frozenset[str]"
+      ],
+      "added_members": [],
+      "old_signature_sha256": "e29f8444aca53dc0ef2337b75c6cea210bb3099cd43b6a86f8fb0916d2b91199",
+      "new_signature_sha256": "79ed2a6371edc7abe73d48770875302abc860155d904953f84f664b6e3b3221e",
+      "owner_package": "PKG-10-EXECUTOR",
+      "accepting_commit": "3501df9bcee672c0d6cb8d7a8cc186cec03719e9",
+      "accepting_receipt": "2026-07-31/PKG-10-EPIC/EPIC-10A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/agent-server/src/disco/agent_server/verify/__init__.py",
+      "public_name": "HttpVerifyClient",
+      "origin": "disco.agent_server.verify.runner.HttpVerifyClient",
+      "removed_members": [
+        "async def authenticated_request(self, method: str, path: str, *, timeout: float=30.0, **kwargs: Any) -> httpx.Response",
+        "async def websocket_credentials(self) -> tuple[Origin, dict[str, str]]"
+      ],
+      "added_members": [],
+      "old_signature_sha256": "d43ebbe141e65ff12b557a99efbb2ec8403f45e494d2e6998d3c1926a0007318",
+      "new_signature_sha256": "ae89d5ed3f99b509f0f71f49a067e9f262dad1e32b588e8cfca92164f8c91373",
+      "owner_package": "PKG-08-VERIFY",
+      "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
+      "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    }
+  ],
+  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta."
 }

@@ -231,8 +231,8 @@ class TestMappingStatic:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         mapping = baseline["mapping_static"]
         expected_counts = {
-            "python_test_file_count": 757,
-            "python_static_test_id_count": 9224,
+            "python_test_file_count": 786,
+            "python_static_test_id_count": 9336,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
         }
@@ -266,7 +266,7 @@ class TestMappingStatic:
     def test_mapping_static_fixture_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         fixtures = baseline["mapping_static"]["fixtures"]
-        assert len(fixtures) == 172
+        assert len(fixtures) == 176
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -518,14 +518,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 9768,
+            "packages": 9870,
             "harness": 1236,
             "integrations": 9,
             "tests": 328,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11341 == sum(expected.values())
+        assert collected["total"] == 11443 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -541,7 +541,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11341}
+        assert result == {"collected_total": 11443}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -560,9 +560,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9224,
+            "python_static_ids": 9336,
             "typescript_static_ids": 1200,
-            "collected_total": 11341,
+            "collected_total": 11443,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -583,9 +583,17 @@ class TestBaselineValidation:
             for path in advanced["mapping_static"]["python_test_files"]
             if path not in represented_files
         )
+        # Must not collide with a package that already owns a transition —
+        # hardcoding one silently became a duplicate as the baseline grew.
+        claimed = {row["package"] for row in advanced["additive_transitions"]}
+        later_package = next(
+            name
+            for name in ("PKG-11-RETRIEVAL", "PKG-11-SETTINGS", "PKG-12-FE-SHELL")
+            if name not in claimed
+        )
         advanced["additive_transitions"].append(
             {
-                "package": "PKG-05-CONTEXT",
+                "package": later_package,
                 "root": "multiple",
                 "source_identity_before": baseline["source_identity"],
                 "source_identity_after": latest_identity,
@@ -615,7 +623,7 @@ class TestBaselineValidation:
         advanced["mapping_static"]["python_static_test_ids"].append(later_static)
         advanced["mapping_static"]["python_static_test_ids"].sort()
         advanced["mapping_static"]["python_static_test_id_count"] += 1
-        later_transition = _transition_for(advanced, "PKG-05-CONTEXT")
+        later_transition = _transition_for(advanced, later_package)
         later_transition["root"] = "tests"
         later_transition["collected_roots"] = {
             "tests": {
@@ -822,6 +830,7 @@ class TestInventoryRules:
             "command_drift_fails": True,
             "additions_allowed_only_when_baseline_updated_in_owning_package": True,
             "real_collection_distinct_from_mapping_static": True,
+            "module_splits_require_an_exact_transition_record": True,
         }
 
     def test_additive_transitions_present(
@@ -1135,6 +1144,9 @@ class TestDeselectionDetection:
         temp_authority = tmp_path / "architecture/test-inventory.json"
         regeneration_baseline = copy.deepcopy(baseline)
         regeneration_baseline["additive_transitions"] = []
+        # tmp_path is not a Git repo, so no accepting commit resolves
+        # there; this test exercises the PKG-02 relation, not splits.
+        regeneration_baseline["module_split_transitions"] = []
         write(temp_authority, json.dumps(regeneration_baseline, indent=2) + "\n")
         next_identity = _git(REPO_ROOT, "rev-parse", "HEAD")
         monkeypatch.setattr(
