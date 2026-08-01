@@ -1,18 +1,38 @@
-import base64
+# base64/ipaddress/re/deque/urlsplit are no longer called directly in this
+# module — their call sites moved into `_browser_daemon_parts/*.py` along
+# with the code that used them. Kept as explicit self-re-exports (ruff-clean,
+# verified empirically in Epic 10-B) purely so every name this module bound
+# before the split is still bound after it.
+import base64 as base64
 import hashlib
-import ipaddress
+import ipaddress as ipaddress
 import json
 import os
-import re
+import re as re
 import secrets
 import signal
 import sys
-from collections import deque
+from collections import deque as deque
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit as urlsplit
 
 from playwright.sync_api import sync_playwright
+
+from ._browser_daemon_parts import dispatch as _dispatch
+from ._browser_daemon_parts import dom_signals as _dom_signals
+from ._browser_daemon_parts.dom_signals import (
+    _count_visible_semantic_elements as _count_visible_semantic_elements,
+)
+from ._browser_daemon_parts.dom_signals import _visible_dom_text as _visible_dom_text
+from ._browser_daemon_parts.lane_lifecycle import LaneLifecycle
+from ._browser_daemon_parts.nonce_ledger import NonceLedger
+from ._browser_daemon_parts.protocol_helpers import _TOKEN_RE as _TOKEN_RE
+from ._browser_daemon_parts.protocol_helpers import is_token as _is_token
+from ._browser_daemon_parts.protocol_helpers import page_kind as _page_kind
+from ._browser_daemon_parts.protocol_helpers import positive_epoch as _positive_epoch
+from ._browser_daemon_parts.render_probe import BrowserRendererUnavailable
+from ._browser_daemon_parts.render_probe import text_renderer_ready as _text_renderer_ready
 
 # Process sandboxes export the real jailed workspace path; container backends
 # use the common /workspace guest path.
@@ -62,7 +82,6 @@ CLICK_TIMEOUT_MS = 3000
 DAEMON_INSTANCE_ID = secrets.token_hex(16)
 _LANES = frozenset({"agent", "host_verifier"})
 _SYNC_ACTIONS = frozenset({"screenshot", "click", "fill", "press", "submit", "console_view"})
-_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 _LEGACY_GENERATION = "0" * 32
 _RECENT_NONCE_LIMIT = 256
 
@@ -87,63 +106,14 @@ _STEALTH_INIT_SCRIPT = """
 """
 
 
-class BrowserRendererUnavailable(RuntimeError):
-    """Chromium launched, but cannot produce trustworthy painted text evidence."""
-
-
-def _text_renderer_ready(page) -> bool:
-    """Calibrate ordinary system-font layout on a disposable browser page."""
-    try:
-        page.set_content(
-            '<!doctype html><span id="disco-render-probe" '
-            'style="font:16px sans-serif">Disco renderer probe</span>'
-        )
-        result = page.evaluate("""
-            () => {
-                const element = document.getElementById('disco-render-probe');
-                const node = element && element.firstChild;
-                if (!element || !node || !(element.innerText || '').trim()) return false;
-                const range = document.createRange();
-                range.selectNodeContents(node);
-                return Array.from(range.getClientRects()).some(
-                    rect => rect.width > 0 && rect.height > 0
-                );
-            }
-        """)
-    except Exception:
-        return False
-    return result is True
-
-
-def _is_token(value) -> bool:
-    return isinstance(value, str) and _TOKEN_RE.fullmatch(value) is not None
-
-
-def _positive_epoch(value) -> bool:
-    return type(value) is int and value > 0
-
-
-def _page_kind(url) -> str:
-    value = str(url or "")
-    if not value or value == "about:blank":
-        return "uninitialized"
-    try:
-        parsed = urlsplit(value)
-        host = parsed.hostname
-    except ValueError:
-        return "external"
-    # Reload authority is intentionally narrower than URL reachability: only a
-    # literal HTTP(S) loopback origin can represent the local preview. A
-    # loopback-looking file/custom/javascript URL is still external.
-    if parsed.scheme.lower() not in {"http", "https"} or host is None:
-        return "external"
-    if host.lower() == "localhost":
-        return "local_preview"
-    try:
-        return "local_preview" if ipaddress.ip_address(host).is_loopback else "external"
-    except ValueError:
-        # Literal host parsing only. Never use DNS to enlarge the local trust class.
-        return "external"
+# BrowserRendererUnavailable, _text_renderer_ready, _is_token, _positive_epoch,
+# and _page_kind now live in _browser_daemon_parts (imported above with the
+# original names preserved) — split out to keep this module under its size
+# budget. None of them read instance state, and _page_kind is the only one an
+# external test calls by this module's dotted path, so a plain (non-`x as x`)
+# aliased import is enough: every one of them is also still called from code
+# in THIS file (BrowserState.start, BrowserHandler._protocol/_freshness), so
+# ruff sees real use, not a bare re-export.
 
 
 class BrowserPageState:
@@ -161,6 +131,18 @@ class BrowserPageState:
         self.executor_generation = None
         self.synchronized_epoch = None
 
+    def clear_diagnostics(self):
+        """Clear this lane's console/network history and forget its main-document type."""
+        self.console_logs = []
+        self.network_fails = []
+        self.document_content_type = ""
+
+    def reset_for_new_page(self):
+        """Clear diagnostics + freshness ahead of binding a fresh page to this lane."""
+        self.console_logs = []
+        self.network_fails = []
+        self.reset_freshness()
+
 
 class BrowserState:
     def __init__(self):
@@ -172,8 +154,12 @@ class BrowserState:
         self.context = None
         self.host_context = None
         self._lanes = {name: BrowserPageState() for name in _LANES}
-        self._recent_nonce_order = deque()
-        self._recent_nonces = set()
+        # Lane page-provisioning/generation-recycling and nonce replay-defense
+        # are each a distinct authority from Playwright process ownership —
+        # split into their own owners (PY-0729: this class was over the
+        # public-method budget with them inlined).
+        self._lane_lifecycle = LaneLifecycle(self)
+        self._nonces = NonceLedger(_RECENT_NONCE_LIMIT)
         self.screenshot_seq = 0
         self.render_ready = False
         self.render_error = ""
@@ -221,65 +207,10 @@ class BrowserState:
         page.on("response", lambda response, name=lane_name: self._add_response_for(name, response))
         return lane
 
-    def ensure_lane_page(self, lane_name):
-        lane = self.lane(lane_name)
-        if lane.page is None:
-            if lane_name == "host_verifier":
-                if self.host_context is None:
-                    self.host_context = self._new_context()
-                context = self.host_context
-            else:
-                context = self.context
-            if context is None:
-                raise RuntimeError("Browser context not initialized")
-            self._bind_page(lane_name, context.new_page())
-        return lane
-
-    def close_lane(self, lane_name):
-        if lane_name != "host_verifier":
-            raise ValueError("only the host verifier lane may be closed independently")
-        lane = self.lane(lane_name)
-        page, lane.page = lane.page, None
-        context, self.host_context = self.host_context, None
-        errors = []
-        if page is not None:
-            try:
-                page.close()
-            except Exception as exc:
-                errors.append(exc)
-        if context is not None:
-            try:
-                context.close()
-            except Exception as exc:
-                errors.append(exc)
-        lane.console_logs = []
-        lane.network_fails = []
-        lane.reset_freshness()
-        if errors:
-            raise errors[0]
-
-    def reset_lane_for_generation(self, lane_name, generation):
-        lane = self.ensure_lane_page(lane_name)
-        if lane.executor_generation in {None, generation}:
-            lane.executor_generation = generation
-            return lane
-        # A new executor generation cannot inherit page/history/freshness from
-        # its predecessor. Recreate only this fixed lane; the other lane remains
-        # untouched. The host lane rotates its entire isolated context so no
-        # origin state survives between verifier generations.
-        if lane_name == "host_verifier":
-            self.close_lane("host_verifier")
-            lane = self.ensure_lane_page("host_verifier")
-            lane.executor_generation = generation
-            return lane
-        old_page, lane.page = lane.page, None
-        if old_page is not None:
-            old_page.close()
-        lane.console_logs = []
-        lane.network_fails = []
-        lane.reset_freshness()
-        lane.executor_generation = generation
-        return self.ensure_lane_page(lane_name)
+    # Page-provisioning, host-lane close, and generation-recycling now live on
+    # `self._lane_lifecycle` (see `_browser_daemon_parts/lane_lifecycle.py`) —
+    # none of the three had a caller outside this file, so there is no
+    # compatibility method left behind here.
 
     def _new_context(self):
         if self.browser is None:
@@ -293,16 +224,6 @@ class BrowserState:
         )
         context.add_init_script(_STEALTH_INIT_SCRIPT)
         return context
-
-    def accept_nonce(self, nonce):
-        if nonce in self._recent_nonces:
-            return False
-        self._recent_nonces.add(nonce)
-        self._recent_nonce_order.append(nonce)
-        while len(self._recent_nonce_order) > _RECENT_NONCE_LIMIT:
-            expired = self._recent_nonce_order.popleft()
-            self._recent_nonces.discard(expired)
-        return True
 
     def start(self, display: str | None = None):
         self.playwright = sync_playwright().start()
@@ -354,8 +275,7 @@ class BrowserState:
         # A restart creates two empty bounded lanes, with the host-verifier page
         # lazy so ordinary browsing pays for one page only.
         self._lanes = {name: BrowserPageState() for name in _LANES}
-        self._recent_nonce_order.clear()
-        self._recent_nonces.clear()
+        self._nonces.clear()
         self._bind_page("agent", self.context.new_page())
         self.render_ready = True
         self.render_error = ""
@@ -494,241 +414,17 @@ class BrowserState:
             failures.pop(0)
 
     def clear_console(self):
-        self.clear_lane_diagnostics("agent")
-
-    def clear_lane_diagnostics(self, lane_name):
-        lane = self.lane(lane_name)
-        lane.console_logs = []
-        # B7: a fresh navigation starts a fresh network-failure ledger.
-        lane.network_fails = []
-        # Main-document response metadata must be rebound by that fresh
-        # navigation; never carry a previous document's content type forward.
-        lane.document_content_type = ""
+        self.lane("agent").clear_diagnostics()
 
 
 state = BrowserState()
 
 
-# DOM-analysis helpers, extracted from BrowserHandler. They read no instance
-# state -- they take a page and return what a human would actually see -- so
-# they were module functions living in a class, and that pushed the handler
-# over its size budget.
-
-
-def _visible_dom_text(page) -> str:
-    """Return bounded exact text from rendered, non-hidden DOM text nodes.
-
-    ``innerText`` is the right user-facing summary, but browsers apply CSS
-    ``text-transform`` to it. Exact content claims also need the authored
-    node text, coupled to browser-owned visibility and geometry rather than
-    raw HTML/source bytes. Hidden, transparent, clipped, zero-area, and
-    ``aria-hidden`` nodes are excluded.
-    """
-    try:
-        value = page.evaluate(r"""
-            () => {
-                const output = [];
-                const transparent = value => value === 'transparent' ||
-                    /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
-                // A transparent fill over a background CLIPPED TO TEXT is
-                // the gradient-heading idiom: the glyphs are painted by the
-                // background and ARE visible. Transparent fill WITHOUT that
-                // clip is still cloaked copy and stays excluded.
-                const paintsTextViaBackground = style =>
-                    (style.webkitBackgroundClip === 'text' ||
-                     style.backgroundClip === 'text') &&
-                    (style.backgroundImage || 'none') !== 'none';
-                const hiddenText = style =>
-                    (transparent(style.color) ||
-                     transparent(style.webkitTextFillColor || '')) &&
-                    !paintsTextViaBackground(style);
-                const intersects = (first, second) =>
-                    Math.min(first.right, second.right) >
-                        Math.max(first.left, second.left) &&
-                    Math.min(first.bottom, second.bottom) >
-                        Math.max(first.top, second.top);
-                const walker = document.createTreeWalker(
-                    document.body, NodeFilter.SHOW_TEXT
-                );
-                while (walker.nextNode()) {
-                    const node = walker.currentNode;
-                    const raw = (node.nodeValue || '').replace(/\s+/g, ' ').trim();
-                    if (!raw) continue;
-                    const parent = node.parentElement;
-                    if (!parent || parent.closest('[aria-hidden="true"]')) continue;
-
-                    let visible = true;
-                    const clippingAncestors = [];
-                    for (let current = parent; current; current = current.parentElement) {
-                        const style = window.getComputedStyle(current);
-                        if (style.display === 'none' ||
-                            style.visibility === 'hidden' ||
-                            style.visibility === 'collapse' ||
-                            Number(style.opacity) === 0 ||
-                            hiddenText(style) ||
-                            style.clipPath === 'inset(100%)') {
-                            visible = false;
-                            break;
-                        }
-                        if (/(hidden|clip|scroll|auto)/.test(
-                            `${style.overflow} ${style.overflowX} ${style.overflowY}`
-                        )) {
-                            clippingAncestors.push(current.getBoundingClientRect());
-                        }
-                    }
-                    if (!visible) continue;
-
-                    const range = document.createRange();
-                    range.selectNodeContents(node);
-                    const rendered = Array.from(range.getClientRects()).some(rect => {
-                        if (rect.width <= 0 || rect.height <= 0) return false;
-                        return clippingAncestors.every(clip => intersects(rect, clip));
-                    });
-                    if (rendered) output.push(raw);
-                }
-                return output.join('\n').slice(0, 4000);
-            }
-        """)
-    except Exception:
-        return ""
-    return value if isinstance(value, str) else ""
-
-
-def _count_visible_semantic_elements(page) -> int:
-    """Count rendered, content-bearing DOM semantics.
-
-    The interactive element walker deliberately ignores ordinary headings and
-    paragraphs.  Without a separate signal, a valid small page such as
-    ``<h1>Live Server Up</h1>`` is indistinguishable from an empty SPA shell to
-    the finish and verification gates.  Keep this signal deliberately narrow:
-    only headings count.  Short paragraphs/list items can be transient loading
-    placeholders, and unpainted canvas or broken media must not manufacture a
-    pass.  Hidden, zero-area, and off-viewport headings do not count, and a
-    heading must contain non-whitespace text.
-    """
-    try:
-        count = page.evaluate(r"""
-            () => {
-                const viewportWidth = window.innerWidth ||
-                    document.documentElement.clientWidth;
-                const viewportHeight = window.innerHeight ||
-                    document.documentElement.clientHeight;
-                const transparent = value => value === 'transparent' ||
-                    /^rgba\(.*,[ ]*0(?:\.0+)?\)$/.test(value);
-                // A transparent fill over a background CLIPPED TO TEXT is
-                // the gradient-heading idiom: the glyphs are painted by the
-                // background and ARE visible. Transparent fill WITHOUT that
-                // clip is still cloaked copy and stays excluded.
-                const paintsTextViaBackground = style =>
-                    (style.webkitBackgroundClip === 'text' ||
-                     style.backgroundClip === 'text') &&
-                    (style.backgroundImage || 'none') !== 'none';
-                const hiddenText = style =>
-                    (transparent(style.color) ||
-                     transparent(style.webkitTextFillColor || '')) &&
-                    !paintsTextViaBackground(style);
-                const intersect = (box, left, top, right, bottom) => ({
-                    left: Math.max(box.left, left),
-                    top: Math.max(box.top, top),
-                    right: Math.min(box.right, right),
-                    bottom: Math.min(box.bottom, bottom),
-                });
-                return Array.from(document.querySelectorAll(
-                    'h1, h2, h3, h4, h5, h6'
-                )).filter(el => {
-                    if (typeof el.checkVisibility === 'function' &&
-                        !el.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) {
-                        return false;
-                    }
-                    const style = window.getComputedStyle(el);
-                    if (style.visibility === 'hidden' || style.display === 'none' ||
-                        style.pointerEvents === 'none' || Number(style.opacity) === 0 ||
-                        hiddenText(style)) {
-                        return false;
-                    }
-
-                    // A DOM box can exist while all of its text is clipped. Walk
-                    // actual text ranges, then intersect each range with the
-                    // viewport and every clipping ancestor.
-                    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-                    const textNodes = [];
-                    while (walker.nextNode()) {
-                        if ((walker.currentNode.textContent || '').trim()) {
-                            textNodes.push(walker.currentNode);
-                        }
-                    }
-                    return textNodes.some(node => {
-                        const textParent = node.parentElement || el;
-                        if (typeof textParent.checkVisibility === 'function' &&
-                            !textParent.checkVisibility({
-                                checkOpacity: true, checkVisibilityCSS: true
-                            })) {
-                            return false;
-                        }
-                        const nodeStyle = window.getComputedStyle(textParent);
-                        if (nodeStyle.visibility === 'hidden' ||
-                            nodeStyle.display === 'none' ||
-                            nodeStyle.pointerEvents === 'none' ||
-                            Number(nodeStyle.opacity) === 0 ||
-                            hiddenText(nodeStyle)) {
-                            return false;
-                        }
-                        const range = document.createRange();
-                        range.selectNodeContents(node);
-                        return Array.from(range.getClientRects()).some(rect => {
-                            if (rect.width <= 0 || rect.height <= 0) return false;
-                            let box = intersect(
-                                rect, 0, 0, viewportWidth, viewportHeight
-                            );
-                            for (let ancestor = textParent; ancestor;
-                                 ancestor = ancestor.parentElement) {
-                                const ancestorStyle = window.getComputedStyle(ancestor);
-                                if (ancestorStyle.clipPath !== 'none' ||
-                                    ancestorStyle.clip !== 'auto') {
-                                    return false; // clipping geometry is not safely inferable
-                                }
-                                const ancestorRect = ancestor.getBoundingClientRect();
-                                if (ancestorStyle.overflowX !== 'visible') {
-                                    box.left = Math.max(box.left, ancestorRect.left);
-                                    box.right = Math.min(box.right, ancestorRect.right);
-                                }
-                                if (ancestorStyle.overflowY !== 'visible') {
-                                    box.top = Math.max(box.top, ancestorRect.top);
-                                    box.bottom = Math.min(box.bottom, ancestorRect.bottom);
-                                }
-                            }
-                            const width = box.right - box.left;
-                            const height = box.bottom - box.top;
-                            const visibleRatio = (width * height) / (rect.width * rect.height);
-                            if (width < 2 || height < 2 || visibleRatio < 0.25) return false;
-
-                            // Geometry alone cannot prove the text is not fully
-                            // covered by another element. At least one sampled
-                            // point must resolve to the text parent or one of its
-                            // ancestors (never an opaque covering descendant).
-                            const points = [
-                                [0.5, 0.5], [0.25, 0.25], [0.75, 0.25],
-                                [0.25, 0.75], [0.75, 0.75],
-                            ];
-                            return points.some(([x, y]) => {
-                                const hit = document.elementFromPoint(
-                                    box.left + width * x, box.top + height * y
-                                );
-                                return hit === textParent ||
-                                    (hit !== null && hit.contains(textParent));
-                            });
-                        });
-                    });
-                }).length;
-            }
-        """)
-    except Exception:
-        return 0
-    # JavaScript data is untrusted.  In particular, bool is an int subclass in
-    # Python and must not become a fabricated positive count.
-    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-        return 0
-    return count
+# `_visible_dom_text` and `_count_visible_semantic_elements` — the
+# DOM-analysis helpers formerly here — now live in
+# `_browser_daemon_parts/dom_signals.py` (imported above with the original
+# names preserved): their embedded JS templates pushed both this module and
+# (for `_count_visible_semantic_elements`) the callable itself over budget.
 
 
 class BrowserHandler(BaseHTTPRequestHandler):
@@ -850,7 +546,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             return None, None, None, None, "invalid expected daemon identity"
         if expected_daemon_id is not None and expected_daemon_id != DAEMON_INSTANCE_ID:
             return None, None, None, None, "daemon instance identity mismatch"
-        if not state.accept_nonce(nonce):
+        if not state._nonces.accept(nonce):
             return None, None, None, None, "replayed request nonce"
         return lane_name, generation, nonce, epoch, None
 
@@ -937,7 +633,6 @@ class BrowserHandler(BaseHTTPRequestHandler):
     def _navigate(
         self,
         page,
-        state,
         lane,
         url,
         *,
@@ -960,7 +655,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 self._freshness(lane_name, generation, nonce, requested_epoch, False),
             )
         try:
-            state.clear_lane_diagnostics(lane_name)
+            lane.clear_diagnostics()
             page.goto(url, wait_until="load")
             page.wait_for_timeout(500)  # Settle time
         except Exception:
@@ -1004,7 +699,9 @@ class BrowserHandler(BaseHTTPRequestHandler):
         # browser stack: the workspace owns its processes; the daemon owns
         # recovering its own transport.
         try:
-            return self._dispatch_parsed(action, params, lane_name, generation, nonce, requested_epoch)
+            return self._dispatch_parsed(
+                action, params, lane_name, generation, nonce, requested_epoch
+            )
         except Exception as first_error:
             error = first_error
             if self._heal_dead_transport():
@@ -1057,426 +754,41 @@ class BrowserHandler(BaseHTTPRequestHandler):
         return True
 
     def _dispatch_parsed(self, action, params, lane_name, generation, nonce, requested_epoch):
-        if not state.render_ready:
-            return self._error(
-                "browser_daemon_unavailable",
-                "renderer_unavailable",
-                state.render_error or "Browser renderer not initialized",
-                self._freshness(lane_name, generation, nonce, requested_epoch, False),
-            )
-        if action == "_close_lane":
-            if lane_name != "host_verifier":
-                return self._error(
-                    "freshness_protocol_invalid",
-                    "invalid_lane_close",
-                    "the agent browser lane cannot be closed by this operation",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
-                )
-            state.close_lane("host_verifier")
-            return {
-                "ok": True,
-                "freshness": self._freshness(lane_name, generation, nonce, requested_epoch, False),
-            }
-
-        lane = state.reset_lane_for_generation(lane_name, generation)
-        page = lane.page
-        if page is None:
-            return self._error(
-                "browser_daemon_unavailable",
-                "renderer_unavailable",
-                "Browser renderer not initialized",
-                self._freshness(lane_name, generation, nonce, requested_epoch, False),
-            )
-        if lane.synchronized_epoch is not None and (
-            requested_epoch is None or requested_epoch < lane.synchronized_epoch
-        ):
-            return self._error(
-                "freshness_protocol_invalid",
-                "epoch_regression",
-                "workspace epoch regressed",
-                self._freshness(lane_name, generation, nonce, requested_epoch, False),
-            )
-
-        vw = params.get("viewport_width")
-        vh = params.get("viewport_height")
-        if type(vw) is int and type(vh) is int:
-            page.set_viewport_size({"width": vw, "height": vh})
-
-        screenshot_path = None
-        sync_performed = False
-
-        pending_epoch = requested_epoch is not None and requested_epoch != lane.synchronized_epoch
-        if action in _SYNC_ACTIONS:
-            kind = _page_kind(getattr(page, "url", ""))
-            if kind == "uninitialized":
-                return self._error(
-                    "browser_session_uninitialized",
-                    "missing_loaded_page",
-                    "browser page has no loaded document; navigate before this action",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, False),
-                )
-        if action in _SYNC_ACTIONS and pending_epoch:
-            kind = _page_kind(getattr(page, "url", ""))
-            if kind == "local_preview":
-                try:
-                    state.clear_lane_diagnostics(lane_name)
-                    page.reload(wait_until="load")
-                    page.wait_for_timeout(500)
-                except Exception:
-                    return self._error(
-                        "freshness_sync_failed",
-                        "reload_failed",
-                        "local preview could not be synchronized",
-                        self._freshness(lane_name, generation, nonce, requested_epoch, False),
-                    )
-                # Acknowledge immediately after reload. A later action failure
-                # must not cause the next recovery action to reload again.
-                lane.synchronized_epoch = requested_epoch
-                sync_performed = True
-            else:
-                # Workspace bytes cannot affect a literal non-loopback page.
-                # Acknowledge without reloading it so external browsing state is
-                # never destroyed by local mutations.
-                lane.synchronized_epoch = requested_epoch
-
-        if action == "navigate":
-            failure = self._navigate(
-                page,
-                state,
-                lane,
-                params.get("url"),
-                lane_name=lane_name,
-                generation=generation,
-                nonce=nonce,
-                requested_epoch=requested_epoch,
-            )
-            if failure is not None:
-                return failure
-        elif action == "screenshot":
-            pass  # Just take a screenshot at the end
-        elif action == "click":
-            freshness = self._freshness(
-                lane_name, generation, nonce, requested_epoch, sync_performed
-            )
-            locator, error = self._action_locator(page, self._selector_for(params), freshness)
-            if error is not None:
-                return error
-            assert locator is not None
-            try:
-                locator.click(timeout=CLICK_TIMEOUT_MS)
-                page.wait_for_timeout(500)
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "interaction_blocked",
-                    "browser click could not be completed",
-                    freshness,
-                )
-        elif action == "press":
-            key = params.get("key", "")
-            if not key:
-                return self._error(
-                    "browser_action_failed",
-                    "interaction_blocked",
-                    "key required for press",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-                )
-            try:
-                page.keyboard.press(key)
-                page.wait_for_timeout(500)
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "interaction_blocked",
-                    "browser key press could not be completed",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-                )
-        elif action == "fill":
-            index = params.get("index")
-            if index is None:
-                return self._error(
-                    "browser_action_failed",
-                    "selector_not_found",
-                    "Index required for fill",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-                )
-            freshness = self._freshness(
-                lane_name, generation, nonce, requested_epoch, sync_performed
-            )
-            locator, error = self._action_locator(page, self._selector_for(params), freshness)
-            if error is not None:
-                return error
-            assert locator is not None
-            try:
-                locator.fill(params.get("text", ""))
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "interaction_blocked",
-                    "browser fill could not be completed",
-                    freshness,
-                )
-        elif action == "submit":
-            index = params.get("index")
-            if index is None:
-                return self._error(
-                    "browser_action_failed",
-                    "selector_not_found",
-                    "Index required for submit",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-                )
-            freshness = self._freshness(
-                lane_name, generation, nonce, requested_epoch, sync_performed
-            )
-            locator, error = self._action_locator(page, self._selector_for(params), freshness)
-            if error is not None:
-                return error
-            assert locator is not None
-            try:
-                tag_name = locator.evaluate("el => el.tagName.toLowerCase()")
-                if tag_name == "input" or tag_name == "textarea":
-                    locator.focus()
-                    page.keyboard.press("Enter")
-                else:
-                    locator.click(timeout=CLICK_TIMEOUT_MS)
-                page.wait_for_timeout(500)
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "interaction_blocked",
-                    "browser submit could not be completed",
-                    freshness,
-                )
-        elif action == "back":
-            try:
-                page.go_back()
-                page.wait_for_timeout(500)
-                # History may restore an old cached local document. Reload that
-                # destination once so a successful back cannot fabricate same-
-                # epoch freshness.
-                if pending_epoch and _page_kind(page.url) == "local_preview":
-                    state.clear_lane_diagnostics(lane_name)
-                    page.reload(wait_until="load")
-                    page.wait_for_timeout(500)
-                    sync_performed = True
-                lane.synchronized_epoch = requested_epoch
-            except Exception:
-                return self._error(
-                    "browser_action_failed",
-                    "navigation_failed",
-                    "browser history navigation failed",
-                    self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-                )
-        elif action == "console_view":
-            return {
-                "ok": True,
-                "url": page.url,
-                "title": page.title(),
-                "console": lane.console_logs,
-                "network": lane.network_fails,
-                "elements": [],
-                "text": "",
-                "screenshot_path": None,
-                "freshness": self._freshness(
-                    lane_name, generation, nonce, requested_epoch, sync_performed
-                ),
-            }
-        elif action == "live_start":
-            global _live_headed
-            if _live_view is None:
-                return {"ok": False, "error": "live_view module not available"}
-            # Ensure Xvfb + VNC stack is up
-            ok = _live_view.ensure_live()
-            if not ok:
-                return {"ok": False, "error": "Failed to start live view stack"}
-            # If browser is headless, restart it headed on :1
-            if not _live_headed:
-                if state.browser is not None:
-                    try:
-                        state.browser.close()
-                    except Exception:
-                        pass
-                if state.playwright is not None:
-                    try:
-                        state.playwright.stop()
-                    except Exception:
-                        pass
-                state.start(display=":1")
-                lane = state.reset_lane_for_generation(lane_name, generation)
-                page = lane.page
-                _live_headed = True
-            return {
-                "ok": True,
-                "novnc_port": 6080,
-                "display": ":1",
-                "freshness": self._freshness(
-                    lane_name, generation, nonce, requested_epoch, sync_performed
-                ),
-            }
-        elif action == "live_touch":
-            # Heartbeat from the frontend while the live view is open — refresh the idle
-            # watchdog so an actively-watched session is not reaped after 600s.
-            if _live_view is not None:
-                _live_view.touch()
-            return {
-                "ok": True,
-                "live": _live_view.is_live() if _live_view is not None else False,
-                "freshness": self._freshness(
-                    lane_name, generation, nonce, requested_epoch, sync_performed
-                ),
-            }
-        elif action == "live_stop":
-            if _live_view is not None:
-                _live_view.teardown()
-            return {
-                "ok": True,
-                "freshness": self._freshness(
-                    lane_name, generation, nonce, requested_epoch, sync_performed
-                ),
-            }
-        else:
-            return self._error(
-                "browser_action_failed",
-                "unknown_action",
-                "Unknown browser action",
-                self._freshness(lane_name, generation, nonce, requested_epoch, sync_performed),
-            )
-
-        # Common data for most actions
-        if action not in ("console_view", "live_start", "live_stop", "live_touch"):
-            # B-F: capture-before-render race — read elements + text, but retry up to
-            # CAPTURE_RETRY_MAX times until the page has SOMETHING (text or elements),
-            # so a late SPA hydration (mount > the fixed settle) is not returned as a
-            # permanent empty observation. ~CAPTURE_RETRY_MAX * INTERVAL worst case.
-            elements = []
-            text = ""
-            for _attempt in range(CAPTURE_RETRY_MAX):
-                elements = self._get_elements(page)
-                text = page.evaluate(
-                    "() => (document.body.innerText || document.body.textContent || '').trim()"
-                ).strip()[:MAX_TEXT]
-                if text or elements:
-                    break
-                # Don't sleep after the final read — a genuinely-blank page returns
-                # empty immediately at the cap rather than burning a trailing wait.
-                if _attempt < CAPTURE_RETRY_MAX - 1:
-                    page.wait_for_timeout(CAPTURE_RETRY_INTERVAL_MS)
-
-            state.screenshot_seq += 1
-            os.makedirs(SCREENSHOT_DIR, exist_ok=True)
-            screenshot_rel_path = f".pmx/screenshots/{state.screenshot_seq:04d}-{action}.png"
-            screenshot_full_path = os.path.join(WORKSPACE_ROOT, screenshot_rel_path)
-            page.screenshot(path=screenshot_full_path, full_page=params.get("full_page", False))
-            screenshot_path = screenshot_rel_path
-
-            # AppKit EPIC G: surface the data-appkit-section markers present in the
-            # RENDERED DOM so verify_appkit_app's section_coverage check can prove each
-            # AppSpec section actually mounted. Additive + harmless to normal builds
-            # (an app with no markers returns []). Port-scope miss found live 2026-07-03:
-            # the verifier read `appkit_sections` but nothing ever emitted it here.
-            try:
-                appkit_sections = page.evaluate(
-                    "() => Array.from(document.querySelectorAll('[data-appkit-section]'))"
-                    ".map(e => e.getAttribute('data-appkit-section'))"
-                )
-            except Exception:
-                appkit_sections = []
-            try:
-                canvas_count = page.evaluate("() => document.querySelectorAll('canvas').length")
-            except Exception:
-                canvas_count = 0
-            visible_semantic_elements = _count_visible_semantic_elements(page)
-            visible_dom_text = _visible_dom_text(page)
-
-            res = {
-                "ok": True,
-                "url": page.url,
-                "title": page.title(),
-                "console": lane.console_logs,
-                "network": lane.network_fails,
-                "elements": elements,
-                "text": text,
-                "appkit_sections": appkit_sections,
-                "canvas_count": canvas_count,
-                # Exact authored text from rendered, non-hidden text nodes.
-                # Unlike innerText, this is not rewritten by CSS text-transform,
-                # so exact-content claims retain their case while still requiring
-                # structured browser visibility/geometry evidence.
-                "visible_dom_text": visible_dom_text,
-                # Captured from the Playwright main-document Response event, not
-                # from page JavaScript (which can shadow document.contentType).
-                "document_content_type": lane.document_content_type,
-                "visible_semantic_elements": visible_semantic_elements,
-                "screenshot_path": screenshot_path,
-                "freshness": self._freshness(
-                    lane_name, generation, nonce, requested_epoch, sync_performed
-                ),
-            }
-
-            if params.get("include_screenshot_b64"):
-                with open(screenshot_full_path, "rb") as f:
-                    b64 = base64.b64encode(f.read()).decode("utf-8")
-                res["screenshot_b64"] = b64
-
-            return res
+        """Real per-command dispatch table + the shared pre/post-action steps
+        around it now live in `_browser_daemon_parts/dispatch.py` (PY-0732/
+        PY-0733/PY-0731/PY-0734: this was a 322-logical-line / mccabe-66
+        if/elif chain). `state` and every module global a test can
+        monkeypatch are read here (this method's own module scope) and
+        passed down explicitly, so a replaced `daemon.state` or
+        `daemon._live_headed` is still honored. `_live_headed` is a module
+        global only THIS module can rebind — the parts module returns the
+        (possibly updated) value instead of mutating it directly.
+        """
+        global _live_headed
+        response, _live_headed = _dispatch.dispatch_parsed(
+            self,
+            state,
+            action,
+            params,
+            lane_name,
+            generation,
+            nonce,
+            requested_epoch,
+            live_view=_live_view,
+            live_headed=_live_headed,
+            workspace_root=WORKSPACE_ROOT,
+            screenshot_dir=SCREENSHOT_DIR,
+            max_text=MAX_TEXT,
+            click_timeout_ms=CLICK_TIMEOUT_MS,
+            capture_retry_max=CAPTURE_RETRY_MAX,
+            capture_retry_interval_ms=CAPTURE_RETRY_INTERVAL_MS,
+            sync_actions=_SYNC_ACTIONS,
+            page_kind=_page_kind,
+        )
+        return response
 
     def _get_elements(self, page):
-        # W6: broaden the element walker beyond standard interactive elements.
-        # We now also index:
-        #   - <div>, <span>, <li> elements that have onclick handlers (already
-        #     covered by [onclick] but this ensures we capture them with the
-        #     extended selector set)
-        #   - elements whose computed CSS cursor is 'pointer' (the idiomatic
-        #     signal for "this is clickable" in modern SPAs and design-system
-        #     components that use divs as buttons)
-        # The walker assigns data-pmx-index to each found element so the
-        # click action can reach it by index without knowing the CSS path.
-        return page.evaluate(f"""
-            () => {{
-                // Standard interactive elements — always indexed.
-                const standardSelectors = [
-                    'a', 'button', 'input', 'select', 'textarea',
-                    '[role="button"]', '[onclick]'
-                ];
-                const standardSet = new Set(
-                    Array.from(document.querySelectorAll(standardSelectors.join(',')))
-                );
-
-                // Extended: block/inline elements with cursor:pointer that aren't
-                // already covered by the standard set.
-                const extendedTags = ['div', 'span', 'li', 'td', 'th', 'label',
-                                      'article', 'section', 'header', 'nav', 'aside'];
-                const pointerCandidates = Array.from(
-                    document.querySelectorAll(extendedTags.join(','))
-                ).filter(el => {{
-                    if (standardSet.has(el)) return false;  // already in standard set
-                    return window.getComputedStyle(el).cursor === 'pointer';
-                }});
-
-                // Union: standard first (preserve ordering), then pointer extras.
-                const allElements = [
-                    ...Array.from(standardSet),
-                    ...pointerCandidates,
-                ]
-                .filter(el => {{
-                    const rect = el.getBoundingClientRect();
-                    return rect.width > 0 && rect.height > 0 &&
-                           window.getComputedStyle(el).visibility !== 'hidden' &&
-                           window.getComputedStyle(el).display !== 'none';
-                }})
-                .slice(0, {MAX_ELEMENTS});
-
-                return allElements.map((el, i) => {{
-                    const index = i + 1;
-                    el.setAttribute('data-pmx-index', index.toString());
-                    const tag = el.tagName.toLowerCase();
-                    let text = (el.innerText || el.textContent || el.value ||
-                                el.placeholder || "").trim().replace(/\\n/g, " ");
-                    if (text.length > 80) text = text.substring(0, 77) + "...";
-                    return `${{index}}[:] <${{tag}}>${{text}}</${{tag}}>`;
-                }});
-            }}
-        """)
+        return _dom_signals.get_elements(page, max_elements=MAX_ELEMENTS)
 
 
 def run():
