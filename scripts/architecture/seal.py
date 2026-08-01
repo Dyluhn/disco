@@ -84,6 +84,13 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/test_inventory_parts/_rows.py",
     "scripts/architecture/test_inventory_parts/_splits.py",
     "scripts/architecture/test_inventory_parts/_transitions.py",
+    # Epic 11-A decomposed generate_debt.py for the same reason (695 of its own
+    # 700-line budget, with four sub-epic seals to register). Only frozen DATA
+    # moved, but that data decides which rows leave the active ledger, so it is
+    # hash-gated exactly like the generator that reads it.
+    "scripts/architecture/generate_debt_parts/__init__.py",
+    "scripts/architecture/generate_debt_parts/location_overrides.py",
+    "scripts/architecture/generate_debt_parts/resolved_ids.py",
     "docs/governance/SEAL-INVOCATION.json",
 )
 
