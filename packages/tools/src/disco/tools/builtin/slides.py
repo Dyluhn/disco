@@ -17,26 +17,89 @@ Format support:
   - pdf: requires marp + Chromium or LibreOffice in the sandbox image.
   - pptx: C3 native editable PPTX (real text boxes) via python-pptx; or
           Marp --pptx (image-based) when the C2 path is not used.
+
+Internal layout
+----------------
+The C1-deck-render path, the Marp-CLI-in-sandbox helpers, the dependency-free
+markdown-fallback renderer, and the export-render fact stamping all live in
+the private `slides_parts` subpackage (split by real responsibility — see
+`slides_parts/__init__.py`). This module remains the sole public
+compatibility/export facade: it re-imports every name unchanged, so every
+existing import path (production code and tests) keeps working.
 """
 
 from __future__ import annotations
 
-import html
 import re
 import shlex
-from textwrap import dedent
 from typing import Literal
 
-from disco.core.contract.export_render import (
-    EXPORT_RENDER_KEY,
-    check_export_render,
-)
 from disco.core.effects import EffectCapability
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
 from .image_gen import ImageGenNotConfigured, select_image_backend
+from .slides_parts._c1_render import _render_c1_deck_impl as _render_c1_deck_impl
+
+# --- compatibility re-exports (PKG-10-MEDIA) --------------------------------
+# Names this module exposed BEFORE the parts split. Consumers and the test
+# suite reach several of them through this module object (including via
+# monkeypatch), so the facade must keep exposing every one. Restored
+# programmatically by diffing this module's top-level names against its
+# parent commit; PKG-13-FACADES owns their eventual deletion.
+from .slides_parts._export_stamp import (
+    EXPORT_RENDER_KEY as EXPORT_RENDER_KEY,
+)
+from .slides_parts._export_stamp import _stamp_export_render_impl as _stamp_export_render_impl
+from .slides_parts._export_stamp import (
+    check_export_render as check_export_render,
+)
+from .slides_parts._markdown_fallback import (
+    _BOLD_RE as _BOLD_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _FENCE_RE as _FENCE_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _IMAGE_RE as _IMAGE_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _INLINE_CODE_RE as _INLINE_CODE_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _ITALIC_RE as _ITALIC_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _LINK_RE as _LINK_RE,
+)
+from .slides_parts._markdown_fallback import (
+    _MARP_MINIMAL_THEME as _MARP_MINIMAL_THEME,
+)
+from .slides_parts._markdown_fallback import (
+    _basic_md_to_html as _basic_md_to_html,
+)
+from .slides_parts._markdown_fallback import (
+    _fallback_html as _fallback_html,
+)
+from .slides_parts._markdown_fallback import (
+    _inline_markdown_to_html as _inline_markdown_to_html,
+)
+from .slides_parts._markdown_fallback import (
+    _split_slides as _split_slides,
+)
+from .slides_parts._markdown_fallback import (
+    dedent as dedent,
+)
+from .slides_parts._markdown_fallback import (
+    html as html,
+)
+from .slides_parts._marp_path import (
+    _marp_available as _marp_available,
+)
+from .slides_parts._marp_path import (
+    _marp_render_in_sandbox as _marp_render_in_sandbox,
+)
 
 # ---- args model --------------------------------------------------------------
 
@@ -99,250 +162,6 @@ class SlidesGenerateArgs(BaseModel):
             "'markdown' forces the Marp/fallback path regardless of goal."
         ),
     )
-
-
-# ---- HTML fallback (used when marp CLI is unavailable) -----------------------
-
-_MARP_MINIMAL_THEME = dedent("""\
-/* Minimal built-in theme fallback */
-section {
-  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-  font-size: 1.5em;
-  padding: 2em;
-  background: #fff;
-  color: #222;
-}
-h1 { font-size: 2em; margin-bottom: 0.3em; }
-h2 { font-size: 1.6em; margin-bottom: 0.3em; }
-h3 { font-size: 1.3em; margin-bottom: 0.2em; }
-code { background: #f0f0f0; padding: 0.1em 0.3em; border-radius: 3px; font-size: 0.85em; }
-pre { background: #f0f0f0; padding: 1em; border-radius: 6px; overflow-x: auto; }
-pre code { background: none; padding: 0; }
-ul, ol { text-align: left; padding-left: 1.5em; }
-li { margin-bottom: 0.3em; }
-blockquote {
-  border-left: 4px solid #ccc; margin: 0.5em 0; padding: 0.3em 1em;
-  color: #555; font-style: italic;
-}
-table { border-collapse: collapse; margin: 0.5em auto; }
-th, td { border: 1px solid #ddd; padding: 0.4em 0.8em; text-align: left; }
-th { background: #f5f5f5; }
-img { max-width: 100%; height: auto; }
-a { color: #0366d6; }
-""")
-
-
-# Simple inline markup patterns applied BEFORE the html.escape pass.
-# Order: protect code spans/spans first (they may contain other tokens),
-# then block-level, then inline.
-_FENCE_RE = re.compile(r"```(.*?)\n(.*?)```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_ITALIC_RE = re.compile(r"\*(.+?)\*")
-_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
-_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-
-
-def _inline_markdown_to_html(text: str) -> str:
-    """Convert inline markdown (bold, italic, code, links, images) to HTML.
-    Safe to apply on already-HTML-escaped text — the regexes match literal
-    markdown tokens that survive escaping."""
-    text = _IMAGE_RE.sub(r'<img src="\2" alt="\1">', text)
-    text = _LINK_RE.sub(r'<a href="\2">\1</a>', text)
-    text = _BOLD_RE.sub(r"<strong>\1</strong>", text)
-    text = _ITALIC_RE.sub(r"<em>\1</em>", text)
-    text = _INLINE_CODE_RE.sub(r"<code>\1</code>", text)
-    return text
-
-
-def _basic_md_to_html(md: str) -> str:
-    """Minimal CommonMark-to-HTML converter for the fallback renderer.
-    Handles headings, code fences, lists, blockquotes, paragraphs, and
-    inline formatting. Deliberately simple — full Marp rendering is preferred."""
-    lines = md.split("\n")
-    out: list[str] = []
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        # Fenced code block (```)
-        if line.startswith("```"):
-            lang = line[3:].strip()
-            block_lines: list[str] = []
-            i += 1
-            while i < len(lines) and not lines[i].startswith("```"):
-                block_lines.append(lines[i])
-                i += 1
-            code_html = html.escape("\n".join(block_lines))
-            cls = f' class="language-{html.escape(lang)}"' if lang else ""
-            out.append(f"<pre><code{cls}>{code_html}</code></pre>")
-            i += 1  # skip closing ```
-            continue
-
-        # Heading
-        heading_match = re.match(r"^(#{1,6})\s+(.+)$", line)
-        if heading_match:
-            level = min(len(heading_match.group(1)), 6)
-            text = _inline_markdown_to_html(html.escape(heading_match.group(2)))
-            out.append(f"<h{level}>{text}</h{level}>")
-            i += 1
-            continue
-
-        # Blockquote
-        if line.startswith("> "):
-            bq_lines: list[str] = []
-            while i < len(lines) and lines[i].startswith("> "):
-                bq_lines.append(lines[i][2:])
-                i += 1
-            bq_text = "<br>".join(_inline_markdown_to_html(html.escape(ln)) for ln in bq_lines)
-            out.append(f"<blockquote>{bq_text}</blockquote>")
-            continue
-
-        # Unordered list
-        if re.match(r"^[-*+]\s+", line):
-            out.append("<ul>")
-            while i < len(lines) and re.match(r"^[-*+]\s+", lines[i]):
-                text = _inline_markdown_to_html(html.escape(re.sub(r"^[-*+]\s+", "", lines[i])))
-                out.append(f"<li>{text}</li>")
-                i += 1
-            out.append("</ul>")
-            continue
-
-        # Ordered list
-        if re.match(r"^\d+\.\s+", line):
-            out.append("<ol>")
-            while i < len(lines) and re.match(r"^\d+\.\s+", lines[i]):
-                text = _inline_markdown_to_html(html.escape(re.sub(r"^\d+\.\s+", "", lines[i])))
-                out.append(f"<li>{text}</li>")
-                i += 1
-            out.append("</ol>")
-            continue
-
-        # Horizontal rule (--- or *** on its own)
-        if re.match(r"^[-*]{3,}\s*$", line):
-            out.append("<hr>")
-            i += 1
-            continue
-
-        # Empty line -> paragraph break
-        if line.strip() == "":
-            i += 1
-            continue
-
-        # Paragraph (collect consecutive non-empty, non-special lines)
-        para_lines: list[str] = []
-        while (
-            i < len(lines)
-            and lines[i].strip()
-            and not any(lines[i].startswith(p) for p in ("#", "```", "> ", "- ", "* ", "+ "))
-            and not re.match(r"^\d+\.\s+", lines[i])
-            and not re.match(r"^[-*]{3,}\s*$", lines[i])
-        ):
-            para_lines.append(lines[i])
-            i += 1
-        if para_lines:
-            text = "<br>".join(_inline_markdown_to_html(html.escape(ln)) for ln in para_lines)
-            out.append(f"<p>{text}</p>")
-
-    return "\n    ".join(out)
-
-
-def _split_slides(markdown: str) -> list[str]:
-    """Split markdown into slides on '---' separators. Handles leading/trailing
-    separators and CRLF line endings. A leading YAML/Marp frontmatter block is
-    stripped first so it is never counted or rendered as a slide (Codex P10-7: it
-    otherwise inflated the declared slide count → false truncation at the gate)."""
-    # Normalize line endings
-    md = markdown.replace("\r\n", "\n")
-    # Strip a leading Marp/YAML frontmatter block: `---` on the VERY first line (no
-    # leading separator) whose body is NOT a markdown heading (so a real leading
-    # `---\n# Slide\n---` separator+content is left intact — that guard is what the
-    # empty-filtered test pins).
-    md = re.sub(r"\A---\n(?!#).*?\n---[ \t]*(?:\n|\Z)", "", md, count=1, flags=re.DOTALL)
-    # Split on \n---\n (slide separator on its own line)
-    parts = re.split(r"\n---\n", md)
-    # Filter empty slides
-    return [p.strip() for p in parts if p.strip()]
-
-
-def _fallback_html(markdown: str, theme: str | None = None) -> str:
-    """Minimal self-contained HTML renderer. Splits on '---', wraps each
-    slide in a <section> tag. Works without Marp — HTML always ships."""
-    slides_raw = _split_slides(markdown)
-    theme_css = theme or _MARP_MINIMAL_THEME
-
-    sections = ""
-    for i, slide_md in enumerate(slides_raw):
-        html_body = _basic_md_to_html(slide_md)
-        sections += f'  <section class="slide" id="slide-{i + 1}">\n    {html_body}\n  </section>\n'
-
-    return dedent(
-        f"""\
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Slide Deck</title>
-      <style>
-    {theme_css}
-        body {{ margin: 0; padding: 0; }}
-        .slide {{
-          min-height: 100vh;
-          box-sizing: border-box;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          page-break-after: always;
-        }}
-      </style>
-    </head>
-    <body>
-    {sections}
-    </body>
-    </html>"""
-    )
-
-
-# ---- marp CLI — run INSIDE the sandbox (not the agent-server host) -----------
-# The deck markdown is agent-generated (injection-tainted). Marp drives a full
-# Chromium to render PDF/PPTX; running that on the host would let a crafted deck
-# (file:// refs, local URLs) exfiltrate host files during render. So marp runs in
-# the jailed sandbox via exec_shell — the binary + Chromium ship in the image
-# (deploy/sandbox/Dockerfile, RP-10 layer). The output lands directly in the
-# workspace, so there is no host temp file and no read-back.
-
-
-async def _marp_available(ctx: ToolContext) -> bool:
-    """True if the marp CLI is present INSIDE the sandbox."""
-    assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
-    try:
-        res = await ctx.sandbox.exec_shell("command -v marp", timeout_s=10)
-    except Exception:
-        return False
-    return res.exit_code == 0
-
-
-async def _marp_render_in_sandbox(
-    ctx: ToolContext,
-    src_name: str,
-    out_name: str,
-    fmt: str,
-    *,
-    timeout_s: int = 180,
-) -> tuple[bool, str]:
-    """Run `marp <src> -o <out>` INSIDE the sandbox (workdir = workspace). Both
-    paths are workspace-relative names. Returns (ok, error_message)."""
-    assert ctx.sandbox is not None  # slides tool declares runs_in="sandbox"
-    pptx = "--pptx " if fmt == "pptx" else ""
-    cmd = f"marp {pptx}{shlex.quote(src_name)} -o {shlex.quote(out_name)}"
-    res = await ctx.sandbox.exec_shell(cmd, timeout_s=timeout_s)
-    if res.timed_out:
-        return False, f"marp render timed out after {timeout_s}s"
-    if res.exit_code != 0:
-        return False, (res.stderr or "").strip() or f"marp exited with code {res.exit_code}"
-    return True, ""
 
 
 # ---- tool implementation -----------------------------------------------------
@@ -463,51 +282,7 @@ class SlidesTool:
         to the tool result's structured payload. Best-effort: on any read/parse
         failure the payload is left unstamped (the gate then falls through — absence
         is honest, never a fabricated verdict)."""
-        s = outcome.structured or {}
-        filename = s.get("filename")
-        fmt = str(s.get("format") or "")
-        declared = s.get("slide_count") if isinstance(s.get("slide_count"), int) else None
-        # The C1/native renderers set slide_count = len(deck.slides) (EXACT); the
-        # markdown/Marp paths derive it from a separator split (HEURISTIC, can be
-        # off by one) — so truncation is strict for the former, tolerant for the latter.
-        declared_exact = str(s.get("renderer") or "") not in ("marp", "fallback")
-        if not isinstance(filename, str) or not filename or ctx.sandbox is None:
-            return outcome
-        try:
-            data = await ctx.sandbox.read_file(filename)
-        except Exception:
-            return outcome
-        if isinstance(data, str):
-            data = data.encode("utf-8")
-        source_text: str | None = None
-        # A deck PDF is LibreOffice-converted from a FRESH sibling .pptx written this
-        # same run (renderer=="libreoffice"); gate on that so a stale leftover .pptx
-        # from an earlier run can't judge the current PDF. Use the pptx's own
-        # chrome/placeholder/media-aware verdict, not its raw text: "" forces the PDF
-        # content check to refuse a blank deck, while None lets the byte-floor pass a
-        # real deck (incl. a media-only visual deck whose text is empty/placeholder).
-        if fmt == "pdf" and str(s.get("renderer") or "") == "libreoffice":
-            base_name = s.get("base_name")
-            if isinstance(base_name, str) and base_name:
-                try:
-                    pptx_data = await ctx.sandbox.read_file(f"{base_name}.pptx")
-                    if isinstance(pptx_data, str):
-                        pptx_data = pptx_data.encode("utf-8")
-                    if pptx_data.startswith(b"PK"):
-                        pf = check_export_render("pptx", pptx_data)
-                        source_text = None if pf.non_blank else ""
-                except Exception:
-                    source_text = None
-        facts = check_export_render(
-            fmt,
-            data,
-            text=source_text,
-            declared_units=declared,
-            declared_exact=declared_exact,
-        )
-        return outcome.model_copy(
-            update={"structured": {**s, EXPORT_RENDER_KEY: facts.model_dump(mode="json")}}
-        )
+        return await _stamp_export_render_impl(outcome, ctx)
 
     @staticmethod
     def _delivery_note(ctx: ToolContext, artifacts: list[str]) -> str:
@@ -632,139 +407,8 @@ class SlidesTool:
         ``image_stats`` (ImageGenStats) carries the honest image outcome — its note
         goes in the CONTENT (so the agent knows images failed / were unconfigured)
         and its numbers in `structured.images`."""
-        from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
-
-        if ctx.sandbox is None:
-            return ToolOutcome(
-                success=False,
-                content="No sandbox available to write the slide deck.",
-            )
-        sbx = ctx.sandbox
-        out_filename = f"{args.filename}.{fmt}"
-
-        # A2: advertise the in-app editor ONLY when THIS run wrote a fresh sidecar.
-        editable: dict[str, str] = {"editable_source": editable_source} if editable_source else {}
-        img_note = image_stats.note() if image_stats is not None else ""
-        img_structured: dict = (
-            {
-                "images": {
-                    "configured": image_stats.configured,
-                    "wanted": image_stats.wanted,
-                    "generated": image_stats.generated,
-                    "failed": len(image_stats.failed),
-                    "sample_error": image_stats.sample_error,
-                }
-            }
-            if image_stats is not None
-            else {}
-        )
-
-        if fmt == "html":
-            html_str = render_html(deck)
-            await sbx.write_file(out_filename, html_str.encode("utf-8"))
-            return ToolOutcome(
-                success=True,
-                content=(
-                    f"Slide deck '{args.filename}' written to {out_filename}\n"
-                    f"Format: HTML (C3 brand renderer)\n"
-                    f"Slides: {len(deck.slides)}{img_note}"
-                ),
-                artifacts=[out_filename],
-                structured={
-                    "filename": out_filename,
-                    "base_name": args.filename,
-                    "format": "html",
-                    "slide_count": len(deck.slides),
-                    "renderer": "c3-brand",
-                    **img_structured,
-                    # A2.0/A2.2: editable_source (the AuthoredDeck sidecar) is present
-                    # ONLY when the sidecar write actually succeeded — its presence is
-                    # what gates the in-app deck editor tab.
-                    **editable,
-                    "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
-                },
-            )
-
-        if fmt == "pptx":
-            pptx_bytes = render_pptx(deck)
-            await sbx.write_file(out_filename, pptx_bytes)
-
-            # Also write brand HTML alongside
-            html_name = f"{args.filename}.html"
-            try:
-                html_str = render_html(deck)
-                await sbx.write_file(html_name, html_str.encode("utf-8"))
-                artifacts = [out_filename, html_name]
-            except Exception:
-                artifacts = [out_filename]
-
-            # Attempt PDF via LibreOffice
-            pdf_note = ""
-            pdf_ok, pdf_err = await convert_to_pdf(ctx, out_filename)
-            if pdf_ok:
-                pdf_name = f"{args.filename}.pdf"
-                artifacts.append(pdf_name)
-            else:
-                pdf_note = f"\nPDF: {pdf_err}"
-
-            return ToolOutcome(
-                success=True,
-                content=(
-                    f"Slide deck '{args.filename}' written to {out_filename}\n"
-                    f"Format: PPTX (C3 native editable — real text boxes)\n"
-                    f"Slides: {len(deck.slides)}{img_note}{pdf_note}"
-                ),
-                artifacts=artifacts,
-                structured={
-                    "filename": out_filename,
-                    "base_name": args.filename,
-                    "format": "pptx",
-                    "slide_count": len(deck.slides),
-                    "renderer": "pptx-native",
-                    **img_structured,
-                    # A2.0/A2.2: present only when the sidecar write actually succeeded.
-                    **editable,
-                    "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
-                },
-            )
-
-        if fmt == "pdf":
-            # Render PPTX first, then convert
-            pptx_bytes = render_pptx(deck)
-            pptx_name = f"{args.filename}.pptx"
-            await sbx.write_file(pptx_name, pptx_bytes)
-            pdf_ok, pdf_err = await convert_to_pdf(ctx, pptx_name)
-            if not pdf_ok:
-                return ToolOutcome(
-                    success=False,
-                    content=f"PDF conversion failed: {pdf_err}",
-                    error=pdf_err,
-                )
-            return ToolOutcome(
-                success=True,
-                content=(
-                    f"Slide deck '{args.filename}' written to {out_filename}\n"
-                    f"Format: PDF (via LibreOffice + C3 PPTX)\n"
-                    f"Slides: {len(deck.slides)}{img_note}"
-                ),
-                artifacts=[out_filename, pptx_name],
-                structured={
-                    "filename": out_filename,
-                    "base_name": args.filename,
-                    "format": "pdf",
-                    "slide_count": len(deck.slides),
-                    "renderer": "libreoffice",
-                    **img_structured,
-                    # A2: a fresh sidecar makes even a pdf-format deck editable (the
-                    # editor re-renders html/pptx; the pdf is flagged stale on save).
-                    **editable,
-                },
-            )
-
-        return ToolOutcome(
-            success=False,
-            content=f"Unsupported format: {fmt!r}",
-            error=f"Unsupported format: {fmt!r}",
+        return await _render_c1_deck_impl(
+            deck, args, ctx, fmt, editable_source=editable_source, image_stats=image_stats
         )
 
     async def _run_marp_path(

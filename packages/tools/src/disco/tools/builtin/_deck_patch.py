@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Callable, Sequence
 from typing import Annotated, Any, Literal
 
 from disco.core.effects import EffectCapability
@@ -81,118 +82,147 @@ def _get_parent(doc: Any, parts: list[str]) -> tuple[Any, str | int]:
     return cur, last
 
 
+def _apply_op_test(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``test``: verify without mutation."""
+    value = op.get("value")
+    if not parts:
+        if doc != value:
+            raise PatchError("test failed: root value mismatch")
+        return doc
+    parent, last = _get_parent(doc, parts)
+    if isinstance(parent, dict):
+        actual = parent.get(last)
+    elif isinstance(parent, list):
+        idx = int(last)
+        actual = parent[idx] if 0 <= idx < len(parent) else None
+    else:
+        raise PatchError(f"test: cannot navigate into {type(parent).__name__}")
+    if actual != value:
+        raise PatchError(f"test failed at {path!r}: expected {value!r}, got {actual!r}")
+    return doc
+
+
+def _apply_op_replace(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``replace``."""
+    value = op.get("value")
+    if not parts:
+        return value  # replace root
+    parent, last = _get_parent(doc, parts)
+    if isinstance(parent, dict):
+        if last not in parent:
+            raise PatchError(f"replace: path {path!r} does not exist")
+        parent[last] = value
+    elif isinstance(parent, list):
+        idx = int(last)
+        if idx < 0 or idx >= len(parent):
+            raise PatchError(f"replace: array index {idx} out of range")
+        parent[idx] = value
+    else:
+        raise PatchError(f"replace: cannot set on {type(parent).__name__}")
+    return doc
+
+
+def _apply_op_add(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``add``."""
+    value = op.get("value")
+    if not parts:
+        return value  # add at root = replace
+    parent, last = _get_parent(doc, parts)
+    if isinstance(parent, dict):
+        parent[last] = value
+    elif isinstance(parent, list):
+        if last == "-":
+            parent.append(value)
+        else:
+            idx = int(last)
+            if idx < 0 or idx > len(parent):
+                raise PatchError(f"add: array index {idx} out of range")
+            parent.insert(idx, value)
+    else:
+        raise PatchError(f"add: cannot add to {type(parent).__name__}")
+    return doc
+
+
+def _apply_op_remove(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``remove``."""
+    if not parts:
+        raise PatchError("remove: cannot remove the root document")
+    parent, last = _get_parent(doc, parts)
+    if isinstance(parent, dict):
+        if last not in parent:
+            raise PatchError(f"remove: key {last!r} not found")
+        del parent[last]
+    elif isinstance(parent, list):
+        idx = int(last)
+        if idx < 0 or idx >= len(parent):
+            raise PatchError(f"remove: array index {idx} out of range")
+        parent.pop(idx)
+    else:
+        raise PatchError(f"remove: cannot delete from {type(parent).__name__}")
+    return doc
+
+
+def _apply_op_move(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``move``: remove from source, then add at destination."""
+    from_path = op.get("from", "")
+    from_parts = _pointer_parts(from_path)
+    # Remove from source
+    if not from_parts:
+        raise PatchError("move: cannot move root")
+    from_parent, from_last = _get_parent(doc, from_parts)
+    if isinstance(from_parent, dict):
+        value = from_parent.pop(from_last)
+    elif isinstance(from_parent, list):
+        idx = int(from_last)
+        value = from_parent.pop(idx)
+    else:
+        raise PatchError("move: invalid source")
+    # Add to destination
+    return _apply_op(doc, {"op": "add", "path": path, "value": value})
+
+
+def _apply_op_copy(doc: Any, path: str, parts: list[str], op: dict[str, Any]) -> Any:
+    """RFC-6902 ``copy``: deep-copy from source, then add at destination."""
+    from_path = op.get("from", "")
+    from_parts = _pointer_parts(from_path)
+    if not from_parts:
+        value = copy.deepcopy(doc)
+    else:
+        from_parent, from_last = _get_parent(doc, from_parts)
+        if isinstance(from_parent, dict):
+            value = copy.deepcopy(from_parent[from_last])
+        elif isinstance(from_parent, list):
+            value = copy.deepcopy(from_parent[int(from_last)])
+        else:
+            raise PatchError("copy: invalid source")
+    return _apply_op(doc, {"op": "add", "path": path, "value": value})
+
+
+# Dispatch table for `_apply_op`. Every handler has the signature
+# ``(doc, path, parts, op) -> Any`` — `parts` is `_pointer_parts(path)`,
+# already computed once by the caller (so a malformed `path` always fails
+# the same way, before any operation-specific logic runs — same precedence
+# as the original if/elif chain).
+_PATCH_OP_HANDLERS: dict[str, Callable[[Any, str, list[str], dict[str, Any]], Any]] = {
+    "test": _apply_op_test,
+    "replace": _apply_op_replace,
+    "add": _apply_op_add,
+    "remove": _apply_op_remove,
+    "move": _apply_op_move,
+    "copy": _apply_op_copy,
+}
+
+
 def _apply_op(doc: Any, op: dict[str, Any]) -> Any:
     """Apply one RFC-6902 operation to *doc* (mutates a deep copy, returns it)."""
     operation = op.get("op", "")
     path = op.get("path", "")
     parts = _pointer_parts(path)
 
-    if operation == "test":
-        # Verify without mutation
-        value = op.get("value")
-        if not parts:
-            if doc != value:
-                raise PatchError("test failed: root value mismatch")
-            return doc
-        parent, last = _get_parent(doc, parts)
-        if isinstance(parent, dict):
-            actual = parent.get(last)
-        elif isinstance(parent, list):
-            idx = int(last)
-            actual = parent[idx] if 0 <= idx < len(parent) else None
-        else:
-            raise PatchError(f"test: cannot navigate into {type(parent).__name__}")
-        if actual != value:
-            raise PatchError(f"test failed at {path!r}: expected {value!r}, got {actual!r}")
-        return doc
-
-    if operation == "replace":
-        value = op.get("value")
-        if not parts:
-            return value  # replace root
-        parent, last = _get_parent(doc, parts)
-        if isinstance(parent, dict):
-            if last not in parent:
-                raise PatchError(f"replace: path {path!r} does not exist")
-            parent[last] = value
-        elif isinstance(parent, list):
-            idx = int(last)
-            if idx < 0 or idx >= len(parent):
-                raise PatchError(f"replace: array index {idx} out of range")
-            parent[idx] = value
-        else:
-            raise PatchError(f"replace: cannot set on {type(parent).__name__}")
-        return doc
-
-    if operation == "add":
-        value = op.get("value")
-        if not parts:
-            return value  # add at root = replace
-        parent, last = _get_parent(doc, parts)
-        if isinstance(parent, dict):
-            parent[last] = value
-        elif isinstance(parent, list):
-            if last == "-":
-                parent.append(value)
-            else:
-                idx = int(last)
-                if idx < 0 or idx > len(parent):
-                    raise PatchError(f"add: array index {idx} out of range")
-                parent.insert(idx, value)
-        else:
-            raise PatchError(f"add: cannot add to {type(parent).__name__}")
-        return doc
-
-    if operation == "remove":
-        if not parts:
-            raise PatchError("remove: cannot remove the root document")
-        parent, last = _get_parent(doc, parts)
-        if isinstance(parent, dict):
-            if last not in parent:
-                raise PatchError(f"remove: key {last!r} not found")
-            del parent[last]
-        elif isinstance(parent, list):
-            idx = int(last)
-            if idx < 0 or idx >= len(parent):
-                raise PatchError(f"remove: array index {idx} out of range")
-            parent.pop(idx)
-        else:
-            raise PatchError(f"remove: cannot delete from {type(parent).__name__}")
-        return doc
-
-    if operation == "move":
-        from_path = op.get("from", "")
-        from_parts = _pointer_parts(from_path)
-        # Remove from source
-        if not from_parts:
-            raise PatchError("move: cannot move root")
-        from_parent, from_last = _get_parent(doc, from_parts)
-        if isinstance(from_parent, dict):
-            value = from_parent.pop(from_last)
-        elif isinstance(from_parent, list):
-            idx = int(from_last)
-            value = from_parent.pop(idx)
-        else:
-            raise PatchError("move: invalid source")
-        # Add to destination
-        return _apply_op(doc, {"op": "add", "path": path, "value": value})
-
-    if operation == "copy":
-        from_path = op.get("from", "")
-        from_parts = _pointer_parts(from_path)
-        if not from_parts:
-            value = copy.deepcopy(doc)
-        else:
-            from_parent, from_last = _get_parent(doc, from_parts)
-            if isinstance(from_parent, dict):
-                value = copy.deepcopy(from_parent[from_last])
-            elif isinstance(from_parent, list):
-                value = copy.deepcopy(from_parent[int(from_last)])
-            else:
-                raise PatchError("copy: invalid source")
-        return _apply_op(doc, {"op": "add", "path": path, "value": value})
-
-    raise PatchError(f"Unknown RFC-6902 operation: {operation!r}")
+    handler = _PATCH_OP_HANDLERS.get(operation)
+    if handler is None:
+        raise PatchError(f"Unknown RFC-6902 operation: {operation!r}")
+    return handler(doc, path, parts, op)
 
 
 def _patch_operation_name(op: object) -> object:
@@ -320,6 +350,155 @@ class DeckPatchArgs(BaseModel):
     )
 
 
+# ─── DeckPatchTool.run phases ──────────────────────────────────────────────
+#
+# Each phase mirrors one numbered step of `DeckPatchTool.run`'s docstring.
+# Phases that can fail return `ToolOutcome` (a `fail_outcome(...)`) instead of
+# their normal success value; `run` checks `isinstance(result, ToolOutcome)`
+# after each such call and returns immediately, so the RETURNED failure
+# message and the ORDER in which phases run are unchanged from before this
+# split — only the code that computes them moved.
+
+
+async def _deck_patch_read_authored_json(
+    ctx: ToolContext, deck_file: str
+) -> dict[str, Any] | ToolOutcome:
+    """Phase 1: read *deck_file* from the sandbox workspace and parse it as JSON."""
+    sandbox = ctx.sandbox
+    assert sandbox is not None, "deck_patch requires a sandbox context"
+    try:
+        raw_bytes = await sandbox.read_file(deck_file)
+    except Exception as exc:
+        return fail_outcome(f"Could not read deck file {deck_file!r}: {exc}")
+
+    try:
+        return json.loads(raw_bytes)
+    except json.JSONDecodeError as exc:
+        return fail_outcome(f"deck file is not valid JSON: {exc}")
+
+
+def _deck_patch_apply(
+    authored_json: dict[str, Any], patch: Sequence[PatchInput]
+) -> dict[str, Any] | ToolOutcome:
+    """Phase 2: apply the RFC-6902 patch (in memory only).
+
+    The typed JsonPatchOperation models exist for the ADVERTISED schema;
+    apply_patch's engine consumes plain dicts.
+    """
+    try:
+        return apply_patch(
+            authored_json,
+            [
+                op.model_dump(exclude_none=True) if isinstance(op, BaseModel) else op
+                for op in patch
+            ],
+        )
+    except PatchError as exc:
+        return fail_outcome(f"Patch application failed: {exc}")
+
+
+def _deck_patch_validate(patched_json: dict[str, Any], authored_deck_model: Any) -> Any:
+    """Phase 3: validate the patched document against the AuthoredDeck schema."""
+    try:
+        return authored_deck_model.model_validate(patched_json)
+    except Exception as exc:
+        return fail_outcome(
+            f"Patched document fails AuthoredDeck schema validation: {exc}. "
+            "Workspace NOT modified — patch reverted."
+        )
+
+
+def _deck_patch_stem(deck_file: str) -> str:
+    """Phase 4: derive the deck stem (needed to reload image assets)."""
+    stem = deck_file
+    if stem.endswith(".authored.json"):
+        stem = stem[: -len(".authored.json")]
+    elif "." in stem:
+        stem = stem.rsplit(".", 1)[0]
+    return stem
+
+
+async def _deck_patch_reload_image_assets(
+    ctx: ToolContext, authored_deck: Any, stem: str
+) -> dict[int, bytes]:
+    """Phase 4b: reload generated images so an EDIT preserves them.
+
+    The C7 image bytes live on the rendered Element, not in the authored
+    sidecar — so a naive re-lower drops them back to the [image] placeholder
+    (a false affordance: "edit your deck" silently deletes its images). The
+    images are still on disk as "{stem}_img_{i}.png"; reload them by the same
+    convention _stage_assets wrote, keyed by authored-slide index.
+    """
+    sandbox = ctx.sandbox
+    assert sandbox is not None, "deck_patch requires a sandbox context"
+    image_assets: dict[int, bytes] = {}
+    for i, slide in enumerate(authored_deck.slides):
+        if not slide.image_prompt:
+            continue
+        try:
+            data = await sandbox.read_file(f"{stem}_img_{i}.png")
+        except Exception:  # noqa: BLE001 — missing asset → placeholder, never crash
+            continue
+        if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
+            image_assets[i] = data
+    return image_assets
+
+
+async def _deck_patch_render(
+    ctx: ToolContext,
+    authored_deck: Any,
+    image_assets: dict[int, bytes],
+    lower_deck_fn: Callable[..., Any],
+    direction_brand_override_fn: Callable[[ToolContext], Any],
+    render_html_fn: Callable[[Any], str],
+    render_pptx_fn: Callable[[Any], bytes],
+) -> tuple[str, bytes] | ToolOutcome:
+    """Phase 4c: re-render deterministically via the C1 path."""
+    try:
+        deck = lower_deck_fn(
+            authored_deck,
+            image_assets=image_assets,
+            brand_override=await direction_brand_override_fn(ctx),
+        )  # AuthoredDeck → C1
+        html_str = render_html_fn(deck)  # Deck → HTML string
+        pptx_bytes = render_pptx_fn(deck)  # Deck → PPTX bytes
+    except Exception as exc:
+        return fail_outcome(f"Re-render failed: {exc}. Workspace NOT modified.")
+    return html_str, pptx_bytes
+
+
+def _deck_patch_output_names(args: DeckPatchArgs, stem: str) -> tuple[str, str]:
+    """Phase 5: determine output filenames."""
+    html_out = args.output_html or f"{stem}.html"
+    pptx_out = args.output_pptx or f"{stem}.pptx"
+    return html_out, pptx_out
+
+
+async def _deck_patch_write_outputs(
+    ctx: ToolContext,
+    authored_out: str,
+    patched_json: dict[str, Any],
+    html_out: str,
+    html_str: str,
+    pptx_out: str,
+    pptx_bytes: bytes,
+) -> list[str] | ToolOutcome:
+    """Phase 6: write back (all-or-nothing: write all, report all)."""
+    sandbox = ctx.sandbox
+    assert sandbox is not None, "deck_patch requires a sandbox context"
+    written: list[str] = []
+    try:
+        await sandbox.write_file(authored_out, json.dumps(patched_json, indent=2).encode())
+        written.append(authored_out)
+        await sandbox.write_file(html_out, html_str.encode())
+        written.append(html_out)
+        await sandbox.write_file(pptx_out, pptx_bytes)
+        written.append(pptx_out)
+    except Exception as exc:
+        return fail_outcome(f"Write failed after successful patch+render: {exc}")
+    return written
+
+
 # ─── DeckPatchTool ────────────────────────────────────────────────────────────
 
 
@@ -367,92 +546,50 @@ class DeckPatchTool:
         assert ctx.sandbox is not None, "deck_patch requires a sandbox context"
 
         # ── 1. Read the authored JSON ─────────────────────────────────────────
-        try:
-            raw_bytes = await ctx.sandbox.read_file(args.deck_file)
-        except Exception as exc:
-            return fail_outcome(f"Could not read deck file {args.deck_file!r}: {exc}")
-
-        try:
-            authored_json: dict = json.loads(raw_bytes)
-        except json.JSONDecodeError as exc:
-            return fail_outcome(f"deck file is not valid JSON: {exc}")
+        authored_json = await _deck_patch_read_authored_json(ctx, args.deck_file)
+        if isinstance(authored_json, ToolOutcome):
+            return authored_json
 
         # ── 2. Apply the RFC-6902 patch (in memory only) ─────────────────────
-        try:
-            # The typed JsonPatchOperation models exist for the ADVERTISED schema;
-            # apply_patch's engine consumes plain dicts.
-            patched_json = apply_patch(
-                authored_json,
-                [
-                    op.model_dump(exclude_none=True) if hasattr(op, "model_dump") else op
-                    for op in args.patch
-                ],
-            )
-        except PatchError as exc:
-            return fail_outcome(f"Patch application failed: {exc}")
+        patched_json = _deck_patch_apply(authored_json, args.patch)
+        if isinstance(patched_json, ToolOutcome):
+            return patched_json
 
         # ── 3. Validate against AuthoredDeck schema ───────────────────────────
-        try:
-            authored_deck = AuthoredDeck.model_validate(patched_json)
-        except Exception as exc:
-            return fail_outcome(
-                f"Patched document fails AuthoredDeck schema validation: {exc}. "
-                "Workspace NOT modified — patch reverted."
-            )
+        authored_deck = _deck_patch_validate(patched_json, AuthoredDeck)
+        if isinstance(authored_deck, ToolOutcome):
+            return authored_deck
 
         # ── 4. Determine the deck stem (needed to reload image assets) ────────
-        stem = args.deck_file
-        if stem.endswith(".authored.json"):
-            stem = stem[: -len(".authored.json")]
-        elif "." in stem:
-            stem = stem.rsplit(".", 1)[0]
+        stem = _deck_patch_stem(args.deck_file)
 
         # ── 4b. Reload generated images so an EDIT preserves them ─────────────
-        # The C7 image bytes live on the rendered Element, not in the authored
-        # sidecar — so a naive re-lower drops them back to the [image] placeholder
-        # (a false affordance: "edit your deck" silently deletes its images). The
-        # images are still on disk as "{stem}_img_{i}.png"; reload them by the same
-        # convention _stage_assets wrote, keyed by authored-slide index.
-        image_assets: dict[int, bytes] = {}
-        for i, slide in enumerate(authored_deck.slides):
-            if not slide.image_prompt:
-                continue
-            try:
-                data = await ctx.sandbox.read_file(f"{stem}_img_{i}.png")
-            except Exception:  # noqa: BLE001 — missing asset → placeholder, never crash
-                continue
-            if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
-                image_assets[i] = data
+        image_assets = await _deck_patch_reload_image_assets(ctx, authored_deck, stem)
 
         # ── 4c. Re-render deterministically via C1 path ───────────────────────
-        try:
-            deck = lower_deck(
-                authored_deck,
-                image_assets=image_assets,
-                brand_override=await direction_brand_override(ctx),
-            )  # AuthoredDeck → C1
-            html_str = render_html(deck)  # Deck → HTML string
-            pptx_bytes = render_pptx(deck)  # Deck → PPTX bytes
-        except Exception as exc:
-            return fail_outcome(f"Re-render failed: {exc}. Workspace NOT modified.")
+        rendered = await _deck_patch_render(
+            ctx,
+            authored_deck,
+            image_assets,
+            lower_deck,
+            direction_brand_override,
+            render_html,
+            render_pptx,
+        )
+        if isinstance(rendered, ToolOutcome):
+            return rendered
+        html_str, pptx_bytes = rendered
 
         # ── 5. Determine output filenames ─────────────────────────────────────
-
         authored_out = args.deck_file  # overwrite in place
-        html_out = args.output_html or f"{stem}.html"
-        pptx_out = args.output_pptx or f"{stem}.pptx"
+        html_out, pptx_out = _deck_patch_output_names(args, stem)
 
         # ── 6. Write back (all-or-nothing: write all, report all) ────────────
-        written: list[str] = []
-        try:
-            await ctx.sandbox.write_file(authored_out, json.dumps(patched_json, indent=2).encode())
-            written.append(authored_out)
-            await ctx.sandbox.write_file(html_out, html_str.encode())
-            written.append(html_out)
-            await ctx.sandbox.write_file(pptx_out, pptx_bytes)
-            written.append(pptx_out)
-        except Exception as exc:
-            return fail_outcome(f"Write failed after successful patch+render: {exc}")
+        written = await _deck_patch_write_outputs(
+            ctx, authored_out, patched_json, html_out, html_str, pptx_out, pptx_bytes
+        )
+        if isinstance(written, ToolOutcome):
+            return written
 
         # Build a concise summary
         n_slides = len(authored_deck.slides)

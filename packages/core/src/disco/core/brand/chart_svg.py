@@ -309,23 +309,43 @@ def _render_pie(pairs: list[tuple[str, float]], title, x_label, y_label, pal: Pa
     return _frame(title, "", "", pal, "".join(slices) + "".join(legend))
 
 
-def _render_scatter(data: list[dict[str, Any]], title, x_label, y_label, pal: Palette) -> str:
+def _scatter_points(data: list[dict[str, Any]]) -> list[tuple[float, float, str]]:
+    """Coerce scatter data → [(x, y, group)], dropping non-numeric/incomplete
+    rows and capping the printable density."""
     pts = [
         (_num(d.get("x")), _num(d.get("y")), str(d.get("group", "Default")))
         for d in data
         if isinstance(d, dict)
     ]
-    pts = [(x, y, g) for x, y, g in pts if x is not None and y is not None][: _MAX_POINTS * 4]
-    if not pts:
-        return ""
+    return [(x, y, g) for x, y, g in pts if x is not None and y is not None][: _MAX_POINTS * 4]
+
+
+def _scatter_bounds(
+    pts: list[tuple[float, float, str]],
+) -> tuple[float, float, float, float, float]:
+    """Axis bounds + spans for scatter scaling. Returns (xmin, xr, ymin, yr, ymax)."""
     xs = [x for x, _, _ in pts]
     ys = [y for _, y, _ in pts]
     xmin, xmax = min(xs), max(xs) or 1.0
     ymin, ymax = min(ys), max(ys) or 1.0
     xr = (xmax - xmin) or 1.0
     yr = (ymax - ymin) or 1.0
-    grid, x0, y0, plot_w, plot_h = _axes_grid(pal, ymax)
-    groups = list(dict.fromkeys(g for _, _, g in pts))
+    return xmin, xr, ymin, yr, ymax
+
+
+def _scatter_dots_svg(
+    pts: list[tuple[float, float, str]],
+    groups: list[str],
+    x0: float,
+    y0: float,
+    plot_w: float,
+    plot_h: float,
+    xmin: float,
+    xr: float,
+    ymin: float,
+    yr: float,
+    pal: Palette,
+) -> str:
     dots = []
     for x, y, g in pts:
         px = x0 + plot_w * (x - xmin) / xr
@@ -334,7 +354,11 @@ def _render_scatter(data: list[dict[str, Any]], title, x_label, y_label, pal: Pa
         dots.append(
             f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4" fill="{_attr(c)}" fill-opacity="0.8"/>'
         )
-    legend = "".join(
+    return "".join(dots)
+
+
+def _scatter_legend_svg(groups: list[str], x0: float, pal: Palette) -> str:
+    return "".join(
         f'<rect x="{x0 + 8 + i * 90:.0f}" y="{_PAD_T - 2:.0f}" '
         f'width="10" height="10" rx="2" '
         f'fill="{_attr(pal.series[i % len(pal.series)])}"/>'
@@ -343,7 +367,18 @@ def _render_scatter(data: list[dict[str, Any]], title, x_label, y_label, pal: Pa
         f"{_esc(_ellipsize(str(g), 12))}</text>"
         for i, g in enumerate(groups)
     )
-    return _frame(title, x_label, y_label, pal, grid + "".join(dots) + legend)
+
+
+def _render_scatter(data: list[dict[str, Any]], title, x_label, y_label, pal: Palette) -> str:
+    pts = _scatter_points(data)
+    if not pts:
+        return ""
+    xmin, xr, ymin, yr, ymax = _scatter_bounds(pts)
+    grid, x0, y0, plot_w, plot_h = _axes_grid(pal, ymax)
+    groups = list(dict.fromkeys(g for _, _, g in pts))
+    dots = _scatter_dots_svg(pts, groups, x0, y0, plot_w, plot_h, xmin, xr, ymin, yr, pal)
+    legend = _scatter_legend_svg(groups, x0, pal)
+    return _frame(title, x_label, y_label, pal, grid + dots + legend)
 
 
 def render_chart_svg(spec: dict[str, Any], pal: Palette) -> str | None:
@@ -375,6 +410,36 @@ def render_chart_svg(spec: dict[str, Any], pal: Palette) -> str | None:
         return None
 
 
+def _chart_table_scatter_rows(
+    data: list[Any], x_label: str, y_label: str
+) -> tuple[list[str], list[list[str]]]:
+    cols = ["Group", x_label or "X", y_label or "Y"]
+    rows = [
+        [_esc(d.get("group", "Default")), _esc(d.get("x")), _esc(d.get("y"))]
+        for d in data
+        if isinstance(d, dict)
+    ]
+    return cols, rows
+
+
+def _chart_table_default_rows(
+    data: list[Any], x_label: str, y_label: str
+) -> tuple[list[str], list[list[str]]]:
+    cols = [x_label or "Label", y_label or "Value"]
+    rows = [
+        [_esc(d.get("label", d.get("x", ""))), _esc(d.get("value", d.get("y", "")))]
+        for d in data
+        if isinstance(d, dict)
+    ]
+    return cols, rows
+
+
+def _chart_table_head_body_html(cols: list[str], rows: list[list[str]]) -> tuple[str, str]:
+    thead = "".join(f"<th>{c}</th>" for c in cols)
+    tbody = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    return thead, tbody
+
+
 def render_chart_table(spec: dict[str, Any]) -> str:
     """Fallback: render the chart's data as a styled HTML table (mirrors
     ChartBlock.tsx's own TableView fallback). Always returns valid HTML."""
@@ -386,21 +451,10 @@ def render_chart_table(spec: dict[str, Any]) -> str:
     x_label = _esc(spec.get("x_label", "Label"))
     y_label = _esc(spec.get("y_label", "Value"))
     if ctype == "scatter":
-        cols = ["Group", x_label or "X", y_label or "Y"]
-        rows = [
-            [_esc(d.get("group", "Default")), _esc(d.get("x")), _esc(d.get("y"))]
-            for d in data
-            if isinstance(d, dict)
-        ]
+        cols, rows = _chart_table_scatter_rows(data, x_label, y_label)
     else:
-        cols = [x_label or "Label", y_label or "Value"]
-        rows = [
-            [_esc(d.get("label", d.get("x", ""))), _esc(d.get("value", d.get("y", "")))]
-            for d in data
-            if isinstance(d, dict)
-        ]
-    thead = "".join(f"<th>{c}</th>" for c in cols)
-    tbody = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+        cols, rows = _chart_table_default_rows(data, x_label, y_label)
+    thead, tbody = _chart_table_head_body_html(cols, rows)
     cap = f"<caption>{title}</caption>" if title else ""
     return (
         f'<table class="chart-table">{cap}<thead><tr>{thead}</tr></thead>'

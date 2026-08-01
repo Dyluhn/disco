@@ -27,10 +27,10 @@ import html as _html
 import json
 import logging
 import re
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import markdown as _md
-from disco.core import ReportEvent
+from disco.core import ReportEvent, ReportSection
 from disco.core.brand import (
     definition_mark_html,
     font_face_css,
@@ -395,44 +395,17 @@ def _cover_meta_html(report: ReportEvent, n_passages: int) -> str:
     return "".join(items)
 
 
-def _build_pdf_html(
-    report: ReportEvent,
-    follow_ups: list[tuple[str, str]] | None,
-    theme: Theme,
-    title: str | None = None,
+def _pdf_display_title(report: ReportEvent, title: str | None) -> str:
+    """W-10: the cover title page uses the real generated title, falling back
+    to the raw question only when no title is available."""
+    return (title or "").strip() or report.query
+
+
+def _pdf_cover_html(
+    report: ReportEvent, title_escaped: str, theme: Theme, n_passages: int
 ) -> str:
-    """Build a branded, structured HTML document from a ReportEvent.
-
-    This is the DR-2 / §1.5 renderer.  It iterates the STRUCTURED model
-    (sections, passages, follow_ups) and emits real <section>/<h2>/.chip
-    markup instead of a flattened markdown string.  Does NOT use nl2br.
-
-    The disco definition mark appears on the cover when ``theme.branded``.
-    The dropcap is an inline ``<span class="dropcap">`` (NOT ::first-letter
-    float — WeasyPrint asserts on that).
-
-    TOC is emitted when sections > 10.
-    Sources appendix uses 2-col class when passages > 30.
-    """
-    sections = report.sections
-    passages = report.passages
-    n_sections = len(sections)
-    n_passages = len(passages)
-
-    # Numbered-citation map (id → [N]) + theme palette for inline SVG charts.
-    cite_map = _citation_map(report)
-    pal = palette_from_theme(theme)
-
-    # ---- running header ----
-    running_header = (
-        f'<div id="running-header"><span class="running-wordmark">{wordmark_html()}</span></div>'
-    )
-
-    # ---- cover ----
-    # W-10: the cover title page uses the real generated title, falling back to
-    # the raw question only when no title is available.
-    display_title = (title or "").strip() or report.query
-    title_escaped = _html.escape(display_title)
+    """Cover page: dropcap title, subtitle, meta row, and the disco definition
+    mark (only when ``theme.branded``)."""
     if title_escaped:
         first_char = title_escaped[0]
         rest_title = title_escaped[1:]
@@ -443,7 +416,7 @@ def _build_pdf_html(
     cover_mark = definition_mark_html("colophon") if theme.branded else ""
     cover_meta = _cover_meta_html(report, n_passages)
 
-    cover_html = (
+    return (
         '<div class="cover-page">'
         '<div class="cover-rule"></div>'
         f'<div class="cover-title">{title_html}</div>'
@@ -455,28 +428,41 @@ def _build_pdf_html(
         "</div>"
     )
 
-    # ---- TOC (when > 10 sections) ----
-    toc_html = ""
-    if n_sections > 10:
-        toc_items = "".join(
-            f'<li><span class="toc-no">{str(i + 1).zfill(2)}</span>{_html.escape(s.title)}</li>'
-            for i, s in enumerate(sections)
-        )
-        toc_html = (
-            '<div class="toc-block">'
-            '<div class="toc-heading">Contents</div>'
-            f'<ul class="toc-list">{toc_items}</ul>'
-            "</div>"
-        )
 
-    # ---- executive summary ----
-    summary_html = (
+def _pdf_toc_html(sections: list[ReportSection]) -> str:
+    """Table of contents block, emitted only when there are more than 10
+    sections."""
+    if len(sections) <= 10:
+        return ""
+    toc_items = "".join(
+        f'<li><span class="toc-no">{str(i + 1).zfill(2)}</span>{_html.escape(s.title)}</li>'
+        for i, s in enumerate(sections)
+    )
+    return (
+        '<div class="toc-block">'
+        '<div class="toc-heading">Contents</div>'
+        f'<ul class="toc-list">{toc_items}</ul>'
+        "</div>"
+    )
+
+
+def _pdf_summary_html(
+    report: ReportEvent, cite_map: dict[str, int], pal: Palette | None
+) -> str:
+    """Executive summary block: citation chips + inline charts, same renderer
+    as a report section body."""
+    return (
         '<div class="exec-summary">'
         f"{_render_section_body(report.summary or '', cite_map, pal)}"
         "</div>"
     )
 
-    # ---- sections ----
+
+def _pdf_sections_html(
+    sections: list[ReportSection], cite_map: dict[str, int], pal: Palette | None
+) -> str:
+    """Render every report section: numbered heading, optional conflict note,
+    and the section body (citation chips + inline charts)."""
     sections_html_parts: list[str] = []
     for i, s in enumerate(sections):
         no_label = str(i + 1).zfill(2)
@@ -499,43 +485,57 @@ def _build_pdf_html(
             f"{body}"
             "</section>"
         )
-    sections_html = "\n".join(sections_html_parts)
+    return "\n".join(sections_html_parts)
 
-    # ---- bounded-by note ----
-    bounded_html = ""
+
+def _pdf_bounded_html(report: ReportEvent) -> str:
+    """Bounded-by honesty note, emitted only when the run was truncated."""
     _trunc = report_truncation(report.bounded_by)
-    if _trunc:
-        bounded_html = (
-            '<div class="bounded-note">This run was bounded by '
-            f"<strong>{_html.escape(_trunc)}</strong>. "
-            "Some planned sub-questions were not covered. Consider running "
-            "the EXHAUSTIVE tier or assigning a faster driver model for "
-            "deeper coverage.</div>"
-        )
+    if not _trunc:
+        return ""
+    return (
+        '<div class="bounded-note">This run was bounded by '
+        f"<strong>{_html.escape(_trunc)}</strong>. "
+        "Some planned sub-questions were not covered. Consider running "
+        "the EXHAUSTIVE tier or assigning a faster driver model for "
+        "deeper coverage.</div>"
+    )
 
-    # ---- follow-up Q&A ----
-    followup_html = ""
-    if follow_ups:
-        items = ""
-        for j, (question, answer) in enumerate(follow_ups, 1):
-            answer_html = _render_section_body(strip_think_spans(answer), cite_map, pal)
-            items += (
-                '<div class="followup-item">'
-                f'<div class="followup-q">Q {j}: {_html.escape(question)}</div>'
-                f'<div class="followup-a">{answer_html}</div>'
-                "</div>"
-            )
-        followup_html = (
-            '<div class="followup-page">'
-            '<div class="followup-head">'
-            '<div class="followup-heading">Follow-up Q&amp;A</div>'
-            '<div class="followup-rule"></div>'
-            "</div>"
-            f"{items}"
+
+def _pdf_followup_html(
+    follow_ups: list[tuple[str, str]] | None,
+    cite_map: dict[str, int],
+    pal: Palette | None,
+) -> str:
+    """Follow-up Q&A page, emitted only when there are selected follow-ups."""
+    if not follow_ups:
+        return ""
+    items = ""
+    for j, (question, answer) in enumerate(follow_ups, 1):
+        answer_html = _render_section_body(strip_think_spans(answer), cite_map, pal)
+        items += (
+            '<div class="followup-item">'
+            f'<div class="followup-q">Q {j}: {_html.escape(question)}</div>'
+            f'<div class="followup-a">{answer_html}</div>'
             "</div>"
         )
+    return (
+        '<div class="followup-page">'
+        '<div class="followup-head">'
+        '<div class="followup-heading">Follow-up Q&amp;A</div>'
+        '<div class="followup-rule"></div>'
+        "</div>"
+        f"{items}"
+        "</div>"
+    )
 
-    # ---- sources appendix ----
+
+def _pdf_sources_appendix_html(passages: list[dict[str, Any]]) -> str:
+    """Sources appendix (2-col class when passages > 30), omitted entirely
+    when there are no cited passages."""
+    n_passages = len(passages)
+    if not n_passages:
+        return ""
     two_col_class = " sources-2col" if n_passages > 30 else ""
     src_items = ""
     for i, p in enumerate(passages):
@@ -549,17 +549,69 @@ def _build_pdf_html(
             f" &mdash; {url}"
             "</li>"
         )
-    appendix_html = (
-        (
-            f'<div class="sources-appendix{two_col_class}">'
-            '<div class="sources-heading">'
-            f"Sources ({n_passages})</div>"
-            f'<ul class="sources-list">{src_items}</ul>'
-            "</div>"
-        )
-        if n_passages
-        else ""
+    return (
+        f'<div class="sources-appendix{two_col_class}">'
+        '<div class="sources-heading">'
+        f"Sources ({n_passages})</div>"
+        f'<ul class="sources-list">{src_items}</ul>'
+        "</div>"
     )
+
+
+def _build_pdf_html(
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]] | None,
+    theme: Theme,
+    title: str | None = None,
+) -> str:
+    """Build a branded, structured HTML document from a ReportEvent.
+
+    This is the DR-2 / §1.5 renderer.  It iterates the STRUCTURED model
+    (sections, passages, follow_ups) and emits real <section>/<h2>/.chip
+    markup instead of a flattened markdown string.  Does NOT use nl2br.
+
+    The disco definition mark appears on the cover when ``theme.branded``.
+    The dropcap is an inline ``<span class="dropcap">`` (NOT ::first-letter
+    float — WeasyPrint asserts on that).
+
+    TOC is emitted when sections > 10.
+    Sources appendix uses 2-col class when passages > 30.
+    """
+    sections = report.sections
+    passages = report.passages
+    n_passages = len(passages)
+
+    # Numbered-citation map (id → [N]) + theme palette for inline SVG charts.
+    cite_map = _citation_map(report)
+    pal = palette_from_theme(theme)
+
+    # ---- running header ----
+    running_header = (
+        f'<div id="running-header"><span class="running-wordmark">{wordmark_html()}</span></div>'
+    )
+
+    # ---- cover ----
+    display_title = _pdf_display_title(report, title)
+    title_escaped = _html.escape(display_title)
+    cover_html = _pdf_cover_html(report, title_escaped, theme, n_passages)
+
+    # ---- TOC (when > 10 sections) ----
+    toc_html = _pdf_toc_html(sections)
+
+    # ---- executive summary ----
+    summary_html = _pdf_summary_html(report, cite_map, pal)
+
+    # ---- sections ----
+    sections_html = _pdf_sections_html(sections, cite_map, pal)
+
+    # ---- bounded-by note ----
+    bounded_html = _pdf_bounded_html(report)
+
+    # ---- follow-up Q&A ----
+    followup_html = _pdf_followup_html(follow_ups, cite_map, pal)
+
+    # ---- sources appendix ----
+    appendix_html = _pdf_sources_appendix_html(passages)
 
     # ---- assemble ----
     brand_css = font_face_css() + theme_css_vars(theme) + print_skeleton_css()

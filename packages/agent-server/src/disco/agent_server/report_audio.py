@@ -366,6 +366,247 @@ async def _generate_turn_script(
         raise TurnScriptError(str(exc)) from exc
 
 
+def _report_audio_cache_paths(
+    report: ReportEvent,
+    follow_ups: list[tuple[str, str]] | None,
+    mode: str,
+    out_dir: Path,
+) -> tuple[Path, Path]:
+    """B3: content-hash cache key — the key is a hash of the report text + follow-up
+    content so that regenerating after an edit (new summary/sections/follow-ups)
+    busts the cache and produces a fresh audio file.  The hash replaces the old
+    mode+fu_count suffix which collided across edits of the same conversation.
+    """
+    content_seed = (
+        report.query
+        + (report.summary or "")
+        + "".join(s.markdown for s in report.sections)
+        + ("|".join(f"{q}:{a}" for q, a in follow_ups) if follow_ups else "")
+        + mode
+    )
+    content_hash = hashlib.sha256(content_seed.encode()).hexdigest()[:12]
+    mp3_path = out_dir / f"audio_overview_{mode}_{content_hash}.mp3"
+    transcript_path = out_dir / f"audio_overview_{mode}_{content_hash}.md"
+    return mp3_path, transcript_path
+
+
+def _audio_cache_hit(mp3_path: Path, transcript_path: Path) -> bool:
+    """True when a previous run for this conversation already wrote both
+    artifacts verbatim.  The pipeline is deterministic given the report, the
+    LLM, and the voice settings — and the LLM call is the slow / expensive
+    step.  This makes the endpoint idempotent (idempotency is good for
+    retries, and the UI can re-press the button without re-spending RAM)."""
+    return mp3_path.exists() and transcript_path.exists()
+
+
+def _resolve_tts_voice_params(
+    tts_settings: Any,
+    resolve_key: Callable[[str | None], str | None] | None,
+) -> tuple[str, str, bool, str, str, str, str]:
+    """Extract voice/provider settings from `tts_settings` and resolve the
+    remote TTS connection parameters.  Returns ``(voice_a, voice_b, is_remote,
+    remote_base, remote_key, remote_model, backend)``."""
+    voice_a = getattr(tts_settings, "voice_a", "af_heart")
+    voice_b = getattr(tts_settings, "voice_b", "af_bella")
+    provider = getattr(tts_settings, "provider", "bundled")
+    remote_base, remote_key, remote_model = _resolve_remote_params(
+        provider,
+        getattr(tts_settings, "base_url", "") or "",
+        getattr(tts_settings, "api_key_env", "") or "",
+        getattr(tts_settings, "model", "") or "",
+        resolve_key,
+    )
+    is_remote = provider != "bundled"
+    backend = {
+        "bundled": "bundled Kokoro",
+        "speaches": "self-host Speaches",
+        "openai": "paid OpenAI-compatible",
+    }.get(provider, provider)
+    return voice_a, voice_b, is_remote, remote_base, remote_key, remote_model, backend
+
+
+async def _ensure_voice_model_ready(
+    is_remote: bool, on_progress: ProgressCallback | None
+) -> None:
+    """Step 1b: voice-model download (bundled only, first run).
+
+    W-08: only signal "downloading voice model…" when a download is GENUINELY
+    about to happen — i.e. the bundled backend is selected AND its weight
+    files aren't on disk yet.  Remote backends and warm-cache runs skip this,
+    so the UI never shows the false download note.
+    """
+    if not is_remote:
+        from . import tts_local
+
+        if not tts_local.model_files_present():
+            # Real byte-level download progress (W-08).  ensure_model fetches the
+            # missing weight files BEFORE synthesis and emits per-poll
+            # `downloading_model` events carrying actual downloaded/total/pct — so
+            # the UI shows a GENUINE progress bar, not a static note.  When the
+            # weights are already on disk this whole block is skipped (no event).
+            await tts_local.ensure_model(on_progress=on_progress)
+
+
+async def _synthesize_turn_pcm(
+    turn: Any,
+    index: int,
+    total_turns: int,
+    voice: str,
+    *,
+    is_remote: bool,
+    remote_base: str,
+    remote_key: str,
+    remote_model: str,
+    backend: str,
+) -> Any | None:
+    """Normalize + synthesize one turn to PCM, or return ``None`` if the turn
+    is genuinely empty (both normalized and raw text are blank).
+
+    C1: normalize the text fed to TTS — strip markdown so the engine speaks
+    clean prose, not raw markup.  The transcript is built from the ORIGINAL
+    turn.text so it stays raw and readable as markdown.
+    """
+    tts_text = _normalize_for_tts(turn.text)
+    # D4 robustness: if the normalizer strips ALL content (e.g. a turn
+    # that is only a code block or citation chips), fall back to the
+    # original text so Kokoro receives something speakable.  An empty
+    # string causes Kokoro to raise `ValueError: need at least one array
+    # to concatenate`, which would abort the whole pipeline — far worse
+    # than synthesising the raw markdown (which Kokoro reads letter by
+    # letter but still produces non-empty audio).
+    if not tts_text.strip():
+        tts_text = turn.text.strip()
+    if not tts_text:
+        # The original turn text is ALSO empty — skip this turn entirely
+        # rather than letting Kokoro crash.  The mixer drops empty turns
+        # gracefully (no phantom silence gap).
+        logger.warning(
+            "TTS: skipping empty turn %d/%d (speaker %s) — both normalized "
+            "and raw text are empty; turn.text=%r",
+            index + 1,
+            total_turns,
+            turn.speaker,
+            turn.text,
+        )
+        return None
+    try:
+        if is_remote:
+            pcm = await audio_overview._synthesize_remote(
+                tts_text,
+                voice,
+                remote_base,
+                api_key=remote_key,
+                model=remote_model,
+            )
+        else:
+            pcm = await audio_overview._synthesize_local(tts_text, voice)
+    except httpx.ConnectError as e:
+        raise TtsBackendError(
+            f"TTS endpoint unreachable at {remote_base} (turn {index + 1}/{total_turns}): {e}"
+        ) from e
+    except Exception as e:
+        raise TtsBackendError(
+            f"TTS ({backend}) failed for turn {index + 1}/{total_turns} "
+            f"(speaker {turn.speaker}): {e}"
+        ) from e
+    size = getattr(pcm, "size", len(pcm) if pcm is not None else 0)
+    if pcm is None or size == 0:
+        raise TtsBackendError(
+            f"TTS ({backend}) returned empty audio for turn {index + 1}/{total_turns} "
+            f"(speaker {turn.speaker})"
+        )
+    return pcm
+
+
+async def _synthesize_turns(
+    turns: list[Any],
+    voice_a: str,
+    voice_b: str,
+    *,
+    is_remote: bool,
+    remote_base: str,
+    remote_key: str,
+    remote_model: str,
+    backend: str,
+    on_progress: ProgressCallback | None,
+) -> list[Any]:
+    """Step 2: synthesize each turn to PCM, skipping genuinely-empty turns."""
+    pcm_turns: list[Any] = []
+    total_turns = len(turns)
+    for i, turn in enumerate(turns):
+        await _emit(
+            on_progress,
+            {"stage": "synthesizing", "current": i + 1, "total": total_turns},
+        )
+        voice = voice_a if turn.speaker == "A" else voice_b
+        pcm = await _synthesize_turn_pcm(
+            turn,
+            i,
+            total_turns,
+            voice,
+            is_remote=is_remote,
+            remote_base=remote_base,
+            remote_key=remote_key,
+            remote_model=remote_model,
+            backend=backend,
+        )
+        if pcm is not None:
+            pcm_turns.append(pcm)
+    return pcm_turns
+
+
+def _build_transcript_text(
+    mode: str,
+    report: ReportEvent,
+    voice_a: str,
+    voice_b: str,
+    turns: list[Any],
+) -> str:
+    """Step 4: build the transcript markdown.  ``"single"`` mode has no "Host
+    A/B" labels — just the spoken text; ``"podcast"`` mode prefixes each turn
+    with its host label."""
+    if mode == "single":
+        # Single-speaker: no "Host A/B" labels — just the spoken text.
+        transcript_lines: list[str] = [
+            "# Audio Overview Transcript",
+            "",
+            f"Query: {report.query}",
+            f"Voice: {voice_a}",
+            f"Turns: {len(turns)}",
+            "",
+        ]
+        for turn in turns:
+            transcript_lines.append(turn.text)
+            transcript_lines.append("")
+    else:
+        transcript_lines = [
+            "# Audio Overview Transcript",
+            "",
+            f"Query: {report.query}",
+            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
+            f"Turns: {len(turns)}",
+            "",
+        ]
+        for turn in turns:
+            label = "Host A" if turn.speaker == "A" else "Host B"
+            transcript_lines.append(f"**{label}:** {turn.text}")
+            transcript_lines.append("")
+    return "\n".join(transcript_lines)
+
+
+def _write_audio_artifacts(
+    mp3_path: Path, transcript_path: Path, mixed_mp3: bytes, transcript_text: str
+) -> None:
+    """Step 5: write to the cid-scoped cache dir.  Atomic: write to .part then
+    rename, so a partial file is never served."""
+    mp3_tmp = mp3_path.with_suffix(mp3_path.suffix + ".part")
+    tr_tmp = transcript_path.with_suffix(transcript_path.suffix + ".part")
+    mp3_tmp.write_bytes(mixed_mp3)
+    tr_tmp.write_text(transcript_text, encoding="utf-8")
+    mp3_tmp.replace(mp3_path)
+    tr_tmp.replace(transcript_path)
+
+
 async def generate_report_audio(
     report: ReportEvent,
     conversation_id: str,
@@ -407,132 +648,39 @@ async def generate_report_audio(
         raise ValueError(f"Unknown audio mode {mode!r}; expected 'podcast' or 'single'.")
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    # B3: Content-hash cache key — the key is a hash of the report text + follow-up
-    # content so that regenerating after an edit (new summary/sections/follow-ups)
-    # busts the cache and produces a fresh audio file.  The hash replaces the old
-    # mode+fu_count suffix which collided across edits of the same conversation.
-    _content_seed = (
-        report.query
-        + (report.summary or "")
-        + "".join(s.markdown for s in report.sections)
-        + ("|".join(f"{q}:{a}" for q, a in follow_ups) if follow_ups else "")
-        + mode
-    )
-    _content_hash = hashlib.sha256(_content_seed.encode()).hexdigest()[:12]
-    mp3_path = out_dir / f"audio_overview_{mode}_{_content_hash}.mp3"
-    transcript_path = out_dir / f"audio_overview_{mode}_{_content_hash}.md"
+    mp3_path, transcript_path = _report_audio_cache_paths(report, follow_ups, mode, out_dir)
 
     # If a previous run for this conversation already wrote both files, hand
-    # them back verbatim.  The pipeline is deterministic given the report, the
-    # LLM, and the voice settings — and the LLM call is the slow / expensive
-    # step.  This makes the endpoint idempotent (idempotency is good for
-    # retries, and the UI can re-press the button without re-spending RAM).
-    if mp3_path.exists() and transcript_path.exists():
+    # them back verbatim — see `_audio_cache_hit`.
+    if _audio_cache_hit(mp3_path, transcript_path):
         # Cache hit — instant, no synth, no download.  Tell the UI so it shows
         # "ready" rather than a false "downloading voice model…" note (W-08).
         await _emit(on_progress, {"stage": "cache_hit"})
         return mp3_path, transcript_path
 
-    voice_a = getattr(tts_settings, "voice_a", "af_heart")
-    voice_b = getattr(tts_settings, "voice_b", "af_bella")
-    provider = getattr(tts_settings, "provider", "bundled")
-    remote_base, remote_key, remote_model = _resolve_remote_params(
-        provider,
-        getattr(tts_settings, "base_url", "") or "",
-        getattr(tts_settings, "api_key_env", "") or "",
-        getattr(tts_settings, "model", "") or "",
-        resolve_key,
+    voice_a, voice_b, is_remote, remote_base, remote_key, remote_model, backend = (
+        _resolve_tts_voice_params(tts_settings, resolve_key)
     )
-    is_remote = provider != "bundled"
 
     # --- Step 1: turn-script ------------------------------------------------
     await _emit(on_progress, {"stage": "preparing"})
     overview_text = report_to_overview_text(report, follow_ups)
     turns = await _generate_turn_script(overview_text, mode, conversation_id=conversation_id)
-    backend = {
-        "bundled": "bundled Kokoro",
-        "speaches": "self-host Speaches",
-        "openai": "paid OpenAI-compatible",
-    }.get(provider, provider)
 
-    # --- Step 1b: voice-model download (bundled only, first run) ------------
-    # W-08: only signal "downloading voice model…" when a download is GENUINELY
-    # about to happen — i.e. the bundled backend is selected AND its weight
-    # files aren't on disk yet.  Remote backends and warm-cache runs skip this,
-    # so the UI never shows the false download note.
-    if not is_remote:
-        from . import tts_local
-
-        if not tts_local.model_files_present():
-            # Real byte-level download progress (W-08).  ensure_model fetches the
-            # missing weight files BEFORE synthesis and emits per-poll
-            # `downloading_model` events carrying actual downloaded/total/pct — so
-            # the UI shows a GENUINE progress bar, not a static note.  When the
-            # weights are already on disk this whole block is skipped (no event).
-            await tts_local.ensure_model(on_progress=on_progress)
+    await _ensure_voice_model_ready(is_remote, on_progress)
 
     # --- Step 2: synthesize each turn to PCM --------------------------------
-    # C1: normalize the text fed to TTS — strip markdown so the engine speaks
-    # clean prose, not raw markup.  The transcript (Step 4) is built from the
-    # ORIGINAL turn.text so it stays raw and readable as markdown.
-    pcm_turns: list[Any] = []
-    total_turns = len(turns)
-    for i, turn in enumerate(turns):
-        await _emit(
-            on_progress,
-            {"stage": "synthesizing", "current": i + 1, "total": total_turns},
-        )
-        voice = voice_a if turn.speaker == "A" else voice_b
-        tts_text = _normalize_for_tts(turn.text)
-        # D4 robustness: if the normalizer strips ALL content (e.g. a turn
-        # that is only a code block or citation chips), fall back to the
-        # original text so Kokoro receives something speakable.  An empty
-        # string causes Kokoro to raise `ValueError: need at least one array
-        # to concatenate`, which would abort the whole pipeline — far worse
-        # than synthesising the raw markdown (which Kokoro reads letter by
-        # letter but still produces non-empty audio).
-        if not tts_text.strip():
-            tts_text = turn.text.strip()
-        if not tts_text:
-            # The original turn text is ALSO empty — skip this turn entirely
-            # rather than letting Kokoro crash.  The mixer drops empty turns
-            # gracefully (no phantom silence gap).
-            logger.warning(
-                "TTS: skipping empty turn %d/%d (speaker %s) — both normalized "
-                "and raw text are empty; turn.text=%r",
-                i + 1,
-                len(turns),
-                turn.speaker,
-                turn.text,
-            )
-            continue
-        try:
-            if is_remote:
-                pcm = await audio_overview._synthesize_remote(
-                    tts_text,
-                    voice,
-                    remote_base,
-                    api_key=remote_key,
-                    model=remote_model,
-                )
-            else:
-                pcm = await audio_overview._synthesize_local(tts_text, voice)
-        except httpx.ConnectError as e:
-            raise TtsBackendError(
-                f"TTS endpoint unreachable at {remote_base} (turn {i + 1}/{len(turns)}): {e}"
-            ) from e
-        except Exception as e:
-            raise TtsBackendError(
-                f"TTS ({backend}) failed for turn {i + 1}/{len(turns)} "
-                f"(speaker {turn.speaker}): {e}"
-            ) from e
-        size = getattr(pcm, "size", len(pcm) if pcm is not None else 0)
-        if pcm is None or size == 0:
-            raise TtsBackendError(
-                f"TTS ({backend}) returned empty audio for turn {i + 1}/{len(turns)} "
-                f"(speaker {turn.speaker})"
-            )
-        pcm_turns.append(pcm)
+    pcm_turns = await _synthesize_turns(
+        turns,
+        voice_a,
+        voice_b,
+        is_remote=is_remote,
+        remote_base=remote_base,
+        remote_key=remote_key,
+        remote_model=remote_model,
+        backend=backend,
+        on_progress=on_progress,
+    )
 
     # --- Step 3: mix in PCM, encode the whole overview once -----------------
     await _emit(on_progress, {"stage": "mixing"})
@@ -542,42 +690,10 @@ async def generate_report_audio(
     mixed_mp3 = encode_mp3(mixed_pcm, sample_rate=audio_overview.TTS_SAMPLE_RATE)
 
     # --- Step 4: build transcript -------------------------------------------
-    if mode == "single":
-        # Single-speaker: no "Host A/B" labels — just the spoken text.
-        transcript_lines: list[str] = [
-            "# Audio Overview Transcript",
-            "",
-            f"Query: {report.query}",
-            f"Voice: {voice_a}",
-            f"Turns: {len(turns)}",
-            "",
-        ]
-        for turn in turns:
-            transcript_lines.append(turn.text)
-            transcript_lines.append("")
-    else:
-        transcript_lines = [
-            "# Audio Overview Transcript",
-            "",
-            f"Query: {report.query}",
-            f"Voices: Host A = {voice_a}, Host B = {voice_b}",
-            f"Turns: {len(turns)}",
-            "",
-        ]
-        for turn in turns:
-            label = "Host A" if turn.speaker == "A" else "Host B"
-            transcript_lines.append(f"**{label}:** {turn.text}")
-            transcript_lines.append("")
-    transcript_text = "\n".join(transcript_lines)
+    transcript_text = _build_transcript_text(mode, report, voice_a, voice_b, turns)
 
     # --- Step 5: write to the cid-scoped cache dir --------------------------
-    # Atomic: write to .part then rename, so a partial file is never served.
-    mp3_tmp = mp3_path.with_suffix(mp3_path.suffix + ".part")
-    tr_tmp = transcript_path.with_suffix(transcript_path.suffix + ".part")
-    mp3_tmp.write_bytes(mixed_mp3)
-    tr_tmp.write_text(transcript_text, encoding="utf-8")
-    mp3_tmp.replace(mp3_path)
-    tr_tmp.replace(transcript_path)
+    _write_audio_artifacts(mp3_path, transcript_path, mixed_mp3, transcript_text)
 
     logger.info(
         "report audio generated: cid-artifact dir=%s mp3=%d bytes turns=%d backend=%s",

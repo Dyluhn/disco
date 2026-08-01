@@ -407,24 +407,16 @@ def layout_chart_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
 # ---------------------------------------------------------------------------
 
 
-def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
-    """Title-strip + native python-pptx table (real, editable table shape).
+def _table_slide_geometry(
+    spec: TableSpec | None,
+) -> tuple[bool, list[Any], int, int]:
+    """Derive ``(has_header, data_rows, n_cols, row_offset)`` from `spec`.
 
-    Header row gets accent fill with white text.  Data rows use theme.text.
-
-    ``slide`` is duck-typed: must have ``.title`` (str), ``.table`` (TableSpec|None),
-    and ``.notes`` (str|None).  Compatible with both C1 ``Slide`` and ``DeckSlide``.
+    A table is renderable when it has EITHER headers or rows. The old gate
+    bailed on empty `headers` alone and discarded a fully-populated `rows`
+    (gauntlet 2026-07-07: a 7-row comparison table with headers==[] rendered
+    as "[no data]", losing every row).
     """
-    from pptx.util import Emu, Pt
-
-    content_top = _title_strip(prs_slide, getattr(slide, "title", ""), theme)
-    spec: TableSpec | None = getattr(slide, "table", None)
-    tbl_h = _SLIDE_H - content_top - _MARGIN
-
-    # A table is renderable when it has EITHER headers or rows. The old gate bailed on
-    # empty `headers` alone and discarded a fully-populated `rows` (gauntlet 2026-07-07:
-    # a 7-row comparison table with headers==[] rendered as "[no data]", losing every
-    # row). Only fall through to the placeholder when there is genuinely nothing.
     has_header = bool(spec and spec.headers)
     data_rows = list(spec.rows) if spec and spec.rows else []
     n_cols = (
@@ -432,45 +424,59 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
         if spec is not None and spec.headers
         else max((len(r) for r in data_rows), default=0)
     )
-    if spec is None or n_cols == 0 or (not has_header and not data_rows):
-        _chart_empty_placeholder(prs_slide, _MARGIN, content_top, _CW, tbl_h, theme)
-        _maybe_notes(prs_slide, slide)
-        return
-
     row_offset = 1 if has_header else 0
-    n_rows = len(data_rows) + row_offset
+    return has_header, data_rows, n_cols, row_offset
 
-    tbl = prs_slide.shapes.add_table(
-        n_rows,
-        n_cols,
-        Emu(_MARGIN),
-        Emu(content_top),
-        Emu(_CW),
-        Emu(tbl_h),
-    )
-    table = tbl.table
 
-    # Header row — accent background, white bold text (only when headers supplied).
-    if has_header:
-        for j, hdr in enumerate(spec.headers):
-            cell = table.cell(0, j)
-            cell.text = str(hdr)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = _rgb(theme.accent)
-            for para in cell.text_frame.paragraphs:
-                for run in para.runs:
-                    run.font.color.rgb = _rgb("#ffffff")
-                    run.font.bold = True
-                    run.font.size = Pt(12)
+def _table_slide_is_empty(
+    spec: TableSpec | None, n_cols: int, has_header: bool, data_rows: list[Any]
+) -> bool:
+    """Only fall through to the placeholder when there is genuinely nothing —
+    not merely an empty header list."""
+    return spec is None or n_cols == 0 or (not has_header and not data_rows)
 
-    # Data rows. In the headerless case the first column carries the row labels
-    # (dimension names in a comparison table), so bold it for scannability instead
-    # of leaving a flat, hard-to-read grid.
-    # Cell fill is set EXPLICITLY from the theme: python-pptx's default table style
-    # is a light banded fill, so on a dark theme the near-white ``theme.text`` runs
-    # were invisible on the default light cells (gauntlet e-web 2026-07-07 — data
-    # rows unreadable). surface_1 + theme.text is self-consistent on any theme,
-    # matching the two_by_two quadrant treatment.
+
+def _render_pptx_table_header(
+    table: Any, spec: TableSpec | None, has_header: bool, theme: Theme
+) -> None:
+    """Header row — accent background, white bold text (only when headers
+    supplied)."""
+    from pptx.util import Pt
+
+    if not has_header or spec is None:
+        return
+    for j, hdr in enumerate(spec.headers):
+        cell = table.cell(0, j)
+        cell.text = str(hdr)
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = _rgb(theme.accent)
+        for para in cell.text_frame.paragraphs:
+            for run in para.runs:
+                run.font.color.rgb = _rgb("#ffffff")
+                run.font.bold = True
+                run.font.size = Pt(12)
+
+
+def _render_pptx_table_data_rows(
+    table: Any,
+    data_rows: list[Any],
+    n_cols: int,
+    row_offset: int,
+    has_header: bool,
+    theme: Theme,
+) -> None:
+    """Data rows. In the headerless case the first column carries the row
+    labels (dimension names in a comparison table), so bold it for
+    scannability instead of leaving a flat, hard-to-read grid.
+
+    Cell fill is set EXPLICITLY from the theme: python-pptx's default table
+    style is a light banded fill, so on a dark theme the near-white
+    ``theme.text`` runs were invisible on the default light cells (gauntlet
+    e-web 2026-07-07 — data rows unreadable). surface_1 + theme.text is
+    self-consistent on any theme, matching the two_by_two quadrant treatment.
+    """
+    from pptx.util import Pt
+
     for i, row in enumerate(data_rows):
         for j in range(n_cols):
             val = str(row[j]) if j < len(row) else ""
@@ -484,5 +490,41 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
                     run.font.color.rgb = _rgb(theme.text)
                     if not has_header and j == 0:
                         run.font.bold = True
+
+
+def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
+    """Title-strip + native python-pptx table (real, editable table shape).
+
+    Header row gets accent fill with white text.  Data rows use theme.text.
+
+    ``slide`` is duck-typed: must have ``.title`` (str), ``.table`` (TableSpec|None),
+    and ``.notes`` (str|None).  Compatible with both C1 ``Slide`` and ``DeckSlide``.
+    """
+    from pptx.util import Emu
+
+    content_top = _title_strip(prs_slide, getattr(slide, "title", ""), theme)
+    spec: TableSpec | None = getattr(slide, "table", None)
+    tbl_h = _SLIDE_H - content_top - _MARGIN
+
+    has_header, data_rows, n_cols, row_offset = _table_slide_geometry(spec)
+    if _table_slide_is_empty(spec, n_cols, has_header, data_rows):
+        _chart_empty_placeholder(prs_slide, _MARGIN, content_top, _CW, tbl_h, theme)
+        _maybe_notes(prs_slide, slide)
+        return
+
+    n_rows = len(data_rows) + row_offset
+
+    tbl = prs_slide.shapes.add_table(
+        n_rows,
+        n_cols,
+        Emu(_MARGIN),
+        Emu(content_top),
+        Emu(_CW),
+        Emu(tbl_h),
+    )
+    table = tbl.table
+
+    _render_pptx_table_header(table, spec, has_header, theme)
+    _render_pptx_table_data_rows(table, data_rows, n_cols, row_offset, has_header, theme)
 
     _maybe_notes(prs_slide, slide)

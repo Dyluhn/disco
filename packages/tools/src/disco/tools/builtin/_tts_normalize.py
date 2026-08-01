@@ -240,14 +240,20 @@ def _linearize_tables(text: str) -> str:
     return "\n".join(out)
 
 
-def _linearize_table_block(block: list[str]) -> list[str] | None:
+def _parse_table_rows(block: list[str]) -> list[list[str]] | None:
+    """Split each line into cells; bail (return None) if the block isn't a
+    genuine table — too short, or any row has fewer than 2 cells."""
     if len(block) < 2:
         return None
-
     rows = [_split_table_row(line) for line in block]
     if any(len(row) < 2 for row in rows):
         return None
+    return rows
 
+
+def _table_headers_and_data_rows(rows: list[list[str]]) -> tuple[list[str], list[list[str]]]:
+    """Detect an optional header row (row[1] is a ``---`` separator) and split
+    `rows` into ``(headers, data_rows)``."""
     separator_index = 1 if _is_table_separator(rows[1]) else -1
     if separator_index == 1:
         headers = rows[0]
@@ -255,6 +261,37 @@ def _linearize_table_block(block: list[str]) -> list[str] | None:
     else:
         headers = []
         data_rows = rows
+    return headers, data_rows
+
+
+def _spoken_table_row(row: list[str], headers: list[str], column_count: int) -> str | None:
+    """Render one data row as a spoken fragment, or None if it carries no
+    speakable content.  Mirrors the original if/elif/elif precedence: once the
+    headers case applies, the other two shapes are never considered — even if
+    it yields no parts."""
+    cells = row[:column_count]
+    if headers and len(headers) == len(cells):
+        parts = [
+            f"{header}: {cell}"
+            for header, cell in zip(headers, cells, strict=False)
+            if header and cell
+        ]
+        if parts:
+            return _ensure_sentence_end("; ".join(parts))
+        return None
+    if len(cells) == 2 and cells[0] and cells[1]:
+        return _ensure_sentence_end(f"{cells[0]}: {cells[1]}")
+    if cells:
+        return _ensure_sentence_end("; ".join(cell for cell in cells if cell))
+    return None
+
+
+def _linearize_table_block(block: list[str]) -> list[str] | None:
+    rows = _parse_table_rows(block)
+    if rows is None:
+        return None
+
+    headers, data_rows = _table_headers_and_data_rows(rows)
 
     column_count = len(headers or data_rows[0])
     if column_count > 4:
@@ -262,19 +299,9 @@ def _linearize_table_block(block: list[str]) -> list[str] | None:
 
     spoken_rows: list[str] = []
     for row in data_rows:
-        cells = row[:column_count]
-        if headers and len(headers) == len(cells):
-            parts = [
-                f"{header}: {cell}"
-                for header, cell in zip(headers, cells, strict=False)
-                if header and cell
-            ]
-            if parts:
-                spoken_rows.append(_ensure_sentence_end("; ".join(parts)))
-        elif len(cells) == 2 and cells[0] and cells[1]:
-            spoken_rows.append(_ensure_sentence_end(f"{cells[0]}: {cells[1]}"))
-        elif cells:
-            spoken_rows.append(_ensure_sentence_end("; ".join(cell for cell in cells if cell)))
+        spoken = _spoken_table_row(row, headers, column_count)
+        if spoken is not None:
+            spoken_rows.append(spoken)
     return spoken_rows
 
 

@@ -24,816 +24,164 @@ instructs: "if image_prompt set, body=[] or at most one caption line."
 
 Layering: disco.tools → disco.core (legal downward import).
           disco.tools ≠→ disco.agent_server (upward import — never here).
+
+The implementation (prompt templates, LLM endpoint resolution, the raw
+chat-completions transport, theme/craft defaults, JSON extraction/validation)
+lives in the sibling ``_slides_pipeline_parts`` package; this module re-imports
+and re-exports every one of those names unchanged so that
+``disco.tools.builtin._slides_pipeline.<name>`` keeps resolving exactly as it
+did before the split — including for ``find_and_edit.py``'s imports and for
+test ``patch``/``patch.object`` targets, since every real caller of these names
+(``_stage_outline``, ``_stage_fill``, ``_stage_assets``, ``generate_deck``)
+still lives physically in this module and therefore still resolves them at
+call time through this module's globals.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING
 
-import httpx
-from disco.tools.builtin._deck_schema import (
-    AccentSpec,
-    AuthoredDeck,
-    AuthoredSlide,
-    Deck,
-    FontPairingSpec,
-    LightDarkTokenPair,
-    SlideArchetype,
-    lower_deck,
+from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, Deck, lower_deck
+
+from ._slides_pipeline_parts._constants import (
+    _ARCHETYPES as _ARCHETYPES,
 )
-from pydantic import ValidationError
+from ._slides_pipeline_parts._constants import (
+    _ARCHETYPES_STR,
+)
+from ._slides_pipeline_parts._constants import (
+    _VALID_THEMES as _VALID_THEMES,
+)
+from ._slides_pipeline_parts._constants import (
+    _VALID_THEMES_STR as _VALID_THEMES_STR,
+)
+
+# --- compatibility re-exports (PKG-10-MEDIA) --------------------------------
+# Names this module exposed BEFORE the parts split. Consumers and the test
+# suite reach several of them through this module object (including via
+# monkeypatch), so the facade must keep exposing every one. Restored
+# programmatically by diffing this module's top-level names against its
+# parent commit; PKG-13-FACADES owns their eventual deletion.
+from ._slides_pipeline_parts._constants import (
+    SlideArchetype as SlideArchetype,
+)
+from ._slides_pipeline_parts._constants import (
+    get_args as get_args,
+)
+from ._slides_pipeline_parts._craft import (
+    _BANNED_TITLE_PATTERNS as _BANNED_TITLE_PATTERNS,
+)
+from ._slides_pipeline_parts._craft import (
+    _IMAGE_SLOT_ARCHETYPES as _IMAGE_SLOT_ARCHETYPES,
+)
+from ._slides_pipeline_parts._craft import (
+    _SECTION_ARCHETYPES as _SECTION_ARCHETYPES,
+)
+from ._slides_pipeline_parts._craft import (
+    _THEME_ALIASES as _THEME_ALIASES,
+)
+from ._slides_pipeline_parts._craft import (
+    _VALID_LAYOUT_HINTS as _VALID_LAYOUT_HINTS,
+)
+from ._slides_pipeline_parts._craft import (
+    AccentSpec as AccentSpec,
+)
+from ._slides_pipeline_parts._craft import (
+    FontPairingSpec as FontPairingSpec,
+)
+from ._slides_pipeline_parts._craft import (
+    LightDarkTokenPair as LightDarkTokenPair,
+)
+from ._slides_pipeline_parts._craft import (
+    _clip_words as _clip_words,
+)
+from ._slides_pipeline_parts._craft import (
+    _coerce_known_theme_aliases as _coerce_known_theme_aliases,
+)
+from ._slides_pipeline_parts._craft import (
+    _compose_image_prompt as _compose_image_prompt,
+)
+from ._slides_pipeline_parts._craft import (
+    _demote_tableless_comparisons as _demote_tableless_comparisons,
+)
+from ._slides_pipeline_parts._craft import (
+    _enforce_density_budgets as _enforce_density_budgets,
+)
+from ._slides_pipeline_parts._craft import (
+    _ensure_image_slot_prompts as _ensure_image_slot_prompts,
+)
+from ._slides_pipeline_parts._craft import (
+    _image_slot_type as _image_slot_type,
+)
+from ._slides_pipeline_parts._craft import (
+    _infer_archetype as _infer_archetype,
+)
+from ._slides_pipeline_parts._craft import (
+    _null_invalid_layout_hints as _null_invalid_layout_hints,
+)
+from ._slides_pipeline_parts._craft import (
+    _prepare_filled_deck,
+    _prepare_outline_deck,
+)
+from ._slides_pipeline_parts._craft import (
+    _scrub_title as _scrub_title,
+)
+from ._slides_pipeline_parts._craft import (
+    _theme_defaults as _theme_defaults,
+)
+from ._slides_pipeline_parts._craft import (
+    _with_craft_defaults as _with_craft_defaults,
+)
+from ._slides_pipeline_parts._craft import (
+    re as re,
+)
+from ._slides_pipeline_parts._json_deck_parse import (
+    ValidationError as ValidationError,
+)
+from ._slides_pipeline_parts._json_deck_parse import (
+    _extract_json_object as _extract_json_object,
+)
+from ._slides_pipeline_parts._json_deck_parse import (
+    _parse_authored_deck,
+)
+from ._slides_pipeline_parts._json_deck_parse import (
+    json as json,
+)
+from ._slides_pipeline_parts._llm_client import (
+    LLMResponse as LLMResponse,
+)
+from ._slides_pipeline_parts._llm_client import _call_llm, _complete_response_content, _retry_msg
+from ._slides_pipeline_parts._llm_client import (
+    httpx as httpx,
+)
+from ._slides_pipeline_parts._llm_endpoint import (
+    Any as Any,
+)
+from ._slides_pipeline_parts._llm_endpoint import (
+    _purpose_for_model_endpoint,
+    _resolve_llm_key,
+    _resolve_slides_llm,
+)
+from ._slides_pipeline_parts._prompts import (
+    _CAPABLE_SYSTEM,
+    _FILL_USER_TMPL,
+    _OUTLINE_USER_TMPL,
+    _WEAK_SYSTEM,
+)
+from ._slides_pipeline_parts._types import (
+    LLMResponseLike as LLMResponseLike,
+)
+from ._slides_pipeline_parts._types import (
+    SlidesGenerationIncompleteError,
+)
 
 if TYPE_CHECKING:
     from disco.tools.anatomy import ToolContext
     from disco.tools.builtin.image_gen import ImageBackend
 
 _LOG = logging.getLogger("disco.tools.slides_pipeline")
-
-
-@dataclass(frozen=True)
-class LLMResponse:
-    """Provider fields needed to distinguish complete output from truncation."""
-
-    content: str
-    finish_reason: str | None
-
-
-type LLMResponseLike = str | LLMResponse
-
-
-class SlidesGenerationIncompleteError(RuntimeError):
-    """The provider explicitly reported that a slide-author response was incomplete."""
-
-    def __init__(self, stage: str, finish_reason: str) -> None:
-        if finish_reason == "length":
-            detail = "truncated"
-            code = "SLIDES_PROVIDER_OUTPUT_TRUNCATED"
-        else:
-            detail = "did not complete"
-            code = "SLIDES_PROVIDER_OUTPUT_INCOMPLETE"
-        super().__init__(
-            f"{code}: Provider {detail} the slide {stage} response "
-            f"(finish_reason={finish_reason!r}); the incomplete response was not "
-            "retried at the same output cap, no partial deck was written, and no "
-            "plain-renderer fallback was substituted. Reduce the requested slide "
-            "count or goal scope, or select a model that can return the complete "
-            "authored-deck JSON, then regenerate"
-        )
-        self.code = code
-        self.stage = stage
-        self.finish_reason = finish_reason
-
-
-# Prompt templates below intentionally preserve JSON examples and schema alternations.
-# ruff: noqa: E501
-
-# Derive the valid theme set from the single source of truth — the Literal on
-# AuthoredDeck.theme.  Every prompt and the retry message reference this tuple
-# so they stay in sync with the schema automatically.
-_VALID_THEMES: tuple[str, ...] = get_args(AuthoredDeck.model_fields["theme"].annotation)
-_VALID_THEMES_STR = " | ".join(f'"{t}"' for t in _VALID_THEMES)
-_ARCHETYPES: tuple[str, ...] = get_args(SlideArchetype)
-_ARCHETYPES_STR = " | ".join(f'"{a}"' for a in _ARCHETYPES)
-
-_IMAGE_SLOT_ARCHETYPES = frozenset({"full_bleed_image", "photo_grid"})
-_SECTION_ARCHETYPES = frozenset({"section_divider"})
-_BANNED_TITLE_PATTERNS = (
-    re.compile(r"\bit'?s\s+not\s+.+?\bit'?s\s+.+", re.IGNORECASE),
-    re.compile(r"\bthe\s+magic\s+moment\b", re.IGNORECASE),
-    re.compile(r"^(verdict|punchline)\s*:", re.IGNORECASE),
-)
-
-# ---------------------------------------------------------------------------
-# LLM endpoint resolution (ConfigStore-based; no agent_server import)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_slides_llm() -> tuple[str, str, str | None]:
-    """Return (base_url, model_id, api_key) for the slides generation LLM.
-
-    Uses the AGENT_DRIVER model from ConfigStore. The api_key is resolved from
-    the entry's `api_key_env` SecretStore ref so a REMOTE driver
-    (OpenRouter / any paid OpenAI-compatible
-    endpoint) authenticates — without it the deck author silently 401s on every
-    non-local driver. Local keyless endpoints resolve to None (no auth header).
-
-    This mirrors audio_config.py's approach without importing from agent_server.
-    """
-    try:
-        from disco.core.llm import ConfigStore
-        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
-        from disco.core.llm.types import ModelRole
-
-        store = ConfigStore()
-        cfg = store.load()
-        model_key = cfg.model_for(ModelRole.AGENT_DRIVER)
-        entry = cfg.models.get(model_key)
-        if (
-            entry
-            and entry.base_url
-            and store.origin_approved(entry.base_url, f"model:{entry.provider}", entry.api_key_env)
-            and secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url)
-        ):
-            return entry.base_url.rstrip("/"), entry.model_id, _resolve_llm_key(entry.api_key_env)
-    except Exception:  # noqa: BLE001
-        pass
-    return "", "local-model", None
-
-
-def _resolve_llm_key(api_key_env: str | None) -> str | None:
-    """Resolve the named secret for the deck-author LLM. Never logs the value.
-
-    Mirrors the agent-server's canonical SecretStore-only resolution:
-    the OpenRouter driver key is stored in the RESERVED "openrouter" SecretStore slot
-    (set by the dedicated /api OpenRouter route), NOT under its env-var name — so a
-    plain get_secret(api_key_env) misses it. Returns None if nothing is configured."""
-    if not api_key_env:
-        return None
-    try:
-        from disco.core.llm.secret_refs import resolve_provider_secret
-        from disco.core.llm.secrets import SecretStore
-
-        return resolve_provider_secret(api_key_env, SecretStore())
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _purpose_for_model_endpoint(cfg: Any, llm_url: str, api_key_env: str | None) -> str:
-    for entry in cfg.models.values():
-        if not entry.base_url:
-            continue
-        # Normalize BOTH sides: a keyless local entry stores api_key_env as "" while
-        # ctx.driver_llm carries it verbatim — `None == ""` must not knock a
-        # self-hosted driver down to model:unknown (unapproved).
-        if entry.base_url.rstrip("/") == llm_url and (entry.api_key_env or None) == (
-            api_key_env or None
-        ):
-            return f"model:{entry.provider}"
-    return "model:unknown"
-
-
-# ---------------------------------------------------------------------------
-# Prompt templates
-# ---------------------------------------------------------------------------
-
-# Capable-model system prompt (compact — C4 verdict: loose hybrid wins)
-_CAPABLE_SYSTEM = """\
-You are an expert slide-deck designer. Generate a slide deck as valid JSON matching \
-the AuthoredDeck schema. Output ONLY valid JSON — no markdown fences, no prose before \
-or after.
-
-AuthoredDeck schema:
-{
-  "title": "Deck title",
-  "theme": "disco-light" | "disco-dark" | "ink-light" | "sepia-light"
-           | "signal-light" | "midnight-dark" | "neutral" | "neutral-light",
-  "accent_palette": [{"name": "teal", "value": "#1f9a8a", "role": "section accent"}],
-  "font_pairing": {"display": "Fraunces", "body": "Newsreader", "ui": "Schibsted Grotesk"},
-  "token_pair": {"light_bg": "#fcfcfa", "light_text": "#1a1813", "dark_bg": "#0d1017", "dark_text": "#e9e6df"},
-  "art_direction": "grainy risograph, two-tone teal/sand, soft grain, no text",
-  "slides": [AuthoredSlide, ...]
-}
-
-AuthoredSlide schema:
-{
-  "type": "title"|"bullets"|"section_header"|"two_column"|"comparison"|"metrics"|"image_right"|"image_left"|"full_image"|"table"|"closing",
-  "archetype": "title"|"section_divider"|"big_number"|"full_bleed_image"|"quote"|"comparison_table"|"timeline"|"diagram"|"two_by_two"|"photo_grid"|"bullets"|"closing",
-  "title": "Slide heading",
-  "body": ["bullet or content line", ...],
-  "layout_hint": null | "title"|"bullets"|...,
-  "image_prompt": null | "prompt for image generation",
-  "chart": null,
-  "table": null,
-  "notes": null | "speaker notes (never shown on slide)"
-}
-
-Deck craft rules:
-- Write the full title sequence first and keep ONE grammatical style for every title: \
-  either short topic noun-phrases OR brief declarative action titles. Never mix them. \
-  Titles alone must tell the story.
-- Choose an archetype for every slide from the listed set. Never use more than two \
-  consecutive "bullets" archetypes. Every section opens with section_divider or \
-  full_bleed_image. Include at least one big_number or quote when the content supports it. \
-  HARD RULE for decks of 8+ slides: at least TWO slides must be image-bearing \
-  (section_divider, full_bleed_image, or photo_grid) — a long deck with zero imagery \
-  slides is invalid.
-- VARIETY RULE: no specialty archetype (two_by_two, timeline, diagram, comparison_table, \
-  big_number, quote) more than TWICE per deck — three near-identical layouts in one deck \
-  reads as a template, not a design. A two_by_two is a 2x2 ANALYTICAL grid: use it only \
-  when the four items genuinely trade off along two axes, and give every quadrant a bold \
-  headline PLUS one support line — four floating one-liners in big empty boxes is invalid; \
-  if the content is really just four parallel facts, use bullets instead.
-- comparison_table REQUIRES the "table" field filled with real headers+rows. If you \
-  cannot produce an actual table, do NOT use comparison_table — use bullets or \
-  two_column instead (a comparison slide with a thin body renders mostly empty).
-- Commit a theme with 3-4 named accents, a non-default font pairing (never Inter, \
-  Roboto, or Arial), a light/dark token pair, and one project-wide art_direction.
-- Image prompts are slots, not decoration: cover + section dividers + full_bleed_image \
-  and photo_grid slides need image_prompt. Compose them as art direction + slide subject \
-  + slot type + "no words, no lettering". Target at least one image per 3-4 slides; do \
-  not add decorative spam.
-- Density: bullets <= 5 lines and <= 9 words each; big_number = 1 number + 1 line; \
-  full_bleed_image/photo_grid <= 2 lines. Keep repeated elements parallel.
-- Banned title patterns: "It's not X. It's Y.", punchline/verdict titles, \
-  "The magic moment". Avoid web-density reflexes; bottom whitespace is correct on slides.
-- Think in slide pixels: 36pt = 48px, and visible type should not imply less than a \
-  24px floor.
-- notes and image_prompt are NEVER shown on the visible slide face.
-"""
-
-# Worked-example system prompt for weak models (ctx.assist=True)
-_WEAK_SYSTEM = """\
-You are an expert slide-deck designer. Generate a slide deck as valid JSON.
-Output ONLY valid JSON — no markdown fences, no prose.
-
-The "theme" field MUST be one of these exact strings:
-"disco-light" | "disco-dark" | "ink-light" | "sepia-light"
-| "signal-light" | "midnight-dark" | "neutral" | "neutral-light"
-
-Use these craft rules:
-- First decide the whole title sequence. Use one style only: short topic noun-phrases OR \
-  brief declarative action titles. Titles alone must tell the story.
-- Every slide needs an "archetype" from this exact set: title, section_divider, \
-  big_number, full_bleed_image, quote, comparison_table, timeline, diagram, two_by_two, \
-  photo_grid, bullets, closing.
-- Never use more than two bullets slides in a row. Every section starts with \
-  section_divider or full_bleed_image.
-- Commit 3-4 named accents, a font pairing that is NOT Inter/Roboto/Arial, a light/dark \
-  token pair, and one art_direction.
-- Cover, every section_divider, every full_bleed_image, and every photo_grid slide need \
-  image_prompt. Prompt shape: art_direction + slide subject + slot type + \
-  "no words, no lettering".
-- Density: bullets <= 5 lines <= 9 words each; big_number = 1 number + 1 line; \
-  full_bleed_image/photo_grid <= 2 lines. Keep repeated items parallel.
-- Banned title patterns: "It's not X. It's Y.", punchline/verdict titles, \
-  "The magic moment". Use a 24px visible type floor mindset.
-
-Copy this exact structure and fill it in with the requested content:
-
-{
-  "title": "DECK TITLE HERE",
-  "theme": "disco-light",
-  "accent_palette": [
-    {"name": "teal", "value": "#1f9a8a", "role": "primary section accent"},
-    {"name": "sand", "value": "#d8b26e", "role": "warm contrast"},
-    {"name": "ink", "value": "#20211c", "role": "text and linework"}
-  ],
-  "font_pairing": {"display": "Fraunces", "body": "Newsreader", "ui": "Schibsted Grotesk"},
-  "token_pair": {"light_bg": "#fcfcfa", "light_text": "#1a1813", "dark_bg": "#0d1017", "dark_text": "#e9e6df"},
-  "art_direction": "grainy editorial risograph, teal and sand palette, soft paper grain, no text",
-  "slides": [
-    {
-      "type": "title",
-      "archetype": "title",
-      "title": "MAIN TITLE",
-      "body": ["One-line subtitle or tagline"],
-      "layout_hint": "full_image",
-      "image_prompt": "grainy editorial risograph, teal and sand palette, soft paper grain, no text; subject: MAIN TITLE; slot: full-bleed background; no words, no lettering",
-      "chart": null,
-      "table": null,
-      "notes": "Optional speaker notes"
-    },
-    {
-      "type": "bullets",
-      "archetype": "bullets",
-      "title": "SLIDE HEADING",
-      "body": [
-        "First parallel point",
-        "Second parallel point",
-        "Third parallel point",
-        "Fourth parallel point"
-      ],
-      "layout_hint": null,
-      "image_prompt": null,
-      "chart": null,
-      "table": null,
-      "notes": null
-    },
-    {
-      "type": "closing",
-      "archetype": "closing",
-      "title": "Thank You",
-      "body": ["Contact: name@example.com"],
-      "layout_hint": null,
-      "image_prompt": null,
-      "chart": null,
-      "table": null,
-      "notes": null
-    }
-  ]
-}
-"""
-
-_OUTLINE_USER_TMPL = """\
-Goal: {goal}
-
-Generate an outline of {n} slides for this deck.
-
-Before choosing any body copy, write the full slide title sequence in one grammatical \
-style for the entire deck. Pick either short topic noun-phrases OR brief declarative \
-action titles; do not mix styles. The titles alone must tell the story.
-
-Output a minimal AuthoredDeck JSON:
-- Deck-level fields must include title, theme, accent_palette, font_pairing, token_pair, \
-  art_direction, and slides.
-- accent_palette must contain 3-4 named accents suitable for OKLCH-friendly section \
-  derivation.
-- font_pairing must avoid Inter, Roboto, and Arial.
-- art_direction must be a reusable image style contract with style keywords, palette \
-  descriptors, medium/texture/lighting, and no-text guidance.
-- Each slide must include type, archetype, title, body, layout_hint, image_prompt, \
-  chart, table, and notes.
-- At outline stage, body must be [], notes null, chart null, table null.
-- Set image_prompt null at outline stage unless the slot subject is already essential; \
-  the fill stage will compose final prompts from art_direction.
-
-Archetype set: {archetypes}.
-Mix rules: never more than two consecutive "bullets"; every section opens with \
-section_divider or full_bleed_image; include at least one big_number or quote when \
-the material supports it.
-Use existing type values for renderer compatibility: title, bullets, section_header, \
-two_column, comparison, metrics, image_right, image_left, full_image, table, closing.
-"""
-
-_FILL_USER_TMPL = """\
-Here is the slide outline:
-{outline_json}
-
-Now fill in the complete content for each slide.  For each slide:
-- Keep type, archetype, title, theme, accent_palette, font_pairing, token_pair, and \
-  art_direction from the outline.
-- Preserve the outline's one-style title sequence. Do not introduce banned title \
-  patterns: "It's not X. It's Y.", punchline/verdict titles, or "The magic moment".
-- Apply density budgets by archetype:
-  * bullets: <= 5 body lines, <= 9 words per line.
-  * big_number: body is exactly 2 lines: one number, then one short interpretation line.
-  * full_bleed_image/photo_grid: <= 2 body lines.
-  * section_divider/title/closing: <= 1 body line unless speaker notes carry detail.
-- Make repeated elements parallel in grammar and length.
-- Use a 24px visible type floor mindset for any inline size guidance; 36pt equals 48px.
-- image_prompt is REQUIRED for the cover slide, every section_divider, every \
-  full_bleed_image slide, and every photo_grid slide. Compose it exactly as: \
-  art_direction + slide subject + slot type (full-bleed background | spot illustration \
-  | divider art) + "no words, no lettering".
-- Image prompts are capped to cover + dividers + explicit visual slides; do not add \
-  decorative image prompts to ordinary bullets slides.
-- If image_prompt is set and the slide is visual, set layout_hint to "full_image" and \
-  keep body at the visual-slide budget.
-- notes: optional 1–3 sentence speaker notes.
-
-Return the COMPLETE AuthoredDeck JSON with ALL fields filled in.
-Output ONLY valid JSON.
-"""
-
-
-def _retry_msg(err: str) -> str:
-    """Build a targeted retry prompt that names the specific parse error and
-    lists ALL valid theme values.  The theme enum is the most common mismatch
-    (models hallucinate values like ``"dark-research"`` when only shown 3 of the
-    8 valid strings) so we call it out explicitly on every retry."""
-    return (
-        "Your previous response was not valid JSON or did not match the AuthoredDeck schema.\n\n"
-        f"Error detail: {err}\n\n"
-        f'The "theme" field MUST be exactly one of: {_VALID_THEMES_STR}\n\n'
-        "Please fix all errors and output ONLY valid JSON matching the AuthoredDeck schema.\n"
-        "No markdown, no prose — only the raw JSON object."
-    )
-
-
-# ---------------------------------------------------------------------------
-# LLM call helper
-# ---------------------------------------------------------------------------
-
-
-async def _call_llm(
-    messages: list[dict[str, str]],
-    llm_url: str,
-    model: str,
-    *,
-    api_key: str | None = None,
-    temperature: float = 0.7,
-    max_tokens: int = 24576,
-) -> LLMResponse:
-    """Call the endpoint without discarding its completion status.
-
-    Sends a Bearer Authorization header when `api_key` is provided so a remote
-    driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
-    pass api_key=None and send no auth header (unchanged).
-
-    Gauntlet run-1 root cause (2026-07-07): reasoning drivers (MiniMax M3) think
-    for minutes on outline/fill-sized prompts — the old 120s cap produced
-    ``httpx.ReadTimeout`` whose ``str()`` is EMPTY, so the degraded note carried a
-    blank reason and every deck silently fell back to the plain renderer. Read
-    timeout is now generous (the deck author is a background step, not a UI
-    turn), timeouts raise with a NAMED reason, and the returned content goes
-    through the canonical think-strip — this raw path bypasses the router, so
-    nothing else removes a reasoning model's ``<think>`` span before JSON
-    parsing."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(600.0, connect=30.0),
-            trust_env=False,
-            follow_redirects=False,
-        ) as client:
-            resp = await client.post(
-                f"{llm_url}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.TimeoutException as e:
-        raise RuntimeError(
-            f"{type(e).__name__} after 600s from {llm_url} (reasoning models can "
-            "exceed short caps; the driver endpoint may be slow or wedged)"
-        ) from e
-    from disco.core.think import strip_think_spans
-
-    choice = data["choices"][0]
-    content = choice["message"].get("content") or ""
-    return LLMResponse(
-        content=strip_think_spans(content),
-        finish_reason=choice.get("finish_reason"),
-    )
-
-
-def _complete_response_content(response: LLMResponseLike, *, stage: str) -> str:
-    """Return content only when the provider did not report an incomplete stop.
-
-    Plain strings remain accepted for test and legacy adapters whose completion
-    status is unknown. The production HTTP adapter always returns ``LLMResponse``.
-    """
-    if isinstance(response, str):
-        return response
-    if not isinstance(response, LLMResponse):
-        raise TypeError(
-            f"Slide LLM adapter returned unsupported response type {type(response).__name__}"
-        )
-    finish_reason = (response.finish_reason or "").strip().lower()
-    if finish_reason == "length":
-        raise SlidesGenerationIncompleteError(stage, finish_reason)
-    if finish_reason not in ("", "stop", "end_turn", "eos", "eos_token"):
-        raise SlidesGenerationIncompleteError(stage, finish_reason)
-    return response.content
-
-
-# ---------------------------------------------------------------------------
-# Theme alias coercion (SAFE — known shorthands only)
-# ---------------------------------------------------------------------------
-
-# Only these canonical shorthands are coerced.  Unknown/invalid values (e.g.
-# ``"dark-research"``, ``"corporate"``) are left as-is so pydantic rejects them
-# and the retry (which lists the full enum) corrects the model.
-_THEME_ALIASES: dict[str, str] = {
-    "dark": "disco-dark",
-    "light": "disco-light",
-}
-
-
-def _coerce_known_theme_aliases(data: dict) -> dict:
-    """Coerce a known legacy theme shorthand to the canonical Literal value.
-
-    Returns a shallow copy with ``theme`` remapped when the value is a key in
-    ``_THEME_ALIASES``; otherwise returns ``data`` unchanged.
-    """
-    theme = data.get("theme")
-    if isinstance(theme, str) and theme in _THEME_ALIASES:
-        data = {**data, "theme": _THEME_ALIASES[theme]}
-    return data
-
-
-_VALID_LAYOUT_HINTS: frozenset[str] = frozenset(
-    get_args(get_args(AuthoredSlide.model_fields["layout_hint"].annotation)[0])
-)
-
-
-def _null_invalid_layout_hints(data: dict) -> dict:
-    """Null out off-enum ``layout_hint`` values instead of failing the deck.
-
-    ``layout_hint`` is OPTIONAL — the lowering infers a layout from ``type``/
-    ``archetype`` when it is None. Gauntlet run-1: MiniMax M3 authored creative
-    hints ("hero", "big_number") and the WHOLE outline hard-failed schema
-    validation over a nullable field, degrading the deck to the plain fallback.
-    Unknown hints now become None (a per-slide note in the retry already lists
-    the enum for fields that MUST be exact)."""
-    slides = data.get("slides")
-    if not isinstance(slides, list):
-        return data
-    fixed = []
-    changed = False
-    for s in slides:
-        if isinstance(s, dict):
-            hint = s.get("layout_hint")
-            if hint is not None and hint not in _VALID_LAYOUT_HINTS:
-                s = {**s, "layout_hint": None}
-                changed = True
-        fixed.append(s)
-    return {**data, "slides": fixed} if changed else data
-
-
-# ---------------------------------------------------------------------------
-# Craft metadata + density/image-slot post-processing
-# ---------------------------------------------------------------------------
-
-
-def _theme_defaults(
-    theme: str,
-) -> tuple[list[AccentSpec], FontPairingSpec, LightDarkTokenPair, str]:
-    """Return conservative craft metadata for legacy/partial model output."""
-    by_theme: dict[str, tuple[list[AccentSpec], FontPairingSpec, LightDarkTokenPair, str]] = {
-        "disco-light": (
-            [
-                AccentSpec(name="cerulean", value="#4077a3", role="primary emphasis"),
-                AccentSpec(name="moss", value="#397852", role="supportive proof"),
-                AccentSpec(name="paper", value="#d8b26e", role="warm section contrast"),
-            ],
-            FontPairingSpec(display="Fraunces", body="Newsreader", ui="Schibsted Grotesk"),
-            LightDarkTokenPair(
-                light_bg="#fcfcfa",
-                light_text="#1a1813",
-                dark_bg="#0d1017",
-                dark_text="#e9e6df",
-            ),
-            "grainy editorial risograph, cerulean and warm paper palette, soft print grain, no text",
-        ),
-        "signal-light": (
-            [
-                AccentSpec(name="cobalt", value="#2f5fd0", role="primary emphasis"),
-                AccentSpec(name="mint", value="#2f7d54", role="positive signal"),
-                AccentSpec(name="amber", value="#a07a30", role="threshold warning"),
-            ],
-            FontPairingSpec(display="Schibsted Grotesk", body="Newsreader", ui="Schibsted Grotesk"),
-            LightDarkTokenPair(
-                light_bg="#fbfcfd",
-                light_text="#13161c",
-                dark_bg="#0d1017",
-                dark_text="#e9e6df",
-            ),
-            "clean technical editorial illustration, cobalt and mint palette, precise linework, no text",
-        ),
-        "ink-light": (
-            [
-                AccentSpec(name="oxblood", value="#9d2b2b", role="primary emphasis"),
-                AccentSpec(name="charcoal", value="#15140f", role="linework"),
-                AccentSpec(name="warm gray", value="#c3beb6", role="secondary fields"),
-            ],
-            FontPairingSpec(display="Fraunces", body="Newsreader", ui="Schibsted Grotesk"),
-            LightDarkTokenPair(
-                light_bg="#ffffff",
-                light_text="#15140f",
-                dark_bg="#15140f",
-                dark_text="#f5f4f2",
-            ),
-            "stark ink editorial engraving, oxblood and charcoal palette, paper texture, no text",
-        ),
-        "sepia-light": (
-            [
-                AccentSpec(name="terracotta", value="#a85d2e", role="primary emphasis"),
-                AccentSpec(name="olive", value="#5a6b3a", role="supporting proof"),
-                AccentSpec(name="parchment", value="#d9cfb4", role="section field"),
-            ],
-            FontPairingSpec(display="Fraunces", body="Newsreader", ui="Schibsted Grotesk"),
-            LightDarkTokenPair(
-                light_bg="#f7f1e3",
-                light_text="#2c2417",
-                dark_bg="#2c2417",
-                dark_text="#f7f1e3",
-            ),
-            "warm archival collage, terracotta and parchment palette, soft paper grain, no text",
-        ),
-        "midnight-dark": (
-            [
-                AccentSpec(name="amber", value="#d9a441", role="primary emphasis"),
-                AccentSpec(name="sky", value="#76a9d8", role="cool contrast"),
-                AccentSpec(name="deep navy", value="#151926", role="background field"),
-            ],
-            FontPairingSpec(display="Fraunces", body="Newsreader", ui="Schibsted Grotesk"),
-            LightDarkTokenPair(
-                light_bg="#fbfcfd",
-                light_text="#13161c",
-                dark_bg="#0d1017",
-                dark_text="#e9e6df",
-            ),
-            "nocturne editorial illustration, amber and deep navy palette, soft cinematic grain, no text",
-        ),
-    }
-    accents, fonts, tokens, art_direction = by_theme.get(theme, by_theme["disco-light"])
-    return (
-        [accent.model_copy() for accent in accents],
-        fonts.model_copy(),
-        tokens.model_copy(),
-        art_direction,
-    )
-
-
-def _infer_archetype(slide: AuthoredSlide, index: int, total: int) -> SlideArchetype:
-    if index == 0:
-        return "title"
-    if index == total - 1 or slide.type.lower() == "closing":
-        return "closing"
-    typ = slide.type.lower()
-    if typ in ("section_header", "section"):
-        return "section_divider"
-    if typ in ("full_image", "image_left", "image_right") and not slide.body:
-        return "full_bleed_image"
-    if typ in ("metrics", "metrics_grid"):
-        return "big_number"
-    if typ in ("comparison", "table"):
-        return "comparison_table"
-    if typ == "two_column":
-        return "two_by_two"
-    return "bullets"
-
-
-def _with_craft_defaults(deck: AuthoredDeck) -> AuthoredDeck:
-    accents, fonts, tokens, art_direction = _theme_defaults(deck.theme)
-    if not deck.accent_palette:
-        deck.accent_palette = accents
-    if deck.font_pairing is None:
-        deck.font_pairing = fonts
-    if deck.token_pair is None:
-        deck.token_pair = tokens
-    if not deck.art_direction:
-        deck.art_direction = art_direction
-
-    total = len(deck.slides)
-    for i, slide in enumerate(deck.slides):
-        if slide.archetype is None:
-            slide.archetype = _infer_archetype(slide, i, total)
-    return deck
-
-
-def _clip_words(line: str, max_words: int) -> str:
-    words = line.split()
-    if len(words) <= max_words:
-        return line
-    return " ".join(words[:max_words])
-
-
-def _scrub_title(title: str) -> str:
-    out = title.strip()
-    if _BANNED_TITLE_PATTERNS[0].search(out):
-        parts = re.split(r"\bit'?s\s+", out, flags=re.IGNORECASE)
-        if parts:
-            out = parts[-1].strip().strip(".")
-    if _BANNED_TITLE_PATTERNS[1].search(out):
-        out = re.sub(r"\bthe\s+magic\s+moment\b", "Critical moment", out, flags=re.IGNORECASE)
-    if _BANNED_TITLE_PATTERNS[2].search(out):
-        out = re.sub(r"^(verdict|punchline)\s*:\s*", "", out, flags=re.IGNORECASE)
-    return out or title
-
-
-def _enforce_density_budgets(deck: AuthoredDeck) -> AuthoredDeck:
-    for slide in deck.slides:
-        slide.title = _scrub_title(slide.title)
-        archetype = slide.archetype or "bullets"
-        if archetype == "bullets":
-            slide.body = [_clip_words(line, 9) for line in slide.body[:5]]
-        elif archetype == "big_number":
-            slide.body = [_clip_words(line, 9) for line in slide.body[:2]]
-        elif archetype in ("full_bleed_image", "photo_grid"):
-            slide.body = [_clip_words(line, 9) for line in slide.body[:2]]
-        elif archetype in ("title", "section_divider", "closing"):
-            slide.body = [_clip_words(line, 12) for line in slide.body[:1]]
-        elif archetype == "quote":
-            slide.body = [_clip_words(line, 14) for line in slide.body[:2]]
-    return deck
-
-
-def _image_slot_type(slide: AuthoredSlide, index: int) -> str | None:
-    archetype = slide.archetype
-    if index == 0:
-        return "full-bleed background"
-    if archetype in _SECTION_ARCHETYPES:
-        return "divider art"
-    if archetype in _IMAGE_SLOT_ARCHETYPES:
-        return "full-bleed background"
-    if slide.image_prompt:
-        return "spot illustration"
-    return None
-
-
-def _compose_image_prompt(art_direction: str, subject: str, slot_type: str) -> str:
-    subject_clean = " ".join(subject.split())
-    return f"{art_direction}; subject: {subject_clean}; slot: {slot_type}; no words, no lettering"
-
-
-def _ensure_image_slot_prompts(deck: AuthoredDeck) -> AuthoredDeck:
-    art_direction = deck.art_direction or _theme_defaults(deck.theme)[3]
-    for i, slide in enumerate(deck.slides):
-        slot_type = _image_slot_type(slide, i)
-        if slot_type is None:
-            continue
-        subject = slide.image_prompt or slide.title
-        if slide.body:
-            subject = f"{subject} — {slide.body[0]}"
-        slide.image_prompt = _compose_image_prompt(art_direction, subject, slot_type)
-        if (
-            i == 0
-            or slide.archetype in _SECTION_ARCHETYPES
-            or slide.archetype in _IMAGE_SLOT_ARCHETYPES
-        ):
-            slide.layout_hint = "full_image"
-    return deck
-
-
-def _prepare_outline_deck(deck: AuthoredDeck) -> AuthoredDeck:
-    return _with_craft_defaults(deck)
-
-
-def _demote_tableless_comparisons(deck: AuthoredDeck) -> AuthoredDeck:
-    """Gauntlet s-arxiv 2026-07-07: a comparison_table slide with NO table
-    payload and a thin body (3 lines) rendered as two column headers + one
-    lonely bullet — a mostly-empty slide. A comparison NEEDS a real table (or
-    at least enough body lines for two balanced columns); anything thinner
-    reads better as plain bullets. Demote in place (render-time normalization —
-    the authored sidecar keeps the model's original)."""
-    for slide in deck.slides:
-        if (
-            slide.archetype == "comparison_table"
-            and slide.table is None
-            and slide.chart is None
-            and len(slide.body or []) < 4
-        ):
-            slide.archetype = "bullets"
-            slide.layout_hint = "bullets"
-    return deck
-
-
-def _prepare_filled_deck(deck: AuthoredDeck) -> AuthoredDeck:
-    deck = _with_craft_defaults(deck)
-    deck = _demote_tableless_comparisons(deck)
-    deck = _enforce_density_budgets(deck)
-    return _ensure_image_slot_prompts(deck)
-
-
-# ---------------------------------------------------------------------------
-# JSON extraction + AuthoredDeck validation
-# ---------------------------------------------------------------------------
-
-
-def _extract_json_object(text: str) -> str:
-    """Extract the first {...} JSON object from LLM output that may have prose."""
-    text = text.strip()
-    # Direct JSON object
-    if text.startswith("{"):
-        depth = 0
-        end = 0
-        for i, ch in enumerate(text):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        if end > 0:
-            return text[:end]
-    # Markdown code fence
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        return m.group(1)
-    # Last-resort: first { to last }
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end > start:
-        return text[start : end + 1]
-    return text
-
-
-def _parse_authored_deck(raw: str) -> tuple[AuthoredDeck | None, str]:
-    """Parse raw LLM output as an AuthoredDeck.  Returns (deck, error_msg).
-
-    Applies ``_coerce_known_theme_aliases`` BEFORE pydantic validation to
-    silently fix short-hand aliases (``"dark"`` → ``"disco-dark"`` etc.).
-    Unknown invalid theme strings are left for pydantic to reject; the caller
-    should then pass ``_retry_msg(err)`` so the model sees the full enum.
-    """
-    extracted = _extract_json_object(raw)
-    try:
-        data = json.loads(extracted)
-    except json.JSONDecodeError as e:
-        return None, f"JSON parse error: {e}"
-    data = _coerce_known_theme_aliases(data)
-    data = _null_invalid_layout_hints(data)
-    try:
-        deck = AuthoredDeck.model_validate(data)
-    except (ValidationError, Exception) as e:
-        return None, f"Schema validation error: {e}"
-    return deck, ""
 
 
 # ---------------------------------------------------------------------------
@@ -978,6 +326,67 @@ class ImageGenStats:
         return f"\nImages: {self.generated}/{self.wanted} generated."
 
 
+async def _cached_slide_image(
+    ctx: ToolContext, meta_name: str, img_name: str, expected_hash: str
+) -> bytes | None:
+    """Return the sandbox's previously-generated image for this slide if its
+    cached hash still matches the current prompt and the bytes are real
+    raster data, else None (no usable cache entry)."""
+    if ctx.sandbox is None:
+        return None
+    try:
+        cached_hash = await ctx.sandbox.read_file(meta_name)
+        cached_img = await ctx.sandbox.read_file(img_name)
+        if cached_hash.decode("utf-8").strip() == expected_hash and _is_raster_bytes(cached_img):
+            return cached_img
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+async def _generate_one_slide_image(
+    ctx: ToolContext,
+    backend: ImageBackend,
+    slide: AuthoredSlide,
+    seed: int,
+    img_name: str,
+    meta_name: str,
+    h_hex: str,
+    index: int,
+) -> tuple[bytes | None, str | None]:
+    """Generate + cache one slide's image.
+
+    Returns ``(image_bytes, None)`` on success, ``(None, None)`` when the
+    backend returned something that isn't real raster data (not an error, just
+    not embeddable), or ``(None, error_summary)`` when generation raised.
+    """
+    prompt = slide.image_prompt or ""
+    try:
+        img_bytes = backend.generate(
+            prompt=prompt,
+            # 16:9 landscape, both dims >= the ComfyUI 512 floor so a real
+            # diffusion backend doesn't snap 384 up to 1024 and hand back a
+            # distorted portrait for a slide that wants a wide image.
+            width=1024,
+            height=576,
+            seed=seed,
+            fmt="png",
+        )
+        # Only embed real raster bytes — a backend that returns something other
+        # than PNG/JPEG (mis-config, error blob) must fall back to the [image]
+        # placeholder, not a broken data-URI / corrupt add_picture.
+        if not _is_raster_bytes(img_bytes):
+            _LOG.warning("Slide %d image is not PNG/JPEG — skipping embed", index)
+            return None, None
+        if ctx.sandbox is not None:
+            await ctx.sandbox.write_file(img_name, img_bytes)
+            await ctx.sandbox.write_file(meta_name, h_hex.encode("utf-8"))
+        return img_bytes, None
+    except Exception as e:  # noqa: BLE001
+        _LOG.warning("Image generation failed for slide %d: %s", index, e)
+        return None, f"{type(e).__name__}: {e}"[:200]
+
+
 async def _stage_assets(
     authored: AuthoredDeck,
     ctx: ToolContext,
@@ -1022,43 +431,20 @@ async def _stage_assets(
         h_hex = h.hexdigest()
         seed = int.from_bytes(h.digest()[:4], "big", signed=False)
 
-        if ctx.sandbox is not None:
-            try:
-                cached_hash = await ctx.sandbox.read_file(meta_name)
-                cached_img = await ctx.sandbox.read_file(img_name)
-                if cached_hash.decode("utf-8").strip() == h_hex and _is_raster_bytes(cached_img):
-                    assets[i] = cached_img
-                    continue
-            except Exception:  # noqa: BLE001
-                pass
+        cached = await _cached_slide_image(ctx, meta_name, img_name, h_hex)
+        if cached is not None:
+            assets[i] = cached
+            continue
 
-        try:
-            img_bytes = backend.generate(
-                prompt=slide.image_prompt,
-                # 16:9 landscape, both dims >= the ComfyUI 512 floor so a real
-                # diffusion backend doesn't snap 384 up to 1024 and hand back a
-                # distorted portrait for a slide that wants a wide image.
-                width=1024,
-                height=576,
-                seed=seed,
-                fmt="png",
-            )
-            # Only embed real raster bytes — a backend that returns something other
-            # than PNG/JPEG (mis-config, error blob) must fall back to the [image]
-            # placeholder, not a broken data-URI / corrupt add_picture.
-            if not _is_raster_bytes(img_bytes):
-                _LOG.warning("Slide %d image is not PNG/JPEG — skipping embed", i)
-                failed.append(i)
-                continue
+        img_bytes, err = await _generate_one_slide_image(
+            ctx, backend, slide, seed, img_name, meta_name, h_hex, i
+        )
+        if img_bytes is not None:
             assets[i] = img_bytes
-            if ctx.sandbox is not None:
-                await ctx.sandbox.write_file(img_name, img_bytes)
-                await ctx.sandbox.write_file(meta_name, h_hex.encode("utf-8"))
-        except Exception as e:  # noqa: BLE001
-            _LOG.warning("Image generation failed for slide %d: %s", i, e)
+        else:
             failed.append(i)
-            if stats.sample_error is None:
-                stats.sample_error = f"{type(e).__name__}: {e}"[:200]
+            if err is not None and stats.sample_error is None:
+                stats.sample_error = err
     if failed:
         # One aggregate signal instead of scattered per-slide lines — a backend that
         # is configured but erroring (out of credits, rate-limited) otherwise produced
