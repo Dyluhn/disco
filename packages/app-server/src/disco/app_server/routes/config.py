@@ -38,7 +38,7 @@ def _put_sandbox_config(state: ConfigState, dto: SandboxConfigDTO) -> SandboxCon
     setup. A structurally unrunnable config (gvisor/podman with an empty/host-less
     endpoint) is rejected 400 with a typed reason rather than silently saved."""
     try:
-        return state.update_sandbox_config(dto)
+        return state.sandbox.update_sandbox_config(dto)
     except ConfigValidationError as exc:
         raise _validation_error(exc) from exc
 
@@ -47,21 +47,21 @@ async def _test_sandbox(state: ConfigState, dto: SandboxConfigDTO) -> ProbeResul
     """W-48: connectivity PREFLIGHT for the given sandbox backend config — a real,
     bounded probe of the configured endpoint, returning a typed host-naming verdict
     (HTTP 200 with ok=False on an expected failure, never a 500)."""
-    return await state.test_sandbox(dto)
+    return await state.sandbox.test_sandbox(dto)
 
 
 async def _sandbox_health(state: ConfigState) -> SandboxHealthDTO:
     """Reachability of the ACTIVE (persisted) sandbox backend — the cheap signal the
     app shell polls to surface an unreachable sandbox BEFORE a run is started. Same
     probe the run path hits, so the banner and the real run agree."""
-    return await state.sandbox_health()
+    return await state.sandbox.sandbox_health()
 
 
 def _put_role_fallback_config(
     state: ConfigState, dto: RoleFallbackConfigDTO
 ) -> RoleFallbackConfigDTO:
     try:
-        return state.update_role_fallback_config(dto)
+        return state.features.update_role_fallback_config(dto)
     except ConfigValidationError as exc:
         raise _validation_error(exc) from exc
 
@@ -70,7 +70,7 @@ async def _test_data_source(state: ConfigState, kind: str) -> ProbeResult:
     """Probe T4.2 — reachability of the configured search/extraction endpoint.
     ``kind`` is 'search' or 'extraction'. Bundled tiers report honestly that
     there's nothing to reach; remote tiers do a real GET. Always 200."""
-    return await state.test_data_source(kind)
+    return await state.features.test_data_source(kind)
 
 
 def _put_projects_config(
@@ -80,7 +80,7 @@ def _put_projects_config(
     server-side; a bad path returns 400 with a typed `reason` so the UI shows
     a specific error ("not_found" / "not_a_directory" / "not_writable")."""
     try:
-        return state.update_projects_config(dto)
+        return state.platform.update_projects_config(dto)
     except ConfigValidationError as exc:
         raise _validation_error(exc) from exc
 
@@ -92,7 +92,7 @@ def _put_live_browser_config(
     live stack (anything but gVisor) is rejected with 400 + a typed reason so the UI
     flags it instead of silently persisting a setting that only ever fails at runtime."""
     try:
-        return state.update_live_browser_config(dto)
+        return state.platform.update_live_browser_config(dto)
     except ConfigValidationError as exc:
         raise _validation_error(exc) from exc
 
@@ -102,7 +102,7 @@ def _put_build_kernel_config(
 ) -> BuildKernelConfigDTO:
     """Persist the vestigial Build kernel selector."""
     try:
-        return state.update_build_kernel_config(dto)
+        return state.platform.update_build_kernel_config(dto)
     except ConfigValidationError as exc:
         raise _validation_error(exc) from exc
 
@@ -112,7 +112,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/sandbox/config")
     async def get_sandbox_config() -> SandboxConfigDTO:
-        return state.sandbox_config()
+        return state.sandbox.sandbox_config()
 
     @router.put("/api/sandbox/config")
     async def put_sandbox_config(dto: SandboxConfigDTO) -> SandboxConfigDTO:
@@ -128,39 +128,39 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/encoders/config")
     async def get_encoders_config() -> EncodersConfigDTO:
-        return state.encoders_config()
+        return state.features.encoders_config()
 
     @router.put("/api/encoders/config")
     async def put_encoders_config(dto: EncodersConfigDTO) -> EncodersConfigDTO:
-        return state.update_encoders_config(dto)
+        return state.features.update_encoders_config(dto)
 
     @router.get("/api/tts/config")
     async def get_tts_config() -> TtsConfigDTO:
-        return state.tts_config()
+        return state.features.tts_config()
 
     @router.put("/api/tts/config")
     async def put_tts_config(dto: TtsConfigDTO) -> TtsConfigDTO:
-        return state.update_tts_config(dto)
+        return state.features.update_tts_config(dto)
 
     @router.get("/api/image-gen/config")
     async def get_image_gen_config() -> ImageGenConfigDTO:
-        return state.image_gen_config()
+        return state.features.image_gen_config()
 
     @router.put("/api/image-gen/config")
     async def put_image_gen_config(dto: ImageGenConfigDTO) -> ImageGenConfigDTO:
-        return state.update_image_gen_config(dto)
+        return state.features.update_image_gen_config(dto)
 
     @router.get("/api/data-sources/config")
     async def get_data_sources_config() -> DataSourcesConfigDTO:
-        return state.data_sources_config()
+        return state.features.data_sources_config()
 
     @router.put("/api/data-sources/config")
     async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
-        return state.update_data_sources_config(dto)
+        return state.features.update_data_sources_config(dto)
 
     @router.get("/api/role-fallback/config")
     async def get_role_fallback_config() -> RoleFallbackConfigDTO:
-        return state.role_fallback_config()
+        return state.features.role_fallback_config()
 
     @router.put("/api/role-fallback/config")
     async def put_role_fallback_config(dto: RoleFallbackConfigDTO) -> RoleFallbackConfigDTO:
@@ -172,7 +172,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/projects/storage/config")
     async def get_projects_config() -> ProjectStorageConfigDTO:
-        return state.projects_config()
+        return state.platform.projects_config()
 
     @router.put("/api/projects/storage/config")
     async def put_projects_config(dto: ProjectStorageConfigDTO) -> ProjectStorageConfigDTO:
@@ -180,7 +180,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/live-browser/config")
     async def get_live_browser_config() -> LiveBrowserConfigDTO:
-        return state.live_browser_config()
+        return state.platform.live_browser_config()
 
     @router.put("/api/live-browser/config")
     async def put_live_browser_config(dto: LiveBrowserConfigDTO) -> LiveBrowserConfigDTO:
@@ -188,7 +188,7 @@ def make_config_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/build-kernel/config")
     async def get_build_kernel_config() -> BuildKernelConfigDTO:
-        return state.build_kernel_config()
+        return state.platform.build_kernel_config()
 
     @router.put("/api/build-kernel/config")
     async def put_build_kernel_config(dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:

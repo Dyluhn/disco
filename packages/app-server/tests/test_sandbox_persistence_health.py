@@ -66,9 +66,11 @@ def test_switch_backend_preserves_other_backends_connection(state):
     was that the round-trip blanked it). The store retains a per-backend block."""
     gvisor_sock = "ssh://sandbox@100.81.82.115"
     # 1. configure + save gVisor with a real remote host
-    state.update_sandbox_config(_obj(backend="gvisor", docker_socket=gvisor_sock, runtime="runsc"))
+    state.sandbox.update_sandbox_config(
+        _obj(backend="gvisor", docker_socket=gvisor_sock, runtime="runsc")
+    )
     # 2. switch to local (its own docker_socket)
-    state.update_sandbox_config(
+    state.sandbox.update_sandbox_config(
         _obj(
             backend="local",
             docker_socket="unix:///var/run/docker.sock",
@@ -76,7 +78,7 @@ def test_switch_backend_preserves_other_backends_connection(state):
         )
     )
     # 3. the persisted config remembers gVisor's connection block verbatim
-    cfg = state.sandbox_config()
+    cfg = state.sandbox.sandbox_config()
     assert cfg.backend == "local"
     assert "gvisor" in cfg.connections, "gVisor's saved block must survive the switch"
     assert cfg.connections["gvisor"].docker_socket == gvisor_sock
@@ -86,17 +88,17 @@ def test_switch_backend_preserves_other_backends_connection(state):
 def test_active_flat_fields_track_the_active_backend(state):
     """The flat fields (what the live backend builder reads) reflect the ACTIVE backend,
     while inactive backends keep their own block — no cross-contamination."""
-    state.update_sandbox_config(
+    state.sandbox.update_sandbox_config(
         _obj(backend="gvisor", docker_socket="ssh://sandbox@host-a", runtime="runsc")
     )
-    state.update_sandbox_config(
+    state.sandbox.update_sandbox_config(
         _obj(
             backend="local",
             docker_socket="unix:///var/run/docker.sock",
             runtime="runc",
         )
     )
-    cfg = state.sandbox_config()
+    cfg = state.sandbox.sandbox_config()
     assert cfg.docker_socket == "unix:///var/run/docker.sock"  # active = local
     assert cfg.runtime == "runc"
     assert cfg.connections["gvisor"].docker_socket == "ssh://sandbox@host-a"  # inactive preserved
@@ -127,7 +129,7 @@ def test_old_flat_config_migrates_active_only_clean_defaults_for_others(state, s
     legacy = SandboxSettings(backend="gvisor", docker_socket="ssh://sandbox@", runtime="runsc")
     store.save(store.load().model_copy(update={"sandbox": legacy}))
 
-    cfg = state.sandbox_config()
+    cfg = state.sandbox.sandbox_config()
     # active backend reflects the (bad) flat block — shown so the user can fix it
     assert cfg.connections["gvisor"].docker_socket == "ssh://sandbox@"
     # Local did NOT inherit the gvisor ssh socket — it got a clean local docker socket
@@ -184,16 +186,16 @@ def test_accept_gvisor_with_valid_host_and_port(client, good_socket):
 
 def test_reject_keeps_last_good_block(state):
     """A rejected gvisor save must NOT clobber the previously-saved good gVisor block."""
-    state.update_sandbox_config(
+    state.sandbox.update_sandbox_config(
         _obj(backend="gvisor", docker_socket="ssh://sandbox@good-host", runtime="runsc")
     )
     from disco.app_server.config_state import ConfigValidationError
 
     with pytest.raises(ConfigValidationError):
-        state.update_sandbox_config(
+        state.sandbox.update_sandbox_config(
             _obj(backend="gvisor", docker_socket="ssh://sandbox@", runtime="runsc")
         )
-    cfg = state.sandbox_config()
+    cfg = state.sandbox.sandbox_config()
     assert cfg.connections["gvisor"].docker_socket == "ssh://sandbox@good-host"
 
 
@@ -228,10 +230,10 @@ def test_health_unreachable_names_the_host(state):
     import asyncio
 
     # save a reachable config first, then point the ACTIVE backend at a dead endpoint
-    state.update_sandbox_config(
+    state.sandbox.update_sandbox_config(
         _obj(backend="gvisor", docker_socket="tcp://127.0.0.1:1", runtime="runsc")
     )
-    health = asyncio.run(state.sandbox_health())
+    health = asyncio.run(state.sandbox.sandbox_health())
     assert health.reachable is False
     assert health.backend == "gvisor"
     assert "tcp://127.0.0.1:1" in health.detail  # the endpoint is NAMED

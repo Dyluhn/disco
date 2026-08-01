@@ -126,17 +126,17 @@ def make_openrouter_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/openrouter/key")
     async def get_openrouter_key() -> OpenRouterKeyStatus:
-        return state.openrouter_key_status()
+        return state.openrouter.openrouter_key_status()
 
     @router.put("/api/openrouter/key")
     async def put_openrouter_key(body: OpenRouterKeyBody) -> OpenRouterKeyStatus:
         try:
-            return state.set_openrouter_key(body.key)
+            return state.openrouter.set_openrouter_key(body.key)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.delete("/api/openrouter/key")
     async def delete_openrouter_key() -> OpenRouterKeyStatus:
-        return state.clear_openrouter_key()
+        return state.openrouter.clear_openrouter_key()
 
     return router

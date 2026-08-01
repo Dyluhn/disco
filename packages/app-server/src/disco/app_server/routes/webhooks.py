@@ -24,7 +24,7 @@ def make_webhooks_router(state: ConfigState) -> APIRouter:
         request: Request,
     ) -> WebhookInboundConfigStatus:
         try:
-            state.configure_webhook_inbound(
+            state.integrations.configure_webhook_inbound(
                 owner_id=current_owner_id(request),
                 audience=audience,
                 signing_secret=body.signing_secret.get_secret_value(),
@@ -44,7 +44,7 @@ def make_webhooks_router(state: ConfigState) -> APIRouter:
         request: Request,
     ) -> WebhookOutboundConfigStatus:
         try:
-            config = state.configure_webhook_outbound(
+            config = state.integrations.configure_webhook_outbound(
                 owner_id=current_owner_id(request),
                 audience=audience,
                 endpoint_id=endpoint_id,

@@ -54,7 +54,7 @@ def test_key_test_points_data_source_keys_elsewhere(client, state):
     # configure a paid search provider that references the canonical tavily secret-ref
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    state.update_data_sources_config(
+    state.features.update_data_sources_config(
         DataSourcesConfigDTO(
             search_provider="tavily",
             search_base_url="",
@@ -81,7 +81,7 @@ def test_key_test_no_value_stored_is_misconfigured(client, state):
 def test_key_test_ok_when_provider_answers(client, state, monkeypatch):
     """A stored key + a model endpoint that references it + a 200 from the
     provider → ok. The real HTTP call is stubbed; resolution is real."""
-    state.set_secret("gemma", "sk-gemma-live")
+    state.secrets_admin.set_secret("gemma", "sk-gemma-live")
     _approve_secret_model_origin(state, "gemma")
 
     captured: dict = {}
@@ -105,7 +105,7 @@ def test_key_test_ok_when_provider_answers(client, state, monkeypatch):
 
 
 def test_key_test_unauthorized_is_not_a_500(client, state, monkeypatch):
-    state.set_secret("gemma", "sk-bad")
+    state.secrets_admin.set_secret("gemma", "sk-bad")
     _approve_secret_model_origin(state, "gemma")
 
     async def fake_probe(base_url, api_key, model_id):
@@ -135,7 +135,7 @@ def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
     for provider in ("arxiv", "news", "semantic_scholar", "site_scoped"):
-        state.update_data_sources_config(
+        state.features.update_data_sources_config(
             DataSourcesConfigDTO(
                 search_provider=provider,
                 search_base_url="example.com" if provider == "site_scoped" else "",
@@ -153,8 +153,8 @@ def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
 def test_data_sources_config_reports_configured_sources(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    state.set_secret("TAVILY_API_KEY", "tv-live")
-    state.update_data_sources_config(
+    state.secrets_admin.set_secret("TAVILY_API_KEY", "tv-live")
+    state.features.update_data_sources_config(
         DataSourcesConfigDTO(
             search_provider="searxng",
             search_base_url="http://searx.local:8080",
@@ -173,7 +173,7 @@ def test_data_sources_config_reports_configured_sources(client, state):
 def test_data_source_selfhost_without_url_is_misconfigured(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    state.update_data_sources_config(
+    state.features.update_data_sources_config(
         DataSourcesConfigDTO(
             search_provider="searxng",
             search_base_url="",
@@ -190,7 +190,7 @@ def test_data_source_selfhost_without_url_is_misconfigured(client, state):
 def test_data_source_selfhost_reachable(client, state, monkeypatch):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    state.update_data_sources_config(
+    state.features.update_data_sources_config(
         DataSourcesConfigDTO(
             search_provider="searxng",
             search_base_url="http://searx.local:8080",

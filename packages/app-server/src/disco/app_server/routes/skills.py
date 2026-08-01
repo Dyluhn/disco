@@ -13,22 +13,22 @@ def make_skills_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/skills")
     async def get_skills() -> list[SkillDTO]:
-        return state.skills()
+        return state.skills.skills()
 
     @router.post("/api/skills", status_code=201)
     async def create_skill(create: SkillCreate) -> SkillDTO:
-        return state.create_skill(create)
+        return state.skills.create_skill(create)
 
     @router.put("/api/skills/{skill_id}")
     async def put_skill(skill_id: str, patch: SkillPatch) -> SkillDTO:
-        updated = state.update_skill(skill_id, patch)
+        updated = state.skills.update_skill(skill_id, patch)
         if updated is None:
             raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
         return updated
 
     @router.delete("/api/skills/{skill_id}", status_code=204)
     async def delete_skill(skill_id: str) -> None:
-        if not state.delete_skill(skill_id):
+        if not state.skills.delete_skill(skill_id):
             raise HTTPException(status_code=404, detail=f"unknown skill {skill_id!r}")
 
     return router

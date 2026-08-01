@@ -22,18 +22,18 @@ def make_models_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/models")
     async def get_models() -> list[ModelDTO]:
-        return state.models()
+        return state.models.models()
 
     @router.post("/api/models", status_code=201)
     async def add_model(upsert: ModelUpsert) -> list[ModelDTO]:
         try:
-            return state.add_model(upsert)
+            return state.models.add_model(upsert)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/models/assignments")
     async def get_assignments() -> AssignmentsDTO:
-        return state.assignments()
+        return state.assignments.assignments()
 
     @router.put("/api/models/assignments")
     async def put_assignments(patch: AssignmentsPatch) -> AssignmentsDTO:
@@ -41,7 +41,7 @@ def make_models_router(state: ConfigState) -> APIRouter:
         # + fail-loud at runtime, not blocked here. The one structural guard is that
         # the model KEY must exist in the catalogue (else routing can't resolve it).
         try:
-            return state.update_assignments(patch)
+            return state.assignments.update_assignments(patch)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -49,14 +49,14 @@ def make_models_router(state: ConfigState) -> APIRouter:
     @router.put("/api/models/{model_id}")
     async def put_model(model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
         try:
-            return state.update_model(model_id, upsert)
+            return state.models.update_model(model_id, upsert)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.delete("/api/models/{model_id}")
     async def delete_model(model_id: str) -> list[ModelDTO]:
         try:
-            return state.remove_model(model_id)
+            return state.models.remove_model(model_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

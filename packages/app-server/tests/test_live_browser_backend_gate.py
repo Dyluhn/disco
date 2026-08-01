@@ -25,29 +25,29 @@ def test_enable_rejected_on_local_backend(tmp_path):
     typed reason — and NOT persisted."""
     state = _state(tmp_path, backend="local")
     with pytest.raises(ConfigValidationError) as exc:
-        state.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
+        state.platform.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
     assert exc.value.reason == "unsupported_backend"
     # not persisted: it still reads disabled.
-    assert state.live_browser_config().enabled is False
+    assert state.platform.live_browser_config().enabled is False
 
 
 def test_enable_rejected_on_process_and_podman_backends(tmp_path):
     for backend in ("process", "podman"):
         state = _state(tmp_path, backend=backend)
         with pytest.raises(ConfigValidationError):
-            state.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
+            state.platform.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
 
 
 def test_enable_allowed_on_gvisor_backend(tmp_path):
     """gVisor ships the stack + the accepted live-jail model → enabling persists."""
     state = _state(tmp_path, backend="gvisor")
-    out = state.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
+    out = state.platform.update_live_browser_config(LiveBrowserConfigDTO(enabled=True))
     assert out.enabled is True
-    assert state.live_browser_config().enabled is True
+    assert state.platform.live_browser_config().enabled is True
 
 
 def test_disable_always_allowed_even_on_local(tmp_path):
     """Turning it OFF is never gated (e.g. clearing a stale flag after a backend switch)."""
     state = _state(tmp_path, backend="local", enabled=True)
-    out = state.update_live_browser_config(LiveBrowserConfigDTO(enabled=False))
+    out = state.platform.update_live_browser_config(LiveBrowserConfigDTO(enabled=False))
     assert out.enabled is False

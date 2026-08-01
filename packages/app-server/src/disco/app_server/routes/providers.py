@@ -346,7 +346,7 @@ class _ProviderCatalogue:
         return None
 
     async def probe(self, provider: ProviderDTO, api_key: str) -> tuple[bool, str | None]:
-        if not self._state.provider_origin_approved(provider):
+        if not self._state.providers.provider_origin_approved(provider):
             return False, "provider key is not approved for this origin"
         try:
             await _fetch_provider_catalogue(provider, api_key)
@@ -358,7 +358,7 @@ class _ProviderCatalogue:
         # Gate before consulting the cache or decrypting the key. A tampered
         # persisted base_url must neither receive a credential nor inherit a
         # catalogue cached under the previously approved host.
-        if not self._state.provider_origin_approved(provider):
+        if not self._state.providers.provider_origin_approved(provider):
             raise HTTPException(
                 status_code=403,
                 detail="Provider key is not approved for this origin. Re-save the provider.",
@@ -371,7 +371,7 @@ class _ProviderCatalogue:
             hit = self.fresh_hit(provider.id)
             if hit is not None:
                 return hit
-            key = self._state._resolve_secret_value(provider.secret_name)
+            key = self._state.providers._resolve_secret_value(provider.secret_name)
             if not key:
                 raise HTTPException(
                     status_code=400,
@@ -390,7 +390,7 @@ class _ProviderCatalogue:
 
 def _provider_or_404(state: ConfigState, provider_id: str) -> ProviderDTO:
     try:
-        return state._provider_dto(state.provider_settings(provider_id))
+        return state.providers._provider_dto(state.providers.provider_settings(provider_id))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
 
@@ -399,7 +399,7 @@ async def _create_provider(
     state: ConfigState, catalogue: _ProviderCatalogue, body: ProviderCreate
 ) -> ProviderMutationResult:
     try:
-        provider = state.create_provider(body)
+        provider = state.providers.create_provider(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     ok, error = await catalogue.probe(provider, body.api_key.strip())
@@ -411,7 +411,7 @@ async def _update_provider(
     state: ConfigState, catalogue: _ProviderCatalogue, provider_id: str, body: ProviderPatch
 ) -> ProviderMutationResult:
     try:
-        provider = state.update_provider(provider_id, body)
+        provider = state.providers.update_provider(provider_id, body)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
     except ValueError as exc:
@@ -419,7 +419,7 @@ async def _update_provider(
     key = (
         body.api_key.strip()
         if body.api_key
-        else state._resolve_secret_value(provider.secret_name)
+        else state.providers._resolve_secret_value(provider.secret_name)
     )
     if key:
         ok, error = await catalogue.probe(provider, key)
@@ -433,7 +433,7 @@ async def _delete_provider(
     state: ConfigState, catalogue: _ProviderCatalogue, provider_id: str
 ) -> Response:
     try:
-        state.delete_provider(provider_id)
+        state.providers.delete_provider(provider_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
     except ProviderInUseError as exc:
@@ -457,7 +457,7 @@ def _enable_provider_model(
     if hit is not None:
         catalogue_model = next((m for m in hit if m.model_id == body.model_id), None)
     try:
-        return state.enable_provider_model(provider_id, body, catalogue_model)
+        return state.providers.enable_provider_model(provider_id, body, catalogue_model)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -467,7 +467,7 @@ def _disable_provider_model(
 ) -> list[ModelDTO]:
     _provider_or_404(state, provider_id)
     try:
-        return state.disable_provider_model(provider_id, catalogue_id)
+        return state.providers.disable_provider_model(provider_id, catalogue_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -482,7 +482,7 @@ def make_providers_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/providers")
     async def get_providers() -> list[ProviderDTO]:
-        return state.providers()
+        return state.providers.providers()
 
     @router.post("/api/providers", status_code=201)
     async def post_provider(body: ProviderCreate) -> ProviderMutationResult:

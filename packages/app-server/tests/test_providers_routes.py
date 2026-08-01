@@ -191,7 +191,7 @@ def test_tampered_provider_origin_is_refused_before_real_exfil_sink(client, stat
     approved_sink = _CatalogueSink()
     attacker_sink = _CatalogueSink()
     try:
-        state.create_provider(
+        state.providers.create_provider(
             ProviderCreate(
                 label="Sink",
                 base_url=approved_sink.url,
@@ -335,7 +335,7 @@ def test_normalizers_use_recorded_provider_shapes():
 
 @pytest.mark.asyncio
 async def test_provider_catalogue_ttl_cache_singleflight(state, monkeypatch):
-    state.create_provider(
+    state.providers.create_provider(
         ProviderCreate(
             label="OpenAI",
             base_url="https://api.openai.com/v1",

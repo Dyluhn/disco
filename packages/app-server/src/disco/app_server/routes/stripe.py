@@ -19,7 +19,7 @@ def make_stripe_router(state: ConfigState) -> APIRouter:
         request: Request,
     ) -> StripeConfigStatus:
         try:
-            config = state.configure_stripe_app(
+            config = state.integrations.configure_stripe_app(
                 owner_id=current_owner_id(request),
                 audience=audience,
                 restricted_key=body.restricted_key.get_secret_value(),

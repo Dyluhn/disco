@@ -38,23 +38,23 @@ def make_secrets_router(state: ConfigState) -> APIRouter:
 
     @router.get("/api/secrets")
     async def list_secrets() -> SecretsListDTO:
-        return state.list_secrets()
+        return state.secrets_admin.list_secrets()
 
     @router.get("/api/secrets/{name}")
     async def get_secret_status(name: str) -> SecretStatus:
-        return state.secret_status(_validate(name))
+        return state.secrets_admin.secret_status(_validate(name))
 
     @router.put("/api/secrets/{name}")
     async def put_secret(name: str, body: SecretBody) -> SecretStatus:
         try:
-            return state.set_secret(_validate(name), body.value)
+            return state.secrets_admin.set_secret(_validate(name), body.value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.delete("/api/secrets/{name}")
     async def delete_secret(name: str) -> SecretStatus:
         try:
-            return state.clear_secret(_validate(name))
+            return state.secrets_admin.clear_secret(_validate(name))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -63,6 +63,6 @@ def make_secrets_router(state: ConfigState) -> APIRouter:
         """Probe T4.1 — a REAL authenticated call to the provider that uses this
         key (an OpenAI-compatible models list). Expected failures (no endpoint,
         bad key, unreachable) return ok=False at 200; only a bad NAME is a 400."""
-        return await state.test_secret(_validate(name))
+        return await state.secrets_admin.test_secret(_validate(name))
 
     return router

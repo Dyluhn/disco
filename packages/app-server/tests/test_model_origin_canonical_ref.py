@@ -42,7 +42,7 @@ def test_add_openrouter_model_approves_canonical_slot_ref(tmp_path, monkeypatch)
     state = _state(tmp_path)
     # The Add flow submits the RAW env-var name; the store normalizes it to the
     # 'openrouter' slot on load (key starts with 'or-').
-    state.add_model(
+    state.models.add_model(
         ModelUpsert(
             id="or-deepseek-x",
             model_id="deepseek/x",
@@ -67,14 +67,14 @@ def test_add_openrouter_model_approves_canonical_slot_ref(tmp_path, monkeypatch)
 def test_openrouter_key_status_locked_when_ciphertext_undecryptable(tmp_path):
     # Store a key under app secret A ...
     a = _state(tmp_path, secret="app-secret-A")
-    a.set_openrouter_key("sk-or-unit-test-key")
-    assert a.openrouter_key_status().configured
-    assert not a.openrouter_key_status().locked
+    a.openrouter.set_openrouter_key("sk-or-unit-test-key")
+    assert a.openrouter.openrouter_key_status().configured
+    assert not a.openrouter.openrouter_key_status().locked
 
     # ... then read the SAME secrets file through a DIFFERENT app secret (rotated key):
     # ciphertext is present but no longer decryptable. Must report locked (re-enter),
     # never a false green.
     b = _state(tmp_path, secret="app-secret-B-rotated")
-    status = b.openrouter_key_status()
+    status = b.openrouter.openrouter_key_status()
     assert status.configured  # ciphertext IS present
     assert status.locked  # ...but undecryptable -> UI prompts re-entry
