@@ -12,6 +12,7 @@ from disco.tools.builtin.image_gen import ImageGenTool
 from disco.tools.builtin.slides import SlidesTool
 from disco.tools.builtin.verify_app import VerifyWebAppArgs, VerifyWebAppTool
 from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppArgs, VerifyAppKitAppTool
+from disco.tools.builtin.verify_appkit_parts.sandbox_reader import SandboxReader
 from disco.tools.sandbox.base import ExecResult
 from tool_fakes import FakeSandboxInstance
 
@@ -112,7 +113,7 @@ async def test_verify_appkit_catchall_has_content(monkeypatch):
     async def _boom(self, ctx):
         raise RuntimeError("app read exploded")
 
-    monkeypatch.setattr(VerifyAppKitAppTool, "_load_app", _boom)
+    monkeypatch.setattr(SandboxReader, "load_app", _boom)
 
     out = await VerifyAppKitAppTool().run(
         VerifyAppKitAppArgs(),

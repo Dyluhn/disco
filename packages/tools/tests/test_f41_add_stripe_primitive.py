@@ -45,7 +45,7 @@ from disco.tools.builtin.app_kit import (
     AppCreateArgs,
     AppCreateTool,
 )
-from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppTool
+from disco.tools.builtin.verify_appkit_parts.checks import security_primitive_checks
 from tool_fakes import FakeSandboxInstance
 
 _SPEC = {
@@ -318,9 +318,7 @@ async def test_tampered_stripe_dependency_lock_fails_trusted_bytes():
 async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     _, app, design, tree = await _stripe_gate_inputs()
     prim = required_security_primitives(app)[0]
-    tool = VerifyAppKitAppTool()
-
-    missing = await tool._security_primitive_checks(
+    missing = await security_primitive_checks(
         _ctx(FakeSandboxInstance()), prim, app, design, tree
     )
     assert missing[-1]["name"] == "primitive_live:stripe.security.v1"
@@ -348,7 +346,7 @@ async def test_host_live_dispatch_is_mandatory_and_result_consistent():
         )
 
     live_ctx = _ctx(FakeSandboxInstance()).model_copy(update={"primitive_live_verifier": live_ok})
-    passed = await tool._security_primitive_checks(live_ctx, prim, app, design, tree)
+    passed = await security_primitive_checks(live_ctx, prim, app, design, tree)
     assert calls == ["stripe.security.v1"]
     assert all(item["passed"] for item in passed)
 
@@ -362,7 +360,7 @@ async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     inconsistent_ctx = _ctx(FakeSandboxInstance()).model_copy(
         update={"primitive_live_verifier": inconsistent}
     )
-    refused = await tool._security_primitive_checks(inconsistent_ctx, prim, app, design, tree)
+    refused = await security_primitive_checks(inconsistent_ctx, prim, app, design, tree)
     assert refused[-1]["passed"] is False
     assert "inconsistent" in refused[-1]["evidence"]
 
@@ -370,7 +368,7 @@ async def test_host_live_dispatch_is_mandatory_and_result_consistent():
         return PrimitiveVerifyResult(ok=True, detail="", checks=())
 
     empty_ctx = _ctx(FakeSandboxInstance()).model_copy(update={"primitive_live_verifier": empty})
-    empty_result = await tool._security_primitive_checks(empty_ctx, prim, app, design, tree)
+    empty_result = await security_primitive_checks(empty_ctx, prim, app, design, tree)
     assert empty_result[-1]["passed"] is False
     assert "empty" in empty_result[-1]["evidence"]
 
@@ -384,7 +382,7 @@ async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     unknown_ctx = _ctx(FakeSandboxInstance()).model_copy(
         update={"primitive_live_verifier": unknown_checks}
     )
-    unknown = await tool._security_primitive_checks(unknown_ctx, prim, app, design, tree)
+    unknown = await security_primitive_checks(unknown_ctx, prim, app, design, tree)
     assert unknown[-1]["passed"] is False
     assert "unknown/missing" in unknown[-1]["evidence"]
 
@@ -394,6 +392,6 @@ async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     exception_ctx = _ctx(FakeSandboxInstance()).model_copy(
         update={"primitive_live_verifier": explodes}
     )
-    exception = await tool._security_primitive_checks(exception_ctx, prim, app, design, tree)
+    exception = await security_primitive_checks(exception_ctx, prim, app, design, tree)
     assert exception[-1]["passed"] is False
     assert exception[-1]["evidence"] == ("host live verifier raised RuntimeError (fail-closed).")
