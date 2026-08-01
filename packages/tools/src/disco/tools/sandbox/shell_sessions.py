@@ -1,27 +1,39 @@
 """ShellSessionManager - persistent named shell sessions backed by tmux."""
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# `secrets` is not called directly here anymore (`exec_dispatch` owns the
+# `token_hex` dispatch), but the attribute must stay reachable as
+# `shell_sessions.secrets`: `test_shell_sessions.py` and
+# `test_rematerialize_servers.py` do
+# `monkeypatch.setattr(shell_sessions_module.secrets, "token_hex", …)` to make
+# dispatch tokens deterministic. That patches an attribute *on the shared
+# `secrets` module object*, which is why `exec_dispatch`'s own `import secrets`
+# still observes it — but the patch target expression has to resolve here first.
+# Deleting it as "unused" (which `ruff --fix` offers) breaks both tests at patch
+# time. It, and the marker constants below, use the redundant-alias re-export
+# form (`X as X`) — ruff's sanctioned re-export marker, no suppression needed.
 import asyncio
 import logging
 import re
-import secrets
+import secrets as secrets
 import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from .base import SandboxInstance, clean_sandbox_env
+from .shell_sessions_parts import exec_dispatch as _exec_dispatch_part
+from .shell_sessions_parts import rematerialize as _rematerialize_part
+from .shell_sessions_parts import text as _text_part
+from .shell_sessions_parts.text import _DONE_MARKER as _DONE_MARKER
+from .shell_sessions_parts.text import _FRESH_MARKER_RE as _FRESH_MARKER_RE
+from .shell_sessions_parts.text import _MARKER_RE, _PS1
+from .shell_sessions_parts.text import _PS1_MARKER as _PS1_MARKER
 
 _LOG = logging.getLogger(__name__)
 
 _PREFIX = "disco"  # WRITE side: new tmux sessions are disco-*
 _LEGACY_PREFIX = "pmx"  # READ side: still swept on teardown (no orphans across rename)
-_PS1_MARKER = "__DISCO_PS1__"
-_PS1 = f"{_PS1_MARKER}$?__$ "
-# Derive the parse regex from the marker constant so the WRITE (PS1) and READ
-# (parse) sides can never drift — the exact bug a literal `__PMX_PS1__` here
-# re-introduced after the marker was renamed.
-_MARKER_RE = re.compile(re.escape(_PS1_MARKER) + r"(\d+)__\$\s*$")
-_FRESH_MARKER_RE = re.compile(re.escape(_PS1_MARKER) + r"(\d+)__\$[ \t]*")
-_DONE_MARKER = "__DISCO_DONE_"
 _VIEW_TAIL_CHARS = 10_000
 _EXEC_RETURN_CHARS = 6_000
 _POLL_S = 0.5
@@ -320,245 +332,33 @@ class ShellSessionManager:
         completion_re: re.Pattern[str] | None = None,
         echoed_dispatch: str | None = None,
     ) -> tuple[str, int | None]:
-        if not delta:
-            return "", None
-
-        text = delta.lstrip("\n")
-        if echoed_dispatch is not None and text.startswith(echoed_dispatch):
-            text = text[len(echoed_dispatch) :].lstrip("\n")
-        else:
-            # Compatibility for captured panes produced before the private
-            # wrapper (and for narrow fakes): discard one echoed command line.
-            _echo, separator, remainder = text.partition("\n")
-            text = remainder if separator else ""
-        text = text.rstrip("\n")
-
-        if not text:
-            return "", None
-        matches = list((completion_re or _FRESH_MARKER_RE).finditer(text))
-        if not matches:
-            return text, None
-        marker = matches[-1]
-        # Strip only the fresh prompt token. Preserve every byte written after it:
-        # background-child stderr is the actionable evidence H322 previously hid
-        # behind a false "still running" verdict.
-        cleaned = text[: marker.start()] + text[marker.end() :]
-        if completion_re is not None:
-            # Bash prints its normal PS1 immediately after the private completion
-            # record.  Strip that display token too, while preserving late stderr
-            # emitted by a background child after the prompt.
-            cleaned = _FRESH_MARKER_RE.sub("", cleaned, count=1)
-        return cleaned.strip("\n"), int(marker.group(1))
+        """Peel a raw tmux pane delta down to the command's real output; see
+        `shell_sessions_parts.text` for the full contract."""
+        return _text_part.strip_output(
+            delta, completion_re=completion_re, echoed_dispatch=echoed_dispatch
+        )
 
     @staticmethod
     def _completion_dispatch(command: str, token: str) -> tuple[str, re.Pattern[str]]:
-        """Wrap a command with an unguessable, line-anchored completion record.
-
-        A public PS1 string is display, not proof: the command echo or arbitrary
-        process output can contain it.  ``eval`` preserves the interactive shell's
-        state-changing semantics while the private token is kept out of the marker
-        literal in the echoed wrapper (it is supplied separately to ``printf``).
-        """
-
-        rc_name = f"__disco_rc_{token}"
-        dispatched = (
-            f"eval {shlex.quote(command)}; {rc_name}=$?; "
-            f"printf '\\n{_DONE_MARKER}%s__%s__\\n' {shlex.quote(token)} \"${rc_name}\""
-        )
-        completion_re = re.compile(rf"(?m)^{re.escape(_DONE_MARKER + token)}__(\d+)__[ \t]*$")
-        return dispatched, completion_re
+        """Wrap a command with an unguessable, line-anchored completion record;
+        see `shell_sessions_parts.text` for the full contract."""
+        return _text_part.completion_dispatch(command, token)
 
     @staticmethod
     def _backgrounded(command: str) -> bool:
-        """Whether clean shell syntax contains a single-ampersand background edge."""
-
-        quote = ""
-        escaped = False
-        for index, char in enumerate(command):
-            if escaped:
-                escaped = False
-                continue
-            if char == "\\" and quote != "'":
-                escaped = True
-                continue
-            if quote:
-                if char == quote:
-                    quote = ""
-                continue
-            if char in ("'", '"'):
-                quote = char
-                continue
-            if char == "#" and (
-                index == 0 or command[index - 1].isspace() or command[index - 1] in ";|&()"
-            ):
-                break
-            if char != "&":
-                continue
-            previous = command[index - 1] if index else ""
-            following = command[index + 1] if index + 1 < len(command) else ""
-            if previous in {"&", "<", ">", "|"} or following in {"&", ">", "|"}:
-                continue
-            return True
-        return False
+        """Whether clean shell syntax contains a single-ampersand background edge;
+        see `shell_sessions_parts.text` for the full contract."""
+        return _text_part.is_backgrounded(command)
 
     async def _remap_reserved_preview_serve(self, command: str) -> str:
-        """Bug 16 — the CLEAN-command home for the reserved-port preview-serve remap.
-
-        `command` here is the model's RAW `shell_exec` command, BEFORE it is wrapped into
-        `tmux send-keys -l '<command>'` below — so a genuine leading `python -m
-        http.server <reserved>` serve can be remapped to a process-safe port precisely
-        and unambiguously (no scan over arbitrary/wrapped shell text; see
-        `remap_reserved_preview_serve`). Gated to SHARED-host backends via the SAME signal
-        the verify resolver uses (`workspace_path is not None` ⇒ process/local, where 8000
-        is the agent-server's own control port); an ISOLATED container keeps 8000 as its
-        canonical app port and is never remapped. Best-effort: any probe failure leaves
-        the command unchanged (the containment refusal is still the safety net)."""
-        try:
-            inst = await self._get_instance()
-        except Exception:  # noqa: BLE001 — instance unavailable; leave command unchanged
-            return command
-        if getattr(inst, "workspace_path", None) is None:
-            return command  # isolated backend — 8000 is the box's own app, keep it
-        from disco.core.loop.preview_target import remap_reserved_preview_serve
-
-        remapped = remap_reserved_preview_serve(command)
-        return remapped if remapped is not None else command
+        """Bug 16 — the CLEAN-command home for the reserved-port preview-serve remap;
+        see `shell_sessions_parts.exec_dispatch` for the full contract."""
+        return await _exec_dispatch_part.remap_reserved_preview_serve(self, command)
 
     async def exec(self, name: str, command: str, exec_dir: str | None) -> ExecOutcome:
-        # Bug 16: remap a reserved-port preview SERVE on the CLEAN command, before the
-        # tmux-wrap below — so a model serving on 8000/5173 lands on a safe, conversation-
-        # owned port the verify resolver can target (instead of STUCK verify_no_progress),
-        # while the Bug-7 crash vector stays closed (we never wrap/run a reserved bind).
-        command = await self._remap_reserved_preview_serve(command)
-        try:
-            await self.ensure(name, exec_dir)
-        except Exception as e:
-            raise RuntimeError(
-                f"session '{name}' could not be reached (sandbox shell unavailable or "
-                f"recreated) — retry once; if it persists, use a new session name or "
-                f"server_start. {e}"
-            ) from e
-        if await self.is_busy(name):
-            full = self._full_name(name)
-            rc, pane_out = await self._run_tmux_safe(
-                f"list-panes -t {shlex.quote(full)} -F '#{{pane_current_command}}'"
-            )
-            cmd_name = (
-                pane_out.strip().splitlines()[0].strip() if rc == 0 and pane_out.strip() else ""
-            )
-            if cmd_name:
-                raise SessionBusy(
-                    f"session '{name}' is busy running '{cmd_name}' — "
-                    "wait for it (shell_wait), "
-                    "interact with it (shell_write_to_process), "
-                    "kill it (shell_kill_process), "
-                    "or use a different session name."
-                )
-            raise SessionBusy(
-                f"Previous command not finished in session '{name}'. Wait for it (shell_wait), "
-                "interact with it (shell_write_to_process), kill it (shell_kill_process), "
-                "or use a different session name."
-            )
-
-        full = self._full_name(name)
-        _, pre_cap = await self._run_tmux_safe(f"capture-pane -J -t {shlex.quote(full)} -p -S -")
-        pre_cap = pre_cap.rstrip("\r\n")
-
-        backgrounded = self._backgrounded(command)
-        port = self._classify_persistent_server(command) if backgrounded else None
-        background_owner_before = (
-            await self._background_port_owner(name, port) if port is not None else None
-        )
-        token = secrets.token_hex(16)
-        dispatched, completion_re = self._completion_dispatch(command, token)
-
-        # A transport error can occur after tmux accepted the bytes.  From this
-        # point until a private completion record is observed, cached idle proof
-        # is invalid even when the first send call raises.
-        self._foreground_state[name] = "busy"
-        try:
-            await self._run_tmux(f"send-keys -t {shlex.quote(full)} -l {shlex.quote(dispatched)}")
-        except Exception:
-            self._foreground_state.pop(name, None)
-            raise
-        try:
-            await self._run_tmux(f"send-keys -t {shlex.quote(full)} Enter")
-        except Exception:
-            # Command text is now sitting unsubmitted at the prompt. It is neither
-            # proven idle nor running; clearing proof prevents a later exec from
-            # appending a second command and accidentally submitting the concatenation.
-            self._foreground_state.pop(name, None)
-            raise
-        # Wall-clock deadline, NOT a poll-count accumulator: over Docker-over-SSH each
-        # capture-pane round-trip costs 1-2s that a `+= _POLL_S` counter never sees,
-        # silently stretching "15s" to a minute (caught live on the gvisor backend).
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + _EXEC_WAIT_S
-        while loop.time() < deadline:
-            await asyncio.sleep(_POLL_S)
-
-            _, post_cap = await self._run_tmux_safe(
-                f"capture-pane -J -t {shlex.quote(full)} -p -S -"
-            )
-            post_cap = post_cap.rstrip("\r\n")
-
-            prefix_continuity = post_cap.startswith(pre_cap)
-            if prefix_continuity:
-                delta = post_cap[len(pre_cap) :]
-            else:
-                delta = post_cap
-
-            # Only this exec's private, line-anchored completion record is proof.
-            # The public prompt marker can occur in command echo or process output.
-            marker_is_fresh = completion_re.search(delta) is not None
-            if marker_is_fresh:
-                cleaned, exit_code = self._strip_output(
-                    delta, completion_re=completion_re, echoed_dispatch=dispatched
-                )
-                outcome = ExecOutcome(
-                    running=False, exit_code=exit_code, output=cleaned[-_EXEC_RETURN_CHARS:]
-                )
-                self._foreground_state[name] = "idle"
-                recorded = await self._record_persistent_if_match(
-                    name,
-                    command,
-                    exec_dir,
-                    outcome,
-                    backgrounded=backgrounded,
-                    background_owner_before=background_owner_before,
-                )
-                if backgrounded:
-                    outcome.note = (
-                        "background server ownership confirmed"
-                        if recorded
-                        else "shell returned; background process status is unverified — use "
-                        "server_status or preview_start"
-                    )
-                return outcome
-
-        _, post_cap = await self._run_tmux_safe(f"capture-pane -J -t {shlex.quote(full)} -p -S -")
-        post_cap = post_cap.rstrip("\r\n")
-        if post_cap.startswith(pre_cap):
-            delta = post_cap[len(pre_cap) :]
-        else:
-            delta = post_cap
-
-        cleaned_running, _ = self._strip_output(delta, echoed_dispatch=dispatched)
-        outcome = ExecOutcome(
-            running=True,
-            exit_code=None,
-            output=cleaned_running[-_EXEC_RETURN_CHARS:],
-            note="still running after 15s — use shell_view / shell_wait",
-        )
-        await self._record_persistent_if_match(
-            name,
-            command,
-            exec_dir,
-            outcome,
-            backgrounded=backgrounded,
-            background_owner_before=background_owner_before,
-        )
-        return outcome
+        """Dispatch one command into a tmux session and attribute its outcome;
+        see `shell_sessions_parts.exec_dispatch` for the full contract."""
+        return await _exec_dispatch_part.exec_command(self, name, command, exec_dir)
 
     async def _record_persistent_if_match(
         self,
@@ -570,80 +370,26 @@ class ShellSessionManager:
         backgrounded: bool,
         background_owner_before: tuple[bool, int | None] | None = None,
     ) -> bool:
-        """Update `_persistent_servers` based on a finished exec() outcome.
-
-        - If the command is STILL running and references a USER_PORT in argv,
-          record (or refresh) the entry — it's a dev server the agent launched
-          that we should restart on a recreate.
-        - If the foreground shell returned after a syntactically backgrounded
-          command, record only when the USER_PORT listener is positively owned by
-          this exact tmux session.
-        - Otherwise, drop any stale entry for that session: the agent finished
-          the server (`Ctrl-C` / `kill`), replaced it with a one-shot, or
-          replaced it with a server on a different port. Either way the OLD
-          entry no longer reflects reality and re-running it would be wrong.
-        """
-        port = self._classify_persistent_server(command)
-        if backgrounded:
-            # A missed/delayed prompt must not bypass attribution: background
-            # commands ALWAYS need exact listener ownership, even when exec() times
-            # out and reports running=True. This excludes a foreign auto-preview.
-            after = (
-                await self._background_port_owner(name, port, wait_for_listener=True)
-                if port is not None
-                else None
-            )
-            if (
-                port is not None
-                and background_owner_before is not None
-                and background_owner_before[0]
-                and after is not None
-                and after[0]
-                and after[1] is not None
-                and after[1] != background_owner_before[1]
-            ):
-                self._persistent_servers[name] = PersistentServer(
-                    name=name, command=command, exec_dir=exec_dir, port=port
-                )
-                return True
-            # A failed/redundant background launch cannot disprove an already
-            # recorded server.  Preserve it, but return False so the new launch is
-            # never attributed to the pre-existing listener.
-            return False
-        elif outcome.running and port is not None:
-            self._persistent_servers[name] = PersistentServer(
-                name=name, command=command, exec_dir=exec_dir, port=port
-            )
-            return True
-        # Not running, or not a port-binding command — forget any prior entry.
-        self._persistent_servers.pop(name, None)
-        return False
+        """Update `_persistent_servers` from a finished exec() outcome; see
+        `shell_sessions_parts.exec_dispatch` for the full contract."""
+        return await _exec_dispatch_part.record_persistent_if_match(
+            self,
+            name,
+            command,
+            exec_dir,
+            outcome,
+            backgrounded=backgrounded,
+            background_owner_before=background_owner_before,
+        )
 
     async def _background_port_owner(
         self, name: str, port: int, *, wait_for_listener: bool = False
     ) -> tuple[bool, int | None]:
-        """Return ``(probe_conclusive, exact-session-listener-pid)`` boundedly."""
-
-        from .port_owner import port_owner
-
-        observed_absence = False
-        for attempt in range(_BACKGROUND_OWNER_ATTEMPTS):
-            try:
-                inst = await self._get_instance()
-                owner = await port_owner(inst, port)
-            except Exception:  # noqa: BLE001 — inconclusive ownership is never admission
-                owner = None
-            # The probe contract distinguishes a successful absence result
-            # (PortOwner with pid=None) from raw None/exception (probe failure).
-            if owner is not None and owner.pid is None:
-                observed_absence = True
-                if not wait_for_listener:
-                    return True, None
-            elif owner is not None and owner.pid is not None:
-                return True, owner.pid if owner.session == self._full_name(name) else None
-            if attempt + 1 < _BACKGROUND_OWNER_ATTEMPTS:
-                await asyncio.sleep(_BACKGROUND_OWNER_INTERVAL_S)
-        return (True, None) if observed_absence else (False, None)
+        """Return ``(probe_conclusive, exact-session-listener-pid)`` boundedly;
+        see `shell_sessions_parts.exec_dispatch` for the full contract."""
+        return await _exec_dispatch_part.background_port_owner(
+            self, name, port, wait_for_listener=wait_for_listener
+        )
 
     def recorded_persistent_servers(self) -> list[PersistentServer]:
         """Snapshot of the persistent-server registry (read-only view, for
@@ -658,95 +404,18 @@ class ShellSessionManager:
         expected_command: str,
         expected_port: int,
     ) -> str:
-        """Stop and revoke one exact foreground-server generation.
-
-        Object identity is captured before the await because a newer same-name
-        generation may legitimately reuse the exact command and port.
-        """
-        current = self._persistent_servers.get(name)
-        expected = (
-            current
-            if current is not None
-            and current.command == expected_command
-            and current.port == expected_port
-            else None
+        """Stop and revoke one exact foreground-server generation; see
+        `shell_sessions_parts.rematerialize` for the full contract."""
+        return await _rematerialize_part.stop_foreground_server(
+            self, name, expected_command=expected_command, expected_port=expected_port
         )
-        try:
-            return await self.kill_foreground(name)
-        finally:
-            # Stop intent revokes this captured generation even when transport
-            # fails ambiguously after accepting the signal. Identity still protects
-            # any replacement registered while the awaited stop was in flight.
-            if expected is not None and self._persistent_servers.get(name) is expected:
-                self._persistent_servers.pop(name, None)
 
     async def rehydrate_persistent_servers(
         self, port_check: Callable[[int], Awaitable[bool]] | None = None
     ) -> list[str]:
         """Re-issue each recorded persistent-server command on the CURRENT
-        instance. Called by `SandboxSession._recreate` after a fresh instance
-        is up so a real app (vite / express / uvicorn / http.server on a
-        non-default port) survives suspend/wake, not just the static
-        auto-preview.
-
-        `port_check(port)` -> True iff a USER_PORT is already bound on the
-        fresh instance. We SKIP those to avoid duplicating a server that's
-        already running (the no-duplication guarantee). Defaults to a /proc
-        probe via `port_owner`.
-
-        Best-effort: any single failure is logged and the rehydrate continues
-        with the next entry. The function NEVER raises — rehydrate is a
-        convenience, like the static auto-preview, and the box must not care.
-        Returns a list of human-readable log lines for diagnostics/tests.
-        """
-        from .port_owner import port_owner
-
-        if port_check is None:
-
-            async def _default_check(port: int) -> bool:
-                try:
-                    inst = await self._get_instance()
-                except Exception:  # noqa: BLE001 — instance gone; just attempt rehydrate
-                    return False
-                try:
-                    owner = await port_owner(inst, port)
-                except Exception:  # noqa: BLE001 — probe failed; treat as not bound
-                    return False
-                return owner is not None and owner.pid is not None
-
-            port_check = _default_check
-
-        logs: list[str] = []
-        # Snapshot the keys so the dict isn't mutated mid-iteration by the
-        # recording that happens inside the re-issued exec() call.
-        for name, srv in list(self._persistent_servers.items()):
-            try:
-                if await port_check(srv.port):
-                    logs.append(
-                        f"port {srv.port} already bound on the new instance — "
-                        f"skipping rehydrate of session '{name}' "
-                        f"(cmd: {srv.command})"
-                    )
-                    continue
-            except Exception as exc:  # noqa: BLE001 — port-check failure is non-fatal
-                logs.append(
-                    f"port-check for {srv.port} failed while rehydrating "
-                    f"'{name}': {exc!r} — attempting re-issue anyway"
-                )
-            try:
-                await self.exec(name, srv.command, srv.exec_dir)
-            except Exception as exc:  # noqa: BLE001 — best-effort; one bad rehydrate must not block the rest
-                logs.append(
-                    f"failed to re-materialize persistent server '{name}' "
-                    f"(cmd: {srv.command}): {exc!r}"
-                )
-                _LOG.warning("rehydrate of persistent server %r failed: %r", name, exc)
-                continue
-            logs.append(
-                f"re-materialized persistent server '{name}' on port {srv.port} "
-                f"(cmd: {srv.command})"
-            )
-        return logs
+        instance; see `shell_sessions_parts.rematerialize` for the full contract."""
+        return await _rematerialize_part.rehydrate_persistent_servers(self, port_check)
 
     async def view(self, name: str, tail_chars: int = _VIEW_TAIL_CHARS) -> SessionView:
         full = self._full_name(name)

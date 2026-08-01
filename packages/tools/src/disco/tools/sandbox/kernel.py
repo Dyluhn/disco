@@ -1,17 +1,25 @@
 from __future__ import annotations
 
-import ast
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# `kernel_parts` resolves this module's names through the parent at call time (the
+# standing §13 rule, which keeps test monkeypatches effective), so ruff cannot see
+# those uses. Every name this module bound before the extraction is restored here
+# in the redundant-alias re-export form (`X as X`) — ruff's sanctioned re-export
+# marker, which needs no per-line suppression. `_secrets` is re-exported from
+# `kernel_parts.text` rather than re-imported so both modules keep the identical
+# module object (`_DEV_GATEWAY_SECRET` is derived from it exactly once).
+import ast as ast
 import asyncio
-import base64
+import base64 as base64
 import contextlib
-import hashlib
-import hmac
-import json
+import hashlib as hashlib
+import hmac as hmac
+import json as json
 import logging
 import os
-import re
-import secrets as _secrets
-import shlex
+import re as re
+import shlex as shlex
 import shutil
 import tempfile
 import time
@@ -19,238 +27,50 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import Empty
+from queue import Empty as Empty
 from typing import Any
 
 from .base import SandboxError
+from .kernel_parts import gateway_execute as _gateway_execute_part
+from .kernel_parts import gateway_startup as _gateway_startup_part
+from .kernel_parts import process_execute as _process_execute_part
+from .kernel_parts import process_recovery as _process_recovery_part
+from .kernel_parts.text import _ANSI_ESCAPE as _ANSI_ESCAPE
+from .kernel_parts.text import _DEFAULT_IDLE_TIMEOUT_S as _DEFAULT_IDLE_TIMEOUT_S
+from .kernel_parts.text import _DEV_GATEWAY_SECRET as _DEV_GATEWAY_SECRET
+from .kernel_parts.text import _GATEWAY_DIAGNOSTIC_MAX_CHARS as _GATEWAY_DIAGNOSTIC_MAX_CHARS
+from .kernel_parts.text import _GATEWAY_SECRET_RE as _GATEWAY_SECRET_RE
+from .kernel_parts.text import _IDLE_TIMEOUT_ENV as _IDLE_TIMEOUT_ENV
+from .kernel_parts.text import _KERNEL_IMAGE_MAX_BYTES as _KERNEL_IMAGE_MAX_BYTES
+from .kernel_parts.text import _KERNEL_STREAM_CAP as _KERNEL_STREAM_CAP
+from .kernel_parts.text import _KERNEL_STREAM_HEAD as _KERNEL_STREAM_HEAD
+from .kernel_parts.text import _KERNEL_STREAM_TAIL as _KERNEL_STREAM_TAIL
+from .kernel_parts.text import _bounded_gateway_diagnostic as _bounded_gateway_diagnostic
+from .kernel_parts.text import (
+    _BoundedTextCapture,
+    _gateway_auth_token,
+    _gateway_transport_state,
+)
+from .kernel_parts.text import _cap_kernel_scalar as _cap_kernel_scalar
+from .kernel_parts.text import _cap_kernel_traceback as _cap_kernel_traceback
+from .kernel_parts.text import _default_idle_timeout_s as _default_idle_timeout_s
+from .kernel_parts.text import (
+    _rewrite_process_workspace_literals as _rewrite_process_workspace_literals,
+)
+from .kernel_parts.text import _secrets as _secrets
 from .shell_sessions import SessionBusy
 
 _LOG = logging.getLogger(__name__)
 
-# Dev fallback for the kernel-gateway auth token when no app secret is set —
-# a process-local random key (stable for this process's lifetime).
-_DEV_GATEWAY_SECRET = _secrets.token_bytes(32)
-
-_GATEWAY_DIAGNOSTIC_MAX_CHARS = 1200
 _GATEWAY_SESSION = "__kernel"
 _GATEWAY_SESSION_CLEANUP_S = 5.0
-_GATEWAY_SECRET_RE = re.compile(
-    r"(?i)\b(?:kg_auth_token|authorization|api[_-]?key|token|secret)\b"
-    r"(?:\s*[:=]\s*|\s+)(?:bearer\s+|token\s+)?[^\s;]+"
-)
 
-
-def _bounded_gateway_diagnostic(
-    output: object,
-    *,
-    exit_code: object = None,
-    auth_token: str = "",
-) -> str:
-    """Return bounded startup evidence without retaining gateway credentials.
-
-    Shell-session output can include the echoed ``KG_AUTH_TOKEN=...`` launch
-    assignment, arbitrary terminal controls, or a very large traceback.  Kernel
-    readiness failures are durable AgentError evidence, so sanitize and bound the
-    text before it crosses that boundary.  Raw exception strings are intentionally
-    excluded by callers; transport failures are represented by their class only.
-    """
-
-    text = str(output or "")
-    if auth_token:
-        text = text.replace(auth_token, "<redacted>")
-    text = _GATEWAY_SECRET_RE.sub("<redacted>", text)
-    text = "".join(
-        char for char in text if char in "\n\t" or (ord(char) >= 32 and ord(char) != 127)
-    ).strip()
-    if len(text) > _GATEWAY_DIAGNOSTIC_MAX_CHARS:
-        text = "…" + text[-(_GATEWAY_DIAGNOSTIC_MAX_CHARS - 1) :]
-    prefix = f"exit={exit_code}; " if exit_code is not None else ""
-    return (prefix + text).strip()[: _GATEWAY_DIAGNOSTIC_MAX_CHARS + len(prefix)]
-
-
-def _gateway_transport_state(exc: BaseException) -> str:
-    """Class-only transport evidence: actionable category without raw URL/detail."""
-
-    name = type(exc).__name__
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", name):
-        name = "RequestError"
-    return f"transport={name}"
-
-
-def _gateway_auth_token(sandbox_id: str) -> str:
-    """The kernel gateway's auth token for one sandbox. SECURITY: the gateway
-    (`jupyter kernelgateway`) is an arbitrary-code-execution endpoint; without a
-    token any caller that can reach its port can drive a kernel. The token is
-    DERIVED, not stored, so it is STABLE and re-derivable: `_ensure_gateway`
-    lazily REUSES a surviving gateway across suspend/resume / agent-server
-    restart, and a fresh `GatewayKernel` must reconnect with the SAME token (a
-    per-object random token would lock the object out of its own kernel).
-
-    HMAC keyed on `DISCO_SECRET_KEY` so the value is secret from other sandboxes
-    (interiors never receive the master key — SEC-1) and from the network; a
-    process-local random key is the dev fallback when no app secret is set. The
-    token is observable only from inside this sandbox (the gateway runs in its
-    own container), which is the same trust boundary it protects."""
-    from disco.core.env import disco_env
-
-    master = disco_env("SECRET_KEY")
-    key = master.encode() if master else _DEV_GATEWAY_SECRET
-    return hmac.new(key, f"kernel-gateway:{sandbox_id}".encode(), hashlib.sha256).hexdigest()
-
-
-# C15: idle-cull knob. Default 300s (5 min) — long enough that an agent thinking
-# between tool calls doesn't trigger churn, short enough to free a forgotten
-# kernel in a quiet conversation. Set to 0 to disable culling entirely.
-_DEFAULT_IDLE_TIMEOUT_S = 300.0
-_IDLE_TIMEOUT_ENV = "DISCO_KERNEL_IDLE_TIMEOUT_S"
-
-
-def _default_idle_timeout_s() -> float:
-    """Read `DISCO_KERNEL_IDLE_TIMEOUT_S`; missing/garbage -> 300.0; clamped to >=0.
-    Read at call-time so tests can monkeypatch the env var per-case without
-    process-level state."""
-    raw = os.environ.get(_IDLE_TIMEOUT_ENV)
-    if raw is None or raw.strip() == "":
-        return _DEFAULT_IDLE_TIMEOUT_S
-    try:
-        v = float(raw)
-    except ValueError:
-        _LOG.warning(
-            "%s=%r is not a float; using default %.0fs",
-            _IDLE_TIMEOUT_ENV,
-            raw,
-            _DEFAULT_IDLE_TIMEOUT_S,
-        )
-        return _DEFAULT_IDLE_TIMEOUT_S
-    return max(0.0, v)
-
-
-# ANSI escape sequence regex for stripping colors from tracebacks
-_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
-_KERNEL_STREAM_HEAD = 16 * 1024
-_KERNEL_STREAM_TAIL = 48 * 1024
-_KERNEL_STREAM_CAP = _KERNEL_STREAM_HEAD + _KERNEL_STREAM_TAIL
-_KERNEL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
 _KERNEL_WS_MAX_FRAME_BYTES = 1024 * 1024
 _KERNEL_INTERRUPT_GRACE_S = 5.0
 _KERNEL_INTERRUPT_CALL_TIMEOUT_S = 1.0
 _KERNEL_RESTART_CALL_TIMEOUT_S = 65.0
 _KERNEL_SHELL_REPLY_GRACE_S = 5.0
 _KERNEL_SHELL_REPLY_MAX_POLLS = 256
-
-
-def _rewrite_process_workspace_literals(code: str, workspace: Path) -> str:
-    """Translate Python string literals rooted at the guest ``/workspace`` path.
-
-    Container kernels have a real ``/workspace`` mount.  The dev-only process
-    kernel instead runs directly in its per-conversation host directory, so a
-    literal path that is valid in every sibling tool otherwise raises
-    ``FileNotFoundError``.  Rewrite only Python string constants whose complete
-    prefix is exactly ``/workspace``; relative paths and strings containing the
-    word elsewhere are untouched.
-
-    The resolved target is jailed before it is inserted.  This does not turn the
-    process backend into an isolation boundary (model code already executes as a
-    host process), but the compatibility layer must never manufacture an escape
-    path such as ``/workspace/../../etc`` itself.
-
-    Cells using IPython-only syntax are left byte-for-byte unchanged when Python's
-    AST parser cannot parse them.  Normal Python cells -- including f-strings --
-    take the strict translated path.
-    """
-    if "/workspace" not in code:
-        return code
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return code
-
-    root = workspace.resolve()
-
-    def rewrite(value: str) -> str:
-        if value == "/workspace":
-            suffix = ""
-        elif value.startswith("/workspace/"):
-            suffix = value[len("/workspace/") :]
-        else:
-            return value
-        target = (root / suffix).resolve()
-        if target != root and root not in target.parents:
-            raise SandboxError(f"process-kernel /workspace path escapes workspace: {value!r}")
-        rendered = str(target)
-        # In an f-string the literal segment often ends at `/workspace/` and
-        # the next segment is a formatted value. Preserve that separator;
-        # pathlib resolution intentionally removes it from the root path.
-        if value.endswith("/") and not rendered.endswith("/"):
-            rendered += "/"
-        return rendered
-
-    class _WorkspaceLiteralTransformer(ast.NodeTransformer):
-        def visit_Constant(self, node: ast.Constant) -> ast.AST:  # noqa: N802
-            if isinstance(node.value, str):
-                translated = rewrite(node.value)
-                if translated != node.value:
-                    return ast.copy_location(ast.Constant(value=translated), node)
-            return node
-
-    rewritten = _WorkspaceLiteralTransformer().visit(tree)
-    ast.fix_missing_locations(rewritten)
-    return ast.unparse(rewritten)
-
-
-class _BoundedTextCapture:
-    """List-compatible bounded accumulator for streamed kernel text."""
-
-    def __init__(self) -> None:
-        self.total = 0
-        self._small = ""
-        self._head = ""
-        self._tail = ""
-
-    def append(self, value: object) -> None:
-        text = str(value or "")
-        self.total += len(text)
-        if len(self._small) <= _KERNEL_STREAM_CAP:
-            room = _KERNEL_STREAM_CAP + 1 - len(self._small)
-            self._small += text[:room]
-        if len(self._head) < _KERNEL_STREAM_HEAD:
-            self._head += text[: _KERNEL_STREAM_HEAD - len(self._head)]
-        if len(text) >= _KERNEL_STREAM_TAIL:
-            self._tail = text[-_KERNEL_STREAM_TAIL:]
-        else:
-            self._tail = (self._tail + text)[-_KERNEL_STREAM_TAIL:]
-
-    def render(self) -> str:
-        if self.total <= _KERNEL_STREAM_CAP:
-            return self._small[: self.total]
-        dropped = max(0, self.total - len(self._head) - len(self._tail))
-        return (
-            self._head + f"\n[disco: kernel output truncated; {self.total} chars total, "
-            f"{dropped} omitted]\n" + self._tail
-        )
-
-    def __iter__(self):
-        yield self.render()
-
-
-def _cap_kernel_scalar(value: object) -> str | None:
-    if value is None:
-        return None
-    capture = _BoundedTextCapture()
-    capture.append(value)
-    return capture.render()
-
-
-def _cap_kernel_traceback(values: object) -> str:
-    capture = _BoundedTextCapture()
-    if not isinstance(values, (list, tuple)):
-        capture.append(_ANSI_ESCAPE.sub("", str(values or "")))
-        return capture.render()
-    for index, value in enumerate(values):
-        if index:
-            capture.append("\n")
-        capture.append(_ANSI_ESCAPE.sub("", str(value or "")))
-    return capture.render()
 
 
 @dataclass
@@ -367,121 +187,10 @@ class ProcessKernel(KernelSession):
             raise
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
-        if self._restart_failed_closed:
-            return KernelResult(
-                ok=False,
-                stdout="",
-                stderr="",
-                error_traceback=(
-                    "KernelUnavailableError: previous kernel restart failed; "
-                    "recreate the sandbox session"
-                ),
-                restart_failed=True,
-            )
-        if not self._kc:
-            await self.start()
-        assert self._kc is not None  # start() always populates both _km and _kc
-        kc = self._kc
-
-        try:
-            code = _rewrite_process_workspace_literals(code, self._workspace)
-        except SandboxError as exc:
-            return KernelResult(
-                ok=False,
-                stdout="",
-                stderr="",
-                error_traceback=f"SandboxError: {exc}",
-            )
-
-        msg_id = kc.execute(code)
-
-        stdout = _BoundedTextCapture()
-        stderr = _BoundedTextCapture()
-        result_repr = None
-        error_traceback = None
-        images = []
-
-        try:
-            while True:
-                try:
-                    # We use a smaller interval to check for timeout more frequently
-                    msg = await kc.get_iopub_msg(timeout=timeout_s)
-                except (TimeoutError, Empty):
-                    # Timeout protocol (EXACT): interrupt -> prove BOTH cross-channel
-                    # completion signals within 5s -> restart if either is missing.
-                    # An IOPub idle alone is not enough: its matching shell reply can
-                    # still be in flight, and starting the next cell in that window
-                    # races the interrupted handler. On teardown that race surfaced as
-                    # ipykernel's "Socket operation on non-socket" and a lost result.
-                    _LOG.warning("Kernel execution timed out, interrupting...")
-                    return await self._recover_from_timeout(kc, msg_id, stdout, stderr)
-
-                content = msg.get("content", {})
-                msg_type = msg.get("header", {}).get("msg_type")
-
-                if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                    continue
-
-                if msg_type == "stream":
-                    if content.get("name") == "stdout":
-                        stdout.append(content.get("text", ""))
-                    elif content.get("name") == "stderr":
-                        stderr.append(content.get("text", ""))
-                elif msg_type == "execute_result":
-                    result_repr = _cap_kernel_scalar(content.get("data", {}).get("text/plain"))
-                elif msg_type == "display_data":
-                    data = content.get("data", {})
-                    if "image/png" in data:
-                        self._seq += 1
-                        img_path = f".pmx/plots/{self._seq:04d}.png"
-                        full_path = self._workspace / img_path
-                        full_path.parent.mkdir(parents=True, exist_ok=True)
-                        encoded = data["image/png"]
-                        if len(encoded) <= (_KERNEL_IMAGE_MAX_BYTES * 4 // 3) + 8:
-                            with open(full_path, "wb") as f:
-                                f.write(base64.b64decode(encoded))
-                            images.append(img_path)
-                elif msg_type == "error":
-                    traceback = content.get("traceback", [])
-                    error_traceback = _cap_kernel_traceback(traceback)
-                elif msg_type == "status" and content.get("execution_state") == "idle":
-                    # Shell and IOPub are independent channels.  IOPub idle proves
-                    # publication drained, but success/failure still comes from the
-                    # matching execute_reply.  Bound both time and poll count: a
-                    # broken or adversarial client returning immediate stale frames
-                    # must not turn this into a CPU/memory-thrashing loop (H299).
-                    reply, protocol_failure = await self._wait_for_execute_reply(
-                        kc,
-                        msg_id,
-                        deadline=time.monotonic() + _KERNEL_SHELL_REPLY_GRACE_S,
-                    )
-                    if reply is None:
-                        assert protocol_failure is not None
-                        return await self._recover_from_protocol_failure(
-                            stdout=stdout,
-                            stderr=stderr,
-                            result_repr=result_repr,
-                            error_traceback=error_traceback,
-                            images=images,
-                            detail=protocol_failure,
-                        )
-
-                    ok = reply.get("content", {}).get("status") == "ok"
-                    res = KernelResult(
-                        ok=ok,
-                        stdout="".join(stdout),
-                        stderr="".join(stderr),
-                        result_repr=result_repr,
-                        error_traceback=error_traceback,
-                        images=images,
-                    )
-                    return await self._apply_discipline(res)
-
-        except Exception as e:
-            _LOG.exception("Kernel execution failed")
-            return KernelResult(
-                ok=False, stdout="".join(stdout), stderr="".join(stderr), error_traceback=str(e)
-            )
+        """Read IOPub messages until the matching execute_reply + idle pair
+        proves completion; see `kernel_parts.process_execute` for the full
+        contract."""
+        return await _process_execute_part.execute(self, code, timeout_s=timeout_s)
 
     async def _wait_for_execute_reply(
         self,
@@ -490,39 +199,11 @@ class ProcessKernel(KernelSession):
         *,
         deadline: float,
     ) -> tuple[dict[str, Any] | None, str | None]:
-        """Return a typed shell reply or a sanitized protocol-failure reason."""
-
-        polls = 0
-        while polls < _KERNEL_SHELL_REPLY_MAX_POLLS:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return None, "matching execute_reply was not received after idle"
-            polls += 1
-            try:
-                reply = await kc.get_shell_msg(timeout=min(0.1, remaining))
-            except (TimeoutError, Empty):
-                continue
-            except Exception as exc:  # noqa: BLE001 - sanitize transport failure
-                return None, f"shell receive failed ({type(exc).__name__})"
-            if not isinstance(reply, dict):
-                return None, "shell channel returned a malformed message"
-            parent_header = reply.get("parent_header")
-            if not isinstance(parent_header, dict):
-                return None, "shell channel returned a malformed parent header"
-            if parent_header.get("msg_id") == msg_id:
-                header = reply.get("header")
-                content = reply.get("content")
-                if (
-                    not isinstance(header, dict)
-                    or header.get("msg_type") != "execute_reply"
-                    or not isinstance(content, dict)
-                    or content.get("status") not in {"ok", "error", "abort"}
-                ):
-                    return None, "current request received an invalid shell reply"
-                return reply, None
-            stale = parent_header.get("msg_id")
-            _LOG.debug("Skipping non-matching shell message for %s", stale)
-        return None, "matching execute_reply exceeded the shell-message budget"
+        """Return a typed shell reply or a sanitized protocol-failure reason;
+        see `kernel_parts.process_recovery` for the full contract."""
+        return await _process_recovery_part.wait_for_execute_reply(
+            self, kc, msg_id, deadline=deadline
+        )
 
     async def _recover_from_protocol_failure(
         self,
@@ -534,39 +215,17 @@ class ProcessKernel(KernelSession):
         images: list[str],
         detail: str,
     ) -> KernelResult:
-        """Quarantine a desynchronized shell channel without fabricating success."""
-
-        _LOG.error("Kernel protocol failure after idle; restarting the kernel")
-        restart_failure: str | None = None
-        try:
-            await asyncio.wait_for(self.restart(), timeout=_KERNEL_RESTART_CALL_TIMEOUT_S)
-        except TimeoutError:
-            restart_failure = "restart timed out"
-        except Exception as exc:  # noqa: BLE001 - preserve protocol-failure truth
-            restart_failure = f"restart failed ({type(exc).__name__})"
-
-        self._restart_failed_closed = restart_failure is not None
-
-        protocol_error = f"KernelProtocolError: {detail}"
-        if restart_failure is None:
-            protocol_error += "; kernel restarted and state was lost"
-        else:
-            protocol_error += f"; {restart_failure}"
-        if error_traceback:
-            protocol_error = f"{error_traceback}\n{protocol_error}"
-        result = KernelResult(
-            ok=False,
-            stdout="".join(stdout),
-            stderr="".join(stderr),
+        """Quarantine a desynchronized shell channel without fabricating success;
+        see `kernel_parts.process_recovery` for the full contract."""
+        return await _process_recovery_part.recover_from_protocol_failure(
+            self,
+            stdout=stdout,
+            stderr=stderr,
             result_repr=result_repr,
-            error_traceback=protocol_error,
+            error_traceback=error_traceback,
             images=images,
-            restarted=restart_failure is None,
-            restart_attempted=True,
-            restart_failed=restart_failure is not None,
-            protocol_failed=True,
+            detail=detail,
         )
-        return await self._apply_discipline(result)
 
     async def _recover_from_timeout(
         self,
@@ -575,73 +234,9 @@ class ProcessKernel(KernelSession):
         stdout: _BoundedTextCapture,
         stderr: _BoundedTextCapture,
     ) -> KernelResult:
-        """Bound interrupt/settle/restart while preserving timeout truth."""
-
-        deadline = time.monotonic() + _KERNEL_INTERRUPT_GRACE_S
-        interrupt_failure: str | None = None
-        try:
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining <= 0:
-                raise TimeoutError
-            await asyncio.wait_for(
-                self.interrupt(),
-                timeout=min(_KERNEL_INTERRUPT_CALL_TIMEOUT_S, remaining),
-            )
-        except TimeoutError:
-            interrupt_failure = "interrupt timed out"
-        except Exception as exc:  # noqa: BLE001 - recovery must remain typed
-            interrupt_failure = f"interrupt failed ({type(exc).__name__})"
-
-        settled = False
-        if interrupt_failure is None:
-            try:
-                settled = await self._wait_for_interrupt_settle(
-                    kc,
-                    msg_id,
-                    deadline=deadline,
-                )
-            except Exception as exc:  # noqa: BLE001 - broken channels require restart
-                _LOG.exception("Kernel channels failed while settling interrupt")
-                interrupt_failure = f"interrupt settle failed ({type(exc).__name__})"
-
-        if settled:
-            return KernelResult(
-                ok=False,
-                stdout="".join(stdout),
-                stderr="".join(stderr),
-                error_traceback="KeyboardInterrupt: execution timed out",
-                timed_out=True,
-                interrupt_attempted=True,
-            )
-
-        _LOG.warning("Kernel failed to complete interrupt protocol, restarting...")
-        restart_failure: str | None = None
-        try:
-            await asyncio.wait_for(self.restart(), timeout=_KERNEL_RESTART_CALL_TIMEOUT_S)
-        except TimeoutError:
-            restart_failure = "restart timed out"
-        except Exception as exc:  # noqa: BLE001 - preserve timeout result truth
-            restart_failure = f"restart failed ({type(exc).__name__})"
-
-        self._restart_failed_closed = restart_failure is not None
-
-        detail = interrupt_failure or "interrupt did not complete both response channels"
-        if restart_failure is None:
-            error = f"Kernel timed out and was restarted after {detail}"
-        else:
-            error = f"Kernel timed out after {detail}; {restart_failure}"
-        return KernelResult(
-            ok=False,
-            stdout="".join(stdout),
-            stderr="".join(stderr),
-            error_traceback=error,
-            timed_out=True,
-            restarted=restart_failure is None,
-            interrupt_attempted=True,
-            interrupt_failed=interrupt_failure is not None,
-            restart_attempted=True,
-            restart_failed=restart_failure is not None,
-        )
+        """Bound interrupt/settle/restart while preserving timeout truth; see
+        `kernel_parts.process_recovery` for the full contract."""
+        return await _process_recovery_part.recover_from_timeout(self, kc, msg_id, stdout, stderr)
 
     async def _wait_for_interrupt_settle(
         self,
@@ -650,46 +245,11 @@ class ProcessKernel(KernelSession):
         *,
         deadline: float | None = None,
     ) -> bool:
-        """Wait boundedly for the interrupted request's IOPub idle + shell reply.
-
-        Jupyter transports the two messages on independent ZMQ channels and may
-        deliver them in either order. We read IOPub first but the shell reply stays
-        queued until consumed. ``queue.Empty`` is jupyter_client's normal async
-        poll timeout and must be retried just like ``TimeoutError``; letting it
-        escape used to return a non-timeout failure while the handler was live.
-        """
-
-        if deadline is None:
-            deadline = time.monotonic() + _KERNEL_INTERRUPT_GRACE_S
-        idle = False
-        while not idle:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            try:
-                msg = await kc.get_iopub_msg(timeout=min(0.1, remaining))
-            except (TimeoutError, Empty):
-                continue
-            if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                continue
-            idle = (
-                msg.get("header", {}).get("msg_type") == "status"
-                and msg.get("content", {}).get("execution_state") == "idle"
-            )
-
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            try:
-                reply = await kc.get_shell_msg(timeout=min(0.1, remaining))
-            except (TimeoutError, Empty):
-                continue
-            if (
-                reply.get("parent_header", {}).get("msg_id") == msg_id
-                and reply.get("header", {}).get("msg_type") == "execute_reply"
-            ):
-                return True
+        """Wait boundedly for the interrupted request's IOPub idle + shell reply;
+        see `kernel_parts.process_recovery` for the full contract."""
+        return await _process_recovery_part.wait_for_interrupt_settle(
+            self, kc, msg_id, deadline=deadline
+        )
 
     async def _apply_discipline(self, res: KernelResult) -> KernelResult:
         """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
@@ -837,130 +397,9 @@ class GatewayKernel(KernelSession):
                 ) from None
 
     async def _ensure_gateway(self) -> str:
-        """Start the gateway lazily in tmux and wait for ready."""
-        # Check if already running (port 8899)
-        from ._container import INTERNAL_PORTS
-
-        port = next(iter(INTERNAL_PORTS))  # 8899
-
-        # Resolve host mapping
-        mapping = None
-        if hasattr(self._sandbox, "internal_port_mapping"):
-            mapping = self._sandbox.internal_port_mapping(port)
-
-        if not mapping:
-            # Never probe ambient host localhost as a hidden fallback: another
-            # process could answer there, and a sealed container would still have
-            # no transport to its own gateway. Container provisioning must provide
-            # the explicit loopback mapping or code_exec fails closed.
-            raise SandboxError(
-                "kernel gateway internal transport is unavailable; "
-                "code_exec cannot start for this sandbox session"
-            )
-
-        self._url = f"http://{mapping[0]}:{mapping[1]}"
-
-        # Try to reach it
-        import httpx
-
-        try:
-            async with httpx.AsyncClient() as client:
-                res = await client.get(f"{self._url}/api", timeout=1.0, headers=self._auth_headers)
-                if res.status_code == 200:
-                    return self._url
-        except Exception:
-            pass
-
-        # Not running -> start in tmux session '__kernel'. exec_dir=None means the
-        # container tmux default dir (WORKDIR /workspace), so kernels spawned by the
-        # gateway inherit the workspace as cwd — user code's relative paths resolve
-        # against the same tree the file API serves.
-        #
-        # The gateway requires every caller (REST + WS) to present the token;
-        # without it the gateway is an unauthenticated RCE endpoint on whatever
-        # interface the port is published to. W3 C-5: pass the token via the
-        # KG_AUTH_TOKEN *environment variable* (Kernel Gateway reads it natively)
-        # as an inline assignment, NOT as `--auth_token=<hex>` in argv — argv is
-        # world-readable via `ps`/`/proc/<pid>/cmdline` to any process sharing the
-        # sandbox's PID namespace, so an argv token is a self-exfiltrating secret.
-        # The token is hex, but quote defensively regardless.
-        cmd = (
-            f"KG_AUTH_TOKEN={shlex.quote(self._token)} "
-            f"jupyter kernelgateway --KernelGatewayApp.api=kernel_gateway.jupyter_websocket "
-            f"--ip 0.0.0.0 --port {port}"
-        )
-        budget_s = int(
-            os.environ.get("DISCO_KERNEL_GATEWAY_START_S")
-            or os.environ.get("PMX_KERNEL_GATEWAY_START_S")
-            or "120"
-        )
-        budget_s = max(1, budget_s)
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + budget_s
-        started = await self._launch_gateway(cmd)
-        started_running = getattr(started, "running", None)
-        started_exit = getattr(started, "exit_code", None)
-        started_diagnostic = _bounded_gateway_diagnostic(
-            getattr(started, "output", ""),
-            exit_code=started_exit,
-            auth_token=self._token,
-        )
-        if started_running is False:
-            diagnostic = started_diagnostic or "gateway process exited without startup output"
-            await self._normalize_gateway_session()
-            raise SandboxError(
-                "jupyter kernel gateway exited during startup; "
-                f"diagnostic={diagnostic}. code_exec is unavailable for this sandbox session; "
-                "continuing with shell is a degraded fallback and does not prove kernel state"
-            )
-
-        # Poll /api until ready. The gateway start is CPU-bound; on a saturated
-        # box (local-LLM inference + the build agent competing for cores) it can
-        # take well over 30s, so an autonomous build would forfeit on a
-        # slow-but-fine start. The env-tunable budget is a REAL wall-clock bound,
-        # inclusive of the tmux launch wait: poll count × request timeout × sleep
-        # must never silently stretch a claimed 120 seconds toward four minutes.
-        # (DISCO_KERNEL_GATEWAY_START_S, default 120s; PMX_ legacy honored).
-        last_readiness = "not_reachable"
-        async with httpx.AsyncClient() as client:
-            while (remaining := deadline - loop.time()) > 0:
-                try:
-                    res = await client.get(
-                        f"{self._url}/api",
-                        timeout=max(0.05, min(1.0, remaining)),
-                        headers=self._auth_headers,
-                    )
-                    if res.status_code == 200:
-                        return self._url
-                    last_readiness = f"http_status={res.status_code}"
-                except Exception as exc:  # noqa: BLE001 — class-only readiness evidence below
-                    last_readiness = _gateway_transport_state(exc)
-                remaining = deadline - loop.time()
-                if remaining > 0:
-                    await asyncio.sleep(min(1.0, remaining))
-
-        # The process may have exited after ShellSessionManager's initial 15-second
-        # observation. Capture one final, separately bounded pane view without
-        # letting diagnostics materially extend the advertised startup budget.
-        final_diagnostic = started_diagnostic
-        try:
-            view = await asyncio.wait_for(self._sessions.view(_GATEWAY_SESSION), timeout=1.0)
-            viewed = _bounded_gateway_diagnostic(
-                getattr(view, "output", ""), auth_token=self._token
-            )
-            if viewed:
-                final_diagnostic = viewed
-        except Exception:  # noqa: BLE001 — keep the launch-time bounded fallback
-            pass
-        diagnostic_suffix = f"; diagnostic={final_diagnostic}" if final_diagnostic else ""
-
-        await self._normalize_gateway_session()
-        raise SandboxError(
-            f"jupyter kernel gateway failed to start within {budget_s}s; "
-            f"final_readiness={last_readiness}{diagnostic_suffix}. "
-            "code_exec is unavailable for this sandbox session; continuing with shell is a "
-            "degraded fallback and does not prove kernel state"
-        )
+        """Start the gateway lazily in tmux and wait for ready; see
+        `kernel_parts.gateway_startup` for the full contract."""
+        return await _gateway_startup_part.ensure_gateway(self)
 
     async def start(self) -> None:
         url = await self._ensure_gateway()
@@ -986,135 +425,9 @@ class GatewayKernel(KernelSession):
         await self.execute(setup_cell, timeout_s=10)
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
-        if not self._ws:
-            await self.start()
-        assert self._ws is not None  # start() always populates _ws
-        ws = self._ws
-
-        msg_id = str(uuid.uuid4())
-        msg = {
-            "header": {
-                "msg_id": msg_id,
-                "msg_type": "execute_request",
-                "session": self._session_id,
-                "version": "5.3",
-                "date": time.strftime("%Y-%m-%dT%H:%M:%S.%fZ", time.gmtime()),
-                "username": "agent",
-            },
-            "parent_header": {},
-            "metadata": {},
-            "content": {
-                "code": code,
-                "silent": False,
-                "store_history": True,
-                "user_expressions": {},
-                "allow_stdin": False,
-                "stop_on_error": True,
-            },
-            "channel": "shell",
-        }
-
-        await ws.send(json.dumps(msg))
-
-        stdout = _BoundedTextCapture()
-        stderr = _BoundedTextCapture()
-        result_repr = None
-        error_traceback = None
-        images = []
-        # Shell ``execute_reply`` carries the authoritative success/error status,
-        # while IOPub ``idle`` says output publication has drained. Kernel Gateway
-        # multiplexes those channels onto one WebSocket but does not guarantee
-        # their cross-channel order, so completion requires BOTH signals. Returning
-        # on idle alone can falsely report a successful first cell as ``ok=False``
-        # when its execute_reply is the next frame (H222).
-        ok = False
-        reply_received = False
-        idle_received = False
-
-        try:
-            while True:
-                try:
-                    raw_msg = await asyncio.wait_for(ws.recv(), timeout=timeout_s)
-                    msg = json.loads(raw_msg)
-                except TimeoutError:
-                    _LOG.warning("Kernel execution timed out, interrupting...")
-                    await self.interrupt()
-
-                    # Wait up to 5s for idle
-                    try:
-                        while True:
-                            raw_msg = await asyncio.wait_for(ws.recv(), timeout=5.0)
-                            msg = json.loads(raw_msg)
-                            if msg.get("parent_header", {}).get("msg_id") == msg_id:
-                                is_status = msg.get("header", {}).get("msg_type") == "status"
-                                if is_status and msg["content"]["execution_state"] == "idle":
-                                    return KernelResult(
-                                        ok=False,
-                                        stdout="".join(stdout),
-                                        stderr="".join(stderr),
-                                        error_traceback="KeyboardInterrupt: execution timed out",
-                                        timed_out=True,
-                                    )
-                    except TimeoutError:
-                        _LOG.warning("Interrupt timed out, restarting...")
-                        await self.restart()
-                        return KernelResult(
-                            ok=False,
-                            stdout="".join(stdout),
-                            stderr="".join(stderr),
-                            error_traceback="KeyboardInterrupt: execution timed out, state lost",
-                            timed_out=True,
-                            restarted=True,
-                        )
-
-                msg_type = msg.get("header", {}).get("msg_type")
-                if msg.get("parent_header", {}).get("msg_id") != msg_id:
-                    continue
-
-                content = msg.get("content", {})
-                if msg_type == "stream":
-                    if content.get("name") == "stdout":
-                        stdout.append(content.get("text", ""))
-                    elif content.get("name") == "stderr":
-                        stderr.append(content.get("text", ""))
-                elif msg_type == "execute_result":
-                    result_repr = _cap_kernel_scalar(content.get("data", {}).get("text/plain"))
-                elif msg_type == "display_data":
-                    data = content.get("data", {})
-                    if "image/png" in data:
-                        self._seq += 1
-                        img_path = f".pmx/plots/{self._seq:04d}.png"
-                        # Since this is a container, we use the sandbox file API to write
-                        encoded = data["image/png"]
-                        if len(encoded) <= (_KERNEL_IMAGE_MAX_BYTES * 4 // 3) + 8:
-                            png = base64.b64decode(encoded)
-                            await self._sandbox.write_file(img_path, png)
-                            images.append(img_path)
-                elif msg_type == "error":
-                    traceback = content.get("traceback", [])
-                    error_traceback = _cap_kernel_traceback(traceback)
-                elif msg_type == "execute_reply":
-                    ok = content.get("status") == "ok"
-                    reply_received = True
-                elif msg_type == "status" and content.get("execution_state") == "idle":
-                    idle_received = True
-
-                if reply_received and idle_received:
-                    res = KernelResult(
-                        ok=ok,
-                        stdout="".join(stdout),
-                        stderr="".join(stderr),
-                        result_repr=result_repr,
-                        error_traceback=error_traceback,
-                        images=images,
-                    )
-                    return await self._apply_discipline(res)
-
-        except Exception as e:
-            _LOG.exception("Kernel execution failed")
-            return KernelResult(
-                ok=False, stdout="".join(stdout), stderr="".join(stderr), error_traceback=str(e)
-            )
+        """Dispatch WS messages until execute_reply + idle both prove
+        completion; see `kernel_parts.gateway_execute` for the full contract."""
+        return await _gateway_execute_part.execute(self, code, timeout_s=timeout_s)
 
     async def _apply_discipline(self, res: KernelResult) -> KernelResult:
         """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""

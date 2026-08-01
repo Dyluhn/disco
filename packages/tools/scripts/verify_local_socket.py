@@ -47,16 +47,8 @@ def _cfg() -> SandboxConfig:
     )
 
 
-async def main() -> None:
-    cfg = _cfg()
-    assert "ssh" not in cfg.docker_socket, "local tier must use a LOCAL socket, no SSH"
-    print(f"config: socket={cfg.docker_socket} runtime={cfg.runtime} image={cfg.image}")
-    svc = LocalSandboxService(cfg)
-    os.environ["PMX_LEAK_TEST"] = SENTINEL  # must never reach the box
-
-    # 1 + 2: create (sealed default) over the LOCAL socket; multi-exec; /workspace persists.
-    inst = await svc.create(SandboxSpec(memory_mb=256), owner_id="local", conversation_id="verify")
-    print(f"\ncreated {inst.id}")
+async def _check_connect_and_session(inst, cfg) -> None:
+    """1 + 2: create (sealed default) over the LOCAL socket; multi-exec; /workspace persists."""
     who = await inst.exec_shell(
         "id -un; cat /proc/self/cgroup | head -1; echo rt-from-config=" + cfg.runtime, timeout_s=10
     )
@@ -74,7 +66,9 @@ async def main() -> None:
         persisted.decode().strip().replace("\n", "|"),
     )
 
-    # 3a: sealed default cannot reach the network.
+
+async def _check_sealed_egress(inst) -> None:
+    """3a: sealed default cannot reach the network."""
     net = await inst.exec_shell(
         "curl -s --max-time 6 https://example.com -o /dev/null -w '%{http_code}' || echo BLOCKED",
         timeout_s=12,
@@ -85,7 +79,9 @@ async def main() -> None:
         net.stdout.strip()[:40],
     )
 
-    # 5: timeout — killed + reported, partial output preserved.
+
+async def _check_timeout(inst) -> None:
+    """5: timeout — killed + reported, partial output preserved."""
     slow = await inst.exec_shell("echo partial; sleep 30", timeout_s=3)
     ok(
         "5. timeout reported (killed, timed_out, partial output)",
@@ -93,7 +89,9 @@ async def main() -> None:
         f"timed_out={slow.timed_out} exit={slow.exit_code} out={slow.stdout.strip()[:20]!r}",
     )
 
-    # 6: secret non-leak — AND prove exec genuinely captured (not a false-empty pass).
+
+async def _check_secret_nonleak(inst) -> None:
+    """6: secret non-leak — AND prove exec genuinely captured (not a false-empty pass)."""
     canary = await inst.exec_shell("echo EXEC_CAPTURED_OK; exit 5", timeout_s=10)
     exec_really_works = canary.stdout.strip() == "EXEC_CAPTURED_OK" and canary.exit_code == 5
     env = await inst.exec_shell("env", timeout_s=10)
@@ -108,19 +106,31 @@ async def main() -> None:
         else "LEAKED!",
     )
 
-    vol_name = f"{cfg.workspace_volume_prefix}-{inst.id}"
 
-    # 7: teardown — container gone, workspace named volume removed.
+def _containers_gone(c, inst_id: str) -> bool:
+    return not any(f"pmx-sbx-{inst_id}" in (ct.name or "") for ct in c.containers.list(all=True))
+
+
+def _volume_removed(c, vol_name: str) -> bool:
+    return not any(vol_name in (v.name or "") for v in c.volumes.list())
+
+
+async def _check_teardown(inst, cfg) -> None:
+    """7: teardown — container gone, workspace named volume removed."""
+    vol_name = f"{cfg.workspace_volume_prefix}-{inst.id}"
     await inst.destroy()
     import docker
 
     c = docker.DockerClient(base_url=cfg.docker_socket)
-    gone = not any(f"pmx-sbx-{inst.id}" in (ct.name or "") for ct in c.containers.list(all=True))
-    vol_removed = not any(vol_name in (v.name or "") for v in c.volumes.list())
+    gone = _containers_gone(c, inst.id)
+    vol_removed = _volume_removed(c, vol_name)
     ok("7. teardown: container removed", gone, "")
     ok("7. teardown: workspace named volume removed", vol_removed, vol_name)
 
-    # 4: limits BITE through the LOCAL socket (the rootless footgun — confirm not silently cgroupfs).
+
+async def _check_limits(svc) -> None:
+    """4: limits BITE through the LOCAL socket (the rootless footgun — confirm not silently
+    cgroupfs)."""
     mem_inst = await svc.create(
         SandboxSpec(memory_mb=128), owner_id="local", conversation_id="verify"
     )
@@ -144,7 +154,9 @@ async def main() -> None:
     except Exception:  # noqa: BLE001
         pass
 
-    # 3b: a GRANTED sandbox can reach the network.
+
+async def _check_granted_network(svc) -> None:
+    """3b: a GRANTED sandbox can reach the network."""
     open_inst = await svc.create(
         SandboxSpec(egress_allow=frozenset({"example.com"})),
         owner_id="local",
@@ -161,7 +173,9 @@ async def main() -> None:
     )
     await open_inst.destroy()
 
-    # image-by-load / NEVER pull — a missing image fails loud, no pull attempted.
+
+async def _check_missing_image(cfg) -> None:
+    """image-by-load / NEVER pull — a missing image fails loud, no pull attempted."""
     bad = LocalSandboxService(cfg.model_copy(update={"image": "pmx-sandbox:DOES-NOT-EXIST"}))
     try:
         await bad.create(SandboxSpec(), owner_id="local", conversation_id="verify")
@@ -173,7 +187,9 @@ async def main() -> None:
             str(e)[:70],
         )
 
-    # #5: lower-isolation legibility + tighter-confirmation coupling.
+
+def _check_isolation_legibility(svc) -> None:
+    """#5: lower-isolation legibility + tighter-confirmation coupling."""
     prof = svc.isolation
     tighter = prof.recommended_confirmation()
     stronger = isolation_for("gvisor").recommended_confirmation()
@@ -194,6 +210,26 @@ async def main() -> None:
         coupling_bites,
         "local gates MEDIUM-risk; gVisor does not",
     )
+
+
+async def main() -> None:
+    cfg = _cfg()
+    assert "ssh" not in cfg.docker_socket, "local tier must use a LOCAL socket, no SSH"
+    print(f"config: socket={cfg.docker_socket} runtime={cfg.runtime} image={cfg.image}")
+    svc = LocalSandboxService(cfg)
+    os.environ["PMX_LEAK_TEST"] = SENTINEL  # must never reach the box
+
+    inst = await svc.create(SandboxSpec(memory_mb=256), owner_id="local", conversation_id="verify")
+    print(f"\ncreated {inst.id}")
+    await _check_connect_and_session(inst, cfg)
+    await _check_sealed_egress(inst)
+    await _check_timeout(inst)
+    await _check_secret_nonleak(inst)
+    await _check_teardown(inst, cfg)
+    await _check_limits(svc)
+    await _check_granted_network(svc)
+    await _check_missing_image(cfg)
+    _check_isolation_legibility(svc)
 
     print("\nDone. Any FAIL above is a real gap to fix.")
 

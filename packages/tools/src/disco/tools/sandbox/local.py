@@ -87,48 +87,17 @@ class LocalSandboxService(GvisorSandboxService):
         cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         mode = egress_mode(spec)
-        if spec.host_services:
-            try:
-                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
-            except RelayConfigurationError as exc:
-                raise SandboxUnavailableError(str(exc)) from exc
-            if relay_upstream.scheme != "https":
-                raise SandboxUnavailableError(
-                    "container host-service relay requires a reachable HTTPS upstream; "
-                    "sidecar loopback is not the agent-server host"
-                )
-        # Per-mode network config (the three-way egress posture; egress_mode docstring).
-        net_kwargs: dict[str, Any] = {}
-        environment: dict[str, str] = {}
-        egress_network = egress_sidecar = None
-        host_service_relay_url = None
-        net_name = ""  # set in the filtered branch; used by the Fix6 forwarder launch
+        self._validate_host_service_relay(spec)
+
         inbound_only = mode == "sealed" and not spec.host_services
-        try:
-            (
-                egress_network,
-                egress_sidecar,
-                environment,
-                net_name,
-                host_service_relay_url,
-            ) = self._setup_filtered_egress(
-                client,
-                spec,
-                instance_id,
-                conversation_id,
-                inbound_only=inbound_only,
-            )
-        except SandboxUnavailableError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
-            operation = "inbound control" if inbound_only else "sandbox policy"
-            raise SandboxUnavailableError(
-                f"{operation} sidecar setup failed; refusing sandbox start"
-            ) from exc
+        (
+            egress_network,
+            egress_sidecar,
+            environment,
+            net_name,
+            host_service_relay_url,
+        ) = self._setup_egress_for_start(client, spec, instance_id, conversation_id, inbound_only)
         net_kwargs = {"network": net_name}
-        ports: dict[str, str | None] | None = None
-        # Bind `ports` at function-frame (the conditional expression above might
-        # leave it unbound on an unrecognised mode — defense in depth).
         volume = None
         container = None
         container_name = f"{SBX_NAME_PREFIX}{instance_id}"
@@ -140,30 +109,8 @@ class LocalSandboxService(GvisorSandboxService):
                 disk_mb=disk_mb,
                 workspace_uid=self._cfg.workspace_uid,
             )
-            container = client.containers.run(
-                image=self._cfg.image,
-                # keepalive
-                command=_keepalive_command(),
-                runtime=self._cfg.runtime,  # runc (a value, not a branch)
-                # The main container never publishes directly. Sealed boxes use
-                # the sidecar only for INTERNAL_PORTS; other modes use the full
-                # curated loopback set.
-                ports=ports,
-                # The limit goes through the LOCAL socket/daemon → it actually bites.
-                mem_limit=f"{mem_mb}m",
-                nano_cpus=int(cpu * 1_000_000_000),
-                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
-                ulimits=nofile_ulimits(self._cfg),
-                volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                # NO host env beyond capability-granted values. Filtered/public
-                # boxes receive only proxy routing vars; sealed passes an empty
-                # dict — no leaks.
-                environment=environment,
-                working_dir=self._cfg.container_workspace,
-                detach=True,
-                name=container_name,
-                labels=labels,
-                **net_kwargs,
+            container = self._run_local_container(
+                client, vol_name, mem_mb, cpu, pids, environment, container_name, labels, net_kwargs
             )
             forward_ports = INTERNAL_PORTS if mode == "sealed" else PUBLISHED_PORTS
             self._launch_inbound_forwarder(
@@ -180,24 +127,115 @@ class LocalSandboxService(GvisorSandboxService):
                 host_service_relay_url,
             )
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
-            if container is None:
-                with contextlib.suppress(Exception):
-                    container = client.containers.get(container_name)
-            with contextlib.suppress(Exception):
-                _remove_container(container)
-            # Don't leak the egress aux if the sandbox itself failed to start (E8).
-            if egress_sidecar is not None:
-                try:
-                    _remove_container(egress_sidecar)
-                except Exception:  # noqa: BLE001 — best-effort
-                    pass
-            if egress_network is not None:
-                try:
-                    egress_network.remove()
-                except Exception:  # noqa: BLE001 — best-effort
-                    pass
-            with contextlib.suppress(Exception):
-                _remove_volume(volume)
+            self._cleanup_failed_local_start(
+                client, container, container_name, egress_sidecar, egress_network, volume
+            )
             if isinstance(exc, SandboxUnavailableError):
                 raise
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+
+    def _validate_host_service_relay(self, spec: SandboxSpec) -> None:
+        if not spec.host_services:
+            return
+        try:
+            relay_upstream = parse_upstream(self._cfg.host_service_upstream)
+        except RelayConfigurationError as exc:
+            raise SandboxUnavailableError(str(exc)) from exc
+        if relay_upstream.scheme != "https":
+            raise SandboxUnavailableError(
+                "container host-service relay requires a reachable HTTPS upstream; "
+                "sidecar loopback is not the agent-server host"
+            )
+
+    def _setup_egress_for_start(
+        self,
+        client: Any,
+        spec: SandboxSpec,
+        instance_id: str,
+        conversation_id: str,
+        inbound_only: bool,
+    ) -> tuple[Any, Any, dict[str, str], str, Any]:
+        try:
+            return self._setup_filtered_egress(
+                client,
+                spec,
+                instance_id,
+                conversation_id,
+                inbound_only=inbound_only,
+            )
+        except SandboxUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
+            operation = "inbound control" if inbound_only else "sandbox policy"
+            raise SandboxUnavailableError(
+                f"{operation} sidecar setup failed; refusing sandbox start"
+            ) from exc
+
+    def _run_local_container(
+        self,
+        client: Any,
+        vol_name: str,
+        mem_mb: float,
+        cpu: float,
+        pids: int,
+        environment: dict[str, str],
+        container_name: str,
+        labels: dict[str, str],
+        net_kwargs: dict[str, Any],
+    ) -> Any:
+        # Bind `ports` at function-frame (the conditional expression above might
+        # leave it unbound on an unrecognised mode — defense in depth).
+        ports: dict[str, str | None] | None = None
+        return client.containers.run(
+            image=self._cfg.image,
+            # keepalive
+            command=_keepalive_command(),
+            runtime=self._cfg.runtime,  # runc (a value, not a branch)
+            # The main container never publishes directly. Sealed boxes use
+            # the sidecar only for INTERNAL_PORTS; other modes use the full
+            # curated loopback set.
+            ports=ports,
+            # The limit goes through the LOCAL socket/daemon → it actually bites.
+            mem_limit=f"{mem_mb}m",
+            nano_cpus=int(cpu * 1_000_000_000),
+            pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
+            ulimits=nofile_ulimits(self._cfg),
+            volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
+            # NO host env beyond capability-granted values. Filtered/public
+            # boxes receive only proxy routing vars; sealed passes an empty
+            # dict — no leaks.
+            environment=environment,
+            working_dir=self._cfg.container_workspace,
+            detach=True,
+            name=container_name,
+            labels=labels,
+            **net_kwargs,
+        )
+
+    def _cleanup_failed_local_start(
+        self,
+        client: Any,
+        container: Any,
+        container_name: str,
+        egress_sidecar: Any,
+        egress_network: Any,
+        volume: Any,
+    ) -> None:
+        if container is None:
+            with contextlib.suppress(Exception):
+                container = client.containers.get(container_name)
+        with contextlib.suppress(Exception):
+            _remove_container(container)
+        # Don't leak the egress aux if the sandbox itself failed to start (E8).
+        if egress_sidecar is not None:
+            try:
+                _remove_container(egress_sidecar)
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+        if egress_network is not None:
+            try:
+                egress_network.remove()
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+        with contextlib.suppress(Exception):
+            _remove_volume(volume)

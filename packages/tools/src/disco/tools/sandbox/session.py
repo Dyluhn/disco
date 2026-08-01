@@ -17,15 +17,24 @@ and the tools use it UNCHANGED — it's a drop-in, self-healing instance.
 
 from __future__ import annotations
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# Extraction into `session_parts/` moved the callers of these names out of this
+# module; the names themselves are this module's surface and are restored here in
+# the redundant-alias re-export form (`X as X`), ruff's sanctioned re-export
+# marker, which needs no per-line suppression. `_LOG` is re-created here rather
+# than re-exported from a part: `logging.getLogger(__name__)` must resolve to
+# *this* module's logger name, and each part legitimately owns its own.
 import asyncio
 import logging
-import shlex
+import shlex as shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-from ._container import PREVIEW_PORT, USER_PORTS
+from ._container import PREVIEW_PORT
+from ._container import USER_PORTS as USER_PORTS
 from .base import (
     ExecResult,
     SandboxError,
@@ -34,6 +43,13 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+from .session_parts import fetch_inside as _fetch_inside_part
+from .session_parts import lifecycle as _lifecycle_part
+from .session_parts import memory_recovery as _memory_recovery_part
+from .session_parts import preview as _preview_part
+from .session_parts import recreate as _recreate_part
+from .session_parts import services as _services_part
+from .session_parts.lifecycle import _shutdown_session_kernel as _shutdown_session_kernel
 
 _LOG = logging.getLogger(__name__)
 
@@ -221,121 +237,20 @@ class SandboxSession:
         return self._instance
 
     async def _recreate(self, dead: SandboxInstance) -> None:
-        """Replace a dead instance with a fresh one. Idempotent under concurrent
-        callers (only the first past the lock with the dead instance re-creates). A
-        create() that itself fails (infra truly down) propagates as
-        SandboxUnavailableError — the session can't paper over a dead host."""
-        async with self._lock:
-            if self._closed or self._instance is not dead:
-                return  # someone else already handled it, or we were closed
-            self._instance = None
-            try:
-                await dead.destroy()
-            except Exception:  # noqa: BLE001 — it's already gone; best-effort cleanup
-                pass
-            self._instance = await self._service.create(
-                self._spec, owner_id=self.owner_id, conversation_id=self.conversation_id
-            )
-            self._generation += 1
-            self.sessions.reset_known_sessions()
-            # C15: tear down the old ManagedKernel so its inner kernel process
-            # doesn't outlive the dead sandbox (the kernel is a child of the
-            # container for gateway backends, but a local subprocess for
-            # process backends — we always try to shut down cleanly).
-            old_kernel, self._kernel = self._kernel, None
-            if old_kernel is not None:
-                try:
-                    await old_kernel.shutdown()
-                except Exception:  # noqa: BLE001 — best-effort; the box is already gone
-                    _LOG.debug("kernel shutdown on recreate failed", exc_info=True)
-        # the old box took the 'preview' session down with it — bring it back up
-        self._spawn_auto_preview()
-        # Rehydrate the fresh (empty) workspace from the last snapshot, if the
-        # owner wired a hook. Outside the lock — the hook writes files back
-        # through this session, which must be able to _ensure() freely. Failures
-        # are logged, never raised: the agent can always rebuild by hand, which
-        # is exactly the (worse) status quo this hook exists to avoid.
-        if self._on_recreate is not None:
-            try:
-                await self._on_recreate()
-            except Exception:  # noqa: BLE001 — best-effort restore
-                _LOG.warning(
-                    "post-recreate rehydrate failed for %s", self.conversation_id, exc_info=True
-                )
-        # C5 — read-back: pull `.pmx/MEMORY.md` (the write-through mirror of
-        # the in-View KnowledgeEvent channel) off the fresh box and stage
-        # the facts for the agent loop to re-emit. The in-View channel is
-        # authoritative in-session; the file is the durable copy. A hard
-        # reset / box wipe erases the in-memory View but the file persists,
-        # so this read-back is the recovery path. Best-effort: a missing
-        # file (no prior remember) leaves the cache empty, and any I/O
-        # failure is logged but never raised.
-        try:
-            await self._recover_pmx_memory()
-        except Exception:  # noqa: BLE001 — recovery is a convenience, never wedge the box
-            _LOG.debug("pmx memory read-back failed", exc_info=True)
-        # C3: re-materialize the agent's own dev servers (vite / express /
-        # uvicorn / http.server on a non-default USER_PORT, …) on the fresh
-        # instance. Until this hook, only the static `python3 -m http.server`
-        # preview survived a recreate — a real app the agent launched simply
-        # vanished on suspend/wake. The shell-sessions manager records each
-        # port-binding command in `exec()` and replays them here, best-effort,
-        # skipping ports already bound (the no-duplication guarantee).
-        try:
-            logs = await self.sessions.rehydrate_persistent_servers()
-            for line in logs:
-                _LOG.info("post-recreate: %s", line)
-        except Exception:  # noqa: BLE001 — rehydrate is a convenience; never wedge the box
-            _LOG.warning(
-                "post-recreate server rehydrate failed for %s",
-                self.conversation_id,
-                exc_info=True,
-            )
+        """Replace a dead instance with a fresh one and run every best-effort
+        recovery hook (on_recreate rehydrate, C5 memory read-back, C3 server
+        rematerialize); see `session_parts.recreate` for the full contract."""
+        await _recreate_part.recreate(self, dead)
 
     def _spawn_auto_preview(self) -> None:
-        """Fire-and-forget the static auto-serve (BP-02): every fresh box comes up with
-        the workspace served as session 'preview'. Idempotent and polite — if anything
-        already owns the port (e.g. the process backend's host, where :8000 is the
-        agent-server itself), ensure_preview() backs off with False. Failures are
-        logged, never raised: preview is a convenience, not a dependency of the box."""
-
-        if self._auto_preview_disabled:
-            # The platform PreviewManager owns previews for this session — don't spawn
-            # the legacy static auto-preview (it would race/collide on a curated port).
-            return
-
-        async def _auto() -> None:
-            try:
-                await self.ensure_preview()
-            except Exception:  # noqa: BLE001 — best-effort; the box must not care
-                _LOG.debug("auto preview start failed", exc_info=True)
-
-        self._preview_task = asyncio.create_task(_auto())
+        """Fire-and-forget the static auto-serve (BP-02); see
+        `session_parts.preview` for the full contract."""
+        _preview_part.spawn_auto_preview(self)
 
     async def disable_auto_preview(self) -> None:
-        """EPIC F (P1 #2) — stand the legacy static auto-preview DOWN so the platform
-        PreviewManager is the SINGLE authority for previews on this session. Cancels a
-        still-pending auto-preview task, tears down an already-running static 'preview'
-        server + its tracked entry, and latches a flag so a later `_spawn_auto_preview`
-        (e.g. after a sandbox recreate) does not bring it back. Idempotent and best-
-        effort: preview is a convenience, so no failure here is allowed to raise."""
-        self._auto_preview_disabled = True
-        task, self._preview_task = self._preview_task, None
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — swallow cleanly
-                pass
-        try:
-            await self.sessions.kill_foreground("preview")
-        except Exception:  # noqa: BLE001 — nothing running / already gone is fine
-            _LOG.debug("auto-preview kill on disable failed", exc_info=True)
-        # Drop the static auto-preview's tracked entry (it may be registered under the
-        # remapped process-safe port, so match by the well-known 'preview' name).
-        for p, svc in list(self._tracked_services.items()):
-            if svc.name == "preview":
-                self._tracked_services.pop(p, None)
+        """EPIC F (P1 #2) — stand the legacy static auto-preview DOWN; see
+        `session_parts.preview` for the full contract."""
+        await _preview_part.disable_auto_preview(self)
 
     async def _resilient(self, op):
         """Run one instance op; on a typed mid-session death, re-create and raise a
@@ -362,60 +277,10 @@ class SandboxSession:
     _LEGACY_MEMORY_PATH = ".pmx/MEMORY.md"
 
     async def _recover_pmx_memory(self) -> None:
-        """C5 — read `.disco/MEMORY.md` (legacy `.pmx/` as a fallback) from the LIVE
-        instance and stage its facts in `self._recovered_memory_facts` for the agent
-        loop to drain. Called from `_recreate` AFTER the user's on_recreate hook has
-        run and the fresh box is up.
-
-        A missing file (no prior `remember` calls → no facts to recover) is
-        a normal, silent no-op: the cache stays None and the loop sees no
-        recovery. A present-but-malformed file is logged and ignored: a
-        bad mirror must not break the next step. A transient I/O error is
-        also best-effort (a dead box can't recover, but the loop will
-        surface the error via the next tool call anyway).
-        """
-        data = None
-        for mem_path in (self._MEMORY_PATH, self._LEGACY_MEMORY_PATH):
-            try:
-                data = await self.read_file(mem_path)
-                break
-            except (FileNotFoundError, NotADirectoryError):
-                continue  # try the legacy path, then give up
-            except Exception:  # noqa: BLE001 — read flakiness on a fresh box is best-effort
-                _LOG.debug("disco memory read-back failed (no facts recovered)", exc_info=True)
-                self._recovered_memory_facts = None
-                return
-        if data is None:
-            # No mirror (new or legacy) on the new box — nothing to recover. Leave
-            # cache None (a fresh box / no prior remember) so the loop sees clean state.
-            self._recovered_memory_facts = None
-            return
-        if not data:
-            self._recovered_memory_facts = None
-            return
-        try:
-            text = data.decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001 — decode error
-            self._recovered_memory_facts = None
-            return
-        facts: list[tuple[str, str]] = []
-        current_scope = ""
-        for raw in text.splitlines():
-            line = raw.rstrip()
-            if line.startswith("## "):
-                current_scope = line[3:].strip()
-                continue
-            # Skip the leading comment / headings — they're prose, not facts.
-            if line.startswith("# "):
-                continue
-            # List item: `- <snippet>`. The write-through only ever produces
-            # `- ` list items under `## <scope>` headings, so this parser
-            # matches the writer exactly. (An empty line just advances.)
-            if line.startswith("- "):
-                snippet = line[2:].strip()
-                if snippet:
-                    facts.append((current_scope, snippet))
-        self._recovered_memory_facts = facts or None
+        """C5 — read `.disco/MEMORY.md` (legacy `.pmx/` as a fallback) and stage its
+        facts in `self._recovered_memory_facts`; see `session_parts.memory_recovery`
+        for the full contract."""
+        await _memory_recovery_part.recover_pmx_memory(self)
 
     def take_recovered_memory_facts(self) -> list[tuple[str, str]]:
         """C5 — pop the staged recovery facts (set by `_recover_pmx_memory`).
@@ -535,173 +400,22 @@ class SandboxSession:
     def expose_port(self, port: int) -> str | None:
         return self._instance.expose_port(port) if self._instance is not None else None
 
-    # Cap on the body we'll pull back through the exec/base64 channel (Fix 2 B-E).
-    # Mirrors the 25 MB per-file upload cap; base64 inflates ~33% over the wire but
-    # we truncate the SOURCE at this many bytes so a runaway response can't blow up
-    # the exec stdout buffer.
-    _FETCH_INSIDE_CAP_BYTES = 25 * 1024 * 1024
-
     async def fetch_inside(
         self, port: int, path: str, *, timeout_s: int = 10
     ) -> tuple[int, bytes, str] | None:
-        """Fix 2 (B-E) — a LIVENESS proxy to a server bound INSIDE the sandbox.
-
-        On sealed/filtered network modes the backend publishes NO host port, so
-        `expose_port` resolves to None even while a dev server is up. The only
-        host-reachable channel is then the run-end snapshot — stale/empty mid-run.
-        This bridges that gap: it `curl`s `http://127.0.0.1:{port}/{path}` from
-        INSIDE the box (the one place the server IS reachable) over the existing
-        exec path, base64-framing the body so binary assets (PNG/wasm/…) survive
-        the text-only exec channel byte-identical.
-
-        Returns `(status, body, content_type)` when the in-sandbox server answers,
-        or `None` when it isn't up (connection refused → curl http_code 000),
-        `curl` is missing, the port is not a curated USER_PORT, or the box died.
-        GET only; body truncated at `_FETCH_INSIDE_CAP_BYTES`. A liveness probe
-        must never raise into the preview route — every failure path yields None.
-        """
-        import base64
-        import urllib.parse
-
-        # Container/generic service containment stays on USER_PORTS. A process
-        # sandbox may additionally fetch one of the platform's managed host
-        # runtime ports; signed Preview authority, not this liveness primitive,
-        # decides whether any such response is user-visible.
-        from disco.core.loop.preview_target import is_managed_host_preview_port
-
-        managed_host_port = self.shares_host_network and is_managed_host_preview_port(port)
-        if port not in USER_PORTS and not managed_host_port:
-            return None
-
-        # URL-encode the path so it can't break out of the single-quoted shell arg
-        # (a `'` becomes %27); preserve the URL-structural characters.
-        safe_path = urllib.parse.quote(path or "", safe="/?=&%#-._~+,:@!$()*;")
-        url = f"http://127.0.0.1:{int(port)}/{safe_path}"
-        # curl writes the body to a temp file and prints `status\tcontent_type`
-        # (no trailing newline) to stdout; we then add a newline and stream the
-        # (truncated) body back base64-encoded. `;` not `&&` so we always reach the
-        # base64 step — a curl failure leaves an empty/`000` header we map to None.
-        cmd = (
-            f"curl -s -o /tmp/.pv -w '%{{http_code}}\\t%{{content_type}}' "
-            f"--max-time {int(timeout_s)} '{url}' 2>/dev/null; "
-            f"printf '\\n'; "
-            f"head -c {self._FETCH_INSIDE_CAP_BYTES} /tmp/.pv 2>/dev/null | base64 -w0 2>/dev/null"
-        )
-        try:
-            res = await self.exec_shell(cmd, timeout_s=int(timeout_s) + 2)
-        except Exception:  # noqa: BLE001 — a liveness probe must never raise into the route
-            return None
-        out = res.stdout
-        nl = out.find("\n")
-        if nl < 0:
-            return None  # curl missing / no header line → not reachable
-        header = out[:nl]
-        b64 = out[nl + 1 :].strip()
-        parts = header.split("\t")
-        status_str = parts[0].strip()
-        ctype = parts[1].strip() if len(parts) > 1 else ""
-        if not status_str.isdigit():
-            return None
-        status = int(status_str)
-        if status == 0:
-            return None  # curl http_code 000 → connection refused / server not up
-        try:
-            body = base64.b64decode(b64) if b64 else b""
-        except Exception:  # noqa: BLE001 — corrupt frame → treat as not reachable
-            return None
-        return (status, body, ctype or "application/octet-stream")
+        """Fix 2 (B-E) — a LIVENESS proxy to a server bound INSIDE the sandbox;
+        see `session_parts.fetch_inside` for the full contract."""
+        return await _fetch_inside_part.fetch_inside(self, port, path, timeout_s=timeout_s)
 
     async def _detect_serve_dir(self, inst: SandboxInstance, workspace: str) -> str:
-        """W6 — detect the subdirectory containing index.html and serve THAT dir.
-
-        Supports subdir apps (e.g. `macos-clone/index.html`): the preview should
-        serve the subdir, not the workspace root (which shows raw files instead of
-        the app). Falls back to workspace root when no index.html is found or the
-        shell command fails.
-
-        Skips `.pmx/` and `node_modules/` — those directories are internal and
-        should never be the serve root."""
-        try:
-            res = await inst.exec_shell(
-                # Find first index.html, skipping internal dirs, sort shallowest first
-                f"find {shlex.quote(workspace)} -name 'index.html'"
-                f" -not -path '*/.pmx/*' -not -path '*/node_modules/*'"
-                f" | sort | head -1",
-                timeout_s=5,
-            )
-            if res.exit_code == 0:
-                found = res.stdout.strip()
-                if found:
-                    import os as _os
-
-                    subdir = _os.path.dirname(found)
-                    if subdir and subdir != workspace:
-                        return subdir
-        except Exception:  # noqa: BLE001 — preview is a convenience, never wedge
-            pass
-        return workspace
+        """W6 — detect the subdirectory containing index.html and serve THAT dir;
+        see `session_parts.preview` for the full contract."""
+        return await _preview_part.detect_serve_dir(inst, workspace)
 
     async def ensure_preview(self, port: int = PREVIEW_PORT) -> bool:
-        """Start (idempotently) the static preview as visible session 'preview'.
-        Returns False without side effects if :port is already bound (someone — maybe
-        the agent's own dev server — owns it; that is fine and not ours to fight).
-
-        W6 — serves the app's index.html SUBDIRECTORY when one is detected (e.g.
-        `macos-clone/`) rather than always falling back to the workspace root.
-        A root-level index.html gets the original behavior.
-
-        BP-G9 — the static preview is now ONE tracked service among potentially
-        many. The entry is registered in `self._tracked_services[port]` so the
-        C3 rematerialize hook re-issues it on a fresh box and a UI/runtime can
-        ask "what's exposed on this conversation right now?" (see
-        `tracked_services`). For multi-service builds use `ensure_service`
-        directly (BP-G9 acceptance: API on 3000 + frontend on 5173)."""
-        if self._auto_preview_disabled:
-            # The platform PreviewManager owns previews here — back off (P1 #2).
-            return False
-
-        from disco.core.loop.preview_target import (
-            process_safe_preview_port,
-            reserved_control_ports,
-        )
-
-        from .port_owner import port_owner
-
-        # Process-backend containment (Bug 7): on a SHARED-host backend (process/
-        # local) the default preview port (8000) is the agent-server's own control
-        # port — serving the static preview there collides with + crashes the
-        # agent-server. Remap a reserved control port to a process-safe preview port
-        # (8080, never 8000). Isolated container backends keep 8000 (it's the box's).
-        if self._service.name in ("process", "local") and port in reserved_control_ports():
-            port = process_safe_preview_port()
-
-        inst = await self._ensure()
-        owner = await port_owner(inst, port)
-        if owner is not None and owner.pid is not None:
-            return False
-
-        res = await inst.exec_shell("pwd", timeout_s=5)
-        workspace = res.stdout.strip()
-        # W6: serve the deepest index.html directory, not always the workspace root.
-        serve_dir = await self._detect_serve_dir(inst, workspace)
-        # S-W5 D5: argv-serialize every component. ``serve_dir`` originates in
-        # the model-authored workspace and may contain shell metacharacters;
-        # interpolating it into a command made preview restart an execution sink.
-        preview_argv = ["python3", "-m", "http.server", str(port), "-d", serve_dir]
-        cmd = shlex.join(preview_argv)
-
-        await self.sessions.exec("preview", cmd, exec_dir=serve_dir)
-        # BP-G9: register the static preview as a tracked service so the wake
-        # machinery has a single source of truth for "what to rematerialize on
-        # a fresh box" — works alongside the C3 `_persistent_servers` dict that
-        # `shell_exec` populates implicitly.
-        self._tracked_services[port] = TrackedService(
-            name="preview",
-            port=port,
-            command=cmd,
-            exec_dir=serve_dir,
-        )
-        return True
+        """Start (idempotently) the static preview as visible session 'preview'
+        (BP-02/W6/BP-G9); see `session_parts.preview` for the full contract."""
+        return await _preview_part.ensure_preview(self, port)
 
     # ---- BP-G9: multi-service tracking + exposure -------------------------
 
@@ -713,64 +427,9 @@ class SandboxSession:
         *,
         exec_dir: str | None = None,
     ) -> str | None:
-        """BP-G9 — start + track a USER_PORT-binding service.
-
-        Generalization of `ensure_preview`: the static auto-preview is one
-        such service; the agent can register arbitrarily many (an API on
-        3000, a Vite dev server on 5173, a worker admin UI on 8080, …).
-        Each gets its own tmux session, its own URL, and its own rematerialize
-        entry — so multi-service builds are first-class, not a special case
-        of the single 'preview' path.
-
-        Behavior:
-          - Refuses to track a port outside `USER_PORTS` (containment: a
-            non-curated port must NEVER become a tracked/exposed URL).
-          - If the port is ALREADY bound on this box (the agent's own dev
-            server, or another tracker's service), returns None — no fight
-            (same polite-backing-off rule as `ensure_preview`).
-          - Otherwise launches `command` as a tmux session named `name`
-            in `exec_dir` (default: the live workspace, same as
-            `ensure_preview`) and records the service in
-            `self._tracked_services[port]`. Returns the exposed URL on
-            success.
-
-        The C3 rehydrate path in `_recreate` re-issues every tracked
-        service on a fresh box (the recorded `command` survives the
-        tmux-level reset, just like C3's `_persistent_servers`).
-        """
-        from .port_owner import port_owner
-
-        if port not in USER_PORTS:
-            raise SandboxError(f"port {port} is not in USER_PORTS; refusing to track as service")
-
-        inst = await self._ensure()
-        owner = await port_owner(inst, port)
-        if owner is not None and owner.pid is not None:
-            # Port already claimed by something on this box — record the
-            # intent (so the wake machinery can see "we wanted a service
-            # on this port") but DON'T fight the current owner. The
-            # rematerialize skip-check will short-circuit on recreate.
-            self._tracked_services[port] = TrackedService(
-                name=name,
-                port=port,
-                command=command,
-                exec_dir=exec_dir,
-            )
-            return None
-
-        cwd = exec_dir
-        if cwd is None:
-            res = await inst.exec_shell("pwd", timeout_s=5)
-            cwd = res.stdout.strip()
-
-        await self.sessions.exec(name, command, exec_dir=cwd)
-        self._tracked_services[port] = TrackedService(
-            name=name,
-            port=port,
-            command=command,
-            exec_dir=cwd,
-        )
-        return inst.expose_port(port)
+        """BP-G9 — start + track a USER_PORT-binding service; see
+        `session_parts.services` for the full contract."""
+        return await _services_part.ensure_service(self, name, port, command, exec_dir=exec_dir)
 
     def tracked_services(self) -> list[TrackedService]:
         """BP-G9 — snapshot of every USER_PORT service this session is
@@ -793,57 +452,9 @@ class SandboxSession:
         return sorted(self._tracked_services.keys())
 
     async def destroy(self) -> None:
-        """Close the session at task end: no further use, and the live box torn down.
-
-        Cancels any in-flight auto-preview task before tearing down the instance so
-        teardown never races a half-started preview (TOCTOU fix — the task is now
-        tracked as self._preview_task and cancelled here).
-
-        P2 #4: also closes a cached platform `PreviewManager` (set on `_preview_manager`
-        by the preview_* tools) — its supervisor task sleeps forever otherwise, leaking
-        past the sandbox it supervised.
-        """
-        async with self._destroy_lock:
-            self._closed, self._destroy_task = True, asyncio.current_task()
-            try:
-                # The process backend's managed Jupyter kernel owns a child process
-                # and multiple ZMQ channel sockets. Tear it down while its sandbox
-                # still exists; simply dropping the reference leaves those resources
-                # alive until interpreter shutdown.
-                await _shutdown_session_kernel(self)
-                # PreviewManager stops foreground servers through this session. The
-                # scoped task owner can reach the live instance while unrelated calls
-                # continue to observe a closed session.
-                mgr = self._preview_manager
-                if mgr is not None:
-                    await mgr.aclose()
-                    self._preview_manager = None
-                task, self._preview_task = self._preview_task, None
-                if task is not None and not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                        pass
-                # Retain the instance owner until backend destruction is confirmed.
-                inst = self._instance
-                if inst is not None:
-                    await inst.destroy()
-                    self._instance = None
-            finally:
-                self._destroy_task = None
-                self._closed = True
-
-
-async def _shutdown_session_kernel(session: SandboxSession) -> None:
-    """Release the managed kernel before sandbox-owned teardown."""
-
-    kernel, session._kernel = session._kernel, None
-    if kernel is not None:
-        try:
-            await kernel.shutdown()
-        except Exception:  # noqa: BLE001 — teardown remains best-effort
-            _LOG.debug("kernel shutdown on session destroy failed", exc_info=True)
+        """Close the session at task end: no further use, and the live box torn
+        down; see `session_parts.lifecycle` for the full contract."""
+        await _lifecycle_part.destroy(self)
 
 
 # Structural conformance: a SandboxSession IS a SandboxInstance (drop-in for the

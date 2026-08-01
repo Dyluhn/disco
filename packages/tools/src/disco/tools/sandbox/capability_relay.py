@@ -152,6 +152,19 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             self._respond(502, b'{"error":"host service unavailable"}')
 
     def _read_request(self, deadline: float) -> tuple[str, dict[bytes, bytes], bytes]:
+        head, buffered = self._read_head_block(deadline)
+        lines = self._validate_head_framing(head)
+        method, target, version = self._parse_request_line(lines[0])
+        self._validate_request_line(method, target, version)
+        headers = self._parse_headers(lines[1:])
+        self._validate_headers(headers)
+        length = self._parse_content_length(headers)
+        body = self._read_body(buffered, length, deadline)
+        self._reject_pipelining()
+        self._parse_json_body(bytes(body))
+        return target.decode("ascii"), headers, bytes(body)
+
+    def _read_head_block(self, deadline: float) -> tuple[bytes, bytes]:
         raw = bytearray()
         while b"\r\n\r\n" not in raw:
             self._set_request_deadline(deadline)
@@ -162,15 +175,27 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             if len(raw) > MAX_HEADER_BYTES:
                 raise _RelayRequestError(431, b'{"error":"headers too large"}')
         head, buffered = bytes(raw).split(b"\r\n\r\n", 1)
+        return head, buffered
+
+    @staticmethod
+    def _validate_head_framing(head: bytes) -> list[bytes]:
         if b"\n" in head.replace(b"\r\n", b""):
             raise _RelayRequestError(400, b'{"error":"malformed headers"}')
         lines = head.split(b"\r\n")
         if len(lines) - 1 > MAX_HEADER_COUNT:
             raise _RelayRequestError(431, b'{"error":"too many headers"}')
+        return lines
+
+    @staticmethod
+    def _parse_request_line(line0: bytes) -> tuple[bytes, bytes, bytes]:
         try:
-            method, target, version = lines[0].split(b" ")
+            method, target, version = line0.split(b" ")
         except ValueError as exc:
             raise _RelayRequestError(400, b'{"error":"malformed request line"}') from exc
+        return method, target, version
+
+    @staticmethod
+    def _validate_request_line(method: bytes, target: bytes, version: bytes) -> None:
         if method != b"POST":
             raise _RelayRequestError(405, b'{"error":"POST required"}')
         if (
@@ -179,7 +204,8 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             or not _SERVICE_PATH.fullmatch(target)
         ):
             raise _RelayRequestError(404, b'{"error":"route not found"}')
-        headers = self._parse_headers(lines[1:])
+
+    def _validate_headers(self, headers: dict[bytes, bytes]) -> None:
         expected_authority = self.relay_server.allowed_authority.encode("ascii")
         if headers.get(b"host") != expected_authority:
             raise _RelayRequestError(400, b'{"error":"invalid host"}')
@@ -190,6 +216,9 @@ class _RelayHandler(socketserver.BaseRequestHandler):
         authorization = headers.get(b"authorization", b"")
         if not _BEARER.fullmatch(authorization):
             raise _RelayRequestError(401, b'{"error":"bearer required"}')
+
+    @staticmethod
+    def _parse_content_length(headers: dict[bytes, bytes]) -> int:
         length_raw = headers.get(b"content-length")
         if length_raw is None or not length_raw.isdigit() or length_raw.startswith(b"0"):
             if length_raw != b"0":
@@ -197,6 +226,9 @@ class _RelayHandler(socketserver.BaseRequestHandler):
         length = int(length_raw or b"-1")
         if length < 0 or length > MAX_BODY_BYTES:
             raise _RelayRequestError(413, b'{"error":"body too large"}')
+        return length
+
+    def _read_body(self, buffered: bytes, length: int, deadline: float) -> bytearray:
         body = bytearray(buffered)
         if len(body) > length:
             raise _RelayRequestError(400, b'{"error":"conflicting request length"}')
@@ -206,6 +238,9 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             if not chunk:
                 raise _RelayRequestError(400, b'{"error":"incomplete body"}')
             body.extend(chunk)
+        return body
+
+    def _reject_pipelining(self) -> None:
         # No keep-alive/pipelining: detect already-buffered bytes beyond the declared body.
         self.request.settimeout(0.01)
         try:
@@ -215,6 +250,9 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             pass
         finally:
             self.request.settimeout(self.relay_server.total_timeout_s)
+
+    @staticmethod
+    def _parse_json_body(body: bytes) -> None:
         try:
             parsed = json.loads(
                 bytes(body).decode("utf-8"),
@@ -225,7 +263,6 @@ class _RelayHandler(socketserver.BaseRequestHandler):
             raise _RelayRequestError(400, b'{"error":"invalid JSON body"}') from exc
         if not isinstance(parsed, dict):
             raise _RelayRequestError(400, b'{"error":"JSON object required"}')
-        return target.decode("ascii"), headers, bytes(body)
 
     def _set_request_deadline(self, deadline: float) -> None:
         remaining = deadline - time.monotonic()
@@ -347,6 +384,21 @@ class CapabilityRelayServer(socketserver.ThreadingMixIn, socketserver.TCPServer)
     ) -> tuple[int, bytes]:
         started = time.monotonic()
         deadline = deadline or started + self.total_timeout_s
+        conn = self._open_upstream_connection(deadline)
+        try:
+            self._send_request(conn, path, headers, body, deadline, started)
+            response, lengths = self._get_validated_response(conn)
+            data = self._read_response_body(conn, response, deadline)
+            self._validate_response_length(data, lengths)
+            self._validate_response_json(data)
+            if time.monotonic() - started > self.total_timeout_s:
+                raise _RelayRequestError(504, b'{"error":"host service timed out"}')
+            status = response.status if 200 <= response.status <= 599 else 502
+            return status, data
+        finally:
+            conn.close()
+
+    def _open_upstream_connection(self, deadline: float) -> http.client.HTTPConnection:
         sock = _connect_pinned(
             self._upstream_addresses,
             min(self.connect_timeout_s, max(0.01, deadline - time.monotonic())),
@@ -364,70 +416,92 @@ class CapabilityRelayServer(socketserver.ThreadingMixIn, socketserver.TCPServer)
             self.upstream.host, self.upstream.port, timeout=self.connect_timeout_s
         )
         conn.sock = sock
+        return conn
+
+    def _send_request(
+        self,
+        conn: http.client.HTTPConnection,
+        path: str,
+        headers: dict[bytes, bytes],
+        body: bytes,
+        deadline: float,
+        started: float,
+    ) -> None:
         outbound = {
             "Host": self.upstream.authority,
             "Content-Type": "application/json",
             "Content-Length": str(len(body)),
             "Authorization": headers[b"authorization"].decode("ascii"),
         }
+        conn.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
+        for name, value in outbound.items():
+            conn.putheader(name, value)
+        if conn.sock is not None:
+            conn.sock.settimeout(max(0.01, deadline - time.monotonic()))
+        conn.endheaders(body)
+        if time.monotonic() - started > self.total_timeout_s:
+            raise _RelayRequestError(504, b'{"error":"host service timed out"}')
+        if conn.sock is not None:
+            conn.sock.settimeout(min(self.read_timeout_s, max(0.01, deadline - time.monotonic())))
+
+    @staticmethod
+    def _get_validated_response(
+        conn: http.client.HTTPConnection,
+    ) -> tuple[http.client.HTTPResponse, list[str]]:
+        response = conn.getresponse()
+        if 300 <= response.status < 400:
+            raise _RelayRequestError(502, b'{"error":"upstream redirect refused"}')
+        media_type = (response.getheader("Content-Type") or "").split(";", 1)[0]
+        if media_type.strip().lower() != "application/json" or response.getheader(
+            "Content-Encoding"
+        ):
+            raise _RelayRequestError(502, b'{"error":"invalid upstream response"}')
+        lengths = response.headers.get_all("Content-Length", failobj=[]) or []
+        if (
+            response.getheader("Transfer-Encoding")
+            or len(lengths) != 1
+            or not lengths[0].isdigit()
+        ):
+            raise _RelayRequestError(502, b'{"error":"invalid upstream response"}')
+        if int(lengths[0]) > MAX_RESPONSE_BYTES:
+            raise _RelayRequestError(502, b'{"error":"upstream response too large"}')
+        return response, lengths
+
+    def _read_response_body(
+        self,
+        conn: http.client.HTTPConnection,
+        response: http.client.HTTPResponse,
+        deadline: float,
+    ) -> bytes:
+        chunks: list[bytes] = []
+        received = 0
+        while received <= MAX_RESPONSE_BYTES:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _RelayRequestError(504, b'{"error":"host service timed out"}')
+            if conn.sock is not None:
+                conn.sock.settimeout(min(self.read_timeout_s, remaining))
+            chunk = response.read(min(64 * 1024, MAX_RESPONSE_BYTES + 1 - received))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        data = b"".join(chunks)
+        if len(data) > MAX_RESPONSE_BYTES:
+            raise _RelayRequestError(502, b'{"error":"upstream response too large"}')
+        return data
+
+    @staticmethod
+    def _validate_response_length(data: bytes, lengths: list[str]) -> None:
+        if len(data) != int(lengths[0]):
+            raise _RelayRequestError(502, b'{"error":"incomplete upstream response"}')
+
+    @staticmethod
+    def _validate_response_json(data: bytes) -> None:
         try:
-            conn.putrequest("POST", path, skip_host=True, skip_accept_encoding=True)
-            for name, value in outbound.items():
-                conn.putheader(name, value)
-            if conn.sock is not None:
-                conn.sock.settimeout(max(0.01, deadline - time.monotonic()))
-            conn.endheaders(body)
-            if time.monotonic() - started > self.total_timeout_s:
-                raise _RelayRequestError(504, b'{"error":"host service timed out"}')
-            if conn.sock is not None:
-                conn.sock.settimeout(
-                    min(self.read_timeout_s, max(0.01, deadline - time.monotonic()))
-                )
-            response = conn.getresponse()
-            if 300 <= response.status < 400:
-                raise _RelayRequestError(502, b'{"error":"upstream redirect refused"}')
-            media_type = (response.getheader("Content-Type") or "").split(";", 1)[0]
-            if media_type.strip().lower() != "application/json" or response.getheader(
-                "Content-Encoding"
-            ):
-                raise _RelayRequestError(502, b'{"error":"invalid upstream response"}')
-            lengths = response.headers.get_all("Content-Length", failobj=[]) or []
-            if (
-                response.getheader("Transfer-Encoding")
-                or len(lengths) != 1
-                or not lengths[0].isdigit()
-            ):
-                raise _RelayRequestError(502, b'{"error":"invalid upstream response"}')
-            if int(lengths[0]) > MAX_RESPONSE_BYTES:
-                raise _RelayRequestError(502, b'{"error":"upstream response too large"}')
-            chunks: list[bytes] = []
-            received = 0
-            while received <= MAX_RESPONSE_BYTES:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise _RelayRequestError(504, b'{"error":"host service timed out"}')
-                if conn.sock is not None:
-                    conn.sock.settimeout(min(self.read_timeout_s, remaining))
-                chunk = response.read(min(64 * 1024, MAX_RESPONSE_BYTES + 1 - received))
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                received += len(chunk)
-            data = b"".join(chunks)
-            if len(data) > MAX_RESPONSE_BYTES:
-                raise _RelayRequestError(502, b'{"error":"upstream response too large"}')
-            if len(data) != int(lengths[0]):
-                raise _RelayRequestError(502, b'{"error":"incomplete upstream response"}')
-            try:
-                json.loads(data)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _RelayRequestError(502, b'{"error":"invalid upstream response"}') from exc
-            if time.monotonic() - started > self.total_timeout_s:
-                raise _RelayRequestError(504, b'{"error":"host service timed out"}')
-            status = response.status if 200 <= response.status <= 599 else 502
-            return status, data
-        finally:
-            conn.close()
+            json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise _RelayRequestError(502, b'{"error":"invalid upstream response"}') from exc
 
 
 def _resolve_upstream(

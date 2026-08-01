@@ -25,51 +25,69 @@ import urllib.parse
 import uuid
 from typing import Any
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# `gvisor_parts` resolves this module's names through the parent at call time (the
+# standing §13 rule, which keeps test monkeypatches effective) — e.g.
+# `gvisor.EGR_NET_PREFIX`, `gvisor.LABEL_CONV_KEYS`, `gvisor.SBX_NAME_PREFIXES` and
+# `gvisor._egress_proxy_mod.__file__`. Ruff cannot see those uses, so every such
+# name is bound here in the redundant-alias re-export form (`X as X`), which is
+# ruff's sanctioned re-export marker and needs no per-line suppression. The
+# `._container` / `.capability_relay` re-exports below are this module's inherited
+# surface, preserved unchanged across the extraction.
 from . import capability_relay as _capability_relay_mod
-from . import egress_proxy as _egress_proxy_mod
+from . import egress_proxy as egress_proxy
 from . import inbound_forward as _inbound_forward_mod
+from ._container import EGRESS_PROXY_PORT as EGRESS_PROXY_PORT
+from ._container import INTERNAL_PORTS as INTERNAL_PORTS
 from ._container import (
-    EGRESS_PROXY_PORT,
-    INTERNAL_PORTS,
     PUBLISHED_PORTS,
     ContainerInstance,
     SshLoopbackTunnelManager,
-    _create_named_volume,
     _remove_container,
-    _remove_volume,
-    bounded_sidecar_cap,
-    collect_host_deny_ips,
-    discover_remote_host_ips,
-    egress_mode,
-    format_allow,
     inbound_readiness_argv,
-    loopback_port_bindings,
-    nofile_ulimits,
-    proxy_env,
-    proxy_readiness_argv,
-    proxy_run_argv,
     reconcile_orphan_aux_resources,
-    resolve_bounds,
-    sealed,
 )
+from ._container import _create_named_volume as _create_named_volume
+from ._container import _remove_volume as _remove_volume
+from ._container import bounded_sidecar_cap as bounded_sidecar_cap
+from ._container import collect_host_deny_ips as collect_host_deny_ips
+from ._container import discover_remote_host_ips as discover_remote_host_ips
+from ._container import egress_mode as egress_mode
+from ._container import format_allow as format_allow
+from ._container import loopback_port_bindings as loopback_port_bindings
+from ._container import nofile_ulimits as nofile_ulimits
+from ._container import proxy_env as proxy_env
+from ._container import proxy_readiness_argv as proxy_readiness_argv
+from ._container import proxy_run_argv as proxy_run_argv
+from ._container import resolve_bounds as resolve_bounds
+from ._container import sealed as sealed
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .capability_relay import (
     HOST_SERVICE_RELAY_PORT,
-    RelayConfigurationError,
-    parse_upstream,
     relay_readiness_argv,
     relay_run_argv,
 )
+from .capability_relay import RelayConfigurationError as RelayConfigurationError
+from .capability_relay import parse_upstream as parse_upstream
 from .config import SandboxConfig, default_sandbox_config
+from .gvisor_parts import container_start as _container_start_part
+from .gvisor_parts import conversation_cleanup as _conversation_cleanup_part
+from .gvisor_parts import egress_setup as _egress_setup_part
 from .isolation import IsolationProfile, isolation_for
+from .naming import EGR_NET_PREFIX as EGR_NET_PREFIX
+from .naming import LABEL_CONV as LABEL_CONV
+from .naming import LABEL_CONV_KEYS as LABEL_CONV_KEYS
+from .naming import SBX_NAME_PREFIX as SBX_NAME_PREFIX
 from .naming import (
-    EGR_NET_PREFIX,
-    LABEL_CONV,
-    LABEL_CONV_KEYS,
-    SBX_NAME_PREFIX,
     SBX_NAME_PREFIXES,
     conv_id_from_labels,
 )
+
+# This module's long-standing private alias for the egress-proxy module;
+# `gvisor_parts.egress_setup` reads `gvisor._egress_proxy_mod.__file__` at call time.
+# Bound from the re-export above so neither name needs a suppression.
+_egress_proxy_mod = egress_proxy
 
 _LOG = logging.getLogger(__name__)
 
@@ -324,175 +342,12 @@ class GvisorSandboxService:
         inbound_only: bool = False,
     ) -> Any:
         """[HARDWARE-UNVERIFIED — live-verify on VM 201] Stand up the internal
-        network + policy/control sidecar and return its topology.
-
-        Containment design: an INTERNAL (no-NAT) network whose ONLY member with an
-        outside route is the proxy sidecar. The sandbox is attached to this network
-        alone, so its sole path to the internet is through the proxy — which refuses
-        any host the allowlist doesn't name. The HTTP(S)_PROXY env is belt-and-
-        suspenders; the no-route property is the real guarantee. ``inbound_only``
-        omits resolver/proxy/relay setup and publishes only INTERNAL_PORTS for
-        host-to-guest kernel control.
-
-        The proxy is the stdlib-only `egress_proxy.py`, injected into a sidecar built
-        from the SAME base image (its python3 runs it — no extra image, honoring the
-        never-pull rule).
-
-        THREE non-obvious details, each VERIFIED live on the gVisor host (VM 201);
-        get any wrong and containment silently breaks:
-
-        1. Two NICs AT BOOT. gVisor (runsc) freezes its netstack at sandbox-create;
-           a `docker network connect` AFTER `run` adds the NIC at the Docker level
-           but the runsc netstack never sees it (the sandbox can't reach the proxy →
-           RST). So the sidecar is `create`d on bridge, `connect`ed to the internal
-           net, and only THEN `start`ed — both interfaces exist before runsc boots.
-
-        2. A WORKING resolver. On a user-defined network Docker forces
-           `nameserver 127.0.0.11` (its embedded DNS), and that resolver is
-           unreachable from a dual-homed gVisor box → the proxy can't resolve any
-           upstream. Routing to the internet by IP works fine, so we point the
-           sidecar's resolv.conf straight at public resolvers.
-
-        3. Reach the proxy by IP, not name. The SANDBOX (on the internal net) also
-           can't use the embedded DNS, so it can't resolve the sidecar's name. We
-           read the sidecar's internal-net IP and hand the sandbox HTTP(S)_PROXY by
-           IP."""
-        net_name = f"{EGR_NET_PREFIX}{instance_id}"
-        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        # EPIC H (P1) — runtime LAST GATE on the sidecar caps. SandboxConfig is hot-mutable, so
-        # a post-construction `cfg.sidecar_cpu = 0` (etc.) bypasses the @field_validator and
-        # would otherwise reach Docker as UNLIMITED. Gate BEFORE creating any network/sidecar
-        # so a mutated cap is refused with nothing stranded.
-        sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
-        sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
-        sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
-        deny_ips = (
-            frozenset()
-            if inbound_only
-            else collect_host_deny_ips(
-                self._cfg.host_ip_blocklist,
-                self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
-                include_local_interfaces=not self._cfg.docker_socket.startswith("ssh://"),
-                additional_host_ips=(
-                    discover_remote_host_ips(self._cfg.docker_socket)
-                    if self._cfg.docker_socket.startswith("ssh://")
-                    and self._injected_client is None
-                    else frozenset()
-                ),
-            )
+        network + policy/control sidecar and return its topology; see
+        `gvisor_parts.egress_setup` for the full contract (the three
+        VM-201-verified non-obvious details live there)."""
+        return _egress_setup_part.setup_filtered_egress(
+            self, client, spec, instance_id, conversation_id, inbound_only=inbound_only
         )
-        # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
-        # so if it creates the network/sidecar then fails partway (connect/start/proxy
-        # inject), nothing downstream tears them down. Own the cleanup HERE: any exception
-        # after either resource exists removes whatever was created before re-raising, so a
-        # failed filtered-egress setup never strands an internal network or proxy sidecar.
-        network: Any = None
-        sidecar: Any = None
-        try:
-            # The network carries the same label as the containers so the orphan
-            # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
-            network = client.networks.create(
-                net_name, driver="bridge", internal=True, labels=labels
-            )
-            # (1) create on bridge → connect internal → start, so runsc sees BOTH NICs.
-            # [FIX6] PUBLISH the preview ports on the SIDECAR (it's on bridge → it CAN
-            # publish; the sandbox is internal-only and can't). The sidecar's inbound
-            # forwarder (launched after the sandbox starts) bridges each published
-            # host port to the sandbox's internal IP — host reaches the preview, the
-            # sandbox keeps zero direct egress. Ports must be declared at create()
-            # (docker can't add mappings to a running container).
-            sidecar = client.containers.create(
-                image=self._cfg.image,
-                command=["sh", "-c", "exec sleep infinity"],
-                runtime=self._cfg.runtime,
-                network="bridge",  # the route to the internet (the proxy's upstream)
-                ports=loopback_port_bindings(INTERNAL_PORTS if sealed(spec) else PUBLISHED_PORTS),
-                # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
-                # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
-                mem_limit=f"{sidecar_memory_mb}m",
-                nano_cpus=int(sidecar_cpu * 1_000_000_000),
-                pids_limit=sidecar_pids_limit,
-                ulimits=nofile_ulimits(self._cfg),
-                cap_drop=["ALL"],
-                security_opt=["no-new-privileges:true"],
-                sysctls={
-                    "net.ipv4.ip_forward": "0",
-                    "net.ipv6.conf.all.forwarding": "0",
-                },
-                detach=True,
-                name=net_name,
-                labels=labels,
-            )
-            network.connect(sidecar)  # the internal net the sandbox shares with it
-            sidecar.start()
-            if inbound_only:
-                # Default sealed boxes need host-to-guest kernel control only.
-                # No resolver, egress proxy, proxy environment, or relay is
-                # installed, so the sandbox retains zero outbound transport.
-                return network, sidecar, {}, net_name, None
-            # (2) replace the dead embedded resolver with public DNS over the (working) route.
-            sidecar.exec_run(
-                [
-                    "sh",
-                    "-c",
-                    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf',
-                ]
-            )
-            # Inject the proxy script + launch it in the background on the sidecar.
-            script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
-            _put_file(sidecar, "/", "egress_proxy.py", script)
-            allow = format_allow(spec.egress_allow)
-            deny_hosts = (
-                frozenset({parse_upstream(self._cfg.host_service_upstream).host})
-                if spec.host_services
-                else frozenset()
-            )
-            argv = proxy_run_argv(
-                allow,
-                EGRESS_PROXY_PORT,
-                public_only=egress_mode(spec) == "public",
-                deny_ips=deny_ips,
-                deny_hosts=deny_hosts,
-            )
-            sidecar.exec_run(
-                [
-                    "sh",
-                    "-c",
-                    f"exec {shlex.join(argv)} >/var/log/egress.log 2>/var/log/egress.err.log",
-                ],
-                detach=True,
-            )
-            ready = sidecar.exec_run(proxy_readiness_argv(EGRESS_PROXY_PORT), demux=True)
-            if ready[0] != 0:
-                raise SandboxUnavailableError(
-                    "egress policy proxy failed its readiness check; refusing sandbox start"
-                )
-            # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
-            try:
-                sidecar.reload()
-                sidecar_running = getattr(sidecar, "status", "") == "running"
-                proxy_ip = (
-                    sidecar.attrs.get("NetworkSettings", {})
-                    .get("Networks", {})
-                    .get(net_name, {})
-                    .get("IPAddress", "")
-                )
-            except Exception as exc:  # noqa: BLE001 — fixed diagnostic + outer cleanup
-                raise SandboxUnavailableError(
-                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
-                ) from exc
-            if not sidecar_running or not proxy_ip:
-                raise SandboxUnavailableError(
-                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
-                )
-            env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-            relay_url = self._launch_capability_relay(sidecar, proxy_ip, spec)
-            return network, sidecar, env, net_name, relay_url
-        except Exception:
-            # Partial setup must not leak: tear down whatever already exists, then re-raise
-            # so the caller surfaces the original failure.
-            self._best_effort_cleanup(network, sidecar)
-            raise
 
     def _launch_capability_relay(
         self, sidecar: Any, sidecar_ip: str, spec: SandboxSpec
@@ -590,129 +445,11 @@ class GvisorSandboxService:
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, host_workspace: str, conversation_id: str = ""
     ) -> Any:
-        """All the blocking Docker work for `create`, run in a thread. Maps infra
-        failures to typed errors with the real cause. `host_workspace` is a path on
-        the DAEMON host (not necessarily local). Returns the container plus its
-        policy/control network, sidecar, workspace volume, and optional relay URL."""
-        client = self._client()
-        self._require_runtime(client)
-        self._require_image(client)  # never-pull guard, before any run
-
-        # NOTE: do NOT mkdir the workspace locally — the bind-mount source is a path
-        # on the Docker DAEMON host, which Docker creates on demand. Making it here
-        # would (wrongly) create it on whatever host runs the backend.
-        # EPIC H (P1): the deployment config is the MAXIMUM, not a fallback. A
-        # model-influenced spec may TIGHTEN cpu/mem/pids but can never loosen them above
-        # the configured max nor disable the pids cap (pids=0 → default, never Docker's
-        # "unlimited"); above-max is clamped down, negatives rejected. See resolve_bounds.
-        cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
-        mode = egress_mode(spec)
-        if spec.host_services:
-            try:
-                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
-            except RelayConfigurationError as exc:
-                raise SandboxUnavailableError(str(exc)) from exc
-            if relay_upstream.scheme != "https":
-                raise SandboxUnavailableError(
-                    "container host-service relay requires a reachable HTTPS upstream; "
-                    "sidecar loopback is not the agent-server host"
-                )
-        # The sandbox never publishes directly. Every mode uses an internal
-        # no-NAT network and a loopback-bound policy/control sidecar.
-        ports = None
-        command = _keepalive_command()
-
-        # Per-mode network config (the three-way egress posture; egress_mode docstring).
-        net_kwargs: dict[str, Any] = {}
-        environment: dict[str, str] = {}
-        egress_network = egress_sidecar = None
-        egress_net_name = ""
-        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        host_service_relay_url = None
-        inbound_only = mode == "sealed" and not spec.host_services
-        try:
-            (
-                egress_network,
-                egress_sidecar,
-                environment,
-                net_name,
-                host_service_relay_url,
-            ) = self._setup_filtered_egress(
-                client,
-                spec,
-                instance_id,
-                conversation_id,
-                inbound_only=inbound_only,
-            )
-        except SandboxUnavailableError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
-            operation = "inbound control" if inbound_only else "sandbox policy"
-            raise SandboxUnavailableError(
-                f"{operation} sidecar setup failed; refusing sandbox start"
-            ) from exc
-        egress_net_name = net_name
-        # INTERNAL network: no bridge/NAT route is ever attached to the sandbox.
-        net_kwargs = {"network": net_name}
-
-        volume = None
-        container = None
-        container_name = f"{SBX_NAME_PREFIX}{instance_id}"
-        vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
-        try:
-            volume = _create_named_volume(
-                client.volumes,
-                name=vol_name,
-                labels=labels,
-                disk_mb=disk_mb,
-                workspace_uid=self._cfg.workspace_uid,
-            )
-            container = client.containers.run(
-                image=self._cfg.image,
-                command=command,  # keepalive
-                runtime=self._cfg.runtime,  # gVisor
-                ports=ports,  # preview exposure (dev-server port only)
-                mem_limit=f"{mem_mb}m",
-                nano_cpus=int(cpu * 1_000_000_000),
-                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
-                ulimits=nofile_ulimits(self._cfg),
-                volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                # NO host env beyond capability-granted values. Filtered/public
-                # boxes receive only proxy routing vars; sealed receives none.
-                environment=environment,
-                # Run every model-controlled process as the configured workspace
-                # principal.  Merely owning the tmpfs mount as this UID is not
-                # sufficient: without an explicit runtime user the image defaults
-                # to root, and guest-side atomic-write staging turns every scaffold
-                # back into a root-owned file.
-                user=f"{self._cfg.workspace_uid}:{self._cfg.workspace_uid}",
-                working_dir=self._cfg.container_workspace,
-                detach=True,
-                name=container_name,
-                labels=labels,
-                **net_kwargs,
-            )
-            forward_ports = INTERNAL_PORTS if mode == "sealed" else PUBLISHED_PORTS
-            self._launch_inbound_forwarder(
-                egress_sidecar,
-                container,
-                egress_net_name,
-                forward_ports,
-            )
-            return container, egress_network, egress_sidecar, volume, host_service_relay_url
-        except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
-            if container is None:
-                with contextlib.suppress(Exception):
-                    container = client.containers.get(container_name)
-            with contextlib.suppress(Exception):
-                _remove_container(container)
-            # Don't leak the egress aux if the sandbox itself failed to start.
-            self._best_effort_cleanup(egress_network, egress_sidecar)
-            with contextlib.suppress(Exception):
-                _remove_volume(volume)
-            if isinstance(exc, SandboxUnavailableError):
-                raise
-            raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+        """All the blocking Docker work for `create`, run in a thread; see
+        `gvisor_parts.container_start` for the full contract."""
+        return _container_start_part.start_container(
+            self, spec, instance_id, host_workspace, conversation_id
+        )
 
     @staticmethod
     def _best_effort_cleanup(network: Any, sidecar: Any) -> None:
@@ -850,88 +587,7 @@ class GvisorSandboxService:
         return await asyncio.to_thread(_list)
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
-        """Destroy all pmx-sbx-* and pmx-egr-* containers labelled with this conversation_id."""
-
-        def _destroy() -> None:
-            try:
-                client = self._client()
-                # Dual-read: match BOTH the current `disco.conversation_id` and
-                # legacy `pmx.conversation_id` label keys (union, dedup by id) so
-                # a container/network started under the old label scheme is still
-                # torn down after the rename.
-                seen_ids: set[str] = set()
-                workspace_volume_names: set[str] = set()
-                for key in LABEL_CONV_KEYS:
-                    for c in client.containers.list(
-                        all=True,
-                        filters={"label": f"{key}={conversation_id}"},
-                    ):
-                        if c.id in seen_ids:
-                            continue
-                        seen_ids.add(c.id)
-                        name = str(getattr(c, "name", "") or "").lstrip("/")
-                        for prefix in SBX_NAME_PREFIXES:
-                            if name.startswith(prefix):
-                                workspace_volume_names.add(
-                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix) :]}"
-                                )
-                                break
-                        try:
-                            c.stop(timeout=2)
-                        except Exception:  # noqa: BLE001 — already stopped is fine
-                            pass
-                        try:
-                            _remove_container(c)
-                        except Exception:  # noqa: BLE001 — already gone is fine
-                            pass
-                # Clean up the egress internal network(s) by LABEL — networks are
-                # named disco-egr-{instance_id}, which has NO relation to the
-                # conversation_id, so a name match can never work. Labels are set
-                # at create time (same conversation label as the containers);
-                # containers were removed above, so the network is detachable.
-                seen_nets: set[str] = set()
-                for key in LABEL_CONV_KEYS:
-                    for net in client.networks.list(filters={"label": f"{key}={conversation_id}"}):
-                        if net.id in seen_nets:
-                            continue
-                        seen_nets.add(net.id)
-                        try:
-                            net.remove()
-                        except Exception:  # noqa: BLE001 — in-use or gone
-                            pass
-                # LocalSandboxService inherits this release path and uses per-run
-                # named workspace volumes. Remove labeled volumes after containers
-                # have gone so no Podman/Docker volume lock survives release.
-                volumes = getattr(client, "volumes", None)
-                if volumes is not None:
-                    seen_vols: set[str] = set()
-                    for key in LABEL_CONV_KEYS:
-                        try:
-                            candidates = volumes.list(filters={"label": f"{key}={conversation_id}"})
-                        except Exception:  # noqa: BLE001 — client lacks volume listing
-                            continue
-                        for vol in candidates:
-                            name = getattr(vol, "name", "") or getattr(vol, "id", "")
-                            if name in seen_vols:
-                                continue
-                            seen_vols.add(name)
-                            try:
-                                _remove_volume(vol)
-                            except Exception:  # noqa: BLE001 — already gone / in use
-                                pass
-                    for name in workspace_volume_names:
-                        if name in seen_vols:
-                            continue
-                        try:
-                            vol = volumes.get(name)
-                        except Exception:  # noqa: BLE001 — missing or unsupported
-                            continue
-                        seen_vols.add(name)
-                        try:
-                            _remove_volume(vol)
-                        except Exception:  # noqa: BLE001 — already gone / in use
-                            pass
-            except Exception:  # noqa: BLE001 — docker unreachable: best-effort
-                pass
-
-        await asyncio.to_thread(_destroy)
+        """Destroy all pmx-sbx-* and pmx-egr-* containers labelled with this
+        conversation_id; see `gvisor_parts.conversation_cleanup` for the full
+        contract."""
+        await _conversation_cleanup_part.destroy_by_conversation(self, conversation_id)

@@ -46,40 +46,50 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# `podman_parts` resolves this module's names through the parent at call time (the
+# standing §13 rule, which keeps test monkeypatches effective) — e.g.
+# `podman.EGR_NET_PREFIX`, `podman.LABEL_CONV_KEYS`, `podman.SBX_NAME_PREFIX`,
+# `podman._egress_proxy_mod.__file__` and `podman._inbound_forward_mod.__file__`.
+# Ruff cannot see those uses, so every such name is bound here in the
+# redundant-alias re-export form (`X as X`), ruff's sanctioned re-export marker,
+# which needs no per-line suppression. The `._container` / `.capability_relay`
+# re-exports are this module's inherited surface, preserved across the extraction.
 from . import capability_relay as _capability_relay_mod
-from . import egress_proxy as _egress_proxy_mod
-from . import inbound_forward as _inbound_forward_mod
+from . import egress_proxy as egress_proxy
+from . import inbound_forward as inbound_forward
+from ._container import EGRESS_PROXY_PORT as EGRESS_PROXY_PORT
+from ._container import INTERNAL_PORTS as INTERNAL_PORTS
 from ._container import (
-    EGRESS_PROXY_PORT,
-    INTERNAL_PORTS,
     PUBLISHED_PORTS,
     SANDBOX_READ_TIMEOUT_S,
     TIMEOUT_EXIT_CODES,
     ContainerInstance,
     SshLoopbackTunnelManager,
-    _create_named_volume,
     _remove_container,
-    _remove_volume,
     bounded_exec_argv,
     bounded_list_argv,
     bounded_list_result,
     bounded_read_argv,
     bounded_read_result,
-    bounded_sidecar_cap,
-    collect_host_deny_ips,
-    discover_remote_host_ips,
-    egress_mode,
-    format_allow,
-    inbound_readiness_argv,
-    loopback_port_bindings,
-    nofile_ulimits,
-    proxy_env,
-    proxy_readiness_argv,
-    proxy_run_argv,
     reconcile_orphan_aux_resources,
-    resolve_bounds,
-    sealed,
 )
+from ._container import _create_named_volume as _create_named_volume
+from ._container import _remove_volume as _remove_volume
+from ._container import bounded_sidecar_cap as bounded_sidecar_cap
+from ._container import collect_host_deny_ips as collect_host_deny_ips
+from ._container import discover_remote_host_ips as discover_remote_host_ips
+from ._container import egress_mode as egress_mode
+from ._container import format_allow as format_allow
+from ._container import inbound_readiness_argv as inbound_readiness_argv
+from ._container import loopback_port_bindings as loopback_port_bindings
+from ._container import nofile_ulimits as nofile_ulimits
+from ._container import proxy_env as proxy_env
+from ._container import proxy_readiness_argv as proxy_readiness_argv
+from ._container import proxy_run_argv as proxy_run_argv
+from ._container import resolve_bounds as resolve_bounds
+from ._container import sealed as sealed
 from .base import (
     ExecResult,
     SandboxError,
@@ -90,20 +100,31 @@ from .base import (
 )
 from .capability_relay import (
     HOST_SERVICE_RELAY_PORT,
-    RelayConfigurationError,
-    parse_upstream,
     relay_readiness_argv,
     relay_run_argv,
 )
+from .capability_relay import RelayConfigurationError as RelayConfigurationError
+from .capability_relay import parse_upstream as parse_upstream
 from .config import SandboxConfig, default_podman_config
+from .naming import EGR_NET_PREFIX as EGR_NET_PREFIX
+from .naming import LABEL_CONV as LABEL_CONV
+from .naming import LABEL_CONV_KEYS as LABEL_CONV_KEYS
+from .naming import SBX_NAME_PREFIX as SBX_NAME_PREFIX
 from .naming import (
-    EGR_NET_PREFIX,
-    LABEL_CONV,
-    LABEL_CONV_KEYS,
-    SBX_NAME_PREFIX,
     SBX_NAME_PREFIXES,
     conv_id_from_labels,
 )
+from .podman_parts import container_start as _container_start_part
+from .podman_parts import conversation_cleanup as _conversation_cleanup_part
+from .podman_parts import egress_setup as _egress_setup_part
+from .podman_parts import workspace_export_script as _workspace_export_script_part
+
+# This module's long-standing private aliases for the egress-proxy and
+# inbound-forward modules; `podman_parts` reads `podman._egress_proxy_mod.__file__`
+# and `podman._inbound_forward_mod.__file__` at call time. Bound from the
+# re-exports above so neither name needs a suppression.
+_egress_proxy_mod = egress_proxy
+_inbound_forward_mod = inbound_forward
 
 # `podman exec` stderr markers that mean the CONTAINER is gone (not the inner command
 # failing) — used to type a mid-session death as SandboxUnavailableError.
@@ -121,179 +142,11 @@ _WORKSPACE_EXPORT_META = "__DISCO_WORKSPACE_EXPORT_META__"
 # One guest process streams the bounded workspace as tar.  Keeping the filter in
 # the guest prevents runtime credential files from crossing the sandbox boundary;
 # archive.py validates every member again before it reaches durable storage.
-_WORKSPACE_EXPORT_SCRIPT = r"""
-import json, os, stat, sys, tarfile
-
-root = os.path.realpath(sys.argv[1])
-max_depth = int(sys.argv[2])
-max_bytes = int(sys.argv[3])
-excluded = {
-    'node_modules', '.pnpm-store', '.npm', '.yarn', '.cache', '.venv',
-    '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
-}
-safe_templates = {'example', 'sample', 'dist', 'template'}
-skipped = []
-preserve = []
-failures = 0
-
-def secret_path(rel):
-    for name in rel.lower().split('/'):
-        for stem in ('.dev.vars', '.env'):
-            if name == stem:
-                return True
-            if name.startswith(stem + '.') and name.rsplit('.', 1)[-1] not in safe_templates:
-                return True
-    return False
-
-def failure(rel, reason, keep=True):
-    global failures
-    skipped.append(f'{rel}: {reason}')
-    if keep:
-        preserve.append(rel)
-    failures += 1
-    if failures >= 10:
-        raise RuntimeError(
-            f'{failures} consecutive failures (last: {rel!r}: {reason}) '
-            '— transport presumed dead, aborting snapshot'
-        )
-
-if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
-    raise RuntimeError('workspace export requires no-follow directory descriptors')
-open_flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | os.O_NOFOLLOW
-directory_flags = open_flags | os.O_DIRECTORY
-
-def same_object(before, after):
-    return (before.st_dev, before.st_ino, stat.S_IFMT(before.st_mode)) == (
-        after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode)
-    )
-
-def walk(directory_fd, rel_root, depth, archive):
-    global failures
-    if depth > max_depth:
-        raise RuntimeError(
-            f'workspace depth exceeded the {max_depth}-level cap at {rel_root!r}'
-        )
-    try:
-        with os.scandir(directory_fd) as iterator:
-            entries = sorted(iterator, key=lambda entry: entry.name)
-    except OSError as exc:
-        if not rel_root:
-            raise RuntimeError(f'workspace traversal failed: {exc}') from exc
-        failure(rel_root, f'list failed: {exc}')
-        return
-
-    for entry in entries:
-        name = entry.name
-        rel = f'{rel_root}/{name}' if rel_root else name
-        if name in excluded or secret_path(rel):
-            continue
-        try:
-            listed = entry.stat(follow_symlinks=False)
-        except OSError as exc:
-            failure(rel, f'lstat failed: {exc}')
-            continue
-        if stat.S_ISLNK(listed.st_mode):
-            skipped.append(f'{rel}: symlink excluded')
-            continue
-        if stat.S_ISDIR(listed.st_mode):
-            if depth + 1 > max_depth:
-                raise RuntimeError(
-                    f'workspace depth exceeded the {max_depth}-level cap at {rel!r}'
-                )
-            child_fd = None
-            try:
-                child_fd = os.open(name, directory_flags, dir_fd=directory_fd)
-                opened = os.fstat(child_fd)
-                if not stat.S_ISDIR(opened.st_mode) or not same_object(listed, opened):
-                    os.close(child_fd)
-                    failure(rel, 'directory changed before it could be archived')
-                    continue
-            except OSError as exc:
-                if child_fd is not None:
-                    os.close(child_fd)
-                failure(rel, f'open directory failed: {exc}')
-                continue
-            try:
-                walk(child_fd, rel, depth + 1, archive)
-            finally:
-                os.close(child_fd)
-            continue
-        if not stat.S_ISREG(listed.st_mode):
-            skipped.append(f'{rel}: non-regular entry excluded')
-            continue
-        # A hardlink can give a path-filtered runtime secret an innocent alias.
-        # Snapshot only uniquely linked regular files; caches that legitimately
-        # use hardlinks are excluded above and source artifacts fail closed.
-        if listed.st_nlink != 1:
-            skipped.append(f'{rel}: hardlinked entry excluded')
-            continue
-        fd = None
-        try:
-            fd = os.open(name, open_flags, dir_fd=directory_fd)
-            opened = os.fstat(fd)
-            if not stat.S_ISREG(opened.st_mode) or not same_object(listed, opened):
-                os.close(fd)
-                failure(rel, 'file changed before it could be archived')
-                continue
-            if opened.st_nlink != 1:
-                os.close(fd)
-                skipped.append(f'{rel}: hardlinked entry excluded')
-                continue
-            if opened.st_size > max_bytes:
-                os.close(fd)
-                skipped.append(
-                    f'{rel}: {opened.st_size} bytes exceeds the {max_bytes}-byte cap'
-                )
-                failures += 1
-                if failures >= 10:
-                    raise RuntimeError(
-                        f'{failures} consecutive failures (last: {rel!r}: oversized) '
-                        '— transport presumed dead, aborting snapshot'
-                    )
-                continue
-            member = tarfile.TarInfo(rel)
-            member.size = opened.st_size
-            member.mode = 0o600
-            member.mtime = int(opened.st_mtime)
-            with os.fdopen(fd, 'rb') as source:
-                archive.addfile(member, source)
-                after = os.fstat(source.fileno())
-            before_version = (
-                opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns
-            )
-            after_version = (
-                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
-            )
-            if after_version != before_version:
-                raise RuntimeError(f'{rel!r} changed while it was being archived')
-            failures = 0
-        except OSError as exc:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-            failure(rel, f'read failed: {exc}')
-
-try:
-    root_fd = os.open(root, directory_flags)
-except OSError as exc:
-    raise RuntimeError(f'workspace root is not a directory: {exc}') from exc
-try:
-    root_info = os.fstat(root_fd)
-    if not stat.S_ISDIR(root_info.st_mode):
-        raise RuntimeError('workspace root is not a directory')
-    with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
-        walk(root_fd, '', 0, archive)
-finally:
-    os.close(root_fd)
-
-print(
-    '__DISCO_WORKSPACE_EXPORT_META__'
-    + json.dumps({'skipped': skipped, 'preserve': preserve}, separators=(',', ':')),
-    file=sys.stderr,
-)
-"""
+# The script text itself lives in `podman_parts.workspace_export_script` (moved
+# purely to shed module-size budget — embedded script text counts as logical
+# source) and is re-imported here unchanged, so `podman._WORKSPACE_EXPORT_SCRIPT`
+# keeps resolving for callers/tests that read it off this module.
+_WORKSPACE_EXPORT_SCRIPT = _workspace_export_script_part.WORKSPACE_EXPORT_SCRIPT
 
 _CPU_PERIOD = 100_000  # cgroup CPU period (100ms); quota/period = cpus
 
@@ -762,193 +615,12 @@ class PodmanSandboxService:
         inbound_only: bool = False,
     ) -> Any:
         """[E8 — live-verify on VM 202 pending] Stand up the internal network plus
-        policy/control sidecar and return its topology.
-
-        SPIRIT identical to `gvisor.py _setup_filtered_egress` — the OLD binary
-        (none|bridge) silently gave an allowlisted box full network, which is the
-        false guarantee E8 closes. Now an INTERNAL (no-NAT) network is the
-        substrate: the box's ONLY route out is the proxy, and the proxy refuses
-        any host the allowlist doesn't name. The HTTP(S)_PROXY env is belt-and-
-        suspenders; the no-route property is the real guarantee.
-
-        Three podman-specific notes (mirror gVisor's invariants #1/#2/#3 in
-        gvisor.py; the podman host may not enforce the same boot-time netstack
-        freeze as runsc, but we keep the create-on-bridge → connect-internal →
-        start ordering so both NICs exist before any sandbox traffic):
-
-        1. The proxy script is `put_archive`'d to the sidecar (no image rebuild;
-           base image's `python3` runs it; honors the never-pull rule).
-        2. `exec_run` on a podman-py remote container is broken (per the backend
-           docstring), so the one-shot setup (resolv.conf + proxy launch) goes
-           through the CLI runner, same as the sandbox's command path.
-        3. The sandbox's proxy env names the sidecar by its INTERNAL-NET IP (read
-           from the sidecar's attrs after `reload()`). Missing or unverifiable IP
-           state fails closed because embedded DNS is unavailable here.
-
-        ``inbound_only`` omits resolver/proxy/relay setup and publishes only
-        INTERNAL_PORTS, preserving zero guest outbound transport."""
-        net_name = f"{EGR_NET_PREFIX}{instance_id}"
-        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        # EPIC H (P1) — runtime LAST GATE on the sidecar caps. SandboxConfig is hot-mutable, so
-        # a post-construction `cfg.sidecar_cpu = 0` (etc.) bypasses the @field_validator and
-        # would otherwise reach podman as UNLIMITED. Gate BEFORE creating any network/sidecar
-        # so a mutated cap is refused with nothing stranded.
-        sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
-        sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
-        sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
-        deny_ips = (
-            frozenset()
-            if inbound_only
-            else collect_host_deny_ips(
-                self._cfg.host_ip_blocklist,
-                self._cfg.preview_host or _preview_host(self._cli_url),
-                include_local_interfaces=not self._cli_url.startswith("ssh://"),
-                additional_host_ips=(
-                    discover_remote_host_ips(self._cli_url)
-                    if self._cli_url.startswith("ssh://") and self._injected_client is None
-                    else frozenset()
-                ),
-            )
+        policy/control sidecar and return its topology; see
+        `podman_parts.egress_setup` for the full contract (spirit-identical to
+        `gvisor.py`'s, with the podman-specific CLI-exec + put_archive transport)."""
+        return _egress_setup_part.setup_filtered_egress(
+            self, client, spec, instance_id, conversation_id, inbound_only=inbound_only
         )
-        # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
-        # so a partial failure here (connect/start/proxy inject) would otherwise strand the
-        # internal network + proxy sidecar. Own the cleanup: any exception after either
-        # resource exists removes whatever was created before re-raising.
-        network: Any = None
-        sidecar: Any = None
-        try:
-            # The network carries the same label as the containers so the orphan
-            # sweep can find it — its NAME is instance-keyed, not conversation-keyed.
-            network = client.networks.create(
-                net_name, driver="bridge", internal=True, labels=labels
-            )
-            # (1) create on bridge → connect internal → start, so the sidecar's
-            # `bridge` NIC (the route to the internet, the proxy's upstream) AND its
-            # internal-net NIC BOTH exist before any sandbox traffic.
-            # [FIX6 parity — live-verified on local podman 5.8.2] PUBLISH the preview
-            # ports on the SIDECAR (it's on bridge → it CAN publish; the sandbox is
-            # internal-only and can't). The sidecar's inbound forwarder (launched after
-            # the sandbox starts, in `_start_container`) bridges each published host
-            # port to the sandbox's internal IP — host reaches the preview, the sandbox
-            # keeps zero direct egress. Ports must be declared at create() (podman can't
-            # add mappings to a running container). podman-py accepts the SAME docker-py
-            # `{"8000/tcp": None}` format AND reads it back as the same
-            # `NetworkSettings.Ports` shape (verified live), so the shared
-            # `_container._resolve_mapping` reads the binding unchanged.
-            sidecar = client.containers.create(
-                image=self._cfg.image,
-                command=["sh", "-c", "exec sleep infinity"],
-                # [FIX6 parity] dual-home the sidecar: a BRIDGE route (the proxy's
-                # upstream + the host's path to the published preview ports) AND, after
-                # `network.connect` below, the internal no-NAT net it shares with the
-                # sandbox. gVisor passes docker-py's `network="bridge"`; the rootless
-                # podman equivalent is `network_mode="bridge"` (verified live — a bare
-                # create defaults to pasta, which an internal net cannot attach to).
-                network_mode="bridge",
-                ports=loopback_port_bindings(
-                    INTERNAL_PORTS if sealed(spec) else PUBLISHED_PORTS,
-                    podman=True,
-                ),
-                # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
-                # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
-                # podman caps cpu via quota/period (mirrors the sandbox create path).
-                mem_limit=f"{sidecar_memory_mb}m",
-                cpu_quota=int(sidecar_cpu * _CPU_PERIOD),
-                cpu_period=_CPU_PERIOD,
-                pids_limit=sidecar_pids_limit,
-                ulimits=nofile_ulimits(self._cfg),
-                cap_drop=["ALL"],
-                no_new_privileges=True,
-                sysctls={
-                    "net.ipv4.ip_forward": "0",
-                    "net.ipv6.conf.all.forwarding": "0",
-                },
-                detach=True,
-                name=net_name,
-                labels=labels,
-            )
-            network.connect(sidecar)
-            sidecar.start()
-            if inbound_only:
-                # Default sealed boxes get only the inbound control transport:
-                # no resolver, egress proxy, proxy env, or relay is installed.
-                return network, sidecar, {}, net_name, None
-            # (2) replace the dead embedded resolver with public DNS over the (working) route.
-            self._sidecar_cli_run(
-                sidecar.name,
-                [
-                    "sh",
-                    "-c",
-                    'printf "nameserver 1.1.1.1\\nnameserver 8.8.8.8\\n" > /etc/resolv.conf',
-                ],
-                15,
-            )
-            # Inject the proxy script (put_archive works over the podman remote, per
-            # the backend docstring). Native detached exec owns the long-lived
-            # process; the shell is replaced by Python instead of abandoning an
-            # ``&`` child that Podman may reap.
-            script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name="egress_proxy.py")
-                info.size = len(script)
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(script))
-            if not sidecar.put_archive("/", buf.getvalue()):
-                raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
-            allow = format_allow(spec.egress_allow)
-            deny_hosts = (
-                frozenset({parse_upstream(self._cfg.host_service_upstream).host})
-                if spec.host_services
-                else frozenset()
-            )
-            argv = proxy_run_argv(
-                allow,
-                EGRESS_PROXY_PORT,
-                public_only=egress_mode(spec) == "public",
-                deny_ips=deny_ips,
-                deny_hosts=deny_hosts,
-            )
-            self._sidecar_cli_run(
-                sidecar.name,
-                [
-                    "sh",
-                    "-c",
-                    f"exec {shlex.join(argv)} >/var/log/egress.log 2>/var/log/egress.err.log",
-                ],
-                10,
-                detach=True,
-            )
-            ready_rc, _ready_out, _ready_err = self._sidecar_cli_run(
-                sidecar.name, proxy_readiness_argv(EGRESS_PROXY_PORT), 10
-            )
-            if ready_rc != 0:
-                raise SandboxUnavailableError(
-                    "egress policy proxy failed its readiness check; refusing sandbox start"
-                )
-            # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
-            # Embedded DNS is unavailable in this topology, so a name fallback would
-            # produce a silently dead proxy transport.
-            try:
-                sidecar.reload()
-                sidecar_running = getattr(sidecar, "status", "") == "running"
-                nets = sidecar.attrs.get("NetworkSettings", {}).get("Networks", {}) or {}
-                proxy_ip = nets.get(net_name, {}).get("IPAddress", "")
-            except Exception as exc:  # noqa: BLE001 — fixed diagnostic + outer cleanup
-                raise SandboxUnavailableError(
-                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
-                ) from exc
-            if not sidecar_running or not proxy_ip:
-                raise SandboxUnavailableError(
-                    "sandbox policy sidecar internal address is unavailable; refusing sandbox start"
-                )
-            env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-            relay_url = self._launch_capability_relay(sidecar, proxy_ip, spec)
-            return network, sidecar, env, net_name, relay_url
-        except Exception:
-            # Partial setup must not leak: tear down whatever already exists, then re-raise.
-            self._best_effort_cleanup(egress_network=network, egress_sidecar=sidecar)
-            raise
 
     def _launch_capability_relay(
         self, sidecar: Any, sidecar_ip: str, spec: SandboxSpec
@@ -990,230 +662,20 @@ class PodmanSandboxService:
         ports: frozenset[int] = PUBLISHED_PORTS,
     ) -> None:
         """[FIX6 parity — port of `gvisor._launch_inbound_forwarder`] Make a FILTERED
-        box's preview ports host-reachable WITHOUT breaking containment. The sandbox is
-        internal-only (no published port); the dual-homed egress SIDECAR publishes the
-        preview ports (see `_setup_filtered_egress`) and runs a stdlib TCP forwarder that
-        bridges each published host port to the sandbox's internal IP —
-        `host:PORT -> <sandbox_ip>:PORT`. Transparent byte pipe → websockets / Vite HMR
-        pass through; the sandbox keeps zero direct egress.
-
-        Fail closed: a published sidecar binding without this forwarder is a false
-        availability signal for both preview and the internal kernel transport.  The
-        caller owns complete sandbox/sidecar/network/volume cleanup on any exception.
-
-        Podman's archive API is the proven binary-safe injection path used by the
-        egress proxy.  Use it here too: a live Podman remote accepted a 7.4-KiB
-        inline-base64 detached exec and returned an exec id while silently never
-        starting the command.  The subsequent short native ``exec --detach`` is
-        bounded by an active listener-readiness probe.  A dead published transport
-        fails sandbox creation instead of returning a knowingly broken preview/kernel
-        path.  gVisor retains its separate docker ``exec_run(detach=True)`` delivery.
-        """
-        try:
-            container.reload()
-            sbx_ip = (
-                container.attrs.get("NetworkSettings", {})
-                .get("Networks", {})
-                .get(net_name, {})
-                .get("IPAddress", "")
-            )
-            if not sbx_ip:
-                raise SandboxUnavailableError(
-                    "sandbox has no internal address; refusing dead inbound transport"
-                )
-            script = pathlib.Path(_inbound_forward_mod.__file__).read_bytes()
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name="inbound_forward.py")
-                info.size = len(script)
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(script))
-            if not sidecar.put_archive("/", buf.getvalue()):
-                raise SandboxUnavailableError(
-                    "failed to inject inbound transport forwarder; refusing sandbox start"
-                )
-            ports_arg = " ".join(str(p) for p in sorted(ports))
-            launch_rc, _launch_out, _launch_err = self._sidecar_cli_run(
-                sidecar.name,
-                [
-                    "sh",
-                    "-c",
-                    f"exec python3 /inbound_forward.py {sbx_ip} {ports_arg} "
-                    ">/var/log/inbound.log 2>/var/log/inbound.err.log",
-                ],
-                15,
-                detach=True,
-            )
-            if launch_rc != 0:
-                raise SandboxUnavailableError(
-                    "inbound transport forwarder launch failed; refusing sandbox start"
-                )
-
-            ready_rc, _ready_out, _ready_err = self._sidecar_cli_run(
-                sidecar.name, inbound_readiness_argv(ports), 7
-            )
-            if ready_rc != 0:
-                raise SandboxUnavailableError(
-                    "inbound transport forwarder failed readiness; refusing sandbox start"
-                )
-        except SandboxUnavailableError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — fixed diagnostic, cleanup owned by caller
-            raise SandboxUnavailableError(
-                "inbound transport forwarder setup failed; refusing sandbox start"
-            ) from exc
+        box's preview ports host-reachable WITHOUT breaking containment; see
+        `podman_parts.container_start` for the full contract."""
+        _container_start_part.launch_inbound_forwarder(self, sidecar, container, net_name, ports)
 
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
     ) -> tuple[Any, str, Any, Any, Any, str | None]:
-        """The blocking Podman work for `create`, in a thread. Image-by-load (never
-        pull); limits via the socket; typed errors on failure. Returns
-        (container, name, egress_network, egress_sidecar, workspace_volume) —
-        the aux refs cover sealed control-only and filtered/public policy modes.
-        `ContainerInstance.destroy()` tears them down and removes the named
-        workspace volume."""
-        client = self._client()
-
-        try:
-            present = client.images.exists(self._cfg.image)
-        except Exception as exc:  # noqa: BLE001
-            raise SandboxUnavailableError(f"could not query Podman images: {exc}") from exc
-        if not present:
-            raise SandboxUnavailableError(
-                f"sandbox image {self._cfg.image!r} is not present (load it with "
-                "`podman load`; this backend never pulls from a registry)"
-            )
-
-        # EPIC H (P1): config is the MAXIMUM, not a fallback. A model spec may tighten
-        # cpu/mem/pids but never loosen them above the configured max nor disable the pids
-        # cap (pids=0 → default, never "unlimited"). Enforced by the user@ systemd manager
-        # via the socket (same path as mem/cpu). See resolve_bounds.
-        cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
-        vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
-        name = f"{SBX_NAME_PREFIX}{instance_id}"
-
-        # Per-mode network config — every guest uses an internal no-NAT network
-        # and sidecar. Sealed uses control-only ingress; filtered/public also run
-        # the policy proxy. No model-shaped spec reaches a raw guest bridge.
-        mode = egress_mode(spec)
-        if spec.host_services:
-            try:
-                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
-            except RelayConfigurationError as exc:
-                raise SandboxUnavailableError(str(exc)) from exc
-            if relay_upstream.scheme != "https":
-                raise SandboxUnavailableError(
-                    "container host-service relay requires a reachable HTTPS upstream; "
-                    "sidecar loopback is not the agent-server host"
-                )
-        labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        net_kwargs: dict[str, Any] = {}
-        environment: dict[str, str] = {}
-        egress_network = egress_sidecar = None
-        egress_net_name = ""
-        host_service_relay_url = None
-        inbound_only = mode == "sealed" and not spec.host_services
-        try:
-            (
-                egress_network,
-                egress_sidecar,
-                environment,
-                net_name,
-                host_service_relay_url,
-            ) = self._setup_filtered_egress(
-                client,
-                spec,
-                instance_id,
-                conversation_id,
-                inbound_only=inbound_only,
-            )
-        except SandboxUnavailableError:
-            raise
-        except Exception as exc:  # noqa: BLE001 — helper already removed partial resources
-            operation = "inbound control" if inbound_only else "sandbox policy"
-            raise SandboxUnavailableError(
-                f"{operation} sidecar setup failed; refusing sandbox start"
-            ) from exc
-        egress_net_name = net_name
-        # podman-py's `containers.create` attaches the one internal network via
-        # `networks`. `network_mode="bridge"` selects the rootless netns driver
-        # (instead of pasta); it does not add the default bridge when an explicit
-        # networks map is supplied. The guest's only interface is the internal
-        # no-NAT network, including for sealed control-only boxes.
-        net_kwargs = {"network_mode": "bridge", "networks": {net_name: {}}}
-
-        volume = None
-        container = None
-        try:
-            volume = _create_named_volume(
-                client.volumes,
-                name=vol_name,
-                labels=labels,
-                disk_mb=disk_mb,
-                workspace_uid=self._cfg.workspace_uid,
-            )
-            container = client.containers.create(
-                image=self._cfg.image,
-                command=["sleep", "infinity"],  # keepalive
-                mem_limit=f"{mem_mb}m",
-                cpu_quota=int(cpu * _CPU_PERIOD),
-                cpu_period=_CPU_PERIOD,
-                pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
-                ulimits=nofile_ulimits(self._cfg),
-                **net_kwargs,
-                volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
-                # NO host env leaks in. Filtered/public boxes receive only proxy
-                # routing vars; sealed receives none.
-                environment=environment,
-                # The base image creates UID 1000 but intentionally has no USER
-                # directive.  Pin the sandbox (not the privileged policy sidecar)
-                # to the workspace principal so guest cp/mv staging preserves an
-                # editable non-root ownership boundary.
-                user=f"{self._cfg.workspace_uid}:{self._cfg.workspace_uid}",
-                working_dir=self._cfg.container_workspace,
-                name=name,
-                labels=labels,
-                detach=True,
-            )
-            container.start()
-            # [FIX6 parity] sandbox is up + on the internal net — launch and prove
-            # the inbound forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT).
-            # A failure raises into this block's complete resource cleanup.
-            forward_ports = INTERNAL_PORTS if mode == "sealed" else PUBLISHED_PORTS
-            self._launch_inbound_forwarder(
-                egress_sidecar,
-                container,
-                egress_net_name,
-                forward_ports,
-            )
-            return (
-                container,
-                name,
-                egress_network,
-                egress_sidecar,
-                volume,
-                host_service_relay_url,
-            )
-        except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
-            from podman.errors import ImageNotFound
-
-            if container is None:
-                with contextlib.suppress(Exception):
-                    container = client.containers.get(name)
-            with contextlib.suppress(Exception):
-                _remove_container(container)
-            # Don't leak the egress aux if the sandbox itself failed to start
-            # (E8: the parent class's teardown walks these refs).
-            self._best_effort_cleanup(egress_network=egress_network, egress_sidecar=egress_sidecar)
-            with contextlib.suppress(Exception):
-                _remove_volume(volume)
-            if isinstance(exc, SandboxUnavailableError):
-                raise
-            if isinstance(exc, ImageNotFound):
-                raise SandboxUnavailableError(
-                    f"sandbox image {self._cfg.image!r} not found"
-                ) from exc
-            raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
+        """The blocking Podman work for `create`, in a thread; see
+        `podman_parts.container_start` for the full contract. Returns
+        (container, name, egress_network, egress_sidecar, workspace_volume,
+        host_service_relay_url) — the aux refs cover sealed control-only and
+        filtered/public policy modes. `ContainerInstance.destroy()` tears them
+        down and removes the named workspace volume."""
+        return _container_start_part.start_container(self, spec, instance_id, conversation_id)
 
     async def create(
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
@@ -1318,88 +780,7 @@ class PodmanSandboxService:
         return await asyncio.to_thread(_list)
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
-        """Destroy all disco-sbx-*/pmx-sbx-* containers labelled with this conversation_id."""
-
-        def _destroy() -> None:
-            try:
-                client = self._client()
-                # Dual-read: match BOTH the current and legacy conversation label
-                # keys (union, dedup) so an old-scheme container is still removed.
-                seen_ids: set[str] = set()
-                workspace_volume_names: set[str] = set()
-                for key in LABEL_CONV_KEYS:
-                    for c in client.containers.list(
-                        all=True,
-                        filters={"label": f"{key}={conversation_id}"},
-                    ):
-                        if c.id in seen_ids:
-                            continue
-                        seen_ids.add(c.id)
-                        name = str(getattr(c, "name", "") or "").lstrip("/")
-                        for prefix in SBX_NAME_PREFIXES:
-                            if name.startswith(prefix):
-                                workspace_volume_names.add(
-                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix) :]}"
-                                )
-                                break
-                        try:
-                            c.stop(timeout=2)
-                        except Exception:  # noqa: BLE001
-                            pass
-                        try:
-                            _remove_container(c)
-                        except Exception:  # noqa: BLE001
-                            pass
-                # [P2] Clean up the filtered-egress internal network(s) by LABEL too —
-                # mirrors the gVisor path. The network NAME is disco-egr-{instance_id}
-                # (instance-keyed, NOT conversation-keyed), so only the conversation
-                # label finds it; a crash/restart with filtered podman boxes would
-                # otherwise strand the labeled `disco-egr-*` networks forever. The
-                # containers above are already removed, so the network is detachable.
-                seen_nets: set[str] = set()
-                for key in LABEL_CONV_KEYS:
-                    for net in client.networks.list(filters={"label": f"{key}={conversation_id}"}):
-                        if net.id in seen_nets:
-                            continue
-                        seen_nets.add(net.id)
-                        try:
-                            net.remove()
-                        except Exception:  # noqa: BLE001 — in-use or gone
-                            pass
-                # Remove the per-sandbox named workspace volume(s) labeled with
-                # this conversation. This is the release path used by soak kill;
-                # container.remove(v=True) covers attached/anonymous volumes, but
-                # named volumes may need explicit removal by the SDK.
-                volumes = getattr(client, "volumes", None)
-                if volumes is not None:
-                    seen_vols: set[str] = set()
-                    for key in LABEL_CONV_KEYS:
-                        try:
-                            candidates = volumes.list(filters={"label": f"{key}={conversation_id}"})
-                        except Exception:  # noqa: BLE001 — client lacks volume listing
-                            continue
-                        for vol in candidates:
-                            name = getattr(vol, "name", "") or getattr(vol, "id", "")
-                            if name in seen_vols:
-                                continue
-                            seen_vols.add(name)
-                            try:
-                                _remove_volume(vol)
-                            except Exception:  # noqa: BLE001 — already gone / in use
-                                pass
-                    for name in workspace_volume_names:
-                        if name in seen_vols:
-                            continue
-                        try:
-                            vol = volumes.get(name)
-                        except Exception:  # noqa: BLE001 — missing or unsupported
-                            continue
-                        seen_vols.add(name)
-                        try:
-                            _remove_volume(vol)
-                        except Exception:  # noqa: BLE001 — already gone / in use
-                            pass
-            except Exception:  # noqa: BLE001 — best-effort
-                pass
-
-        await asyncio.to_thread(_destroy)
+        """Destroy all disco-sbx-*/pmx-sbx-* containers labelled with this
+        conversation_id; see `podman_parts.conversation_cleanup` for the full
+        contract."""
+        await _conversation_cleanup_part.destroy_by_conversation(self, conversation_id)

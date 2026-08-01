@@ -17,14 +17,20 @@ than production.
 
 from __future__ import annotations
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# Extraction into `process_parts/` moved the callers of these names out of this
+# module; the names themselves are this module's surface and are restored here in
+# the redundant-alias re-export form (`X as X`), ruff's sanctioned re-export
+# marker, which needs no per-line suppression.
 import asyncio
-import errno
+import errno as errno
 import os
 import re
-import shlex
+import shlex as shlex
 import shutil
 import signal
-import stat
+import stat as stat
 import sys
 import tempfile
 import time
@@ -35,10 +41,10 @@ from disco.core.events import RuntimeConstraintDeclaration
 
 from ._container import (
     MAX_SANDBOX_LIST_ENTRIES,
-    MAX_SANDBOX_READ_BYTES,
-    SANDBOX_READ_TIMEOUT_S,
     bounded_exec_argv,
 )
+from ._container import MAX_SANDBOX_READ_BYTES as MAX_SANDBOX_READ_BYTES
+from ._container import SANDBOX_READ_TIMEOUT_S as SANDBOX_READ_TIMEOUT_S
 from .base import (
     ExecResult,
     SandboxError,
@@ -50,23 +56,10 @@ from .base import (
 )
 from .capability_relay import CapabilityRelayServer, RelayConfigurationError, serve_in_thread
 from .config import SandboxConfig
-
-# ROOT-1 (slides spiral): a genuine `/workspace`-rooted path token in a shell
-# command — the leading `/workspace` AND the rest of the path up to the next token
-# boundary (unescaped whitespace / quote / shell operator / end). Capturing the WHOLE token
-# (not just the `/workspace` prefix) lets the rewrite RESOLVE + JAIL it via the same
-# helper the file tools use, so a `..` traversal can't escape the jail.
-# The lookbehind keeps it from matching a mid-path occurrence ('/foo/workspace') or a
-# substring ('myworkspace'); the lookahead right after `/workspace` keeps it from
-# matching a longer name ('/workspaces') — it only fires when `/workspace` is followed
-# by a path separator, a token boundary, or end-of-string.
-# Shell expansion inside a token: $VAR, ${VAR}, $(cmd), `cmd`.
-_SHELL_EXPANSION_RE = re.compile(r"[$`]")
-
-_WORKSPACE_TOKEN_RE = re.compile(
-    r"(?<![\w/.])/workspace(?=/|$|[\s'\";|&<>()`])"
-    r"(?:/(?:\\[^\n]|[^\s\\'\";|&<>()`])*)?"
-)
+from .process_parts import secure_io as _secure_io_part
+from .process_parts import workspace_rewrite as _workspace_rewrite_part
+from .process_parts.workspace_rewrite import _SHELL_EXPANSION_RE as _SHELL_EXPANSION_RE
+from .process_parts.workspace_rewrite import _WORKSPACE_TOKEN_RE as _WORKSPACE_TOKEN_RE
 
 # Bug 19 (P0): BEST-EFFORT, DEV-ONLY host-process-SIGNAL refusal for the PROCESS backend
 # ONLY — NOT containment (the real containment is the fail-closed production-validity gate
@@ -276,73 +269,9 @@ class ProcessSandboxInstance:
         return clean_sandbox_env(self._workspace)
 
     def _rewrite_workspace_paths(self, cmd: str) -> str:
-        """ROOT-1 (slides spiral): make a literal ``/workspace`` resolve in the shell.
-
-        The build/agent prompts tell the model files live in ``/workspace``, and the
-        FILE tools honor that (``strip_redundant_workspace_prefix`` maps
-        ``workspace/foo`` → ``foo``, jailed to the real dir). But this backend's shell
-        runs with ``cwd`` = the real per-instance ``/tmp/disco-sbx-.../sbx_.../`` dir,
-        which has NO literal ``/workspace`` — so a model command like
-        ``ls /workspace/deck.pptx`` exits 2 and the agent hunts around (``find /`` …).
-        On the container backends ``/workspace`` genuinely exists, so this only bites
-        the process (dev) backend.
-
-        Rewrite each genuine ``/workspace``-rooted path TOKEN (word-boundary — never
-        ``/workspaces`` and never a mid-substring) to its ``shlex.quote``-d absolute
-        real-workspace path. Relative paths already resolve via ``cwd``, so a NEW-file
-        relative path (``echo hi > out.txt``) is untouched — only a ``/workspace``
-        prefix is translated.
-
-        [SECURITY — P1] The rewrite RESOLVES + JAILS each token through ``_resolve`` —
-        the SAME jail the file tools use — so the shell ``/workspace`` semantics match
-        the file-tool ``/workspace`` semantics exactly (single source of truth). A
-        token whose ``..`` traversal escapes the workspace (e.g.
-        ``/workspace/../../etc/passwd``) makes ``_resolve`` raise
-        ``SandboxPermissionError`` and the whole command is rejected (fail closed) —
-        the rewrite must never itself manufacture an out-of-jail absolute path.
-        """
-
-        # A token whose tail the SHELL computes at run time ("/workspace/$f",
-        # "/workspace/${name}", "/workspace/`basename x`"). It cannot be resolved
-        # here, and shlex.quote-ing it is actively WRONG: unquoted it suppresses
-        # the expansion the model wrote, and inside existing quotes it injects
-        # literal quote characters into the filename. Either way every path comes
-        # back "missing" while a literal `ls` of the same file succeeds — the
-        # environment contradicting itself, which is what sent counted seed 440023
-        # into a read-loop it could not reason its way out of.
-        def _sub(m: re.Match[str]) -> str:
-            # _resolve strips the redundant /workspace prefix, joins onto the real
-            # workspace root, resolves, and raises SandboxPermissionError on escape.
-            # Parse shell escapes in this ONE matched token first.  In particular,
-            # ``hero\ image.svg`` is one path; treating its space as a boundary
-            # rewrote only ``hero\`` and silently manufactured a second argv token.
-            token = m.group(0)
-            if _SHELL_EXPANSION_RE.search(token):
-                # Substitute ONLY the `/workspace` prefix and leave the shell's own
-                # expansion — and the caller's quoting context — exactly as written.
-                rest = token[len("/workspace") :]
-                if ".." in rest:
-                    raise SandboxPermissionError(
-                        f"/workspace path with shell expansion may not traverse: {token!r}"
-                    )
-                root = str(self._workspace)
-                if shlex.quote(root) != root:
-                    # Bare substitution is only safe while the root needs no quoting;
-                    # refuse loudly rather than emit a path that silently mis-parses.
-                    raise SandboxPermissionError(
-                        "cannot expand a /workspace path containing shell expansion "
-                        f"because the workspace path requires quoting: {root!r}"
-                    )
-                return root + rest
-            try:
-                parsed = shlex.split(token, posix=True)
-            except ValueError as exc:
-                raise SandboxPermissionError(f"invalid /workspace path token: {token!r}") from exc
-            if len(parsed) != 1:
-                raise SandboxPermissionError(f"invalid /workspace path token: {token!r}")
-            return shlex.quote(str(self._resolve(parsed[0])))
-
-        return _WORKSPACE_TOKEN_RE.sub(_sub, cmd)
+        """ROOT-1 (slides spiral): make a literal ``/workspace`` resolve in the shell;
+        see `process_parts.workspace_rewrite` for the full contract."""
+        return _workspace_rewrite_part.rewrite_workspace_paths(self, cmd)
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self._alive()
@@ -443,85 +372,9 @@ class ProcessSandboxInstance:
         )
 
     async def read_file(self, path: str) -> bytes:
-        self._alive()
-        clean = strip_redundant_workspace_prefix(path)
-        self._resolve(path)  # lexical jail before the descriptor walk
-
-        def _read_securely() -> bytes:
-            parts = [part for part in Path(clean).parts if part not in ("", ".")]
-            if not parts:
-                raise SandboxPermissionError(f"read_file {path!r}: invalid workspace path")
-            dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-            file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-            opened: list[int] = []
-            try:
-                current = os.open(self._workspace, dir_flags)
-                opened.append(current)
-                for part in parts[:-1]:
-                    if part == "..":
-                        if len(opened) == 1:
-                            raise SandboxPermissionError(
-                                f"read_file {path!r}: path escapes workspace"
-                            )
-                        os.close(opened.pop())
-                        current = opened[-1]
-                        continue
-                    current = os.open(part, dir_flags, dir_fd=current)
-                    opened.append(current)
-                if parts[-1] == "..":
-                    raise SandboxPermissionError(
-                        f"read_file {path!r}: directory paths are not readable files"
-                    )
-                descriptor = os.open(parts[-1], file_flags, dir_fd=current)
-                opened.append(descriptor)
-                info = os.fstat(descriptor)
-                if not stat.S_ISREG(info.st_mode):
-                    raise SandboxPermissionError(
-                        f"read_file {path!r}: only regular, non-symlink files may be read"
-                    )
-                if info.st_size > MAX_SANDBOX_READ_BYTES:
-                    raise OSError(
-                        errno.EFBIG,
-                        f"read_file {path!r} exceeds the "
-                        f"{MAX_SANDBOX_READ_BYTES}-byte transfer cap",
-                    )
-                chunks: list[bytes] = []
-                remaining = MAX_SANDBOX_READ_BYTES + 1
-                while remaining:
-                    chunk = os.read(descriptor, min(1024 * 1024, remaining))
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    remaining -= len(chunk)
-                data = b"".join(chunks)
-                if len(data) > MAX_SANDBOX_READ_BYTES:
-                    raise OSError(
-                        errno.EFBIG,
-                        f"read_file {path!r} grew beyond the transfer cap while reading",
-                    )
-                return data
-            except OSError as exc:
-                if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
-                    raise SandboxPermissionError(
-                        f"read_file {path!r}: symlink and non-regular paths are denied"
-                    ) from exc
-                raise
-            finally:
-                for descriptor in reversed(opened):
-                    try:
-                        os.close(descriptor)
-                    except OSError:
-                        pass
-
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_read_securely), timeout=SANDBOX_READ_TIMEOUT_S
-            )
-        except TimeoutError as exc:
-            raise OSError(
-                errno.ETIMEDOUT,
-                f"read_file {path!r}: exceeded the {SANDBOX_READ_TIMEOUT_S}s read timeout",
-            ) from exc
+        """Read a file through no-follow directory descriptors; see
+        `process_parts.secure_io` for the full contract."""
+        return await _secure_io_part.read_file(self, path)
 
     async def write_file(self, path: str, data: bytes) -> None:
         self._alive()
@@ -530,45 +383,9 @@ class ProcessSandboxInstance:
         target.write_bytes(data)
 
     async def delete_file(self, path: str) -> None:
-        """Unlink one regular file through no-follow directory descriptors."""
-        self._alive()
-        path = strip_redundant_workspace_prefix(path)
-
-        def _delete_securely() -> None:
-            import posixpath
-
-            normalized = posixpath.normpath(path.replace("\\", "/"))
-            if normalized in {"", ".", ".."} or normalized.startswith("../"):
-                raise SandboxPermissionError(f"delete_file path escapes workspace: {path!r}")
-            parts = [part for part in normalized.split("/") if part not in {"", "."}]
-            dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-            opened: list[int] = []
-            try:
-                current = os.open(self._workspace, dir_flags)
-                opened.append(current)
-                for part in parts[:-1]:
-                    current = os.open(part, dir_flags, dir_fd=current)
-                    opened.append(current)
-                info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
-                    raise SandboxPermissionError(
-                        f"delete_file {path!r}: only regular, non-symlink files may be deleted"
-                    )
-                os.unlink(parts[-1], dir_fd=current)
-            except OSError as exc:
-                if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
-                    raise SandboxPermissionError(
-                        f"delete_file {path!r}: symlink and non-regular paths are denied"
-                    ) from exc
-                raise
-            finally:
-                for descriptor in reversed(opened):
-                    try:
-                        os.close(descriptor)
-                    except OSError:
-                        pass
-
-        await asyncio.to_thread(_delete_securely)
+        """Unlink one regular file through no-follow directory descriptors; see
+        `process_parts.secure_io` for the full contract."""
+        await _secure_io_part.delete_file(self, path)
 
     async def atomic_write(self, path: str, data: bytes) -> None:
         """CD-TOOLS-3: write `data` to `path` atomically — a tmp in the SAME dir + os.replace, so

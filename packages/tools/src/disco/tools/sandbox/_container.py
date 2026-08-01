@@ -10,51 +10,78 @@ work over any transport (local socket or Docker/Podman-over-SSH).
 
 from __future__ import annotations
 
+# MODULE SURFACE, PRESERVED (Epic 10-B) ------------------------------------------
+#
+# Extraction into `_container_parts/` moved the *callers* of many of these names
+# out of this module, but the names themselves are this module's surface and are
+# restored here as explicit re-exports in the redundant-alias form (`X as X`),
+# which is ruff's sanctioned re-export marker and needs no per-line suppression.
+#
+# Two of them are load-bearing rather than cosmetic. `subprocess`, `socket` and
+# `psutil` must stay reachable as `_container.subprocess` / `_container.socket` /
+# `_container.psutil`: `test_sw5_isolation_bounds.py` patches attributes *on those
+# shared module objects* (`_container.subprocess.Popen`,
+# `_container.psutil.net_if_addrs`, `_container.socket.create_connection`) to make
+# host discovery deterministic. `host_discovery` binds the same module objects
+# under its own `import`, so the patch is visible there — but the patch target
+# expression itself still has to resolve here. Deleting them as "unused" (which
+# `ruff --fix` offers to do) breaks those tests at patch time.
 import asyncio
-import contextlib
+import contextlib as contextlib
 import errno
-import hashlib
-import io
-import ipaddress
-import json
+import hashlib as hashlib
+import io as io
+import ipaddress as ipaddress
+import json as json
 import logging
 import math
 import posixpath
-import secrets
-import socket
-import subprocess
-import tarfile
-import threading
-import time
-import urllib.parse
+import secrets as secrets
+import socket as socket
+import subprocess as subprocess
+import tarfile as tarfile
+import threading as threading
+import time as time
+import urllib as urllib
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC as UTC
+from datetime import datetime as datetime
 from typing import TYPE_CHECKING, Any
 
-import psutil
+import psutil as psutil
 
 from ..anatomy import Capability
+from ._container_parts import atomic_write as _atomic_write_part
+from ._container_parts import aux_reconcile as _aux_reconcile_part
+from ._container_parts import failure_classification as _failure_classification_part
+from ._container_parts import guest_scripts as _guest_scripts_part
+from ._container_parts import host_discovery as _host_discovery_part
+from ._container_parts import lifecycle as _lifecycle_part
+from ._container_parts import port_mapping as _port_mapping_part
+from ._container_parts.aux_reconcile import _AUX_RECONCILE_GRACE_S as _AUX_RECONCILE_GRACE_S
+from ._container_parts.aux_reconcile import _resource_created_epoch as _resource_created_epoch
+from ._container_parts.aux_reconcile import _resource_labels as _resource_labels
+from ._container_parts.failure_classification import (
+    _DEATH_REVERIFY_BACKOFF_S as _DEATH_REVERIFY_BACKOFF_S,
+)
+from ._container_parts.failure_classification import (
+    _DEATH_REVERIFY_WINDOW_S as _DEATH_REVERIFY_WINDOW_S,
+)
+from ._container_parts.host_discovery import _ssh_endpoint_argv as _ssh_endpoint_argv
 from .base import (
     ExecResult,
     SandboxError,
     SandboxPermissionError,
     SandboxSpec,
-    SandboxUnavailableError,
     raise_read_error,
     strip_redundant_workspace_prefix,
 )
+from .base import SandboxUnavailableError as SandboxUnavailableError
 
 if TYPE_CHECKING:
     from .config import SandboxConfig
 
 _LOG = logging.getLogger(__name__)
-
-# Re-verify cadence/window for confirming a container is REALLY dead (vs a transient
-# docker/podman API 404 burst, which under concurrent load can last ~1s) before accepting a
-# death verdict + recreating. The window must OUTLAST a typical burst so a fresh probe can read
-# the container running again; it is fully async (asyncio.sleep) so the event loop never blocks.
-_DEATH_REVERIFY_BACKOFF_S = 0.25
-_DEATH_REVERIFY_WINDOW_S = 2.0
 
 
 # EPIC H (P1) — the deployment config is the MAXIMUM, not a fallback ---------------
@@ -160,416 +187,32 @@ def nofile_ulimits(cfg: SandboxConfig) -> list[Any]:
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
 
-# S-W5 D3: the sandbox-to-host boundary is bounded before docker-py/podman-py
-# materializes a response. The in-guest helper streams arbitrary command output
-# into fixed-size head/tail buffers and a bounded workspace spill; only that
-# bounded projection crosses the container API.
-EXEC_CAPTURE_HEAD_BYTES = 64 * 1024
-EXEC_CAPTURE_TAIL_BYTES = 64 * 1024
-EXEC_CAPTURE_RETURN_BYTES = EXEC_CAPTURE_HEAD_BYTES + EXEC_CAPTURE_TAIL_BYTES
-EXEC_CAPTURE_SPILL_BYTES = 1024 * 1024
-MAX_SANDBOX_READ_BYTES = 32 * 1024 * 1024
-MAX_SANDBOX_LIST_ENTRIES = 4096
 SANDBOX_READ_TIMEOUT_S = 20
 
-_BOUNDED_EXEC_HELPER = r"""
-import os
-import signal
-import subprocess
-import sys
-import threading
+# The bounded exec/read/delete/list guest-script constants and their argv
+# builders/result parsers live in `_container_parts.guest_scripts` (moved
+# purely to shed module-size budget — embedded script text counts as logical
+# source); re-imported here unchanged so every existing import path
+# (`from ._container import bounded_exec_argv`, `_container._BOUNDED_EXEC_HELPER`,
+# etc.) keeps resolving.
+EXEC_CAPTURE_HEAD_BYTES = _guest_scripts_part.EXEC_CAPTURE_HEAD_BYTES
+EXEC_CAPTURE_TAIL_BYTES = _guest_scripts_part.EXEC_CAPTURE_TAIL_BYTES
+EXEC_CAPTURE_RETURN_BYTES = _guest_scripts_part.EXEC_CAPTURE_RETURN_BYTES
+EXEC_CAPTURE_SPILL_BYTES = _guest_scripts_part.EXEC_CAPTURE_SPILL_BYTES
+MAX_SANDBOX_READ_BYTES = _guest_scripts_part.MAX_SANDBOX_READ_BYTES
+MAX_SANDBOX_LIST_ENTRIES = _guest_scripts_part.MAX_SANDBOX_LIST_ENTRIES
+_BOUNDED_EXEC_HELPER = _guest_scripts_part._BOUNDED_EXEC_HELPER
+_BOUNDED_READ_HELPER = _guest_scripts_part._BOUNDED_READ_HELPER
+_BOUNDED_DELETE_HELPER = _guest_scripts_part._BOUNDED_DELETE_HELPER
+_BOUNDED_LIST_HELPER = _guest_scripts_part._BOUNDED_LIST_HELPER
+bounded_exec_argv = _guest_scripts_part.bounded_exec_argv
+bounded_read_argv = _guest_scripts_part.bounded_read_argv
+bounded_read_result = _guest_scripts_part.bounded_read_result
+bounded_delete_argv = _guest_scripts_part.bounded_delete_argv
+bounded_delete_result = _guest_scripts_part.bounded_delete_result
+bounded_list_argv = _guest_scripts_part.bounded_list_argv
+bounded_list_result = _guest_scripts_part.bounded_list_result
 
-timeout_s = float(sys.argv[1])
-command = sys.argv[2]
-shell_executable = sys.argv[3]
-token = sys.argv[4]
-head_cap = int(sys.argv[5])
-tail_cap = int(sys.argv[6])
-return_cap = int(sys.argv[7])
-spill_cap = int(sys.argv[8])
-spill_dir = os.path.join(os.getcwd(), ".disco", "spills")
-os.makedirs(spill_dir, mode=0o700, exist_ok=True)
-
-
-class Capture:
-    def __init__(self, kind):
-        self.kind = kind
-        self.total = 0
-        self.small = bytearray()
-        self.head = bytearray()
-        self.tail = bytearray()
-        self.relpath = os.path.join(".disco", "spills", token + "." + kind + ".log")
-        self.path = os.path.join(os.getcwd(), self.relpath)
-        self.spilled = 0
-        self.file = open(self.path, "wb")
-
-    def feed(self, chunk):
-        self.total += len(chunk)
-        if len(self.small) <= return_cap:
-            room = return_cap + 1 - len(self.small)
-            self.small.extend(chunk[:room])
-        if len(self.head) < head_cap:
-            self.head.extend(chunk[: head_cap - len(self.head)])
-        self.tail.extend(chunk)
-        if len(self.tail) > tail_cap:
-            del self.tail[:-tail_cap]
-        if self.spilled < spill_cap:
-            part = chunk[: spill_cap - self.spilled]
-            self.file.write(part)
-            self.spilled += len(part)
-
-    def finish(self):
-        self.file.close()
-        if self.total <= return_cap:
-            try:
-                os.unlink(self.path)
-            except OSError:
-                pass
-            return bytes(self.small[:self.total])
-        dropped = max(0, self.total - len(self.head) - len(self.tail))
-        marker = (
-            "\n[disco: output truncated at sandbox boundary; "
-            + str(self.total)
-            + " bytes total, "
-            + str(dropped)
-            + " omitted; bounded prefix saved at "
-            + self.relpath
-            + " (max "
-            + str(spill_cap)
-            + " bytes)]\n"
-        ).encode()
-        return bytes(self.head) + marker + bytes(self.tail)
-
-
-def drain(stream, capture):
-    while True:
-        chunk = stream.read(65536)
-        if not chunk:
-            return
-        capture.feed(chunk)
-
-
-out = Capture("stdout")
-err = Capture("stderr")
-proc = subprocess.Popen(
-    command,
-    shell=True,
-    # H342: the sandbox image deliberately provisions Bash as the agent user's
-    # shell and container command.  Leaving ``shell=True`` ambient selected
-    # Debian's dash via /bin/sh, so one-shot shell/DoD commands used a different
-    # language than persistent shell sessions.  Pin the shared command contract.
-    executable=shell_executable,
-    stdin=subprocess.DEVNULL,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    start_new_session=True,
-)
-
-
-def forward_termination(signum, _frame):
-    # The process-backend wrapper can be cancelled while this helper is waiting.
-    # Forward its TERM/INT to the command's separate process group so neither the
-    # shell nor its descendants outlive the sandbox task.
-    try:
-        os.killpg(proc.pid, signum)
-    except OSError:
-        pass
-
-
-signal.signal(signal.SIGTERM, forward_termination)
-signal.signal(signal.SIGINT, forward_termination)
-t_out = threading.Thread(target=drain, args=(proc.stdout, out), daemon=True)
-t_err = threading.Thread(target=drain, args=(proc.stderr, err), daemon=True)
-t_out.start()
-t_err.start()
-timed_out = False
-try:
-    rc = proc.wait(timeout=timeout_s)
-except subprocess.TimeoutExpired:
-    timed_out = True
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except OSError:
-        pass
-    try:
-        rc = proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        proc.wait()
-        rc = 137
-t_out.join(timeout=5)
-t_err.join(timeout=5)
-out_bytes = out.finish()
-err_bytes = err.finish()
-try:
-    os.rmdir(spill_dir)
-    os.rmdir(os.path.dirname(spill_dir))
-except OSError:
-    pass
-sys.stdout.buffer.write(out_bytes)
-sys.stderr.buffer.write(err_bytes)
-raise SystemExit(124 if timed_out else rc)
-"""
-
-
-def bounded_exec_argv(command: str, timeout_s: int, *, python: str = "python3") -> list[str]:
-    """Return an argv whose stdout/stderr crossing the runtime API is bounded."""
-    return [
-        python,
-        "-c",
-        _BOUNDED_EXEC_HELPER,
-        str(timeout_s),
-        command,
-        "/bin/bash",
-        secrets.token_hex(8),
-        str(EXEC_CAPTURE_HEAD_BYTES),
-        str(EXEC_CAPTURE_TAIL_BYTES),
-        str(EXEC_CAPTURE_RETURN_BYTES),
-        str(EXEC_CAPTURE_SPILL_BYTES),
-    ]
-
-
-_BOUNDED_READ_HELPER = r"""
-import errno
-import os
-import stat
-import sys
-
-root, relpath, cap_raw = sys.argv[1:4]
-cap = int(cap_raw)
-parts = [part for part in relpath.split("/") if part not in ("", ".")]
-
-
-def fail(kind, detail, code):
-    sys.stderr.write("DISCO_READ_" + kind + ":" + detail[:512])
-    raise SystemExit(code)
-
-
-if not parts:
-    fail("DENIED", "invalid relative path", 45)
-
-dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-opened = []
-try:
-    current = os.open(root, dir_flags)
-    opened.append(current)
-    for part in parts[:-1]:
-        if part == "..":
-            if len(opened) == 1:
-                fail("DENIED", "path escapes workspace", 45)
-            os.close(opened.pop())
-            current = opened[-1]
-            continue
-        current = os.open(part, dir_flags, dir_fd=current)
-        opened.append(current)
-    if parts[-1] == "..":
-        fail("DENIED", "directory paths are not readable files", 45)
-    fd = os.open(parts[-1], file_flags, dir_fd=current)
-    opened.append(fd)
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode):
-        fail("DENIED", "only regular, non-symlink files may be read", 45)
-    if info.st_size > cap:
-        fail("TOO_LARGE", str(info.st_size), 46)
-    remaining = cap + 1
-    chunks = []
-    while remaining:
-        chunk = os.read(fd, min(1024 * 1024, remaining))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    data = b"".join(chunks)
-    if len(data) > cap:
-        fail("TOO_LARGE", "file grew while being read", 46)
-    sys.stdout.buffer.write(data)
-except FileNotFoundError as exc:
-    fail("MISSING", str(exc), 44)
-except OSError as exc:
-    if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
-        fail("DENIED", str(exc), 45)
-    fail("ERROR", str(exc), 47)
-finally:
-    for descriptor in reversed(opened):
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-"""
-
-
-def bounded_read_argv(workspace: str, relpath: str, *, python: str = "python3") -> list[str]:
-    """Open and read a workspace file through no-follow directory descriptors."""
-    return [python, "-c", _BOUNDED_READ_HELPER, workspace, relpath, str(MAX_SANDBOX_READ_BYTES)]
-
-
-def bounded_read_result(path: str, rc: int, out: bytes, err: bytes) -> bytes:
-    """Map the guest helper's bounded result to the sandbox read contract."""
-    detail = err.decode("utf-8", "replace")
-    if rc == 0:
-        return out
-    if detail.startswith("DISCO_READ_MISSING:"):
-        raise FileNotFoundError(path)
-    if detail.startswith("DISCO_READ_DENIED:"):
-        raise SandboxPermissionError(
-            f"read_file {path!r}: only regular, non-symlink workspace files may be read"
-        )
-    if detail.startswith("DISCO_READ_TOO_LARGE:"):
-        raise OSError(
-            errno.EFBIG,
-            f"read_file {path!r} exceeds the {MAX_SANDBOX_READ_BYTES}-byte transfer cap",
-        )
-    raise OSError(f"read_file {path!r} failed safely: {detail or f'exit {rc}'}")
-
-
-_BOUNDED_DELETE_HELPER = r"""
-import errno
-import os
-import stat
-import sys
-
-root, relpath = sys.argv[1:3]
-parts = [part for part in relpath.split("/") if part not in ("", ".")]
-
-
-def fail(kind, detail, code):
-    sys.stderr.write("DISCO_DELETE_" + kind + ":" + detail[:512])
-    raise SystemExit(code)
-
-
-if not parts or any(part == ".." for part in parts):
-    fail("DENIED", "invalid relative path", 45)
-
-dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
-opened = []
-try:
-    current = os.open(root, dir_flags)
-    opened.append(current)
-    for part in parts[:-1]:
-        current = os.open(part, dir_flags, dir_fd=current)
-        opened.append(current)
-    info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
-    if not stat.S_ISREG(info.st_mode):
-        fail("DENIED", "only regular, non-symlink files may be deleted", 45)
-    os.unlink(parts[-1], dir_fd=current)
-except FileNotFoundError as exc:
-    fail("MISSING", str(exc), 44)
-except OSError as exc:
-    if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
-        fail("DENIED", str(exc), 45)
-    fail("ERROR", str(exc), 47)
-finally:
-    for descriptor in reversed(opened):
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-"""
-
-
-def bounded_delete_argv(workspace: str, relpath: str, *, python: str = "python3") -> list[str]:
-    """Unlink a regular workspace entry through no-follow directory descriptors."""
-    return [python, "-c", _BOUNDED_DELETE_HELPER, workspace, relpath]
-
-
-def bounded_delete_result(path: str, rc: int, err: bytes) -> None:
-    detail = err.decode("utf-8", "replace")
-    if rc == 0:
-        return
-    if detail.startswith("DISCO_DELETE_MISSING:"):
-        raise FileNotFoundError(path)
-    if detail.startswith("DISCO_DELETE_DENIED:"):
-        raise SandboxPermissionError(
-            f"delete_file {path!r}: only regular, non-symlink workspace files may be deleted"
-        )
-    raise OSError(f"delete_file {path!r} failed safely: {detail or f'exit {rc}'}")
-
-
-_BOUNDED_LIST_HELPER = r"""
-import json
-import os
-import sys
-
-target = sys.argv[1]
-limit = int(sys.argv[2])
-entries_out = []
-try:
-    with os.scandir(target) as entries:
-        for entry in entries:
-            if entry.is_symlink():
-                kind = "other"
-            elif entry.is_file(follow_symlinks=False):
-                kind = "file"
-            elif entry.is_dir(follow_symlinks=False):
-                kind = "directory"
-            else:
-                kind = "other"
-            entries_out.append((entry.name, kind))
-            if len(entries_out) > limit:
-                break
-    payload = {
-        "entries": sorted(entries_out[:limit]),
-        "truncated": len(entries_out) > limit,
-    }
-    sys.stdout.write(json.dumps(payload, ensure_ascii=True, separators=(",", ":")))
-except OSError as exc:
-    errno_value = exc.errno if isinstance(exc.errno, int) else "unknown"
-    sys.stderr.write(f"DISCO_LIST_ERROR:{type(exc).__name__}:{errno_value}")
-    raise SystemExit(48)
-"""
-
-
-def bounded_list_argv(path: str, limit: int, *, python: str = "python3") -> list[str]:
-    """Inspect at most ``limit`` entries in the guest without materializing the directory."""
-
-    if limit <= 0 or limit > MAX_SANDBOX_LIST_ENTRIES:
-        raise ValueError(f"list limit must be between 1 and {MAX_SANDBOX_LIST_ENTRIES}")
-    return [python, "-c", _BOUNDED_LIST_HELPER, path, str(limit)]
-
-
-def bounded_list_result(
-    path: str,
-    rc: int,
-    out: bytes,
-    err: bytes,
-) -> tuple[list[tuple[str, str]], bool]:
-    if rc != 0:
-        detail = err.decode("utf-8", "replace")
-        fields = detail.split(":")
-        if (
-            len(fields) == 3
-            and fields[0] == "DISCO_LIST_ERROR"
-            and fields[1].isidentifier()
-            and fields[2].isdigit()
-        ):
-            raise OSError(
-                int(fields[2]),
-                f"list_dir_bounded {path!r} failed safely: {fields[1]}",
-            )
-        raise OSError(f"list_dir_bounded {path!r} failed safely: {detail or f'exit {rc}'}")
-    try:
-        payload = json.loads(out.decode("utf-8", "strict"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise OSError(f"list_dir_bounded {path!r} returned malformed evidence") from exc
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != {"entries", "truncated"}
-        or not isinstance(payload["entries"], list)
-        or not all(
-            isinstance(entry, list)
-            and len(entry) == 2
-            and isinstance(entry[0], str)
-            and entry[1] in {"file", "directory", "other"}
-            for entry in payload["entries"]
-        )
-        or not isinstance(payload["truncated"], bool)
-    ):
-        raise OSError(f"list_dir_bounded {path!r} returned invalid evidence")
-    return [tuple(entry) for entry in payload["entries"]], payload["truncated"]
 
 
 # Default upper bound on a docker-py / podman-py `reload()` call (Dispo #25 wedge-guard).
@@ -713,224 +356,19 @@ def proxy_run_argv(
     return argv
 
 
-def collect_host_deny_ips(
-    configured: list[str],
-    endpoint_host: str,
-    *,
-    include_local_interfaces: bool,
-    additional_host_ips: frozenset[str] = frozenset(),
-) -> frozenset[str]:
-    """Resolve host-owned addresses before a sandbox network is created.
-
-    The daemon endpoint is always load-bearing: failure to identify it aborts
-    setup. For a local daemon, hostname and outbound-interface discovery add the
-    host's other visible addresses. Explicit entries cover additional interfaces
-    on remote multi-homed hosts.
-    """
-
-    result: set[str] = set()
-    for raw in [*configured, *additional_host_ips]:
-        try:
-            result.add(str(ipaddress.ip_address(raw.strip())))
-        except ValueError as exc:
-            raise SandboxError(f"invalid host_ip_blocklist address {raw!r}") from exc
-
-    def _resolve(host: str, *, required: bool) -> None:
-        clean = host.strip().strip("[]")
-        if not clean:
-            if required:
-                raise SandboxError("sandbox daemon host address is empty")
-            return
-        try:
-            result.add(str(ipaddress.ip_address(clean)))
-            return
-        except ValueError:
-            pass
-        try:
-            infos = socket.getaddrinfo(clean, 0, type=socket.SOCK_STREAM)
-        except OSError as exc:
-            if required:
-                raise SandboxError(
-                    f"cannot resolve sandbox daemon host {clean!r} for egress denial"
-                ) from exc
-            return
-        for _family, _kind, _proto, _canon, sockaddr in infos:
-            result.add(str(ipaddress.ip_address(sockaddr[0])))
-
-    _resolve(endpoint_host, required=True)
-    if include_local_interfaces:
-        result.update(discover_local_host_ips())
-    return frozenset(result)
-
-
-def discover_local_host_ips() -> frozenset[str]:
-    """Inventory every address on the local sandbox-daemon host.
-
-    Resolving the hostname and probing the default route each reveal only a
-    subset on a multi-homed machine. The deny policy must also include secondary
-    public, VPN, and tailnet interfaces, so an unavailable/empty inventory fails
-    closed instead of silently omitting a host-owned global address.
-    """
-    try:
-        interfaces = psutil.net_if_addrs()
-    except Exception as exc:  # noqa: BLE001 — policy construction must fail closed
-        raise SandboxError("could not inventory local sandbox host interfaces") from exc
-    addresses: set[str] = set()
-    for entries in interfaces.values():
-        for entry in entries:
-            if entry.family not in {socket.AF_INET, socket.AF_INET6}:
-                continue
-            raw = str(entry.address).split("%", 1)[0]
-            try:
-                addresses.add(str(ipaddress.ip_address(raw)))
-            except ValueError as exc:
-                raise SandboxError(
-                    f"local sandbox host returned invalid interface address {entry.address!r}"
-                ) from exc
-    if not addresses:
-        raise SandboxError("local sandbox host interface inventory was empty")
-    return frozenset(addresses)
-
-
-def _ssh_endpoint_argv(endpoint: str, *, connect_timeout: int = 8) -> list[str]:
-    parsed = urllib.parse.urlsplit(endpoint)
-    if parsed.scheme != "ssh" or not parsed.hostname:
-        raise SandboxError(f"not an SSH sandbox endpoint: {endpoint!r}")
-    argv = [
-        "ssh",
-        "-o",
-        f"ConnectTimeout={connect_timeout}",
-        "-o",
-        "BatchMode=yes",
-    ]
-    if parsed.username:
-        argv.extend(["-l", urllib.parse.unquote(parsed.username)])
-    if parsed.port:
-        argv.extend(["-p", str(parsed.port)])
-    argv.extend(["--", parsed.hostname])
-    return argv
-
-
-def discover_remote_host_ips(endpoint: str) -> frozenset[str]:
-    """Inventory every interface address on a trusted remote daemon host.
-
-    The policy cannot claim to deny host-owned public addresses based only on
-    the SSH endpoint (often a tailnet address). Inventory is refreshed for every
-    sandbox so a newly-added public interface cannot hide behind a stale cache.
-    If inventory cannot be obtained, sandbox creation fails closed instead of
-    starting a public-egress surface.
-    """
-    argv = [*_ssh_endpoint_argv(endpoint), "ip", "-j", "address", "show"]
-    try:
-        proc = subprocess.run(  # noqa: S603 — fixed argv, trusted configured host
-            argv,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=12,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SandboxError(
-            f"could not inventory remote sandbox host interfaces at {endpoint!r}"
-        ) from exc
-    if proc.returncode != 0:
-        detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
-        raise SandboxError(
-            "remote sandbox host interface inventory failed: "
-            + (detail[-1] if detail else f"ssh exited {proc.returncode}")
-        )
-    try:
-        payload = json.loads(proc.stdout)
-        addresses = {
-            str(ipaddress.ip_address(info["local"]))
-            for interface in payload
-            for info in interface.get("addr_info", [])
-            if info.get("local")
-        }
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise SandboxError("remote sandbox host returned invalid interface inventory") from exc
-    if not addresses:
-        raise SandboxError("remote sandbox host interface inventory was empty")
-    return frozenset(addresses)
-
-
-class SshLoopbackTunnelManager:
-    """Expose remote daemon-loopback mappings only on local loopback."""
-
-    def __init__(self, endpoint: str) -> None:
-        self._endpoint = endpoint
-        self._lock = threading.Lock()
-        self._forwards: dict[int, tuple[int, subprocess.Popen[bytes]]] = {}
-
-    @staticmethod
-    def _available_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            return int(sock.getsockname()[1])
-
-    def forward(self, remote_port: int) -> tuple[str, int]:
-        with self._lock:
-            existing = self._forwards.get(remote_port)
-            if existing is not None and existing[1].poll() is None:
-                return "127.0.0.1", existing[0]
-            for _attempt in range(3):
-                local_port = self._available_port()
-                # SSH options must precede the destination. `_ssh_endpoint_argv`
-                # ends in `-- host`, so move the forwarding options before it.
-                base = _ssh_endpoint_argv(self._endpoint)
-                destination = base[-2:]
-                argv = [
-                    *base[:-2],
-                    "-N",
-                    "-T",
-                    "-o",
-                    "ExitOnForwardFailure=yes",
-                    "-o",
-                    "ServerAliveInterval=15",
-                    "-o",
-                    "ServerAliveCountMax=2",
-                    "-L",
-                    f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
-                    *destination,
-                ]
-                proc = subprocess.Popen(  # noqa: S603 — fixed argv, configured SSH endpoint
-                    argv,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                deadline = time.monotonic() + 5
-                while time.monotonic() < deadline:
-                    if proc.poll() is not None:
-                        break
-                    try:
-                        with socket.create_connection(("127.0.0.1", local_port), timeout=0.1):
-                            self._forwards[remote_port] = (local_port, proc)
-                            return "127.0.0.1", local_port
-                    except OSError:
-                        time.sleep(0.05)
-                with contextlib.suppress(Exception):
-                    proc.terminate()
-                    proc.wait(timeout=1)
-            raise SandboxError(
-                f"could not establish local SSH forwarding for remote sandbox port {remote_port}"
-            )
-
-    def close(self) -> None:
-        with self._lock:
-            forwards = list(self._forwards.values())
-            self._forwards.clear()
-        for _port, proc in forwards:
-            if proc.poll() is not None:
-                continue
-            with contextlib.suppress(Exception):
-                proc.terminate()
-                proc.wait(timeout=2)
-            if proc.poll() is None:
-                with contextlib.suppress(Exception):
-                    proc.kill()
-                    proc.wait(timeout=1)
-
+# Host-address discovery (`collect_host_deny_ips`, `discover_local_host_ips`,
+# `discover_remote_host_ips`) and `SshLoopbackTunnelManager` live in
+# `_container_parts.host_discovery` (moved to shed module-size budget);
+# re-imported here unchanged so every existing import path keeps resolving.
+# `subprocess` stays imported above (even though nothing in THIS module calls
+# it directly anymore) because a test patches `_container.subprocess.Popen` —
+# mutating the shared stdlib module object, which every importer (including
+# host_discovery's own `import subprocess`) observes identically regardless
+# of which file's code runs.
+collect_host_deny_ips = _host_discovery_part.collect_host_deny_ips
+discover_local_host_ips = _host_discovery_part.discover_local_host_ips
+discover_remote_host_ips = _host_discovery_part.discover_remote_host_ips
+SshLoopbackTunnelManager = _host_discovery_part.SshLoopbackTunnelManager
 
 def proxy_readiness_argv(port: int = EGRESS_PROXY_PORT) -> list[str]:
     """Bounded sidecar probe; setup fails if the policy process did not bind."""
@@ -1044,140 +482,32 @@ class ContainerInstance:
         return self._host_service_relay_url
 
     def _safe_reload(self, obj: Any = None) -> bool:
-        """Bounded wrapper around `reload()` (docker-py / podman-py) on `obj`, which
-        defaults to `self._container`. [FIX6] passing the egress SIDECAR lets
-        `_resolve_mapping` refresh the sidecar's published-port bindings under the
-        SAME wedge-guard (the filtered-box preview is published on the sidecar).
-
-        A hung or failing client must NEVER wedge the event loop. The original
-        VM 201/202 incident that motivated this guard: a docker daemon stall
-        caused the agent loop to block indefinitely inside `reload()`; the
-        whole conversation hung waiting for an HTTP call that never returned.
-
-        Mechanism: run the blocking call in a daemon thread, then wait on a
-        `threading.Event` with `_reload_timeout_s`. The thread is `daemon=True`
-        so even if it never returns, it cannot block process exit (the main
-        thread bails out cleanly, the test fake's blocker is released by the
-        test's `finally:` clause). Returning status: True if the reload
-        succeeded AND the container reports 'running'; False on either a
-        non-running state or a raised error.
-
-        On ANY of:
-          - the daemon thread didn't finish in `_reload_timeout_s` (hung client)
-          - the daemon thread raised (dead daemon, connection refused, etc.)
-        we raise a typed `SandboxUnavailableError`. The caller handles it
-        uniformly — `_classify_failure` types the box as dead (session
-        re-creates), `_resolve_mapping` returns None (no URL). The loop is
-        NEVER blocked.
-
-        Cost on a HEALTHY client: one thread spawn + one Event wait per call.
-        A healthy reload is sub-ms, the guard's overhead is on the same order
-        — measured: 1000 healthy reloads complete in <100ms on any CI runner
-        (no measurable added latency).
-        """
-        target = self._container if obj is None else obj
-        done = threading.Event()
-        # Result slot: written by the worker thread, read by the main thread
-        # AFTER `done.wait()` returns. A small dict keeps the assignment atomic
-        # under the GIL (no lock needed for the simple `setattr` we do here).
-        result: dict[str, Any] = {"exc": None, "status": "unknown"}
-
-        def _runner() -> None:
-            try:
-                target.reload()
-                result["status"] = getattr(target, "status", "unknown")
-            except Exception as exc:  # noqa: BLE001 — surface as typed infra error
-                result["exc"] = exc
-            finally:
-                done.set()
-
-        thread = threading.Thread(target=_runner, daemon=True, name="disco-sbx-reload")
-        thread.start()
-        if not done.wait(timeout=self._reload_timeout_s):
-            # Hung: the daemon thread is still running (we can't safely
-            # interrupt a blocking C call in docker-py / podman-py), but
-            # daemon=True means it can't block process exit, and we return
-            # control to the event loop with a typed error. The caller
-            # treats it as "box is dead / client is wedged" — uniformly.
-            raise SandboxUnavailableError(
-                f"sandbox client hung on reload() (>{self._reload_timeout_s}s); "
-                f"the container state is unverifiable"
-            )
-        if result["exc"] is not None:
-            raise SandboxUnavailableError(f"sandbox client failed on reload(): {result['exc']}")
-        return result["status"] == "running"
+        """Bounded wrapper around `reload()`; NEVER wedges the event loop; see
+        `_container_parts.failure_classification` for the full contract
+        (the VM 201/202 incident this guards against)."""
+        return _failure_classification_part.safe_reload(self, obj)
 
     def _classify_failure_sync(self, exc: Exception) -> SandboxError:
-        """Sync classify: a container op threw. If the box is no longer running (a SINGLE
-        `_safe_reload` miss), type it dead (SandboxUnavailableError → session RE-CREATES);
-        else a per-op SandboxError. Runs OFF the event loop (via to_thread from the async
-        wrapper). Does NOT log the death warning — `_classify_failure_async` logs it ONLY
-        after re-verify CONFIRMS death, so a TRANSIENT API 404 never emits a false death
-        diagnostic. (Dispo #25 wedge-guard bounds the probe.)"""
-        alive = False
-        try:
-            alive = self._safe_reload()
-        except SandboxUnavailableError:
-            alive = False
-        if not alive:
-            return SandboxUnavailableError(f"sandbox container died mid-session: {exc}")
-        return SandboxError(f"sandbox op failed in {self.id}: {exc}")
+        """Sync classify: dead box vs per-op failure; see
+        `_container_parts.failure_classification` for the full contract."""
+        return _failure_classification_part.classify_failure_sync(self, exc)
 
     async def _confidently_alive(self) -> bool:
-        """STRICT liveness re-verify for a death verdict: FRESH probes across a bounded
-        ~`_DEATH_REVERIFY_WINDOW_S` window (long enough to OUTLAST a transient docker/podman
-        404 burst, ~1s under concurrent load). Returns True ONLY when a probe reads
-        status=="running" (exactly what `_safe_reload` returns). ANY ambiguity — a raise,
-        non-running, or the box dying for the whole window — returns False ⇒ the death stands.
-        We override a death to "transient" only when we POSITIVELY CONFIRM running, because a
-        real death misclassified as transient surfaces as repeated op failures (worse than a
-        clean recreate). Off-loads each probe to a thread; sleeps are async so the event loop is
-        never blocked (a real death just takes up to the window to confirm + recreate)."""
-        deadline = time.monotonic() + _DEATH_REVERIFY_WINDOW_S
-        while time.monotonic() < deadline:
-            await asyncio.sleep(_DEATH_REVERIFY_BACKOFF_S)
-            try:
-                if await asyncio.to_thread(self._safe_reload):
-                    return True
-            except SandboxUnavailableError:
-                pass
-        return False
+        """STRICT liveness re-verify for a death verdict; see
+        `_container_parts.failure_classification` for the full contract."""
+        return await _failure_classification_part.confidently_alive(self)
 
     async def _classify_failure_async(self, exc: Exception) -> SandboxError:
-        """Classify a raw op throw, RE-VERIFYING before accepting a death verdict. A transient
-        docker/podman API 404 (a simultaneous burst under concurrent load) momentarily fails the
-        reload on a container that is actually ALIVE — declaring death there triggers a needless
-        sandbox RECREATE that derails the build (live-captured: 4 deaths, 0 OOM, all exit=0). So
-        when the sync classify says death, re-probe; ONLY downgrade to a retryable per-op error if
-        `_confidently_alive()` CONFIRMS running. Else the death stands + is logged with its
-        attributed reason. Used by BOTH op paths (`_guarded`, `exec_shell`)."""
-        base = await asyncio.to_thread(self._classify_failure_sync, exc)
-        if not isinstance(base, SandboxUnavailableError):
-            return base
-        if await self._confidently_alive():
-            _LOG.info(
-                "sandbox container %s: transient API error, container running on re-verify: %s",
-                self.id,
-                exc,
-            )
-            return SandboxError(f"transient sandbox API error in {self.id}: {exc}")
-        # Death CONFIRMED across the re-verify window — attribute it (OOMKilled/exit) in BOTH
-        # the WARNING log and the returned error so a recreate is no longer opaque.
-        reason = self._death_reason_from_attrs()
-        _LOG.warning("sandbox container %s died mid-session (%s): %s", self.id, reason, exc)
-        return SandboxUnavailableError(f"sandbox container died mid-session ({reason}): {exc}")
+        """Classify a raw op throw, RE-VERIFYING before accepting a death
+        verdict; see `_container_parts.failure_classification` for the full
+        contract."""
+        return await _failure_classification_part.classify_failure_async(self, exc)
 
     def _death_reason_from_attrs(self) -> str:
-        """Best-effort read of the container's State (refreshed by _safe_reload) for
-        OOMKilled / ExitCode / Error. NEVER raises (diagnostic on a failing path)."""
-        try:
-            state = (getattr(self._container, "attrs", {}) or {}).get("State", {}) or {}
-            return (
-                f"OOMKilled={state.get('OOMKilled')} exit={state.get('ExitCode')} "
-                f"reason={state.get('Error') or ''}".strip()
-            )
-        except Exception:  # noqa: BLE001 — diagnostic only
-            return "reason-unavailable"
+        """Best-effort read of the container's State for OOMKilled/ExitCode/
+        Error; see `_container_parts.failure_classification` for the full
+        contract."""
+        return _failure_classification_part.death_reason_from_attrs(self)
 
     async def _guarded(self, fn: Any) -> Any:
         """Run a blocking container op in a thread; let already-typed SandboxErrors
@@ -1266,97 +596,10 @@ class ContainerInstance:
         return target
 
     async def atomic_write(self, path: str, data: bytes) -> None:
-        """CD-TOOLS-3/4: atomically commit `data` to `path` IN THE GUEST — stage to a RANDOM tmp
-        sibling (so a model can't pre-create a predictable symlink there) then `mv -f` over the
-        target (atomic on the same filesystem; mv replaces a symlinked target rather than following
-        it). The .disco/ governed guard already ran in the tool, so the target is never governed."""
-        self._alive()
-
-        def _aw() -> None:
-            self._resolve_guest_path(path)  # enforce the jail (raises on escape / unverifiable)
-            # Replace the RESOLVED real target (follow a final symlink), matching ProcessSandbox's
-            # _resolve().resolve() + os.replace and the backend's own write_file — so atomic_write
-            # and write_file have identical symlink semantics (codex round-5 parity).
-            # _guest_realpath is jail-checked by _resolve_guest_path above; for a new
-            # file it is the lexical path.
-            real_target = self._guest_realpath(self._container_path(path))
-            if real_target is None:
-                raise SandboxError(f"atomic_write {path!r}: cannot resolve real target")
-            target = real_target
-            parent = posixpath.dirname(target) or self._ws
-            tmp_name = f".disco-tmp-{secrets.token_hex(8)}"
-            upload_name = f"disco-upload-{secrets.token_hex(8)}"
-            self._guest_run(["mkdir", "-p", "--", parent])
-            target_was_file = self._guest_run(["test", "-f", target])[0] == 0
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name=upload_name)
-                info.size = len(data)
-                info.uid = info.gid = self._workspace_uid
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(data))
-            # Rootless Podman's Docker-compatible put_archive applies a
-            # container-runtime SELinux label when extracting directly into a
-            # tmpfs volume. The guest can read that file but cannot rename or
-            # unlink it inside the volume, so every file_write strands a
-            # .disco-tmp-* and fails. Extract into the container's own /tmp,
-            # then have a guest process copy into the workspace. That copy gets
-            # the workspace-compatible label; the final mv remains the only
-            # commit and is still atomic on the workspace filesystem.
-            upload_path = posixpath.join("/tmp", upload_name)
-            tmp_path = posixpath.join(parent, tmp_name)
-            if not self._container.put_archive("/tmp", buf.getvalue()):
-                raise SandboxError(f"atomic_write {path!r} staging failed")
-            committed = False
-            try:
-                rc, _ = self._guest_run(["cp", "--", upload_path, tmp_path])
-                if rc != 0:
-                    raise SandboxError(f"atomic_write {path!r} guest staging failed (rc={rc})")
-                # -T (--no-target-directory): a TRUE rename/replace. Without it, if `target` is an
-                # existing directory or a symlink-to-directory, `mv` would move tmp INTO it
-                # (succeeding while leaving target unchanged + stranding tmp). -T makes mv replace
-                # the target as a non-directory, or fail (rc!=0) if it is a real dir.
-                rc, _ = self._guest_run(["mv", "-fT", "--", tmp_path, target])
-                if rc != 0:
-                    # Compatibility recovery for files materialized by older
-                    # rootless-Podman builds. Direct put_archive into the tmpfs
-                    # gave those files container_runtime_tmpfs_t; the guest may
-                    # read them but SELinux denies unlink/rename-over. The runtime
-                    # archive API can replace that existing regular file. Verify
-                    # the full digest before reporting success. New writes never
-                    # take this branch because write_file now uses this staged
-                    # path and receives a workspace-compatible label.
-                    if not target_was_file:
-                        raise SandboxError(f"atomic_write {path!r} rename failed (rc={rc})")
-                    fallback = io.BytesIO()
-                    with tarfile.open(fileobj=fallback, mode="w") as tar:
-                        info = tarfile.TarInfo(name=posixpath.basename(target))
-                        info.size = len(data)
-                        info.uid = info.gid = self._workspace_uid
-                        info.mtime = int(time.time())
-                        tar.addfile(info, io.BytesIO(data))
-                    if not self._container.put_archive(parent, fallback.getvalue()):
-                        raise SandboxError(f"atomic_write {path!r} legacy overwrite failed")
-                    digest_rc, digest_out = self._guest_run(["sha256sum", "--", target])
-                    expected_digest = hashlib.sha256(data).hexdigest()
-                    digest_parts = digest_out.decode("ascii", "replace").split(maxsplit=1)
-                    observed_digest = digest_parts[0] if digest_parts else ""
-                    if digest_rc != 0 or observed_digest != expected_digest:
-                        raise SandboxError(
-                            f"atomic_write {path!r} legacy overwrite verification failed"
-                        )
-                    self._guest_run(["rm", "-f", "--", tmp_path])
-                    _LOG.warning(
-                        "atomic_write recovered legacy SELinux-labeled target %s",
-                        target,
-                    )
-                committed = True
-            finally:
-                self._guest_run(["rm", "-f", "--", upload_path])
-                if not committed:
-                    self._guest_run(["rm", "-f", "--", tmp_path])
-
-        await self._guarded(_aw)
+        """CD-TOOLS-3/4: atomically commit `data` to `path` IN THE GUEST; see
+        `_container_parts.atomic_write` for the full contract (the staged,
+        SELinux-safe commit-via-rename)."""
+        await _atomic_write_part.atomic_write(self, path, data)
 
     async def resolve_relpath(self, path: str) -> str:
         """CD-TOOLS-4: the REAL (symlink-followed) guest path RELATIVE to the workspace root,
@@ -1521,98 +764,20 @@ class ContainerInstance:
         return self._resolve_mapping(port)
 
     def _resolve_mapping(self, port: int) -> tuple[str, int] | None:
-        """Internal helper to read the Docker/Podman port binding. Goes through
-        `_safe_reload` so a hung/raising client returns None (no URL) instead of
-        wedging the loop. (Dispo #25 wedge-guard.)
-
-        The published mapping lives on the SIDECAR, not the sandbox: every guest
-        is on an internal no-NAT net and publishes nothing directly. Sealed
-        sidecars publish only INTERNAL_PORTS; filtered/public sidecars publish the
-        full curated set. The sandbox fallback supports only older/minimal
-        ContainerInstance implementations without a sidecar."""
-        if port not in PUBLISHED_PORTS:
-            return None
-        source = self._container if self._egress_sidecar is None else self._egress_sidecar
-        try:
-            if not self._safe_reload(source):
-                return None
-            ports = source.attrs.get("NetworkSettings", {}).get("Ports") or {}
-            binding = ports.get(f"{port}/tcp")
-            if not isinstance(binding, list) or len(binding) != 1:
-                return None
-            only_binding = binding[0]
-            if not isinstance(only_binding, dict):
-                return None
-            host_ip = str(only_binding.get("HostIp") or "")
-            if host_ip != "127.0.0.1":
-                # Bindings are requested on IPv4 loopback. Accepting IPv6 here
-                # would require bracketed URL construction and would advertise a
-                # transport shape this stack does not create.
-                return None
-            host_port = int(only_binding["HostPort"])
-            if not 1 <= host_port <= 65_535:
-                return None
-            if self._loopback_tunnel is not None:
-                return self._loopback_tunnel.forward(host_port)
-            return host_ip, host_port
-        except Exception:  # noqa: BLE001 — no mapping yet / box gone / wedged client
-            return None
+        """Read the Docker/Podman port binding off the sidecar (or the
+        sandbox fallback); see `_container_parts.port_mapping` for the full
+        contract."""
+        return _port_mapping_part.resolve_mapping(self, port)
 
     def _teardown_egress_aux(self) -> None:
-        """Best-effort teardown of the policy/control sidecar + internal network.
-        Refs may be None only for partial construction or a backend without this
-        topology. The order MATTERS: the sidecar is on the internal net, so we
-        remove the sidecar first, then the net (else the net remove errors out on
-        an attached endpoint)."""
-        sidecar, network = self._egress_sidecar, self._egress_network
-        if sidecar is None and network is None:
-            return
-        if sidecar is not None:
-            try:
-                sidecar.stop(timeout=2)
-            except Exception:  # noqa: BLE001 — best-effort; force-remove next
-                pass
-            try:
-                _remove_container(sidecar)
-            except Exception:  # noqa: BLE001 — already gone is fine
-                pass
-        if network is not None:
-            try:
-                network.remove()
-            except Exception:  # noqa: BLE001 — still-attached (we removed the sidecar
-                # above, but the client may not see it yet) or already gone
-                pass
+        """Best-effort teardown of the policy/control sidecar + internal
+        network; see `_container_parts.lifecycle` for the full contract."""
+        _lifecycle_part.teardown_egress_aux(self)
 
     async def destroy(self) -> None:
-        """Stop + remove the container, then tear down the policy/control aux (if
-        any). Every container backend uses an ephemeral, quota-capped workspace
-        volume which is explicitly removed during teardown. The aux
-        teardown is shared across every container backend — see
-        `_teardown_egress_aux`."""
-        if self._destroyed:
-            return
-
-        def _teardown() -> None:
-            try:
-                self._container.stop(timeout=self._stop_timeout_s)
-            except Exception:  # noqa: BLE001 — best-effort stop; force-remove next
-                pass
-            if self._loopback_tunnel is not None:
-                self._loopback_tunnel.close()
-            # Successful force removal is the process-termination proof consumed
-            # by SandboxSession and Preview. Never turn a failed removal into a
-            # successful destroy or discard the retryable instance handle.
-            _remove_container(self._container)
-            try:
-                _remove_volume(self._workspace_volume)
-            except Exception:  # noqa: BLE001 — already gone is fine
-                pass
-
-        await asyncio.to_thread(_teardown)
-        self._destroyed = True
-        # Aux AFTER the sandbox: the sandbox is on the internal net; removing the
-        # net while the sandbox still references it would error out.
-        await asyncio.to_thread(self._teardown_egress_aux)
+        """Stop + remove the container, then tear down the policy/control aux
+        (if any); see `_container_parts.lifecycle` for the full contract."""
+        await _lifecycle_part.destroy(self)
 
 
 def _remove_container(container: Any, *, force: bool = True, volumes: bool = True) -> None:
@@ -1649,174 +814,10 @@ def _remove_volume(volume: Any, *, force: bool = True) -> None:
     volume.remove()
 
 
-_AUX_RECONCILE_GRACE_S = 300.0
-
-
-def _resource_created_epoch(resource: Any) -> float | None:
-    """Parse Docker/Podman network or volume creation time, failing closed."""
-
-    attrs = getattr(resource, "attrs", None) or {}
-    raw = attrs.get("CreatedAt") or attrs.get("Created") or attrs.get("created")
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        created = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
-    return created.timestamp()
-
-
-def _resource_labels(resource: Any) -> dict[str, str]:
-    attrs = getattr(resource, "attrs", None) or {}
-    labels = getattr(resource, "labels", None) or attrs.get("Labels") or attrs.get("labels")
-    return labels if isinstance(labels, dict) else {}
-
-
-def reconcile_orphan_aux_resources(
-    client: Any,
-    *,
-    workspace_volume_prefix: str,
-    now_s: float | None = None,
-) -> tuple[int, int]:
-    """Remove old detached sandbox networks/volumes left without a container.
-
-    Startup reconciliation previously considered only sandbox containers. If a
-    crash removed the container first, its labeled internal network and named
-    workspace volume became unreachable forever. This sweep is deliberately
-    conservative: a resource must have an exact current/legacy product prefix,
-    a recognized conversation label, a parseable age beyond the provisioning
-    grace, no attached endpoint/mount, and no matching sandbox or sidecar
-    container. Missing metadata or client errors retain the resource.
-    """
-
-    from .naming import (
-        EGR_NET_PREFIXES,
-        SBX_NAME_PREFIXES,
-        conv_id_from_labels,
-    )
-
-    now = time.time() if now_s is None else now_s
-    try:
-        all_containers = client.containers.list(all=True)
-        container_names = {
-            str(getattr(container, "name", "") or "").lstrip("/") for container in all_containers
-        }
-    except Exception as exc:  # noqa: BLE001 — fail closed; cleanup is maintenance
-        _LOG.warning(
-            "sandbox auxiliary reconciliation skipped: container inventory failed (%s)",
-            type(exc).__name__,
-        )
-        return 0, 0
-
-    def old_enough(resource: Any) -> bool:
-        created_s = _resource_created_epoch(resource)
-        return created_s is not None and now - created_s >= _AUX_RECONCILE_GRACE_S
-
-    def matching_container_exists(suffix: str) -> bool:
-        return any(
-            f"{prefix}{suffix}" in container_names
-            for prefix in (*SBX_NAME_PREFIXES, *EGR_NET_PREFIXES)
-        )
-
-    removed_networks = 0
-    try:
-        networks = client.networks.list()
-    except Exception as exc:  # noqa: BLE001 — fail closed; volumes remain independently safe
-        _LOG.warning(
-            "sandbox network reconciliation skipped: inventory failed (%s)",
-            type(exc).__name__,
-        )
-        networks = []
-    for network in networks:
-        name = str(getattr(network, "name", "") or "")
-        prefix = next((item for item in EGR_NET_PREFIXES if name.startswith(item)), None)
-        if prefix is None or not name.removeprefix(prefix):
-            continue
-        try:
-            reload_resource = getattr(network, "reload", None)
-            if callable(reload_resource):
-                reload_resource()
-        except Exception as exc:  # noqa: BLE001 — stale metadata is not removal authority
-            _LOG.warning(
-                "sandbox network reconciliation retained an unverifiable resource (%s)",
-                type(exc).__name__,
-            )
-            continue
-        attrs = getattr(network, "attrs", None) or {}
-        attached = attrs.get("Containers") or attrs.get("containers") or {}
-        suffix = name.removeprefix(prefix)
-        if (
-            not conv_id_from_labels(_resource_labels(network))
-            or bool(attached)
-            or matching_container_exists(suffix)
-            or not old_enough(network)
-        ):
-            continue
-        try:
-            network.remove()
-            removed_networks += 1
-        except Exception as exc:  # noqa: BLE001 — attached/gone resources remain safe
-            _LOG.warning(
-                "sandbox network reconciliation could not remove an orphan (%s)",
-                type(exc).__name__,
-            )
-
-    removed_volumes = 0
-    try:
-        volumes = client.volumes.list()
-    except Exception as exc:  # noqa: BLE001 — fail closed
-        _LOG.warning(
-            "sandbox volume reconciliation skipped: inventory failed (%s)",
-            type(exc).__name__,
-        )
-        volumes = []
-    volume_prefixes = tuple(dict.fromkeys((f"{workspace_volume_prefix}-", "pmx-ws-")))
-    for volume in volumes:
-        name = str(getattr(volume, "name", "") or getattr(volume, "id", "") or "")
-        prefix = next((item for item in volume_prefixes if name.startswith(item)), None)
-        if prefix is None or not name.removeprefix(prefix):
-            continue
-        try:
-            reload_resource = getattr(volume, "reload", None)
-            if callable(reload_resource):
-                reload_resource()
-        except Exception as exc:  # noqa: BLE001 — stale metadata is not removal authority
-            _LOG.warning(
-                "sandbox volume reconciliation retained an unverifiable resource (%s)",
-                type(exc).__name__,
-            )
-            continue
-        attrs = getattr(volume, "attrs", None) or {}
-        mount_count = attrs.get("MountCount")
-        suffix = name.removeprefix(prefix)
-        if (
-            not conv_id_from_labels(_resource_labels(volume))
-            or (mount_count is not None and mount_count != 0)
-            or matching_container_exists(suffix)
-            or not old_enough(volume)
-        ):
-            continue
-        try:
-            # Never force startup garbage collection. A runtime-visible user
-            # safely wins a race by making the non-forced removal fail.
-            volume.remove()
-            removed_volumes += 1
-        except Exception as exc:  # noqa: BLE001 — attached/gone resources remain safe
-            _LOG.warning(
-                "sandbox volume reconciliation could not remove an orphan (%s)",
-                type(exc).__name__,
-            )
-
-    if removed_networks or removed_volumes:
-        _LOG.info(
-            "sandbox auxiliary reconciliation removed networks=%d volumes=%d",
-            removed_networks,
-            removed_volumes,
-        )
-    return removed_networks, removed_volumes
-
+# `reconcile_orphan_aux_resources` (the dual-prefix orphan network/volume
+# sweep) lives in `_container_parts.aux_reconcile` — moved to shed both its
+# own logical-size and McCabe budget; re-imported here unchanged.
+reconcile_orphan_aux_resources = _aux_reconcile_part.reconcile_orphan_aux_resources
 
 def _create_named_volume(
     volumes: Any,
