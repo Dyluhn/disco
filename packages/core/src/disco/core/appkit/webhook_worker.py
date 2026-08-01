@@ -65,18 +65,10 @@ def emit_webhook_env_ts() -> str:
     )
 
 
-def emit_webhook_worker_ts(app: AppSpec) -> str:
-    app_binding, endpoints = _meta(app)
-    inbound = {
-        endpoint.endpoint_id: list(endpoint.event_types)
-        for endpoint in endpoints
-        if endpoint.direction == "inbound"
-    }
-    outbound = {
-        endpoint.endpoint_id: list(endpoint.event_types)
-        for endpoint in endpoints
-        if endpoint.direction == "outbound"
-    }
+def _webhook_worker_prelude(
+    app_binding: str, inbound: dict[str, list[str]], outbound: dict[str, list[str]]
+) -> str:
+    """Constants, the envelope type, and the tiny webhookJson response helper."""
     return f"""const WEBHOOK_APP_BINDING = {json.dumps(app_binding)};
 const WEBHOOK_INBOUND: Record<string, string[]> = {json.dumps(inbound, sort_keys=True)};
 const WEBHOOK_OUTBOUND: Record<string, string[]> = {json.dumps(outbound, sort_keys=True)};
@@ -90,95 +82,105 @@ function webhookJson(data: unknown, status = 200): Response {{
   return json(data, status, {{ "Cache-Control": "no-store" }});
 }}
 
-async function readWebhookBody(request: Request): Promise<Uint8Array | null> {{
+"""
+
+
+def _webhook_worker_body_reader() -> str:
+    """Bounded raw-body reader plus the timestamped-HMAC signature verifier."""
+    return """async function readWebhookBody(request: Request): Promise<Uint8Array | null> {
   if (request.body === null) return new Uint8Array();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  try {{
-    while (true) {{
-      const {{ done, value }} = await reader.read();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_WEBHOOK_BODY_BYTES) {{ await reader.cancel(); return null; }}
+      if (total > MAX_WEBHOOK_BODY_BYTES) { await reader.cancel(); return null; }
       chunks.push(value);
-    }}
-  }} catch {{
-    try {{ await reader.cancel(); }} catch {{ /* never log request data */ }}
+    }
+  } catch {
+    try { await reader.cancel(); } catch { /* never log request data */ }
     return null;
-  }}
+  }
   const body = new Uint8Array(total);
   let offset = 0;
-  for (const chunk of chunks) {{ body.set(chunk, offset); offset += chunk.byteLength; }}
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
   return body;
-}}
+}
 
 function parseWebhookSignature(
   header: string | null,
-): {{ timestamp: number; mac: Uint8Array }} | null {{
+): { timestamp: number; mac: Uint8Array } | null {
   if (header === null || header.length > 256) return null;
-  const match = /^t=([1-9][0-9]{{0,11}}),v1=([0-9a-f]{{64}})$/.exec(header);
+  const match = /^t=([1-9][0-9]{0,11}),v1=([0-9a-f]{64})$/.exec(header);
   if (match === null) return null;
   const timestamp = Number(match[1]);
   if (!Number.isSafeInteger(timestamp)) return null;
   const mac = new Uint8Array(32);
-  for (let i = 0; i < mac.length; i += 1) {{
+  for (let i = 0; i < mac.length; i += 1) {
     mac[i] = Number.parseInt(match[2].slice(i * 2, i * 2 + 2), 16);
-  }}
-  return {{ timestamp, mac }};
-}}
+  }
+  return { timestamp, mac };
+}
 
 async function webhookSignatureValid(
   env: Env, endpointId: string, header: string | null, body: Uint8Array,
-): Promise<boolean> {{
+): Promise<boolean> {
   const secret = env.WEBHOOK_SIGNING_SECRET;
   if (typeof secret !== "string" || secret.length < 32 || secret.length > 512) return false;
   const parsed = parseWebhookSignature(header);
   if (parsed === null) return false;
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - parsed.timestamp) > WEBHOOK_SIGNATURE_TOLERANCE_SECONDS) return false;
-  const prefix = new TextEncoder().encode(`${{parsed.timestamp}}.${{endpointId}}.`);
+  const prefix = new TextEncoder().encode(`${parsed.timestamp}.${endpointId}.`);
   const signed = new Uint8Array(prefix.byteLength + body.byteLength);
   signed.set(prefix, 0); signed.set(body, prefix.byteLength);
   const key = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(secret), {{ name: "HMAC", hash: "SHA-256" }}, false, ["verify"],
+    "raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"],
   );
   return crypto.subtle.verify("HMAC", key, parsed.mac, signed);
-}}
+}
 
-function parseWebhookEnvelope(body: Uint8Array): WebhookEnvelope | null {{
+"""
+
+
+def _webhook_worker_envelope_and_apply() -> str:
+    """Envelope parsing, dedup lookup, and the atomic apply-effect transaction."""
+    return """function parseWebhookEnvelope(body: Uint8Array): WebhookEnvelope | null {
   let raw: unknown;
-  try {{
-    raw = JSON.parse(new TextDecoder("utf-8", {{ fatal: true }}).decode(body));
-  }} catch {{ return null; }}
+  try {
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch { return null; }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   if (Object.keys(value).sort().join(",") !== "data,id,type") return null;
   if (typeof value.id !== "string" || !WEBHOOK_EVENT_ID_RE.test(value.id)) return null;
   if (typeof value.type !== "string" || value.type.length > 64) return null;
-  return {{ id: value.id, type: value.type, data: value.data }};
-}}
+  return { id: value.id, type: value.type, data: value.data };
+}
 
 async function webhookAlreadyRecorded(
   db: D1DatabaseSession, endpointId: string, eventId: string,
-): Promise<boolean> {{
+): Promise<boolean> {
   const row = await db.prepare(
     "SELECT event_id FROM webhook_events WHERE endpoint_id = ? AND event_id = ? LIMIT 1",
   ).bind(endpointId, eventId).first();
   return row !== null;
-}}
+}
 
 async function applyWebhookEvent(
   env: Env, endpointId: string, event: WebhookEnvelope, body: Uint8Array,
-): Promise<Response> {{
+): Promise<Response> {
   const allowed = WEBHOOK_INBOUND[endpointId];
-  if (!allowed || !allowed.includes(event.type)) {{
-    return webhookJson({{ error: "event type refused" }}, 400);
-  }}
+  if (!allowed || !allowed.includes(event.type)) {
+    return webhookJson({ error: "event type refused" }, 400);
+  }
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", body));
   const bodySha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
   const db = env.DB.withSession("first-primary");
-  try {{
+  try {
     await db.batch([
       db.prepare("INSERT INTO webhook_events (endpoint_id, event_id, event_type) VALUES (?, ?, ?)")
         .bind(endpointId, event.id, event.type),
@@ -187,63 +189,89 @@ async function applyWebhookEvent(
          VALUES (?, ?, ?, ?)`,
       ).bind(endpointId, event.id, event.type, bodySha256),
     ]);
-    return webhookJson({{ ok: true }});
-  }} catch {{
-    if (await webhookAlreadyRecorded(db, endpointId, event.id)) return webhookJson({{ ok: true }});
-    return webhookJson({{ error: "webhook effect failed" }}, 500);
-  }}
-}}
+    return webhookJson({ ok: true });
+  } catch {
+    if (await webhookAlreadyRecorded(db, endpointId, event.id)) return webhookJson({ ok: true });
+    return webhookJson({ error: "webhook effect failed" }, 500);
+  }
+}
 
-async function webhookInbound(request: Request, env: Env, endpointId: string): Promise<Response> {{
-  if (env.WEBHOOK_RUNTIME_READY !== "1") {{
-    return webhookJson({{ error: "delivery unavailable" }}, 503);
-  }}
-  if (!(endpointId in WEBHOOK_INBOUND)) return webhookJson({{ error: "not found" }}, 404);
+"""
+
+
+def _webhook_worker_routes() -> str:
+    """The inbound (HMAC-verified) and outbound (session-authenticated) handlers."""
+    return """\
+async function webhookInbound(request: Request, env: Env, endpointId: string): Promise<Response> {
+  if (env.WEBHOOK_RUNTIME_READY !== "1") {
+    return webhookJson({ error: "delivery unavailable" }, 503);
+  }
+  if (!(endpointId in WEBHOOK_INBOUND)) return webhookJson({ error: "not found" }, 404);
   const body = await readWebhookBody(request);
-  if (body === null) return webhookJson({{ error: "payload too large" }}, 413);
+  if (body === null) return webhookJson({ error: "payload too large" }, 413);
   if (!(await webhookSignatureValid(
     env, endpointId, request.headers.get("Disco-Webhook-Signature"), body,
-  ))) {{
-    console.warn("webhook rejected: signature invalid", {{ endpoint: endpointId }});
-    return webhookJson({{ error: "invalid signature" }}, 401);
-  }}
+  ))) {
+    console.warn("webhook rejected: signature invalid", { endpoint: endpointId });
+    return webhookJson({ error: "invalid signature" }, 401);
+  }
   const event = parseWebhookEnvelope(body);
-  if (event === null) return webhookJson({{ error: "invalid event" }}, 400);
+  if (event === null) return webhookJson({ error: "invalid event" }, 400);
   return applyWebhookEvent(env, endpointId, event, body);
-}}
+}
 
 async function webhookOutbound(
   request: Request, env: Env, endpointId: string, body: unknown,
-): Promise<Response> {{
-  if (env.WEBHOOK_RUNTIME_READY !== "1") {{
-    return webhookJson({{ error: "delivery unavailable" }}, 503);
-  }}
+): Promise<Response> {
+  if (env.WEBHOOK_RUNTIME_READY !== "1") {
+    return webhookJson({ error: "delivery unavailable" }, 503);
+  }
   const session = await resolveSession(request, env);
-  if (session === null) return webhookJson({{ error: "unauthorized" }}, 401);
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {{
-    return webhookJson({{ error: "invalid delivery" }}, 400);
-  }}
+  if (session === null) return webhookJson({ error: "unauthorized" }, 401);
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return webhookJson({ error: "invalid delivery" }, 400);
+  }
   const value = body as Record<string, unknown>;
-  if (Object.keys(value).sort().join(",") !== "data,event_type") {{
-    return webhookJson({{ error: "invalid delivery" }}, 400);
-  }}
+  if (Object.keys(value).sort().join(",") !== "data,event_type") {
+    return webhookJson({ error: "invalid delivery" }, 400);
+  }
   const allowed = WEBHOOK_OUTBOUND[endpointId];
-  if (!allowed || typeof value.event_type !== "string" || !allowed.includes(value.event_type)) {{
-    return webhookJson({{ error: "event type refused" }}, 400);
-  }}
-  try {{
-    const result = await svc(env, "webhook.emit", {{
+  if (!allowed || typeof value.event_type !== "string" || !allowed.includes(value.event_type)) {
+    return webhookJson({ error: "event type refused" }, 400);
+  }
+  try {
+    const result = await svc(env, "webhook.emit", {
       app_binding: WEBHOOK_APP_BINDING,
       endpoint_id: endpointId,
       event_type: value.event_type,
       data: value.data,
-    }});
+    });
     return webhookJson(result);
-  }} catch {{
-    return webhookJson({{ error: "delivery unavailable" }}, 502);
-  }}
-}}
+  } catch {
+    return webhookJson({ error: "delivery unavailable" }, 502);
+  }
+}
 """
+
+
+def emit_webhook_worker_ts(app: AppSpec) -> str:
+    app_binding, endpoints = _meta(app)
+    inbound = {
+        endpoint.endpoint_id: list(endpoint.event_types)
+        for endpoint in endpoints
+        if endpoint.direction == "inbound"
+    }
+    outbound = {
+        endpoint.endpoint_id: list(endpoint.event_types)
+        for endpoint in endpoints
+        if endpoint.direction == "outbound"
+    }
+    return (
+        _webhook_worker_prelude(app_binding, inbound, outbound)
+        + _webhook_worker_body_reader()
+        + _webhook_worker_envelope_and_apply()
+        + _webhook_worker_routes()
+    )
 
 
 def emit_webhook_inbound_route_ts(app: AppSpec) -> str:

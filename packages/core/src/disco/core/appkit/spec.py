@@ -27,10 +27,8 @@ ONLY pydantic + the stdlib. No agent-server / tools / runtime imports.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import date
-from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlparse
 
@@ -42,6 +40,39 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from .spec_parts.io import _APPSPEC_NAME as _APPSPEC_NAME
+from .spec_parts.io import _DESIGNSPEC_NAME as _DESIGNSPEC_NAME
+from .spec_parts.io import _DISCO_DIR as _DISCO_DIR
+from .spec_parts.io import _MAX_SPEC_BYTES as _MAX_SPEC_BYTES
+
+# IO helpers live in `spec_parts/io.py` (kept out of this module to stay under the
+# `python_or_harness_module_logical_gt_700` budget) and are re-exported here at
+# their original names/paths — see the "IO helpers" section below for the full
+# story. `spec_parts.io` imports `AppSpec`/`DesignSpec` back from this module, but
+# only LOCALLY inside the functions that need them at call time (never at its own
+# module scope), so this top-level import is a normal one-way dependency, not a
+# cycle. Every name is imported `as` itself — the explicit-re-export convention —
+# so this module's own attribute (not just `spec_parts.io`'s) is what every
+# existing `from disco.core.appkit.spec import <name>` call site keeps resolving.
+from .spec_parts.io import APPSPEC_RELPATH as APPSPEC_RELPATH
+from .spec_parts.io import DESIGNSPEC_RELPATH as DESIGNSPEC_RELPATH
+from .spec_parts.io import MAX_DESIGNSPEC_BYTES as MAX_DESIGNSPEC_BYTES
+from .spec_parts.io import _load_json as _load_json
+from .spec_parts.io import _parse_spec_bytes as _parse_spec_bytes
+from .spec_parts.io import _save as _save
+from .spec_parts.io import _serialize as _serialize
+from .spec_parts.io import appspec_path as appspec_path
+from .spec_parts.io import designspec_path as designspec_path
+from .spec_parts.io import load_app_spec as load_app_spec
+from .spec_parts.io import load_app_spec_from_bytes as load_app_spec_from_bytes
+from .spec_parts.io import load_design_spec as load_design_spec
+from .spec_parts.io import load_design_spec_from_bytes as load_design_spec_from_bytes
+from .spec_parts.io import load_specs as load_specs
+from .spec_parts.io import save_app_spec as save_app_spec
+from .spec_parts.io import save_design_spec as save_design_spec
+from .spec_parts.io import serialize_app_spec as serialize_app_spec
+from .spec_parts.io import serialize_design_spec as serialize_design_spec
 
 # ---- shared config ------------------------------------------------------------
 
@@ -925,167 +956,10 @@ def _require_unique(ids: object, *, what: str) -> None:
 #
 # Pure JSON read/write under the workspace's `.disco/` dir. Schema-validated on
 # load. No new persistence API — `.disco/` rides the existing snapshot/rehydrate.
-
-_DISCO_DIR = ".disco"
-_APPSPEC_NAME = "appspec.json"
-_DESIGNSPEC_NAME = "designspec.json"
-
-# Workspace-RELATIVE POSIX paths to the two specs. The Epic E tools persist the
-# specs through the SANDBOX API (the workspace may be a container with no host
-# view), so they need the relative path, not a host `Path`. Single-source here so
-# the tool layer and `design_lint` never drift from the on-disk layout.
-APPSPEC_RELPATH = f"{_DISCO_DIR}/{_APPSPEC_NAME}"
-DESIGNSPEC_RELPATH = f"{_DISCO_DIR}/{_DESIGNSPEC_NAME}"
-
-# A spec is small structured JSON, never a data dump. Cap the on-disk file before
-# we read/parse it so a hostile/corrupt `.disco/*.json` can't blow up memory (a
-# JSON bomb): we stat first and refuse anything over this size.
-# Public so a pre-read size probe (e.g. design_lint's in-sandbox `wc -c` boundary
-# check) can bound against the SAME cap the loader enforces — single-source, no drift.
-MAX_DESIGNSPEC_BYTES = 256 * 1024  # 256 KiB
-_MAX_SPEC_BYTES = MAX_DESIGNSPEC_BYTES
-
-
-def appspec_path(workspace_root: str | Path) -> Path:
-    """Path to the AppSpec JSON under the workspace's `.disco/` dir."""
-    return Path(workspace_root) / _DISCO_DIR / _APPSPEC_NAME
-
-
-def designspec_path(workspace_root: str | Path) -> Path:
-    """Path to the DesignSpec JSON under the workspace's `.disco/` dir."""
-    return Path(workspace_root) / _DISCO_DIR / _DESIGNSPEC_NAME
-
-
-def _serialize[SpecT: BaseModel](model: BaseModel, *, expected: type[SpecT]) -> str:
-    # REVALIDATE before serializing: `frozen=True` + tuple fields block in-place mutation,
-    # but a non-construction path (`model_copy(update=...)`, `model_construct(...)`, or a
-    # direct `__dict__` edit) can build a model instance that SKIPPED the field +
-    # cross-field validators (e.g. a duplicate route). Re-running `model_validate` on the
-    # model's own JSON dump re-applies every validator, so what we emit is ALWAYS
-    # schema-valid regardless of how the in-memory model was constructed. A tampered spec
-    # raises ValidationError OUT here and is never persisted; we dump the VALIDATED form
-    # (not the unvalidated input).
-    # Validate against the schema the DESTINATION implies (`expected`), NOT `type(model)` —
-    # otherwise a wrong-typed instance (e.g. a DesignSpec handed to save_app_spec) would
-    # validate against its own schema and land at the wrong path.
-    validated = expected.model_validate(model.model_dump(mode="json"))
-    serialized = json.dumps(validated.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
-    # Symmetry with the loader's `_MAX_SPEC_BYTES` cap: refuse to EMIT a spec we could
-    # never READ back. A spec can be schema-valid yet serialize huge (e.g. many long
-    # string fields), which would then be rejected on load — a write/read asymmetry that
-    # strands an unreadable file on disk. Reject it here instead (UTF-8 byte length).
-    size = len(serialized.encode("utf-8"))
-    if size > _MAX_SPEC_BYTES:
-        raise ValueError(
-            f"serialized {expected.__name__} is too large ({size} bytes > "
-            f"{_MAX_SPEC_BYTES} byte cap); refusing to write an unreadable spec"
-        )
-    return serialized
-
-
-def serialize_app_spec(spec: AppSpec) -> str:
-    """Airtight-validated JSON text for an AppSpec (revalidated + size-capped).
-
-    The serialization half of `save_app_spec`, exposed so a caller that persists
-    through the SANDBOX (not a host `Path`) gets the SAME revalidate + write/read
-    byte-cap guarantee — single-source, no second copy of the airtight logic."""
-    return _serialize(spec, expected=AppSpec)
-
-
-def serialize_design_spec(spec: DesignSpec) -> str:
-    """Airtight-validated JSON text for a DesignSpec (revalidated + size-capped)."""
-    return _serialize(spec, expected=DesignSpec)
-
-
-def _save[SpecT: BaseModel](model: BaseModel, path: Path, *, expected: type[SpecT]) -> Path:
-    serialized = _serialize(model, expected=expected)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _ = path.write_text(serialized, encoding="utf-8")
-    return path
-
-
-def _load_json(path: Path, *, kind: str) -> dict[str, object]:
-    if not path.exists():
-        raise FileNotFoundError(f"no {kind} at {path}")
-    size = path.stat().st_size
-    if size > _MAX_SPEC_BYTES:
-        raise ValueError(
-            f"{kind} at {path} is too large ({size} bytes > {_MAX_SPEC_BYTES} byte cap); "
-            "refusing to parse"
-        )
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{kind} at {path} is not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError(f"{kind} at {path} must be a JSON object, got {type(data).__name__}")
-    return data
-
-
-def save_app_spec(workspace_root: str | Path, spec: AppSpec) -> Path:
-    """Write `spec` to the workspace's `.disco/appspec.json` (creating `.disco/`)."""
-    return _save(spec, appspec_path(workspace_root), expected=AppSpec)
-
-
-def save_design_spec(workspace_root: str | Path, spec: DesignSpec) -> Path:
-    """Write `spec` to the workspace's `.disco/designspec.json` (creating `.disco/`)."""
-    return _save(spec, designspec_path(workspace_root), expected=DesignSpec)
-
-
-def load_app_spec(workspace_root: str | Path) -> AppSpec:
-    """Read + schema-validate the AppSpec from the workspace's `.disco/`.
-
-    Raises FileNotFoundError if absent, ValueError on malformed JSON, and a pydantic
-    ValidationError if the JSON violates the schema."""
-    return AppSpec.model_validate(_load_json(appspec_path(workspace_root), kind="AppSpec"))
-
-
-def load_design_spec(workspace_root: str | Path) -> DesignSpec:
-    """Read + schema-validate the DesignSpec from the workspace's `.disco/`."""
-    return DesignSpec.model_validate(_load_json(designspec_path(workspace_root), kind="DesignSpec"))
-
-
-def _parse_spec_bytes(data: bytes | str, *, kind: str) -> dict[str, object]:
-    """Shared airtight parse for the from-bytes loaders: enforce the SAME
-    `_MAX_SPEC_BYTES` cap BEFORE json.loads (so a hostile blob held in hand can't
-    become a memory/time bomb), then require a JSON object."""
-    raw = data.encode("utf-8") if isinstance(data, str) else data
-    if len(raw) > _MAX_SPEC_BYTES:
-        raise ValueError(
-            f"{kind} is too large ({len(raw)} bytes > {_MAX_SPEC_BYTES} byte cap); "
-            "refusing to parse"
-        )
-    try:
-        parsed = json.loads(raw.decode("utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{kind} is not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{kind} must be a JSON object, got {type(parsed).__name__}")
-    return parsed
-
-
-def load_app_spec_from_bytes(data: bytes | str) -> AppSpec:
-    """Parse + schema-validate an AppSpec from raw bytes/str ALREADY in hand.
-
-    The airtight loader for callers holding the file's bytes rather than a host
-    path (the Epic E tools read `.disco/appspec.json` through the sandbox API).
-    Enforces the SAME `_MAX_SPEC_BYTES` cap as the on-disk loader BEFORE json.loads."""
-    return AppSpec.model_validate(_parse_spec_bytes(data, kind="AppSpec"))
-
-
-def load_design_spec_from_bytes(data: bytes | str) -> DesignSpec:
-    """Parse + schema-validate a DesignSpec from raw bytes/str ALREADY in hand.
-
-    The airtight loader for callers that hold the file's bytes rather than a
-    local filesystem path (e.g. the sandboxed `design_lint` walk, which reads
-    `.disco/designspec.json` through the sandbox API). Enforces the SAME
-    `_MAX_SPEC_BYTES` cap as the on-disk loader BEFORE `json.loads`, so a hostile
-    or corrupt spec can't become a memory/time bomb. Raises ValueError on an
-    oversize blob or malformed JSON, and pydantic ValidationError on a schema
-    violation — exactly like `load_design_spec`."""
-    return DesignSpec.model_validate(_parse_spec_bytes(data, kind="DesignSpec"))
-
-
-def load_specs(workspace_root: str | Path) -> tuple[AppSpec, DesignSpec]:
-    """Load both specs from the workspace `.disco/` dir."""
-    return load_app_spec(workspace_root), load_design_spec(workspace_root)
+#
+# Relocated VERBATIM to `spec_parts/io.py` to keep this module under the
+# `python_or_harness_module_logical_gt_700` budget and imported back in at the
+# TOP of this module (see the import block up top) — every name (including the
+# underscore-prefixed ones some tests reach through the module object for) is
+# re-exported here at its original path, so `from .spec import save_app_spec`
+# (or `_MAX_SPEC_BYTES`, etc.) is unaffected.

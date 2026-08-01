@@ -103,12 +103,13 @@ class TweakField(BaseModel):
                     data = {**data, "colors": tuple(canonical_hex(c) for c in cols)}
         return data
 
-    @model_validator(mode="after")
-    def _validate(self) -> TweakField:
+    def _validate_key_and_label(self) -> None:
         if not _KEY_RE.match(self.key):
             raise ValueError(f"key must match dotted-path pattern, got {self.key!r}")
         if not self.label.strip():
             raise ValueError("label must be non-empty")
+
+    def _validate_affects(self) -> None:
         # affects are lexical AppSpec paths — same dotted form as a key, and unique (so a
         # TEXT/COLOR tweak can't satisfy ">=2 fields" with a repeated path).
         for path in self.affects:
@@ -116,19 +117,24 @@ class TweakField(BaseModel):
                 raise ValueError(f"affects path {path!r} must be a dotted lexical path")
         if len(set(self.affects)) != len(self.affects):
             raise ValueError("affects paths must be unique")
-        ed = self.editor
+
+    def _validate_editor_scoped_constraints(self) -> None:
         # reject constraints irrelevant to the editor
+        ed = self.editor
         if self.options is not None and ed is not TweakEditor.ENUM:
             raise ValueError("options only valid for enum")
         if self.colors is not None and ed is not TweakEditor.PALETTE:
             raise ValueError("colors only valid for palette")
         if (self.min, self.max, self.step) != (None, None, None) and ed not in _NUMERIC:
             raise ValueError("min/max/step only valid for int/float")
+
+    def _validate_grounded(self) -> None:
         # GROUNDED invariant
         if not self.controls_behavior and not self.affects:
             raise ValueError(
                 f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects"
             )
+        ed = self.editor
         if (
             ed in (TweakEditor.TEXT, TweakEditor.COLOR)
             and not self.controls_behavior
@@ -138,7 +144,10 @@ class TweakField(BaseModel):
                 f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields "
                 "(else use a direct edit)"
             )
+
+    def _validate_enum_or_palette(self) -> None:
         # per-editor constraints
+        ed = self.editor
         if ed is TweakEditor.ENUM:
             if not self.options:
                 raise ValueError("enum requires non-empty options")
@@ -150,7 +159,15 @@ class TweakField(BaseModel):
                 raise ValueError("palette requires 2..5 colors")
             if len(set(cols)) != len(cols):
                 raise ValueError("palette colors must be unique")
-        if ed in _NUMERIC:
+
+    @model_validator(mode="after")
+    def _validate(self) -> TweakField:
+        self._validate_key_and_label()
+        self._validate_affects()
+        self._validate_editor_scoped_constraints()
+        self._validate_grounded()
+        self._validate_enum_or_palette()
+        if self.editor in _NUMERIC:
             self._validate_numeric()
         # default must itself be a valid value for this field
         if self.default is not None:
@@ -175,32 +192,35 @@ class TweakField(BaseModel):
             raise ValueError("(max - min) must be a whole number of steps (reachable max)")
 
 
-def coerce_tweak_value(field: TweakField, value: Any) -> Any:
-    """Coerce + validate a raw value for ``field``'s editor → the canonical value, or ValueError.
-    Narrow, editor-specific coercion only (legacy app_set_tweak passes strings)."""
+def _coerce_text_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value
+    raise ValueError("text value must be a string")
+
+
+def _coerce_palette_value(field: TweakField, value: Any) -> Any:
+    v = canonical_hex(value)
+    if v not in (field.colors or ()):
+        raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
+    return v
+
+
+def _coerce_boolean_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError("boolean value must be a bool or 'true'/'false'")
+
+
+def _coerce_enum_value(field: TweakField, value: Any) -> Any:
+    if value in (field.options or ()):
+        return value
+    raise ValueError(f"{value!r} not in enum options {field.options}")
+
+
+def _coerce_numeric_value(field: TweakField, value: Any) -> Any:
     ed = field.editor
-    if ed is TweakEditor.TEXT:
-        if isinstance(value, str):
-            return value
-        raise ValueError("text value must be a string")
-    if ed is TweakEditor.COLOR:
-        return canonical_hex(value)
-    if ed is TweakEditor.PALETTE:
-        v = canonical_hex(value)
-        if v not in (field.colors or ()):
-            raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
-        return v
-    if ed is TweakEditor.BOOLEAN:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
-            return value.strip().lower() == "true"
-        raise ValueError("boolean value must be a bool or 'true'/'false'")
-    if ed is TweakEditor.ENUM:
-        if value in (field.options or ()):
-            return value
-        raise ValueError(f"{value!r} not in enum options {field.options}")
-    # numeric
     num = _to_int(value) if ed is TweakEditor.INT else _to_float(value)
     assert field.min is not None and field.max is not None and field.step is not None
     if not field.min <= num <= field.max:
@@ -208,6 +228,24 @@ def coerce_tweak_value(field: TweakField, value: Any) -> Any:
     if not _step_aligned(num, field.min, field.step):
         raise ValueError(f"{num} is not aligned to step {field.step} from {field.min}")
     return num
+
+
+def coerce_tweak_value(field: TweakField, value: Any) -> Any:
+    """Coerce + validate a raw value for ``field``'s editor → the canonical value, or ValueError.
+    Narrow, editor-specific coercion only (legacy app_set_tweak passes strings)."""
+    ed = field.editor
+    if ed is TweakEditor.TEXT:
+        return _coerce_text_value(value)
+    if ed is TweakEditor.COLOR:
+        return canonical_hex(value)
+    if ed is TweakEditor.PALETTE:
+        return _coerce_palette_value(field, value)
+    if ed is TweakEditor.BOOLEAN:
+        return _coerce_boolean_value(value)
+    if ed is TweakEditor.ENUM:
+        return _coerce_enum_value(field, value)
+    # numeric
+    return _coerce_numeric_value(field, value)
 
 
 def _to_int(value: Any) -> int:

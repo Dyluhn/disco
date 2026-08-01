@@ -46,6 +46,7 @@ happens before any resolve/generate call (same as the hello/records siblings).
 from __future__ import annotations
 
 import html
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -201,38 +202,33 @@ def _formatted_items(spec: CollectionSpec) -> tuple[str, ...]:
     return tuple(formatted)
 
 
-def apply_collection_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
-    """Fold a validated CollectionSpec into the AppSpec: insert (or update — the
-    re-apply/edit path, see the module docstring) ONE `list`-kind Section whose
-    bounded `SectionContent` carries the formatted items. Same house dance as
-    `app_add_section`: validated models → dump → splice → `AppSpec.model_validate`."""
-    if not isinstance(spec, CollectionSpec):  # defensive: app_add_primitive validated it
-        raise TypeError(f"apply_spec for {COLLECTION_PRIMITIVE_ID!r} needs a CollectionSpec")
-
-    formatted = _formatted_items(spec)
-
-    data = app.model_dump(mode="json")
-    pages = data["pages"]
+def _resolve_collection_target_page(
+    pages: list[dict[str, Any]], spec: CollectionSpec
+) -> dict[str, Any]:
+    """The page dict a collection's section is placed on (raises on an app with
+    no pages, or an unknown page_id, naming the known page ids)."""
     if not pages:
         raise ValueError("the app has no pages to place a collection on")
     known_page_ids = [p["id"] for p in pages]
     if spec.page_id is None:
-        page = pages[0]
-    else:
-        page = next((p for p in pages if p["id"] == spec.page_id), None)
-        if page is None:
-            raise ValueError(f"unknown page_id {spec.page_id!r}; known pages: {known_page_ids}")
+        return pages[0]
+    page = next((p for p in pages if p["id"] == spec.page_id), None)
+    if page is None:
+        raise ValueError(f"unknown page_id {spec.page_id!r}; known pages: {known_page_ids}")
+    return page
 
-    section_id = section_id_for(spec.collection_id)
-    # Build through the REAL Section/SectionContent models so every bound and
-    # validator applies — exactly how app_add_section validates its input.
-    section = Section(
-        id=section_id,
-        kind="list",
-        content=SectionContent(heading=spec.title, items=formatted),
-    )
-    sec_json = section.model_dump(mode="json")
 
+def _fold_collection_section(
+    pages: list[dict[str, Any]],
+    page: dict[str, Any],
+    section_id: str,
+    sec_json: dict[str, Any],
+    collection_id: str,
+) -> None:
+    """Insert or update (the re-apply/edit path) the collection's section on
+    `page`, mutating `page["sections"]` in place. Raises on a derived-id
+    collision with a non-list section, or if the id already lives on a
+    DIFFERENT page (no silent cross-page moves)."""
     target_secs = list(page["sections"])
     idx = next((i for i, s in enumerate(target_secs) if s["id"] == section_id), None)
     if idx is not None:
@@ -247,18 +243,44 @@ def apply_collection_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
         # for this slice), preserving variant_id/content_ref picked up since.
         target_secs[idx] = {**target_secs[idx], "content": sec_json["content"]}
         page["sections"] = target_secs
-    else:
-        for other in pages:
-            if other is page:
-                continue
-            if any(s["id"] == section_id for s in other["sections"]):
-                raise ValueError(
-                    f"collection {spec.collection_id!r} already lives on page "
-                    f"{other['id']!r} (section {section_id!r}); pass "
-                    f"page_id={other['id']!r} to update it there — collections "
-                    "are not moved across pages"
-                )
-        page["sections"] = [*target_secs, sec_json]
+        return
+    for other in pages:
+        if other is page:
+            continue
+        if any(s["id"] == section_id for s in other["sections"]):
+            raise ValueError(
+                f"collection {collection_id!r} already lives on page "
+                f"{other['id']!r} (section {section_id!r}); pass "
+                f"page_id={other['id']!r} to update it there — collections "
+                "are not moved across pages"
+            )
+    page["sections"] = [*target_secs, sec_json]
+
+
+def apply_collection_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
+    """Fold a validated CollectionSpec into the AppSpec: insert (or update — the
+    re-apply/edit path, see the module docstring) ONE `list`-kind Section whose
+    bounded `SectionContent` carries the formatted items. Same house dance as
+    `app_add_section`: validated models → dump → splice → `AppSpec.model_validate`."""
+    if not isinstance(spec, CollectionSpec):  # defensive: app_add_primitive validated it
+        raise TypeError(f"apply_spec for {COLLECTION_PRIMITIVE_ID!r} needs a CollectionSpec")
+
+    formatted = _formatted_items(spec)
+
+    data = app.model_dump(mode="json")
+    page = _resolve_collection_target_page(data["pages"], spec)
+
+    section_id = section_id_for(spec.collection_id)
+    # Build through the REAL Section/SectionContent models so every bound and
+    # validator applies — exactly how app_add_section validates its input.
+    section = Section(
+        id=section_id,
+        kind="list",
+        content=SectionContent(heading=spec.title, items=formatted),
+    )
+    sec_json = section.model_dump(mode="json")
+
+    _fold_collection_section(data["pages"], page, section_id, sec_json, spec.collection_id)
 
     return AppSpec.model_validate(data)
 

@@ -101,6 +101,8 @@ def _strip_ts_comments(src: str) -> str:
     string/template literals, so a `fetch(...)`/auth check hidden inside a comment is
     no longer read as live code. The worker's only regex literal (`EMAIL_RE`) carries
     no `//`/`/*`, so a plain literal-skip is exact here."""
+    from .worker_inspect_parts._ts_lexer import _blank_block_comment, _blank_line_comment
+
     out: list[str] = []
     i = 0
     n = len(src)
@@ -113,18 +115,12 @@ def _strip_ts_comments(src: str) -> str:
                 i = end
                 continue
         if ch == "/" and i + 1 < n and src[i + 1] == "/":
-            while i < n and src[i] != "\n":
-                out.append(" ")
-                i += 1
+            blanked, i = _blank_line_comment(src, i)
+            out.append(blanked)
             continue
         if ch == "/" and i + 1 < n and src[i + 1] == "*":
-            out.append("  ")
-            i += 2
-            while i < n and not (src[i] == "*" and i + 1 < n and src[i + 1] == "/"):
-                out.append("\n" if src[i] == "\n" else " ")
-                i += 1
-            out.append("  ")
-            i += 2
+            blanked, i = _blank_block_comment(src, i)
+            out.append(blanked)
             continue
         out.append(ch)
         i += 1
@@ -366,47 +362,17 @@ def _region_has_run_insert(region: str) -> tuple[bool, bool]:
     REACHES it. An insert that exists only in an UNcalled function is correctly NOT
     found here; local runtime reachability is proved separately by
     `packages/core/tests/test_workerd_persistence.py`."""
-    for m in re.finditer(r"\.insert\s*\(\s*leads\s*\)", region):
-        values = re.match(r"\s*\.values\s*\(", region[m.end() :])
-        if values is None:
-            continue
-        values_open = m.end() + values.end() - 1
-        values_end = _match_paren(region, values_open)
-        if values_end is None:
-            continue
-        if re.match(r"\s*\.run\s*\(", region[values_end:]) is None:
-            continue
-        if _insert_in_dead_position(region, m.start()):
-            continue
-        return True, True
+    from .worker_inspect_parts._insert_scan import _drizzle_run_insert, _raw_sql_run_insert
 
+    drizzle = _drizzle_run_insert(region)
+    if drizzle is not None:
+        return drizzle
     # Legacy/raw SQL data planes are not the ratified generated shape. If one is
     # present in-region, surface it as an insert that is not acceptable instead of
     # conflating it with a completely missing insert.
-    for m in re.finditer(r"\.prepare\s*\(", region):
-        j = m.end()
-        while j < len(region) and region[j] in " \t\r\n":
-            j += 1
-        lit, end = _read_string_literal(region, j)
-        if lit is None or "INSERT INTO" not in lit.upper():
-            continue
-        k = end
-        while k < len(region) and region[k] in " \t\r\n":
-            k += 1
-        if k >= len(region) or region[k] != ")":
-            continue  # `.prepare("..." + x)` etc. — literal not closed by `)`
-        bind = re.match(r"\s*\.bind\s*\(", region[k + 1 :])
-        if bind is None:
-            continue  # no `.bind(...)` follows the prepared INSERT
-        bind_open = k + 1 + bind.end() - 1  # index of the `(` opening `.bind(`
-        bind_end = _match_paren(region, bind_open)
-        if bind_end is None:
-            continue
-        if re.match(r"\s*\.run\s*\(", region[bind_end:]) is None:
-            continue  # prepared+bound but never `.run()` — a dead reference
-        if _insert_in_dead_position(region, m.start()):
-            continue  # present but UNREACHABLE (dead branch / after early return)
-        return True, False
+    raw_sql = _raw_sql_run_insert(region)
+    if raw_sql is not None:
+        return raw_sql
     return False, False
 
 
@@ -594,35 +560,16 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     execution; local runtime reachability/behaviour is covered by
     packages/core/tests/test_workerd_persistence.py).
     """
+    from .worker_inspect_parts._auth_guard import _auth_guard_signals
+    from .worker_inspect_parts._post_contract import _post_contract_signals
+
     reasons: list[str] = []
     src = _strip_ts_comments(worker_ts)
 
-    post_block = _route_handler(
-        src, r'url\.pathname\s*===\s*"/api/leads"\s*&&\s*request\.method\s*===\s*"POST"'
+    has_post_route, post_public, post_region_has_insert, insert_parameterized, post_reasons = (
+        _post_contract_signals(src)
     )
-    has_post_route = post_block is not None
-    post_public = has_post_route and re.search(r"isAuthorized\s*\(", post_block or "") is None
-    # Region-scope the insert proof to the POST handler's in-region code (the block +
-    # any helper it calls), so an insert that merely exists ELSEWHERE in the file — or
-    # sits in a dead/unreachable position — does not satisfy the POST contract. This is
-    # STRUCTURAL presence + non-dead position, NOT a runtime-reachability proof.
-    post_region = _post_region(src, post_block) if post_block is not None else ""
-    post_region_has_insert, insert_parameterized = _region_has_run_insert(post_region)
-    if not has_post_route:
-        reasons.append("no public POST /api/leads route")
-    elif not post_public:
-        reasons.append("POST /api/leads must be public — it is gated behind an auth check")
-    if not post_region_has_insert:
-        reasons.append(
-            "the POST /api/leads handler region does not contain a Drizzle insert in a "
-            "reachable (non-dead) position (db.insert(leads).values(...).run() in the "
-            "POST handler or a helper it calls, not after an early return / inside a dead branch)"
-        )
-    elif not insert_parameterized:
-        reasons.append(
-            "the lead insert is not the generated Drizzle data plane "
-            "(db.insert(leads).values(...).run(); raw SQL INSERT strings are not allowed)"
-        )
+    reasons.extend(post_reasons)
 
     get_block = _route_handler(
         src, r'url\.pathname\s*===\s*"/api/leads"\s*&&\s*request\.method\s*===\s*"GET"'
@@ -631,25 +578,9 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
         src, r'url\.pathname\s*===\s*"/admin"\s*&&\s*request\.method\s*===\s*"GET"'
     )
 
-    auth_body = _isauthorized_body(src)
-    bearer_checked = auth_body is not None and bool(
-        re.search(r'"Bearer "', auth_body)
-        and re.search(r"\.startsWith\s*\(", auth_body)
-        and re.search(r"===\s*expected\b", auth_body)
+    leads_get_guarded, admin_guarded, bearer_checked, fail_closed = _auth_guard_signals(
+        src, get_block, admin_block
     )
-    # Fail-closed: the auth check denies when ADMIN_TOKEN (env → `expected`) is unset.
-    fail_closed = auth_body is not None and bool(
-        re.search(r"=\s*env\.ADMIN_TOKEN", auth_body)
-        and re.search(r"if\s*\(\s*!\s*expected\s*\)\s*return\s+false", auth_body)
-    )
-
-    def _admin_denial_ok(guard_body: str) -> bool:
-        if "adminLoginPage" in guard_body:
-            return _admin_login_returns_401(src)
-        return _returns_401(guard_body)
-
-    leads_get_guarded = get_block is not None and _read_block_gated(get_block, _returns_401)
-    admin_guarded = admin_block is not None and _read_block_gated(admin_block, _admin_denial_ok)
     # Reads are TRULY gated only if both blocks early-return a denial AND isAuthorized
     # actually validates the bearer token (an always-true guard is not a gate).
     reads_require_auth = leads_get_guarded and admin_guarded and bearer_checked
@@ -706,6 +637,8 @@ def _call_with_string_arg_in_position(code: str, callee: str, path: str) -> bool
     its first argument is the expected string. Inert mentions in strings/templates do
     not count.
     """
+    from .worker_inspect_parts._call_scan import _call_first_arg_matches, _is_call_boundary
+
     i, n = 0, len(code)
     while i < n:
         ch = code[i]
@@ -714,19 +647,9 @@ def _call_with_string_arg_in_position(code: str, callee: str, path: str) -> bool
             if end > i:
                 i = end  # skip the whole string/template literal — its text is not code
                 continue
-        if code.startswith(callee, i) and (
-            i == 0 or not (code[i - 1].isalnum() or code[i - 1] in "_$.")
-        ):
-            j = i + len(callee)
-            while j < n and code[j] in " \t\r\n":
-                j += 1
-            if j < n and code[j] == "(":
-                j += 1
-                while j < n and code[j] in " \t\r\n":
-                    j += 1
-                inner, _end = _read_string_literal(code, j)
-                if inner is not None and inner.split("?", 1)[0] == path:
-                    return True
+        if _is_call_boundary(code, i, callee):
+            if _call_first_arg_matches(code, i + len(callee), path):
+                return True
         i += 1
     return False
 

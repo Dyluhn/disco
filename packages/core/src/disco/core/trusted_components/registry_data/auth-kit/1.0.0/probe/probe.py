@@ -104,59 +104,46 @@ def _extract_session_cookie(set_cookie_header: str) -> str | None:
     return f"tc_session={value.strip()}"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", required=True)
-    parser.add_argument("--workspace", required=True)
-    args = parser.parse_args()
-
-    base_url: str = args.base_url
-    workspace = Path(args.workspace)
+def _load_config(workspace: Path) -> dict[str, Any] | None:
     config_path = workspace / CONFIG_RELPATH
     try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
+        return json.loads(config_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 — probe cannot proceed without config: infra error
         print(f"auth-kit probe: could not read {config_path}: {exc}", file=sys.stderr)
-        return 1
+        return None
 
-    allowlist: list[str] = config.get("publicAllowlist") or []
-    dev_seed = config.get("devSeedUser")
 
-    checks: list[dict[str, Any]] = []
-
+def _check_unauth_401(base_url: str) -> dict[str, Any]:
     # (a) unauth_401 — a path definitely NOT in the allowlist must be rejected.
     probe_path = _random_probe_path()
     status, _hdrs, _raw = _request(base_url, probe_path)
-    checks.append(
-        {
-            "name": "unauth_401",
-            "passed": status == 401,
-            "detail": f"GET {probe_path} -> {status} (want 401)",
-        }
-    )
+    return {
+        "name": "unauth_401",
+        "passed": status == 401,
+        "detail": f"GET {probe_path} -> {status} (want 401)",
+    }
 
+
+def _check_allowlisted_open(base_url: str, allowlist: list[str]) -> dict[str, Any]:
     # (b) allowlisted_open — the first EXACT (non-wildcard) allowlist entry
     # must NOT be rejected.
     exact_entries = [e for e in allowlist if not e.endswith("*")]
     if exact_entries:
         open_path = exact_entries[0]
         status, _hdrs, _raw = _request(base_url, open_path)
-        checks.append(
-            {
-                "name": "allowlisted_open",
-                "passed": status != 401,
-                "detail": f"GET {open_path} -> {status} (want != 401)",
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "allowlisted_open",
-                "passed": False,
-                "detail": "no exact (non-wildcard) publicAllowlist entry configured to probe",
-            }
-        )
+        return {
+            "name": "allowlisted_open",
+            "passed": status != 401,
+            "detail": f"GET {open_path} -> {status} (want != 401)",
+        }
+    return {
+        "name": "allowlisted_open",
+        "passed": False,
+        "detail": "no exact (non-wildcard) publicAllowlist entry configured to probe",
+    }
 
+
+def _check_login_rejects_bogus(base_url: str) -> dict[str, Any]:
     # (c) login_rejects_bogus — the login endpoint exists and fails closed on a
     # credential that cannot exist. Runs regardless of dev-seed config, so the
     # login seam is never wholly unprobed.
@@ -165,108 +152,133 @@ def main() -> int:
     status, _hb, _rb = _request(
         base_url, "/auth/login", method="POST", body={"email": bogus_email, "password": bogus_pw}
     )
-    checks.append(
-        {
-            "name": "login_rejects_bogus",
-            "passed": status == 401,
-            "detail": f"POST /auth/login (nonexistent user) -> {status} (want 401)",
-        }
-    )
+    return {
+        "name": "login_rejects_bogus",
+        "passed": status == 401,
+        "detail": f"POST /auth/login (nonexistent user) -> {status} (want 401)",
+    }
 
-    # (d) no_default_backdoor — a live devSeedUser with a guessable password (the
-    # shipped default OR any common weak password) must NOT authenticate. FAILS
-    # closed if such a seed exists and logs in.
-    weak_seed = (
+
+def _is_weak_seed(dev_seed: Any) -> bool:
+    return (
         isinstance(dev_seed, dict)
         and isinstance(dev_seed.get("password"), str)
         and dev_seed.get("password") in WEAK_SEED_PASSWORDS
     )
-    if weak_seed:
+
+
+def _check_no_default_backdoor(base_url: str, dev_seed: Any) -> dict[str, Any]:
+    # (d) no_default_backdoor — a live devSeedUser with a guessable password (the
+    # shipped default OR any common weak password) must NOT authenticate. FAILS
+    # closed if such a seed exists and logs in.
+    if _is_weak_seed(dev_seed):
         status, _hd, _rd = _request(
             base_url,
             "/auth/login",
             method="POST",
             body={"email": dev_seed.get("email"), "password": dev_seed.get("password")},
         )
-        checks.append(
-            {
-                "name": "no_default_backdoor",
-                "passed": status != 200,
-                "detail": (
-                    f"weak/known dev credential login -> {status} "
-                    "(want != 200; remove/replace config.devSeedUser before shipping)"
-                ),
-            }
-        )
+        return {
+            "name": "no_default_backdoor",
+            "passed": status != 200,
+            "detail": (
+                f"weak/known dev credential login -> {status} "
+                "(want != 200; remove/replace config.devSeedUser before shipping)"
+            ),
+        }
+    return {
+        "name": "no_default_backdoor",
+        "passed": True,
+        "detail": "config.devSeedUser is not a known-weak credential",
+    }
+
+
+def _check_login_ok(
+    base_url: str, email: Any, password: Any
+) -> tuple[dict[str, Any], str | None]:
+    status, hdrs, _raw = _request(
+        base_url, "/auth/login", method="POST", body={"email": email, "password": password}
+    )
+    set_cookie = hdrs.get("Set-Cookie", "")
+    login_ok = status == 200 and "tc_session" in set_cookie and "httponly" in set_cookie.lower()
+    check = {
+        "name": "login_ok",
+        "passed": login_ok,
+        "detail": (
+            f"POST /auth/login -> {status}; "
+            f"set-cookie-has-tc_session={'tc_session' in set_cookie}, "
+            f"httponly={'httponly' in set_cookie.lower()}"
+        ),
+    }
+    return check, _extract_session_cookie(set_cookie)
+
+
+def _check_session_roundtrip(
+    base_url: str, session_cookie: str | None, email: Any
+) -> dict[str, Any]:
+    detail_bits: list[str] = []
+    with_ok = False
+    if session_cookie:
+        status_with, _h, raw_with = _request(base_url, "/auth/session", cookie=session_cookie)
+        try:
+            parsed = json.loads(raw_with.decode("utf-8"))
+        except Exception:  # noqa: BLE001 — a non-JSON body just fails the check
+            parsed = {}
+        with_ok = status_with == 200 and parsed.get("email") == email
+        detail_bits.append(f"with-cookie -> {status_with} email={parsed.get('email')!r}")
     else:
-        checks.append(
-            {
-                "name": "no_default_backdoor",
-                "passed": True,
-                "detail": "config.devSeedUser is not a known-weak credential",
-            }
-        )
+        detail_bits.append("no session cookie captured from login")
+    status_without, _h2, _r2 = _request(base_url, "/auth/session")
+    without_ok = status_without == 401
+    detail_bits.append(f"without-cookie -> {status_without} (want 401)")
+    return {
+        "name": "session_roundtrip",
+        "passed": with_ok and without_ok,
+        "detail": "; ".join(detail_bits),
+    }
 
+
+def _check_logout_kills(base_url: str, session_cookie: str | None) -> dict[str, Any]:
+    if session_cookie:
+        status_logout, _h3, _r3 = _request(
+            base_url, "/auth/logout", method="POST", cookie=session_cookie
+        )
+        status_after, _h4, _r4 = _request(base_url, "/auth/session", cookie=session_cookie)
+        logout_ok = status_logout == 200 and status_after == 401
+        detail = f"logout -> {status_logout}; session-after-logout -> {status_after} (want 401)"
+    else:
+        logout_ok = False
+        detail = "no session cookie captured from login"
+    return {"name": "logout_kills", "passed": logout_ok, "detail": detail}
+
+
+def _dev_seed_checks(base_url: str, dev_seed: dict[str, Any]) -> list[dict[str, Any]]:
+    email = dev_seed.get("email")
+    password = dev_seed.get("password")
+    login_check, session_cookie = _check_login_ok(base_url, email, password)
+    roundtrip_check = _check_session_roundtrip(base_url, session_cookie, email)
+    logout_check = _check_logout_kills(base_url, session_cookie)
+    return [login_check, roundtrip_check, logout_check]
+
+
+def _run_checks(base_url: str, config: dict[str, Any]) -> list[dict[str, Any]]:
+    allowlist: list[str] = config.get("publicAllowlist") or []
+    dev_seed = config.get("devSeedUser")
+    checks: list[dict[str, Any]] = [
+        _check_unauth_401(base_url),
+        _check_allowlisted_open(base_url, allowlist),
+        _check_login_rejects_bogus(base_url),
+        _check_no_default_backdoor(base_url, dev_seed),
+    ]
     if dev_seed is not None:
-        email = dev_seed.get("email")
-        password = dev_seed.get("password")
+        checks.extend(_dev_seed_checks(base_url, dev_seed))
+    return checks
 
-        status, hdrs, _raw = _request(
-            base_url, "/auth/login", method="POST", body={"email": email, "password": password}
-        )
-        set_cookie = hdrs.get("Set-Cookie", "")
-        login_ok = status == 200 and "tc_session" in set_cookie and "httponly" in set_cookie.lower()
-        checks.append(
-            {
-                "name": "login_ok",
-                "passed": login_ok,
-                "detail": (
-                    f"POST /auth/login -> {status}; "
-                    f"set-cookie-has-tc_session={'tc_session' in set_cookie}, "
-                    f"httponly={'httponly' in set_cookie.lower()}"
-                ),
-            }
-        )
-        session_cookie = _extract_session_cookie(set_cookie)
 
-        detail_bits: list[str] = []
-        with_ok = False
-        if session_cookie:
-            status_with, _h, raw_with = _request(base_url, "/auth/session", cookie=session_cookie)
-            try:
-                parsed = json.loads(raw_with.decode("utf-8"))
-            except Exception:  # noqa: BLE001 — a non-JSON body just fails the check
-                parsed = {}
-            with_ok = status_with == 200 and parsed.get("email") == email
-            detail_bits.append(f"with-cookie -> {status_with} email={parsed.get('email')!r}")
-        else:
-            detail_bits.append("no session cookie captured from login")
-        status_without, _h2, _r2 = _request(base_url, "/auth/session")
-        without_ok = status_without == 401
-        detail_bits.append(f"without-cookie -> {status_without} (want 401)")
-        checks.append(
-            {
-                "name": "session_roundtrip",
-                "passed": with_ok and without_ok,
-                "detail": "; ".join(detail_bits),
-            }
-        )
-
-        if session_cookie:
-            status_logout, _h3, _r3 = _request(
-                base_url, "/auth/logout", method="POST", cookie=session_cookie
-            )
-            status_after, _h4, _r4 = _request(base_url, "/auth/session", cookie=session_cookie)
-            logout_ok = status_logout == 200 and status_after == 401
-            detail = f"logout -> {status_logout}; session-after-logout -> {status_after} (want 401)"
-        else:
-            logout_ok = False
-            detail = "no session cookie captured from login"
-        checks.append({"name": "logout_kills", "passed": logout_ok, "detail": detail})
-
+def _verdict(checks: list[dict[str, Any]]) -> dict[str, Any]:
     passed = all(c["passed"] for c in checks)
     failing_names = [c["name"] for c in checks if not c["passed"]]
-    verdict = {
+    return {
         "passed": passed,
         "checks": checks,
         "summary": (
@@ -275,7 +287,22 @@ def main() -> int:
             else "auth-kit seam probe: failed " + ", ".join(failing_names)
         ),
     }
-    print(json.dumps(verdict))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--workspace", required=True)
+    args = parser.parse_args()
+
+    base_url: str = args.base_url
+    workspace = Path(args.workspace)
+    config = _load_config(workspace)
+    if config is None:
+        return 1
+
+    checks = _run_checks(base_url, config)
+    print(json.dumps(_verdict(checks)))
     return 0
 
 

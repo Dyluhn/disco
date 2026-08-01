@@ -7,7 +7,7 @@ and site name) and `app_add_primitive` folds it into `AppSpec.seo` via
 and the SHARED emitters in `generator.py` lower `app.seo` into:
 
 * `<meta name="description">`, the OG tags and a JSON-LD ``WebSite`` block in
-  the shared `index.html` head (`_seo_head_extras`);
+  the shared `index.html` head (`generator_parts.app_shell._seo_head_extras`);
 * `public/robots.txt` (allow-all + the sitemap pointer) and `public/sitemap.xml`
   (one absolute `<url>` per AppSpec page) — under `public/` so Vite copies them
   verbatim into `dist/`, which is what the Worker's static-asset layer serves
@@ -152,7 +152,7 @@ def prepare_seo_app_spec(app: AppSpec) -> AppSpec:
 def generate_seo(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     """The registry-contract stub tree: a minimal static index.html, exactly
     hello's shape. DELIBERATELY ignores `app.seo` — the seo lowering lives in the
-    SHARED emitters (`generator._seo_head_extras` / `generator._seo_files`) that
+    SHARED emitters (`generator_parts.app_shell._seo_head_extras` / `_seo_files`) that
     the real verticals (lead_gen/directory/records) call; a standalone seo (or
     hello) app carries the folded values in its `.disco` spec only. `design` is
     deliberately unused — see `default_seo_app_spec`."""

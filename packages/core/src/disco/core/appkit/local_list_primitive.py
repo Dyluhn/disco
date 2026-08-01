@@ -426,23 +426,9 @@ def _result(checks: list[VerifyCheck]) -> PrimitiveVerifyResult:
     )
 
 
-def local_list_verify(
-    app: AppSpec | None, design: DesignSpec | None, tree: Mapping[str, str]
-) -> PrimitiveVerifyResult:
-    """Fail-closed source checks for persistence, bounds, deletion, and local-only IO."""
-    del design
-    checks: list[VerifyCheck] = []
-    if app is None:
-        return _result(
-            [
-                VerifyCheck(
-                    "local_list_source_contract",
-                    False,
-                    "no .disco/appspec.json — run app_create first.",
-                )
-            ]
-        )
-
+def _gather_list_sources(app: AppSpec, tree: Mapping[str, str]) -> tuple[list[str], list[str]]:
+    """The component source text for each `list` section (in page/section iteration
+    order), and the component path of any `list` section whose source is missing."""
     from .generator import _comp_name, _component_names
 
     names = _component_names(app)
@@ -458,7 +444,12 @@ def local_list_verify(
                 missing.append(path)
             else:
                 list_sources.append(source)
+    return list_sources, missing
 
+
+def _source_contract_check(list_sources: list[str], missing: list[str]) -> VerifyCheck:
+    """Each list section has a controlled add form, rendered item list, and
+    per-item delete control."""
     source_tokens = (
         "useState<string[]>",
         "onSubmit={addItem}",
@@ -472,20 +463,22 @@ def local_list_verify(
         and not missing
         and all(all(token in source for token in source_tokens) for source in list_sources)
     )
-    checks.append(
-        VerifyCheck(
-            "local_list_source_contract",
-            source_ok,
-            (
-                "each list section has a controlled add form, rendered item list, and "
-                "per-item delete control."
-                if source_ok
-                else "missing or incomplete local-list component source"
-                + (f": {', '.join(missing)}" if missing else ".")
-            ),
-        )
+    return VerifyCheck(
+        "local_list_source_contract",
+        source_ok,
+        (
+            "each list section has a controlled add form, rendered item list, and "
+            "per-item delete control."
+            if source_ok
+            else "missing or incomplete local-list component source"
+            + (f": {', '.join(missing)}" if missing else ".")
+        ),
     )
 
+
+def _storage_bounds_check(list_sources: list[str]) -> VerifyCheck:
+    """localStorage reads/writes are exception-safe and normalize at most
+    `_MAX_ITEMS` strings of `_MAX_ITEM_LENGTH` characters."""
     bound_tokens = (
         f"const MAX_ITEMS = {_MAX_ITEMS};",
         f"const MAX_ITEM_LENGTH = {_MAX_ITEM_LENGTH};",
@@ -501,19 +494,21 @@ def local_list_verify(
         all(token in source for token in bound_tokens) and source.count("catch {") >= 2
         for source in list_sources
     )
-    checks.append(
-        VerifyCheck(
-            "local_list_storage_bounds",
-            bounds_ok,
-            (
-                f"localStorage reads/writes are exception-safe and normalize at most "
-                f"{_MAX_ITEMS} strings of {_MAX_ITEM_LENGTH} characters."
-                if bounds_ok
-                else "the localStorage path is missing corruption/quota handling or hard bounds."
-            ),
-        )
+    return VerifyCheck(
+        "local_list_storage_bounds",
+        bounds_ok,
+        (
+            f"localStorage reads/writes are exception-safe and normalize at most "
+            f"{_MAX_ITEMS} strings of {_MAX_ITEM_LENGTH} characters."
+            if bounds_ok
+            else "the localStorage path is missing corruption/quota handling or hard bounds."
+        ),
     )
 
+
+def _browser_local_only_check(tree: Mapping[str, str], list_sources: list[str]) -> VerifyCheck:
+    """The browser runtime contains no network client, raw-HTML sink, external URL,
+    or secret binding."""
     browser_sources = [
         tree.get("index.html") or "",
         tree.get("src/App.tsx") or "",
@@ -533,37 +528,65 @@ def local_list_verify(
         "https://",
     )
     local_only = all(token not in source for source in browser_sources for token in forbidden)
-    checks.append(
-        VerifyCheck(
-            "local_list_browser_local_only",
-            local_only,
-            (
-                "browser runtime contains no network client, raw-HTML sink, external URL, "
-                "or secret binding."
-                if local_only
-                else "browser runtime contains a forbidden network/raw-HTML/secret surface."
-            ),
-        )
+    return VerifyCheck(
+        "local_list_browser_local_only",
+        local_only,
+        (
+            "browser runtime contains no network client, raw-HTML sink, external URL, "
+            "or secret binding."
+            if local_only
+            else "browser runtime contains a forbidden network/raw-HTML/secret surface."
+        ),
     )
 
+
+def _static_worker_check(tree: Mapping[str, str]) -> VerifyCheck:
+    """The Worker is an asset-only passthrough with no API or D1 binding."""
     worker = tree.get("worker/index.ts")
     worker_ok, worker_reasons = inspect_static_worker(worker or "")
-    checks.append(
-        VerifyCheck(
-            "local_list_static_worker",
-            worker is not None and worker_ok,
-            (
-                "the Worker is an asset-only passthrough with no API or D1 binding."
-                if worker is not None and worker_ok
-                else "; ".join(worker_reasons) or "worker/index.ts is missing."
-            ),
-        )
+    return VerifyCheck(
+        "local_list_static_worker",
+        worker is not None and worker_ok,
+        (
+            "the Worker is an asset-only passthrough with no API or D1 binding."
+            if worker is not None and worker_ok
+            else "; ".join(worker_reasons) or "worker/index.ts is missing."
+        ),
     )
 
+
+def _cloudflare_export_check(tree: Mapping[str, str]) -> VerifyCheck:
+    """The STATIC Cloudflare-export deliverables/config are complete."""
     export_files: dict[str, str | None] = {path: tree.get(path) for path in STATIC_CF_EXPORT_FILES}
     export_files[".dev.vars"] = tree.get(".dev.vars")
     export_result = cloudflare_export_ready_static(export_files)
-    checks.append(VerifyCheck(export_result.name, export_result.passed, export_result.evidence))
+    return VerifyCheck(export_result.name, export_result.passed, export_result.evidence)
+
+
+def local_list_verify(
+    app: AppSpec | None, design: DesignSpec | None, tree: Mapping[str, str]
+) -> PrimitiveVerifyResult:
+    """Fail-closed source checks for persistence, bounds, deletion, and local-only IO."""
+    del design
+    if app is None:
+        return _result(
+            [
+                VerifyCheck(
+                    "local_list_source_contract",
+                    False,
+                    "no .disco/appspec.json — run app_create first.",
+                )
+            ]
+        )
+
+    list_sources, missing = _gather_list_sources(app, tree)
+    checks: list[VerifyCheck] = [
+        _source_contract_check(list_sources, missing),
+        _storage_bounds_check(list_sources),
+        _browser_local_only_check(tree, list_sources),
+        _static_worker_check(tree),
+        _cloudflare_export_check(tree),
+    ]
     return _result(checks)
 
 

@@ -368,7 +368,8 @@ def _metadata_check(app: AppSpec | None) -> VerifyCheck:
     )
 
 
-def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyCheck:
+def _parse_webhook_provenance_record(tree: Mapping[str, str]) -> dict[str, object] | VerifyCheck:
+    """Load and shape-check the raw provenance JSON; VerifyCheck means "stop here"."""
     raw = tree.get(_WEBHOOK_PROVENANCE_RELPATH)
     if raw is None:
         return VerifyCheck(
@@ -402,46 +403,81 @@ def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyChe
         return VerifyCheck(
             "webhook_provenance_binding", False, "Webhook provenance timestamp is empty."
         )
+    return record
+
+
+def _parse_webhook_provenance_specs(
+    record: dict[str, object],
+) -> tuple[WebhookSpec, ...] | VerifyCheck:
+    """Validate the embedded WebhookSpec list; the broad except is deliberate — the
+    validation detail is safe declarative metadata, never a secret."""
     raw_specs = record.get("specs")
     if not isinstance(raw_specs, list) or not raw_specs:
         return VerifyCheck(
             "webhook_provenance_binding", False, "Webhook provenance specs are empty."
         )
     try:
-        specs = tuple(WebhookSpec.model_validate(value) for value in raw_specs)
+        return tuple(WebhookSpec.model_validate(value) for value in raw_specs)
     except Exception as exc:  # noqa: BLE001 - bounded declarative validation detail
         return VerifyCheck(
             "webhook_provenance_binding", False, f"invalid webhook provenance spec: {exc}"
         )
+
+
+def _webhook_provenance_endpoint_reasons(spec: WebhookSpec, app: AppSpec) -> list[str]:
+    """Compare one validated provenance spec against its live metadata endpoint
+    and folded docs section."""
+    if app.webhooks is None:  # caller guards this; fail closed if that ever changes
+        return ["Webhook provenance exists without AppSpec.webhooks metadata (fail-closed)."]
+    by_id = {endpoint.endpoint_id: endpoint for endpoint in app.webhooks.endpoints}
+    endpoint = by_id.get(spec.endpoint_id)
+    if endpoint is None:
+        return [f"unknown provenance endpoint {spec.endpoint_id}"]
+    reasons: list[str] = []
+    if endpoint.direction != spec.direction or endpoint.event_types != tuple(spec.event_types):
+        reasons.append(f"metadata differs for endpoint {spec.endpoint_id}")
+    section = next(
+        (
+            section
+            for page in app.pages
+            for section in page.sections
+            if section.id == f"{_SECTION_ID_PREFIX}{spec.endpoint_id}"
+        ),
+        None,
+    )
+    expected = Section.model_validate(_endpoint_section_data(spec, secured=True))
+    if section is None or section.model_dump(mode="json") != expected.model_dump(mode="json"):
+        reasons.append(f"section differs for endpoint {spec.endpoint_id}")
+    return reasons
+
+
+def _webhook_provenance_reasons(specs: tuple[WebhookSpec, ...], app: AppSpec) -> list[str]:
+    if app.webhooks is None:  # caller guards this; fail closed if that ever changes
+        return ["Webhook provenance exists without AppSpec.webhooks metadata (fail-closed)."]
+    by_id = {endpoint.endpoint_id: endpoint for endpoint in app.webhooks.endpoints}
+    reasons: list[str] = []
+    if len(specs) != len(by_id) or len({spec.endpoint_id for spec in specs}) != len(specs):
+        reasons.append("provenance does not contain exactly one spec per endpoint")
+    for spec in specs:
+        reasons.extend(_webhook_provenance_endpoint_reasons(spec, app))
+    return reasons
+
+
+def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyCheck:
+    record_or_failure = _parse_webhook_provenance_record(tree)
+    if isinstance(record_or_failure, VerifyCheck):
+        return record_or_failure
+    specs_or_failure = _parse_webhook_provenance_specs(record_or_failure)
+    if isinstance(specs_or_failure, VerifyCheck):
+        return specs_or_failure
+    specs = specs_or_failure
     if app is None or app.webhooks is None:
         return VerifyCheck(
             "webhook_provenance_binding",
             False,
             "Webhook provenance exists without AppSpec.webhooks metadata (fail-closed).",
         )
-    by_id = {endpoint.endpoint_id: endpoint for endpoint in app.webhooks.endpoints}
-    reasons: list[str] = []
-    if len(specs) != len(by_id) or len({spec.endpoint_id for spec in specs}) != len(specs):
-        reasons.append("provenance does not contain exactly one spec per endpoint")
-    for spec in specs:
-        endpoint = by_id.get(spec.endpoint_id)
-        if endpoint is None:
-            reasons.append(f"unknown provenance endpoint {spec.endpoint_id}")
-            continue
-        if endpoint.direction != spec.direction or endpoint.event_types != tuple(spec.event_types):
-            reasons.append(f"metadata differs for endpoint {spec.endpoint_id}")
-        section = next(
-            (
-                section
-                for page in app.pages
-                for section in page.sections
-                if section.id == f"{_SECTION_ID_PREFIX}{spec.endpoint_id}"
-            ),
-            None,
-        )
-        expected = Section.model_validate(_endpoint_section_data(spec, secured=True))
-        if section is None or section.model_dump(mode="json") != expected.model_dump(mode="json"):
-            reasons.append(f"section differs for endpoint {spec.endpoint_id}")
+    reasons = _webhook_provenance_reasons(specs, app)
     return VerifyCheck(
         "webhook_provenance_binding",
         not reasons,

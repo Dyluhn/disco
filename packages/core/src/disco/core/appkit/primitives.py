@@ -159,40 +159,88 @@ _REGISTRY: dict[str, PrimitiveDefinition] = {}
 _ALIASES: dict[str, str] = {}
 
 
-def register_primitive(defn: PrimitiveDefinition) -> None:
-    """Register a primitive (idempotent for the SAME definition object). A second,
-    DIFFERENT definition for an already-claimed id/alias is a hard error — a
-    duplicate is a bug, never a silent shadow."""
+def _check_live_verify_pairing(defn: PrimitiveDefinition) -> str | None:
     if (defn.live_verify_id is None) != (defn.security_metadata_field is None):
-        raise ValueError(
+        return (
             f"primitive {defn.id!r} must declare live_verify_id and "
             "security_metadata_field together"
         )
+    return None
+
+
+def _check_live_verify_id_nonblank(defn: PrimitiveDefinition) -> str | None:
     if defn.live_verify_id is not None and not defn.live_verify_id.strip():
-        raise ValueError(f"primitive {defn.id!r} has an empty live_verify_id")
-    if defn.live_verify_id is not None and (
-        not defn.live_verify_checks
-        or any(not name.strip() for name in defn.live_verify_checks)
-        or len(set(defn.live_verify_checks)) != len(defn.live_verify_checks)
-    ):
-        raise ValueError(f"primitive {defn.id!r} must declare unique non-empty live_verify_checks")
+        return f"primitive {defn.id!r} has an empty live_verify_id"
+    return None
+
+
+def _check_live_verify_checks_present(defn: PrimitiveDefinition) -> str | None:
+    if defn.live_verify_id is None:
+        return None
+    checks = defn.live_verify_checks
+    well_formed = (
+        bool(checks)
+        and all(name.strip() for name in checks)
+        and len(set(checks)) == len(checks)
+    )
+    if not well_formed:
+        return f"primitive {defn.id!r} must declare unique non-empty live_verify_checks"
+    return None
+
+
+def _check_live_verify_checks_absent(defn: PrimitiveDefinition) -> str | None:
     if defn.live_verify_id is None and defn.live_verify_checks:
-        raise ValueError(
-            f"primitive {defn.id!r} declares live_verify_checks without live_verify_id"
-        )
+        return f"primitive {defn.id!r} declares live_verify_checks without live_verify_id"
+    return None
+
+
+def _check_security_metadata_field(defn: PrimitiveDefinition) -> str | None:
     if defn.security_metadata_field is not None and not defn.security_metadata_field.isidentifier():
-        raise ValueError(
+        return (
             f"primitive {defn.id!r} has invalid security metadata field "
             f"{defn.security_metadata_field!r}"
         )
+    return None
+
+
+# One row per SELF-CONTAINED registration invariant. `register_primitive` just
+# walks this table and raises on the first failure — the table-driven shape (vs.
+# one long if-chain) is what keeps its own McCabe score low: each predicate is a
+# tiny, independently-testable single-purpose check instead of one function
+# carrying every branch.
+_REGISTRATION_CHECKS: tuple[Callable[[PrimitiveDefinition], str | None], ...] = (
+    _check_live_verify_pairing,
+    _check_live_verify_id_nonblank,
+    _check_live_verify_checks_present,
+    _check_live_verify_checks_absent,
+    _check_security_metadata_field,
+)
+
+
+def _check_no_duplicate_id(defn: PrimitiveDefinition) -> None:
     if defn.id in _REGISTRY and _REGISTRY[defn.id] is not defn:
         raise ValueError(f"duplicate primitive id: {defn.id!r}")
+
+
+def _check_no_alias_conflict(defn: PrimitiveDefinition) -> None:
     for alias in defn.aliases:
         owner = _ALIASES.get(alias)
         if owner is not None and owner != defn.id:
             raise ValueError(
                 f"primitive alias {alias!r} already maps to {owner!r}, not {defn.id!r}"
             )
+
+
+def register_primitive(defn: PrimitiveDefinition) -> None:
+    """Register a primitive (idempotent for the SAME definition object). A second,
+    DIFFERENT definition for an already-claimed id/alias is a hard error — a
+    duplicate is a bug, never a silent shadow."""
+    for check in _REGISTRATION_CHECKS:
+        message = check(defn)
+        if message is not None:
+            raise ValueError(message)
+    _check_no_duplicate_id(defn)
+    _check_no_alias_conflict(defn)
     _REGISTRY[defn.id] = defn
     for alias in defn.aliases:
         _ALIASES[alias] = defn.id

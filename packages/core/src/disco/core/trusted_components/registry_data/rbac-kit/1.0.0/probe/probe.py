@@ -89,6 +89,77 @@ def _concrete_route(pattern: str) -> str:
     return pattern[:-1] if pattern.endswith("*") else pattern
 
 
+def _roles(seed: dict[str, Any]) -> list[str]:
+    r = seed.get("roles")
+    return r if isinstance(r, list) else []
+
+
+def _partition_seeds(
+    seeds: list[Any], required_role: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Split devSeedRoleUsers into one WITHOUT the required role (member) and one WITH it."""
+    member = next(
+        (s for s in seeds if isinstance(s, dict) and required_role not in _roles(s)), None
+    )
+    admin = next((s for s in seeds if isinstance(s, dict) and required_role in _roles(s)), None)
+    return member, admin
+
+
+def _check_member_forbidden(
+    base_url: str, route: str, required_role: str, member: dict[str, Any] | None
+) -> dict[str, Any]:
+    if member is None:
+        return {
+            "name": "member_forbidden",
+            "passed": True,
+            "detail": "no non-privileged seed user configured to probe (skipped)",
+        }
+    member_cookie = _login(base_url, member.get("email"), member.get("password"))
+    # Forge a client-side role claim every way a naive guard might trust.
+    forged = {"X-Role": required_role, "X-Roles": required_role, "Role": required_role}
+    status_plain, _hp, _rp = _request(base_url, route, cookie=member_cookie)
+    status_forged, _hf, _rf = _request(
+        base_url, route, cookie=member_cookie, extra_headers=forged
+    )
+    # Case variation: a case-insensitive downstream router (Express default)
+    # must not let an upper-cased route dodge the gate.
+    status_case, _hu, _ru = _request(base_url, route.upper(), cookie=member_cookie)
+    return {
+        "name": "member_forbidden",
+        "passed": (member_cookie is not None)
+        and status_plain == 403
+        and status_forged == 403
+        and status_case == 403,
+        "detail": (
+            f"member GET {route} -> {status_plain}; "
+            f"forged {list(forged)} -> {status_forged}; "
+            f"case {route.upper()} -> {status_case} (want 403/403/403); "
+            f"logged_in={member_cookie is not None}"
+        ),
+    }
+
+
+def _check_admin_allowed(
+    base_url: str, route: str, admin: dict[str, Any] | None
+) -> dict[str, Any]:
+    if admin is None:
+        return {
+            "name": "admin_allowed",
+            "passed": True,
+            "detail": "no privileged seed user configured to probe (skipped)",
+        }
+    admin_cookie = _login(base_url, admin.get("email"), admin.get("password"))
+    status_admin, _ha, _ra = _request(base_url, route, cookie=admin_cookie)
+    return {
+        "name": "admin_allowed",
+        "passed": (admin_cookie is not None) and status_admin not in (401, 403),
+        "detail": (
+            f"admin GET {route} -> {status_admin} (want not 401/403); "
+            f"logged_in={admin_cookie is not None}"
+        ),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", required=True)
@@ -135,71 +206,9 @@ def main() -> int:
     )
 
     # Partition seeds into one WITHOUT the required role (member) and one WITH it.
-    def _roles(seed: dict[str, Any]) -> list[str]:
-        r = seed.get("roles")
-        return r if isinstance(r, list) else []
-
-    member = next(
-        (s for s in seeds if isinstance(s, dict) and required_role not in _roles(s)), None
-    )
-    admin = next((s for s in seeds if isinstance(s, dict) and required_role in _roles(s)), None)
-
-    if member is not None:
-        member_cookie = _login(base_url, member.get("email"), member.get("password"))
-        # Forge a client-side role claim every way a naive guard might trust.
-        forged = {"X-Role": required_role, "X-Roles": required_role, "Role": required_role}
-        status_plain, _hp, _rp = _request(base_url, route, cookie=member_cookie)
-        status_forged, _hf, _rf = _request(
-            base_url, route, cookie=member_cookie, extra_headers=forged
-        )
-        # Case variation: a case-insensitive downstream router (Express default)
-        # must not let an upper-cased route dodge the gate.
-        status_case, _hu, _ru = _request(base_url, route.upper(), cookie=member_cookie)
-        checks.append(
-            {
-                "name": "member_forbidden",
-                "passed": (member_cookie is not None)
-                and status_plain == 403
-                and status_forged == 403
-                and status_case == 403,
-                "detail": (
-                    f"member GET {route} -> {status_plain}; "
-                    f"forged {list(forged)} -> {status_forged}; "
-                    f"case {route.upper()} -> {status_case} (want 403/403/403); "
-                    f"logged_in={member_cookie is not None}"
-                ),
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "member_forbidden",
-                "passed": True,
-                "detail": "no non-privileged seed user configured to probe (skipped)",
-            }
-        )
-
-    if admin is not None:
-        admin_cookie = _login(base_url, admin.get("email"), admin.get("password"))
-        status_admin, _ha, _ra = _request(base_url, route, cookie=admin_cookie)
-        checks.append(
-            {
-                "name": "admin_allowed",
-                "passed": (admin_cookie is not None) and status_admin not in (401, 403),
-                "detail": (
-                    f"admin GET {route} -> {status_admin} (want not 401/403); "
-                    f"logged_in={admin_cookie is not None}"
-                ),
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "admin_allowed",
-                "passed": True,
-                "detail": "no privileged seed user configured to probe (skipped)",
-            }
-        )
+    member, admin = _partition_seeds(seeds, required_role)
+    checks.append(_check_member_forbidden(base_url, route, required_role, member))
+    checks.append(_check_admin_allowed(base_url, route, admin))
 
     _emit(checks)
     return 0

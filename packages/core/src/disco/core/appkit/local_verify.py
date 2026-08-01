@@ -32,11 +32,9 @@ driven by the worker's inspected structure, not by an idealized contract.
 from __future__ import annotations
 
 import fnmatch
-import json
 import math
 import re
 import sqlite3
-import tomllib
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -137,6 +135,7 @@ def check_schema_sql(schema_sql: str, lead: Entity) -> CheckResult:
     """Execute `schema.sql` in in-memory sqlite, insert a representative lead row
     (parameterized) from the resolved lead entity, read it back, and assert that
     every REQUIRED column rejects NULL. Pure — no deploy, no IO."""
+    from .local_verify_parts._schema_checks import _required_columns_reject_null
     try:
         conn = _connect(schema_sql)
     except sqlite3.Error as exc:
@@ -165,28 +164,20 @@ def check_schema_sql(schema_sql: str, lead: Entity) -> CheckResult:
                 "schema_sql_valid", False, "the inserted lead row could not be read back."
             )
         # Required columns must reject NULL (NOT NULL enforced by the schema).
-        required = [f.name for f in lead.fields if f.required]
-        for req in required:
-            row_vals = [
-                None if f.name == req else _representative_value(f.name, f.type)
-                for f in lead.fields
-            ]
-            try:
-                conn.execute(
-                    f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})', row_vals
-                )
-            except sqlite3.IntegrityError:
-                continue  # good — NULL rejected
+        failing_column, required_count = _required_columns_reject_null(
+            conn, table, lead, col_list, placeholders
+        )
+        if failing_column is not None:
             return CheckResult(
                 "schema_sql_valid",
                 False,
-                f'required column "{req}" accepted NULL (missing NOT NULL constraint).',
+                f'required column "{failing_column}" accepted NULL (missing NOT NULL constraint).',
             )
         return CheckResult(
             "schema_sql_valid",
             True,
             f'table "{table}": inserted + read back a lead row; '
-            f"{len(required)} required column(s) reject NULL.",
+            f"{required_count} required column(s) reject NULL.",
         )
     finally:
         conn.close()
@@ -250,6 +241,8 @@ def check_drizzle_schema(tree: Mapping[str, str | bytes | None]) -> CheckResult:
     column set (names + notNull flags) still matches `schema.sql`, and that the app
     declares the Drizzle runtime/tooling dependencies it imports.
     """
+    from .local_verify_parts._schema_checks import _package_json_declares_drizzle
+
     name = "drizzle_schema_valid"
     schema_sql = _tree_text(tree, "schema.sql")
     schema_ts = _tree_text(tree, "src/db/schema.ts")
@@ -279,26 +272,10 @@ def check_drizzle_schema(tree: Mapping[str, str | bytes | None]) -> CheckResult:
             f"(drizzle={drizzle_cols!r}, sql={sql_cols!r}).",
         )
 
-    try:
-        pkg = json.loads(package_json)
-    except json.JSONDecodeError as exc:
-        return CheckResult(name, False, f"package.json is not valid JSON: {exc}")
-    if not isinstance(pkg, dict):
-        return CheckResult(name, False, "package.json is not a JSON object.")
-    deps = pkg.get("dependencies")
-    dev_deps = pkg.get("devDependencies")
-    if not isinstance(deps, dict) or "drizzle-orm" not in deps:
-        return CheckResult(
-            name,
-            False,
-            "package.json dependencies must declare drizzle-orm.",
-        )
-    if not isinstance(dev_deps, dict) or "drizzle-kit" not in dev_deps:
-        return CheckResult(
-            name,
-            False,
-            "package.json devDependencies must declare drizzle-kit.",
-        )
+    deps_result = _package_json_declares_drizzle(package_json, name)
+    if deps_result is not None:
+        return deps_result
+
     return CheckResult(
         name,
         True,
@@ -318,6 +295,41 @@ def _is_authorized(header: str | None, env_token: str | None, auth: WorkerAuthMo
     if not header or not header.startswith("Bearer "):
         return False
     return header[len("Bearer ") :] == env_token
+
+
+def _roundtrip_post(
+    conn: sqlite3.Connection,
+    table: str,
+    col_list: str,
+    placeholders: str,
+    cols: list[str],
+    lead: Entity,
+    record: dict[str, str],
+) -> int:
+    """Mirror the worker: known keys only, required present, parameterized insert."""
+    known = set(cols)
+    if any(k not in known for k in record):
+        return 400
+    if any(not record.get(f.name) for f in lead.fields if f.required):
+        return 400
+    conn.execute(
+        f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})',
+        [record.get(c) for c in cols],
+    )
+    return 201
+
+
+def _roundtrip_read(
+    conn: sqlite3.Connection,
+    table: str,
+    auth: WorkerAuthModel,
+    header: str | None,
+    env_token: str | None,
+) -> tuple[int, int]:
+    if not _is_authorized(header, env_token, auth):
+        return 401, 0
+    n = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+    return 200, n
 
 
 def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) -> CheckResult:
@@ -349,25 +361,6 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
         placeholders = ", ".join("?" for _ in cols)
         col_list = ", ".join(f'"{c}"' for c in cols)
 
-        def post(record: dict[str, str]) -> int:
-            # Mirror the worker: known keys only, required present, parameterized insert.
-            known = set(cols)
-            if any(k not in known for k in record):
-                return 400
-            if any(not record.get(f.name) for f in lead.fields if f.required):
-                return 400
-            conn.execute(
-                f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders})',
-                [record.get(c) for c in cols],
-            )
-            return 201
-
-        def read(header: str | None, env_token: str | None) -> tuple[int, int]:
-            if not _is_authorized(header, env_token, auth):
-                return 401, 0
-            n = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
-            return 200, n
-
         # 1. POST valid → insert. The inspected POST region must CONTAIN the insert in
         # a reachable (non-dead) position; if the structural inspection shows no insert
         # in-region (it only exists in an unreached function, or sits after an early
@@ -386,7 +379,7 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
                 "the POST handler's reachable path.",
             )
         record = {f.name: _representative_value(f.name, f.type) for f in lead.fields}
-        if post(record) != 201:
+        if _roundtrip_post(conn, table, col_list, placeholders, cols, lead, record) != 201:
             return CheckResult(
                 "local_api_roundtrip", False, "POST /api/leads with valid JSON did not persist."
             )
@@ -396,7 +389,7 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
             )
 
         # 2 + 3. Unauthenticated reads (token configured) must be 401.
-        status_leads, _ = read(None, _ADMIN_TOKEN)
+        status_leads, _ = _roundtrip_read(conn, table, auth, None, _ADMIN_TOKEN)
         if status_leads != 401:
             return CheckResult(
                 "local_api_roundtrip",
@@ -404,7 +397,8 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
                 "an UNauthenticated GET /api/leads was NOT rejected (leads are exposed). "
                 "Gate GET /api/leads behind an Authorization Bearer token.",
             )
-        status_admin, _ = read(None, _ADMIN_TOKEN)  # /admin shares the same gate model
+        # /admin shares the same gate model
+        status_admin, _ = _roundtrip_read(conn, table, auth, None, _ADMIN_TOKEN)
         if status_admin != 401:
             return CheckResult(
                 "local_api_roundtrip",
@@ -414,7 +408,9 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
             )
 
         # 4. Authenticated read returns the row.
-        status_auth, n_auth = read(f"Bearer {_ADMIN_TOKEN}", _ADMIN_TOKEN)
+        status_auth, n_auth = _roundtrip_read(
+            conn, table, auth, f"Bearer {_ADMIN_TOKEN}", _ADMIN_TOKEN
+        )
         if status_auth != 200 or n_auth != 1:
             return CheckResult(
                 "local_api_roundtrip",
@@ -423,7 +419,7 @@ def local_api_roundtrip(schema_sql: str, lead: Entity, auth: WorkerAuthModel) ->
             )
 
         # 5. ADMIN_TOKEN unset → fail closed (reads denied even with a bearer header).
-        status_closed, _ = read(f"Bearer {_ADMIN_TOKEN}", None)
+        status_closed, _ = _roundtrip_read(conn, table, auth, f"Bearer {_ADMIN_TOKEN}", None)
         if status_closed != 401:
             return CheckResult(
                 "local_api_roundtrip",
@@ -691,140 +687,45 @@ def cloudflare_export_ready(files: Mapping[str, str | None]) -> CheckResult:
     is the owner's `npm run cf:dev` / `wrangler deploy` (documented in the guide), not
     something Disco executes.
     """
+    from .local_verify_parts._cf_export import (
+        _assets_result,
+        _d1_binding_result,
+        _missing_deliverables_result,
+        _owner_guide_result,
+        _parse_wrangler_cfg,
+        _secret_contract_result,
+        _wrangler_main_result,
+    )
+
     name = "cloudflare_export_ready"
 
-    missing = [p for p in CF_EXPORT_FILES if not (files.get(p) or "").strip()]
-    if missing:
-        return CheckResult(
-            name,
-            False,
-            "missing Cloudflare export deliverable(s): "
-            f"{', '.join(missing)}. Re-run app_create to regenerate the export tree.",
-        )
+    missing_result = _missing_deliverables_result(files, CF_EXPORT_FILES, name)
+    if missing_result is not None:
+        return missing_result
 
-    try:
-        cfg = tomllib.loads(files["wrangler.toml"] or "")
-    except tomllib.TOMLDecodeError as exc:
-        return CheckResult(name, False, f"wrangler.toml is not valid TOML: {exc}")
+    cfg = _parse_wrangler_cfg(files, name)
+    if isinstance(cfg, CheckResult):
+        return cfg
 
-    main = cfg.get("main")
-    if not main_points_at_worker_entry(main):
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml Worker entry main does not EXACTLY name the worker "
-            f'(main = "{_CF_WORKER_ENTRY}") — a non-canonical main (an absolute path, a '
-            "'..' escape, or a look-alike dir like '....worker/index.ts') would deploy a "
-            "DIFFERENT, unchecked Worker while /api/* + /admin never reach the generated "
-            "one.",
-        )
+    main_result = _wrangler_main_result(cfg, name)
+    if main_result is not None:
+        return main_result
 
-    d1 = cfg.get("d1_databases")
-    db_entry = (
-        next(
-            (b for b in d1 if isinstance(b, dict) and b.get("binding") == "DB"),
-            None,
-        )
-        if isinstance(d1, list)
-        else None
-    )
-    if db_entry is None:
-        return CheckResult(
-            name,
-            False,
-            'wrangler.toml has no [[d1_databases]] entry binding "DB" — the Worker '
-            "cannot reach the leads database.",
-        )
-    db_database_name = db_entry.get("database_name")
-    if not (isinstance(db_database_name, str) and db_database_name.strip()):
-        return CheckResult(
-            name,
-            False,
-            'wrangler.toml [[d1_databases]] binds "DB" but has no non-empty '
-            "database_name — the Worker cannot target a database it can't name. "
-            "Set database_name to the D1 database created with `wrangler d1 create`.",
-        )
+    db_database_name, d1_result = _d1_binding_result(cfg, name)
+    if d1_result is not None:
+        return d1_result
 
-    assets = cfg.get("assets")
-    if not (isinstance(assets, dict) and assets.get("binding") == "ASSETS"):
-        return CheckResult(
-            name,
-            False,
-            'wrangler.toml [assets] does not bind "ASSETS" for the built SPA.',
-        )
+    assets_result = _assets_result(cfg, name)
+    if assets_result is not None:
+        return assets_result
 
-    if assets.get("not_found_handling") != _CF_SPA_NOT_FOUND:
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml [assets] does not set "
-            f'not_found_handling = "{_CF_SPA_NOT_FOUND}" — client-side routes would '
-            "404 instead of resolving to index.html.",
-        )
+    secret_result = _secret_contract_result(files, name)
+    if secret_result is not None:
+        return secret_result
 
-    rwf = assets.get("run_worker_first")
-    routes = set(rwf) if isinstance(rwf, list) else set()
-    if rwf is not True and not set(_CF_WORKER_FIRST_ROUTES) <= routes:
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml [assets] does not route "
-            f"{', '.join(_CF_WORKER_FIRST_ROUTES)} worker-first "
-            "(assets.run_worker_first) — the single-page-application asset layer would "
-            "shadow the lead API + admin read-back with index.html.",
-        )
-
-    # --- secret-safety contract -------------------------------------------------
-    real_secret = files.get(".dev.vars")
-    if real_secret is not None and real_secret.strip():
-        return CheckResult(
-            name,
-            False,
-            "a real .dev.vars file is present in the export — secrets must never be "
-            "generated or committed (only the .dev.vars.example template). Remove .dev.vars.",
-        )
-
-    gitignore = files.get(".gitignore") or ""
-    if not _gitignore_ignores(gitignore, _CF_GITIGNORE_SECRET_RULE):
-        return CheckResult(
-            name,
-            False,
-            ".gitignore does not ignore the real `.dev.vars` secret file — a developer's "
-            "local `.dev.vars` (with a real ADMIN_TOKEN) could be committed. Add a "
-            "`.dev.vars` line to .gitignore.",
-        )
-
-    example = files[".dev.vars.example"] or ""
-    assignments = _dev_vars_assignments(example)
-    if not any(name == "ADMIN_TOKEN" for name, _ in assignments):
-        return CheckResult(
-            name,
-            False,
-            ".dev.vars.example does not declare ADMIN_TOKEN — the admin read-back "
-            "secret has no documented local template.",
-        )
-    # Scan EVERY assignment's value (every occurrence of every key), not just the first
-    # ADMIN_TOKEN: a real secret hidden after a placeholder line — or on any other KEY —
-    # must never escape, regardless of position, order, or duplication.
-    leaked_key = next((key for key, val in assignments if _looks_like_real_secret(val)), None)
-    if leaked_key is not None:
-        return CheckResult(
-            name,
-            False,
-            f".dev.vars.example carries what looks like a REAL secret on {leaked_key}, not a "
-            "placeholder — the template must ship only placeholders (e.g. "
-            "ADMIN_TOKEN=replace-me). Replace it so no real secret is committed.",
-        )
-
-    guide = files["OWNER_GUIDE.md"] or ""
-    missing_steps = [s for s in _CF_GUIDE_REQUIRED_STEPS if s not in guide]
-    if missing_steps:
-        return CheckResult(
-            name,
-            False,
-            "OWNER_GUIDE.md does not document the required deploy step(s): "
-            f"{', '.join(missing_steps)}.",
-        )
+    guide_result = _owner_guide_result(files, _CF_GUIDE_REQUIRED_STEPS, name)
+    if guide_result is not None:
+        return guide_result
 
     return CheckResult(
         name,
@@ -878,104 +779,55 @@ def cloudflare_export_ready_static(files: Mapping[str, str | None]) -> CheckResu
     a D1 binding, `run_worker_first` routing, or an admin-secret template — those have
     no meaning for a static site. It STILL fails closed on a leaked secret: a real
     `.dev.vars` in the export is rejected. Config + doc completeness, NOT a deploy."""
+    from .local_verify_parts._cf_export import (
+        _missing_deliverables_result,
+        _owner_guide_result,
+        _parse_wrangler_cfg,
+        _static_assets_result,
+        _static_d1_absence_result,
+        _static_main_result,
+        _static_real_secret_result,
+        _static_schema_table_absence_result,
+        _static_worker_first_absence_result,
+    )
+
     name = "cloudflare_export_ready"
 
-    missing = [p for p in STATIC_CF_EXPORT_FILES if not (files.get(p) or "").strip()]
-    if missing:
-        return CheckResult(
-            name,
-            False,
-            "missing Cloudflare export deliverable(s): "
-            f"{', '.join(missing)}. Re-run app_create to regenerate the export tree.",
-        )
+    missing_result = _missing_deliverables_result(files, STATIC_CF_EXPORT_FILES, name)
+    if missing_result is not None:
+        return missing_result
 
-    try:
-        cfg = tomllib.loads(files["wrangler.toml"] or "")
-    except tomllib.TOMLDecodeError as exc:
-        return CheckResult(name, False, f"wrangler.toml is not valid TOML: {exc}")
+    cfg = _parse_wrangler_cfg(files, name)
+    if isinstance(cfg, CheckResult):
+        return cfg
 
-    main = cfg.get("main")
-    if not (isinstance(main, str) and main.lstrip("./") == _CF_WORKER_ENTRY):
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml Worker entry main does not point at the worker "
-            f'(main = "{_CF_WORKER_ENTRY}") — the static-asset Worker would not serve.',
-        )
+    main_result = _static_main_result(cfg, name)
+    if main_result is not None:
+        return main_result
 
-    # NEGATIVE assertion: a STATIC primitive has NO server data plane, so a D1 binding
-    # is a lead-gen leftover that must FAIL verify (not pass). A directory app that
-    # still carries `[[d1_databases]]` is a half-converted lead-gen tree.
-    if cfg.get("d1_databases"):
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml declares a [[d1_databases]] binding, but a STATIC directory "
-            "site has no D1 data plane — this is a lead-gen leftover. Remove the "
-            "[[d1_databases]] binding (a static primitive ships no database).",
-        )
+    d1_result = _static_d1_absence_result(cfg, name)
+    if d1_result is not None:
+        return d1_result
 
-    assets = cfg.get("assets")
-    if not (isinstance(assets, dict) and assets.get("binding") == "ASSETS"):
-        return CheckResult(
-            name,
-            False,
-            'wrangler.toml [assets] does not bind "ASSETS" for the built SPA.',
-        )
-    if assets.get("not_found_handling") != _CF_SPA_NOT_FOUND:
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml [assets] does not set "
-            f'not_found_handling = "{_CF_SPA_NOT_FOUND}" — client-side routes would '
-            "404 instead of resolving to index.html.",
-        )
+    assets_result = _static_assets_result(cfg, name)
+    if assets_result is not None:
+        return assets_result
 
-    # NEGATIVE assertion: a STATIC site serves everything from the asset layer — there
-    # is no Worker-first dynamic route. `assets.run_worker_first` is a lead-gen routing
-    # leftover (it shadows the asset layer with the Worker) and must FAIL verify.
-    if assets.get("run_worker_first") is not None:
-        return CheckResult(
-            name,
-            False,
-            "wrangler.toml [assets] sets run_worker_first, but a STATIC directory site "
-            "has no Worker-first dynamic route — this is a lead-gen routing leftover. "
-            "Remove assets.run_worker_first so the asset layer serves everything.",
-        )
+    worker_first_result = _static_worker_first_absence_result(cfg, name)
+    if worker_first_result is not None:
+        return worker_first_result
 
-    # NEGATIVE assertion: the static schema.sql must be table-free. A `CREATE TABLE`
-    # DDL is a lead-gen leftover (the directory primitive persists nothing) and must
-    # FAIL verify — the placeholder schema.sql is comment-only.
-    schema_sql = files.get("schema.sql") or ""
-    if _CF_CREATE_TABLE_RE.search(schema_sql):
-        return CheckResult(
-            name,
-            False,
-            "schema.sql contains a CREATE TABLE statement, but a STATIC directory site "
-            "persists nothing — this is a lead-gen schema leftover. The static "
-            "schema.sql must be table-free (comment-only placeholder).",
-        )
+    schema_result = _static_schema_table_absence_result(files, name)
+    if schema_result is not None:
+        return schema_result
 
-    # Secret-safety still holds: a static site has no secret, so a real .dev.vars in
-    # the export is always a leak.
-    real_secret = files.get(".dev.vars")
-    if real_secret is not None and real_secret.strip():
-        return CheckResult(
-            name,
-            False,
-            "a real .dev.vars file is present in the export — secrets must never be "
-            "generated or committed. Remove .dev.vars.",
-        )
+    secret_result = _static_real_secret_result(files, name)
+    if secret_result is not None:
+        return secret_result
 
-    guide = files["OWNER_GUIDE.md"] or ""
-    missing_steps = [s for s in _CF_STATIC_GUIDE_REQUIRED_STEPS if s not in guide]
-    if missing_steps:
-        return CheckResult(
-            name,
-            False,
-            "OWNER_GUIDE.md does not document the required deploy step(s): "
-            f"{', '.join(missing_steps)}.",
-        )
+    guide_result = _owner_guide_result(files, _CF_STATIC_GUIDE_REQUIRED_STEPS, name)
+    if guide_result is not None:
+        return guide_result
 
     return CheckResult(
         name,
