@@ -24,6 +24,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Insert scripts/ so ``from architecture import ...`` resolves in every test.
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from architecture import source_governance  # noqa: E402
+
 
 def write(path: Path, content: str) -> Path:
     """Write a file, creating parent directories, and return the path."""
@@ -388,4 +390,75 @@ def assert_observation_evidence_boundaries(
     problems = check(root, scan_typescript(root))
     assert_problem_contains(
         problems, "symbol Declared", "outside registered ranges", ts_path
+    )
+
+
+def synthetic_legacy_row(
+    path: str,
+    *,
+    symbol: str = "Bad",
+    parameter: str = "services",
+    annotation: str = "dict",
+) -> dict[str, str]:
+    """Return one well-formed ``legacy_disguised_collaborators`` row.
+
+    The live registry is legitimately empty — the campaign removed every
+    legacy disguise — so mutation tests must synthesize the row they intend
+    to corrupt instead of borrowing ``legacy[0]``. Borrowing made those tests
+    silently dependent on a defect existing in production, and they raised
+    ``IndexError`` the first time the suite was ever run.
+    """
+    return {
+        "path": path,
+        "symbol": symbol,
+        "parameter": parameter,
+        "annotation": annotation,
+        "disposition_id": "DM-001",
+        "owner_package": "PKG-06-RUNTIME",
+        "removal_package": "PKG-06-RUNTIME",
+        "reason": (
+            "DM-001 runtime back-reference exposes ConversationRuntime "
+            "collaborators through self._rt"
+        ),
+    }
+
+
+def write_budget_authority(
+    root: Path,
+    *,
+    composition_facades: list[dict] | None = None,
+    composition_roots: list[dict] | None = None,
+    dependency_aggregates: list[dict] | None = None,
+    effect_owners: list[dict] | None = None,
+    legacy_disguised_collaborators: list[dict] | None = None,
+) -> None:
+    policy_data = json.loads((REPO_ROOT / "architecture/policy.json").read_text())
+    ownership = json.loads(
+        (REPO_ROOT / "architecture/ownership.json").read_text()
+    )
+    ownership["composition_facades"] = composition_facades or []
+    ownership["composition_roots"] = composition_roots or []
+    ownership["dependency_aggregates"] = dependency_aggregates or []
+    ownership["effect_owners"] = effect_owners or []
+    frozen_legacy = ownership["legacy_disguised_collaborators"]
+    ownership["legacy_disguised_collaborators"] = (
+        frozen_legacy
+        if legacy_disguised_collaborators is None
+        else legacy_disguised_collaborators
+    )
+    write(root / "architecture/policy.json", json.dumps(policy_data))
+    write(root / "architecture/ownership.json", json.dumps(ownership))
+    for row in frozen_legacy:
+        write_and_track(
+            root,
+            row["path"],
+            "from typing import Any\n\n"
+            f"class {row['symbol']}:\n"
+            "    def __init__(self, runtime: Any) -> None:\n"
+            "        self._rt = runtime\n",
+        )
+    write_frozen_constructor_fixtures(
+        root,
+        source_governance.FROZEN_GENERIC_COLLABORATORS,
+        source_governance.FROZEN_GENERIC_SCALAR_PARAMETERS,
     )
