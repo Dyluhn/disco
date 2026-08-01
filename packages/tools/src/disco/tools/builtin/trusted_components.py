@@ -28,6 +28,7 @@ from disco.core.trusted_components.lockfile import (
     record_install,
 )
 from disco.core.trusted_components.registry import (
+    LoadedComponent,
     TrustedComponentRegistry,
     parse_requirement,
 )
@@ -85,6 +86,151 @@ class AddTrustedComponentArgs(BaseModel):
     )
 
 
+def _unknown_component_outcome(
+    registry: TrustedComponentRegistry, args: AddTrustedComponentArgs
+) -> ToolOutcome:
+    versions = registry.versions(args.name)
+    detail = (
+        f"no version {args.version!r} of {args.name!r} — available: {', '.join(versions)}"
+        if versions
+        else f"unknown component {args.name!r}"
+    )
+    return ToolOutcome(
+        success=False,
+        error="unknown_component",
+        content=f"{detail}. Catalog:\n{_catalog()}",
+    )
+
+
+async def _dependency_files_present(
+    ctx: ToolContext, registry: TrustedComponentRegistry, name: str, version: str
+) -> bool:
+    """A lock entry whose files were DELETED is not a present dependency (review
+    finding: eject + rm left the edge "satisfied" while zero bytes existed).
+    Structural presence = at least one pinned file of the locked version still on
+    disk."""
+    assert ctx.sandbox is not None
+    dep_comp = registry.get(name, version)
+    if dep_comp is None:  # unknown version → verify handles it
+        return True
+    for dep_rel in dep_comp.manifest.files:
+        if await ctx.sandbox.file_exists(_install_path(name, dep_rel)):
+            return True
+    return False
+
+
+async def _check_requirements(
+    ctx: ToolContext,
+    registry: TrustedComponentRegistry,
+    comp: LoadedComponent,
+    lock: ComponentsLock,
+) -> ToolOutcome | None:
+    """Requires preflight (spec §3.1.2) — fail closed, but the refusal names the
+    exact missing edge AND the command that fixes it. Ejected dependencies still
+    satisfy the edge structurally (D6); verify is what taints the labels."""
+    for entry in comp.manifest.requires:
+        req = parse_requirement(entry)
+        installed = lock.components.get(req.name)
+        if installed is None or not req.satisfied_by(req.name, installed.version):
+            have = f"{req.name} {installed.version}" if installed else "nothing"
+            return ToolOutcome(
+                success=False,
+                error="missing_dependency",
+                content=(
+                    f"{comp.manifest.name} requires {entry}; installed: {have}. "
+                    f"Install it first: add_trusted_component(name='{req.name}')."
+                ),
+            )
+        if not await _dependency_files_present(ctx, registry, req.name, installed.version):
+            return ToolOutcome(
+                success=False,
+                error="missing_dependency",
+                content=(
+                    f"{comp.manifest.name} requires {entry}, and {req.name} is in "
+                    f"the lockfile but its files are GONE from "
+                    f"{INSTALL_PREFIX}/{req.name}/ — reinstall it first: "
+                    f"add_trusted_component(name='{req.name}')."
+                ),
+            )
+    return None
+
+
+async def _resolve_component_write_plan(
+    ctx: ToolContext, comp: LoadedComponent
+) -> tuple[dict[str, bytes], dict[str, bytes]] | ToolOutcome:
+    """Collision check (never clobber): byte-identical files are fine (idempotent
+    re-install), anything else refuses with the list."""
+    assert ctx.sandbox is not None
+    tree = comp.install_tree()
+    collisions: list[str] = []
+    to_write: dict[str, bytes] = {}
+    for relpath, data in tree.items():
+        target = _install_path(comp.manifest.name, relpath)
+        if await ctx.sandbox.file_exists(target):
+            if await ctx.sandbox.read_file(target) == data:
+                continue
+            collisions.append(target)
+        else:
+            to_write[target] = data
+    if collisions:
+        return ToolOutcome(
+            success=False,
+            error="collision",
+            content=(
+                "these files already exist with DIFFERENT content — refusing to "
+                "clobber your work: " + ", ".join(sorted(collisions)) + ". Move or "
+                "revert them (fresh component copies) and retry."
+            ),
+        )
+    return tree, to_write
+
+
+def _build_install_outcome(
+    comp: LoadedComponent, tree: dict[str, bytes], to_write: dict[str, bytes]
+) -> ToolOutcome:
+    m = comp.manifest
+    mounts_bits = []
+    if m.mounts.routes_prefix:
+        mounts_bits.append(f"routes live under {m.mounts.routes_prefix}")
+    if m.mounts.middleware:
+        mounts_bits.append(
+            f"middleware {m.mounts.middleware} mounts app-wide (opt-OUT via the config surface)"
+        )
+    mounts_line = ("Mounts: " + "; ".join(mounts_bits) + ".\n\n") if mounts_bits else ""
+    guide = tree.get(m.guide, b"").decode("utf-8", errors="replace")
+    return ToolOutcome(
+        success=True,
+        content=(
+            f"installed trusted component '{m.name}' {m.version} into "
+            f"{INSTALL_PREFIX}/{m.name}/ — core files are integrity-pinned (edit "
+            f"config/, never core/). {mounts_line}{guide}"
+        ),
+        structured={
+            "name": m.name,
+            "version": m.version,
+            "written": sorted(to_write),
+            "config_surface": [_install_path(m.name, p) for p in m.config_surface],
+        },
+    )
+
+
+async def _install_component(
+    ctx: ToolContext,
+    comp: LoadedComponent,
+    lock: ComponentsLock,
+    tree: dict[str, bytes],
+    to_write: dict[str, bytes],
+) -> ToolOutcome:
+    assert ctx.sandbox is not None
+    for target, data in to_write.items():
+        await _atomic_write(ctx.sandbox, target, data)
+    record_install(
+        lock, comp.manifest.name, comp.manifest.version, datetime.now(UTC).isoformat()
+    )
+    await _atomic_write(ctx.sandbox, LOCKFILE_RELPATH, dump_lock(lock))
+    return _build_install_outcome(comp, tree, to_write)
+
+
 class AddTrustedComponentTool:
     definition = ToolDef(
         name="add_trusted_component",
@@ -120,118 +266,22 @@ class AddTrustedComponentTool:
         registry = TrustedComponentRegistry.default()
         comp = registry.get(args.name, args.version)
         if comp is None:
-            versions = registry.versions(args.name)
-            detail = (
-                f"no version {args.version!r} of {args.name!r} — available: {', '.join(versions)}"
-                if versions
-                else f"unknown component {args.name!r}"
-            )
-            return ToolOutcome(
-                success=False,
-                error="unknown_component",
-                content=f"{detail}. Catalog:\n{_catalog()}",
-            )
+            return _unknown_component_outcome(registry, args)
 
         try:
             lock = await _load_lock(ctx)
         except LockfileCorrupt as exc:
             return _corrupt_refusal(exc)
 
-        # Requires preflight (spec §3.1.2) — fail closed, but the refusal names
-        # the exact missing edge AND the command that fixes it. Ejected
-        # dependencies still satisfy the edge structurally (D6); verify is what
-        # taints the labels.
-        for entry in comp.manifest.requires:
-            req = parse_requirement(entry)
-            installed = lock.components.get(req.name)
-            if installed is None or not req.satisfied_by(req.name, installed.version):
-                have = f"{req.name} {installed.version}" if installed else "nothing"
-                return ToolOutcome(
-                    success=False,
-                    error="missing_dependency",
-                    content=(
-                        f"{comp.manifest.name} requires {entry}; installed: {have}. "
-                        f"Install it first: add_trusted_component(name='{req.name}')."
-                    ),
-                )
-            # A lock entry whose files were DELETED is not a present dependency
-            # (review finding: eject + rm left the edge "satisfied" while zero
-            # bytes existed). Structural presence = at least one pinned file of
-            # the locked version still on disk.
-            dep_comp = registry.get(req.name, installed.version)
-            dep_present = dep_comp is None  # unknown version → verify handles it
-            if dep_comp is not None:
-                for dep_rel in dep_comp.manifest.files:
-                    if await ctx.sandbox.file_exists(_install_path(req.name, dep_rel)):
-                        dep_present = True
-                        break
-            if not dep_present:
-                return ToolOutcome(
-                    success=False,
-                    error="missing_dependency",
-                    content=(
-                        f"{comp.manifest.name} requires {entry}, and {req.name} is in "
-                        f"the lockfile but its files are GONE from "
-                        f"{INSTALL_PREFIX}/{req.name}/ — reinstall it first: "
-                        f"add_trusted_component(name='{req.name}')."
-                    ),
-                )
+        missing = await _check_requirements(ctx, registry, comp, lock)
+        if missing is not None:
+            return missing
 
-        # Collision check (never clobber): byte-identical files are fine
-        # (idempotent re-install), anything else refuses with the list.
-        tree = comp.install_tree()
-        collisions: list[str] = []
-        to_write: dict[str, bytes] = {}
-        for relpath, data in tree.items():
-            target = _install_path(comp.manifest.name, relpath)
-            if await ctx.sandbox.file_exists(target):
-                if await ctx.sandbox.read_file(target) == data:
-                    continue
-                collisions.append(target)
-            else:
-                to_write[target] = data
-        if collisions:
-            return ToolOutcome(
-                success=False,
-                error="collision",
-                content=(
-                    "these files already exist with DIFFERENT content — refusing to "
-                    "clobber your work: " + ", ".join(sorted(collisions)) + ". Move or "
-                    "revert them (fresh component copies) and retry."
-                ),
-            )
-
-        for target, data in to_write.items():
-            await _atomic_write(ctx.sandbox, target, data)
-        record_install(
-            lock, comp.manifest.name, comp.manifest.version, datetime.now(UTC).isoformat()
-        )
-        await _atomic_write(ctx.sandbox, LOCKFILE_RELPATH, dump_lock(lock))
-
-        m = comp.manifest
-        mounts_bits = []
-        if m.mounts.routes_prefix:
-            mounts_bits.append(f"routes live under {m.mounts.routes_prefix}")
-        if m.mounts.middleware:
-            mounts_bits.append(
-                f"middleware {m.mounts.middleware} mounts app-wide (opt-OUT via the config surface)"
-            )
-        mounts_line = ("Mounts: " + "; ".join(mounts_bits) + ".\n\n") if mounts_bits else ""
-        guide = tree.get(m.guide, b"").decode("utf-8", errors="replace")
-        return ToolOutcome(
-            success=True,
-            content=(
-                f"installed trusted component '{m.name}' {m.version} into "
-                f"{INSTALL_PREFIX}/{m.name}/ — core files are integrity-pinned (edit "
-                f"config/, never core/). {mounts_line}{guide}"
-            ),
-            structured={
-                "name": m.name,
-                "version": m.version,
-                "written": sorted(to_write),
-                "config_surface": [_install_path(m.name, p) for p in m.config_surface],
-            },
-        )
+        plan = await _resolve_component_write_plan(ctx, comp)
+        if isinstance(plan, ToolOutcome):
+            return plan
+        tree, to_write = plan
+        return await _install_component(ctx, comp, lock, tree, to_write)
 
 
 class EjectTrustedComponentArgs(BaseModel):
