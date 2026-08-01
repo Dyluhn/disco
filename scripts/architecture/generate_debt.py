@@ -232,10 +232,13 @@ RESOLVED_IDS = (
     | EPIC10_RESOLVED_IDS
 )
 # Epic 10-A registered 75 rows (EXECUTOR 9 + SANDBOX-host 18 + MEDIA 31 +
-# PROJECTS 17): 383 -> 308. Every id is `PY-`, so EXPECTED_OBSERVATIONS is
-# unchanged, and no row was adjudicated, so the tree-count offset stays at the
-# standing +2 (EventStore, BuildKernel).
-EXPECTED_ACTIVE_DEBT_ROWS = 308
+# PROJECTS 17): 383 -> 308. Epic 10-B registered 37 (the tools/sandbox subset of
+# PKG-10-SANDBOX, of 40): 308 -> 271. Every id in both is `PY-`, so
+# EXPECTED_OBSERVATIONS is unchanged, and NEITHER sub-epic adjudicated a row, so
+# the tree-count offset stays at the standing +2 (EventStore, BuildKernel).
+# Reconciliation at the 10-B seal: 209 python tree violations + 62 TypeScript
+# rows = 271 = 308 - 37.
+EXPECTED_ACTIVE_DEBT_ROWS = 271
 EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,

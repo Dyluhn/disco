@@ -226,4 +226,17 @@ CURRENT_LOCATION_OVERRIDES = {
     # PY-0836-SEAM-EVALUATION-2026-07-31.md for why it was neither split nor
     # adjudicated.
     "PY-0836": ("packages/tools/src/disco/tools/projects/store.py:ProjectStore:443-852"),
+    # Epic 10-B: the tools/sandbox extraction shed every size row on these three
+    # classes but left their `public_methods_gt_12` rows ACTIVE, so each needs a
+    # current anchor. All three faithfully implement the 11-member
+    # `SandboxInstance` Protocol — which alone fills 11 of the cap's 12, so no
+    # seam can reach it — but root's consumer re-analysis found criterion 2
+    # failing (`host_service_relay_url`; `ensure_service` / `tracked_services` /
+    # `peek_recovered_memory_facts`), so none was adjudicated. See
+    # PY-0846-0873-0877-SEAM-EVALUATION-2026-07-31.md.
+    "PY-0846": ("packages/tools/src/disco/tools/sandbox/_container.py:ContainerInstance:414-780"),
+    "PY-0873": (
+        "packages/tools/src/disco/tools/sandbox/process.py:ProcessSandboxInstance:214-591"
+    ),
+    "PY-0877": ("packages/tools/src/disco/tools/sandbox/session.py:SandboxSession:80-457"),
 }

@@ -64,8 +64,39 @@ EPIC10A_RESOLVED_IDS = (
     | PKG10_PROJECTS_RESOLVED_IDS
 )
 
+# 37 of 40 — the `tools/sandbox` subset of PKG-10-SANDBOX (the package's
+# remaining 8 rows are the browser cluster, which is 10-C). Set equality was
+# checked against `debt.json` owner_package intersected with the live tree
+# delta, keyed on (path, qualified_symbol, rule); the 37 registered ids are
+# exactly the 37 violations the scan shows cleared. Never transcribed.
+#
+# PY-0846 (`ContainerInstance`, 15), PY-0873 (`ProcessSandboxInstance`, 14) and
+# PY-0877 (`SandboxSession`, 28) stay ACTIVE. All three DO faithfully implement
+# the 11-member `SandboxInstance` Protocol, so the decision doc's premise holds
+# for them (unlike PY-0836) — but the Protocol alone fills 11 of the cap's 12,
+# so no seam can reach 12, and root's own consumer re-analysis found criterion 2
+# failing: `host_service_relay_url` (both container classes) and
+# `ensure_service` / `tracked_services` / `peek_recovered_memory_facts`
+# (`SandboxSession`) have ZERO production consumers. Root did not self-authorize
+# an adjudication the binding criteria reject. See
+# PY-0846-0873-0877-SEAM-EVALUATION-2026-07-31.md.
+PKG10_SANDBOX_TOOLS_RESOLVED_IDS = frozenset(
+    f"PY-{number:04d}"
+    for number in (
+        *range(727, 729),
+        *range(844, 846),
+        *range(847, 873),
+        *range(874, 877),
+        *range(878, 882),
+    )
+)
+
+# Epic 10-B registered 37 rows: the tools/sandbox subset of PKG-10-SANDBOX.
+# EXPECTED_ACTIVE_DEBT_ROWS 308 -> 271.
+EPIC10B_RESOLVED_IDS = PKG10_SANDBOX_TOOLS_RESOLVED_IDS
+
 # --- Epic 10 aggregate -----------------------------------------------------
 # `generate_debt.py` imports ONLY this name, so sealing 10-B and 10-C means
 # adding their sets above and unioning them in here — the generator itself
 # never has to change again for Epic 10, and stays inside its 700-line budget.
-EPIC10_RESOLVED_IDS = EPIC10A_RESOLVED_IDS
+EPIC10_RESOLVED_IDS = EPIC10A_RESOLVED_IDS | EPIC10B_RESOLVED_IDS

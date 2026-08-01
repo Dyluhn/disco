@@ -6734,7 +6734,7 @@
   {
     "id": "PY-0727",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/scripts/verify_local_socket.py:main:50-198",
@@ -6743,7 +6743,7 @@
   {
     "id": "PY-0728",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/scripts/verify_local_socket.py:main:50-198",
@@ -7787,7 +7787,7 @@
   {
     "id": "PY-0844",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:bounded_list_result:534-572",
@@ -7796,7 +7796,7 @@
   {
     "id": "PY-0845",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:ContainerInstance:976-1615",
@@ -7808,13 +7808,13 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
-    "location": "packages/tools/src/disco/tools/sandbox/_container.py:ContainerInstance:976-1615",
+    "location": "packages/tools/src/disco/tools/sandbox/_container.py:ContainerInstance:414-780",
     "role_category": "python service public methods gt 12 candidate"
   },
   {
     "id": "PY-0847",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:reconcile_orphan_aux_resources:1677-1818",
@@ -7823,7 +7823,7 @@
   {
     "id": "PY-0848",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:reconcile_orphan_aux_resources:1677-1818",
@@ -7832,7 +7832,7 @@
   {
     "id": "PY-0849",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/_container.py:<module>:1-1852",
@@ -7841,7 +7841,7 @@
   {
     "id": "PY-0850",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/capability_relay.py:_read_request:154-228",
@@ -7850,7 +7850,7 @@
   {
     "id": "PY-0851",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/capability_relay.py:forward:340-430",
@@ -7859,7 +7859,7 @@
   {
     "id": "PY-0852",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/gvisor.py:GvisorSandboxService:216-937",
@@ -7868,7 +7868,7 @@
   {
     "id": "PY-0853",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/gvisor.py:_setup_filtered_egress:317-495",
@@ -7877,7 +7877,7 @@
   {
     "id": "PY-0854",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/gvisor.py:_start_container:590-715",
@@ -7886,7 +7886,7 @@
   {
     "id": "PY-0855",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/gvisor.py:_destroy:855-935",
@@ -7895,7 +7895,7 @@
   {
     "id": "PY-0856",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/gvisor.py:<module>:1-937",
@@ -7904,7 +7904,7 @@
   {
     "id": "PY-0857",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:ProcessKernel:311-769",
@@ -7913,7 +7913,7 @@
   {
     "id": "PY-0858",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:execute:369-484",
@@ -7922,7 +7922,7 @@
   {
     "id": "PY-0859",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:_ensure_gateway:839-963",
@@ -7931,7 +7931,7 @@
   {
     "id": "PY-0860",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:execute:988-1117",
@@ -7940,7 +7940,7 @@
   {
     "id": "PY-0861",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:execute:988-1117",
@@ -7949,7 +7949,7 @@
   {
     "id": "PY-0862",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/kernel.py:<module>:1-1320",
@@ -7958,7 +7958,7 @@
   {
     "id": "PY-0863",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/local.py:_start_container:59-203",
@@ -7967,7 +7967,7 @@
   {
     "id": "PY-0864",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/local.py:_start_container:59-203",
@@ -7976,7 +7976,7 @@
   {
     "id": "PY-0865",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:PodmanSandboxService:648-1405",
@@ -7985,7 +7985,7 @@
   {
     "id": "PY-0866",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:_setup_filtered_egress:755-951",
@@ -7994,7 +7994,7 @@
   {
     "id": "PY-0867",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:_setup_filtered_egress:755-951",
@@ -8003,7 +8003,7 @@
   {
     "id": "PY-0868",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:_start_container:1066-1216",
@@ -8012,7 +8012,7 @@
   {
     "id": "PY-0869",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:_start_container:1066-1216",
@@ -8021,7 +8021,7 @@
   {
     "id": "PY-0870",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:_destroy:1323-1403",
@@ -8030,7 +8030,7 @@
   {
     "id": "PY-0871",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/podman.py:<module>:1-1405",
@@ -8039,7 +8039,7 @@
   {
     "id": "PY-0872",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/process.py:ProcessSandboxInstance:221-774",
@@ -8051,13 +8051,13 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
-    "location": "packages/tools/src/disco/tools/sandbox/process.py:ProcessSandboxInstance:221-774",
+    "location": "packages/tools/src/disco/tools/sandbox/process.py:ProcessSandboxInstance:214-591",
     "role_category": "python service public methods gt 12 candidate"
   },
   {
     "id": "PY-0874",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/process.py:_read_securely:450-514",
@@ -8066,7 +8066,7 @@
   {
     "id": "PY-0875",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/process.py:<module>:1-918",
@@ -8075,7 +8075,7 @@
   {
     "id": "PY-0876",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/session.py:SandboxSession:64-835",
@@ -8087,13 +8087,13 @@
     "state": "active",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
-    "location": "packages/tools/src/disco/tools/sandbox/session.py:SandboxSession:64-835",
+    "location": "packages/tools/src/disco/tools/sandbox/session.py:SandboxSession:80-457",
     "role_category": "python service public methods gt 12 candidate"
   },
   {
     "id": "PY-0878",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/shell_sessions.py:ShellSessionManager:82-855",
@@ -8102,7 +8102,7 @@
   {
     "id": "PY-0879",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/shell_sessions.py:_backgrounded:372-402",
@@ -8111,7 +8111,7 @@
   {
     "id": "PY-0880",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/shell_sessions.py:exec:427-561",
@@ -8120,7 +8120,7 @@
   {
     "id": "PY-0881",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/sandbox/shell_sessions.py:exec:427-561",
