@@ -64,6 +64,10 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/inventory_static.py",
     "scripts/architecture/generated.py",
     "scripts/architecture/generate_debt.py",
+    # Epic 10's resolved-ID sets were split out of generate_debt.py (which was
+    # at 690 of its own 700-line budget). They decide which rows leave the
+    # active ledger, so they are hash-gated exactly like the generator.
+    "scripts/architecture/debt_resolved_epic10.py",
     "scripts/architecture/generate_inventories.py",
     "scripts/architecture/yaml_parser.py",
     "docs/governance/SEAL-INVOCATION.json",

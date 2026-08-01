@@ -37,6 +37,15 @@ try:
 except ImportError:
     from debt_location_overrides import CURRENT_LOCATION_OVERRIDES
 
+# Epic 10's sub-epic ID sets live in their own (also sealed) module: this file
+# was at 690 logical lines against a 700 cap before Epic 10-A, so three
+# sub-epics' worth of sets would breach the budget this generator enforces.
+# Only the aggregate is imported, so sealing 10-B/10-C does not touch this file.
+try:
+    from .debt_resolved_epic10 import EPIC10_RESOLVED_IDS
+except ImportError:
+    from debt_resolved_epic10 import EPIC10_RESOLVED_IDS
+
 # Accepted packages own these exact resolved dispositions. Keep the immutable ID
 # universe; only transition accepted package IDs from active to resolved.
 PKG02_RESOLVED_IDS = frozenset({"PY-0890", "PY-0891", "DM-010"})
@@ -220,8 +229,13 @@ RESOLVED_IDS = (
     | PKG08_FINISH_RESOLVED_IDS
     | PKG09_RELEASE_RESOLVED_IDS
     | PKG09_CONNECTORS_RESOLVED_IDS
+    | EPIC10_RESOLVED_IDS
 )
-EXPECTED_ACTIVE_DEBT_ROWS = 383
+# Epic 10-A registered 75 rows (EXECUTOR 9 + SANDBOX-host 18 + MEDIA 31 +
+# PROJECTS 17): 383 -> 308. Every id is `PY-`, so EXPECTED_OBSERVATIONS is
+# unchanged, and no row was adjudicated, so the tree-count offset stays at the
+# standing +2 (EventStore, BuildKernel).
+EXPECTED_ACTIVE_DEBT_ROWS = 308
 EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,

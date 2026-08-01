@@ -207,4 +207,23 @@ CURRENT_LOCATION_OVERRIDES = {
         "WorkspaceCoordinator:125-815"
     ),
     "PY-0359": ("packages/agent-server/src/disco/agent_server/workspace_service.py:<module>:1-815"),
+    # Epic 10-A: DM-022 spans two regions that the PKG-10-PROJECTS extraction
+    # moved apart. The manifest/version constant block stayed in `store.py`
+    # (68-82 -> 130-143); `reserve_version_seq`, the version-allocator half,
+    # moved to `store_parts/version_coordinator.py` (1152-1208 -> 490-514). The
+    # observation itself is unchanged — the concern is still distributed, now
+    # across two modules.
+    "DM-022": (
+        "packages/tools/src/disco/tools/projects/store.py:"
+        "ProjectStore manifest/version layout:130-143 + "
+        "packages/tools/src/disco/tools/projects/store_parts/version_coordinator.py:"
+        "reserve_version_seq:490-514"
+    ),
+    # Epic 10-A: PKG-10-PROJECTS extracted `store.py`'s interior into
+    # `store_parts/`, shifting `ProjectStore` from 1499-1995 to 443-852. The row
+    # stays ACTIVE — `ProjectStore` still exposes 20 public methods against a cap
+    # of 12 — so it needs a current anchor rather than a resolved-id entry. See
+    # PY-0836-SEAM-EVALUATION-2026-07-31.md for why it was neither split nor
+    # adjudicated.
+    "PY-0836": ("packages/tools/src/disco/tools/projects/store.py:ProjectStore:443-852"),
 }

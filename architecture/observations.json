@@ -90,7 +90,7 @@
   {
     "id": "DM-022",
     "kind": "distributed_concern",
-    "location": "packages/tools/src/disco/tools/projects/store.py:ProjectStore manifest/version layout:68-82,1152-1208",
+    "location": "packages/tools/src/disco/tools/projects/store.py:ProjectStore manifest/version layout:130-143 + packages/tools/src/disco/tools/projects/store_parts/version_coordinator.py:reserve_version_seq:490-514",
     "concern": "project manifest is unversioned while version allocator/digests are serialized compatibility boundaries",
     "owner_package": "PKG-10-PROJECTS",
     "source_disposition_id": "DM-022"
