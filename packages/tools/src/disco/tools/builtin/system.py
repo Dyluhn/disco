@@ -165,6 +165,68 @@ class CodeExecArgs(BaseModel):
     code: str = Field(description="Source code to execute.")
 
 
+async def _run_python_cell(ctx: ToolContext, code: str) -> ToolOutcome:
+    """Execute one cell in the persistent IPython kernel (BP-08) and map its
+    result to a ToolOutcome, sanitizing every stream before it is persisted."""
+    assert ctx.kernel is not None
+    # Cap the kernel timeout to slightly less than the tool timeout
+    # (floored: a tiny tool timeout must not go zero/negative on the kernel)
+    kernel_timeout = max(5, min(ctx.timeout_s - 5, 120))
+    res = await ctx.kernel.execute(code, timeout_s=kernel_timeout)
+    stdout, stdout_sanitized = sanitize_execution_output(res.stdout, stream="stdout")
+    stderr, stderr_sanitized = sanitize_execution_output(res.stderr, stream="stderr")
+    result_repr, result_sanitized = sanitize_execution_output(
+        res.result_repr or "", stream="result"
+    )
+    traceback, traceback_sanitized = sanitize_execution_output(
+        res.error_traceback or "", stream="traceback"
+    )
+    content_parts = [part for part in (stdout, stderr) if part]
+    if result_repr:
+        content_parts.append(f"→ {result_repr}")
+    if traceback:
+        content_parts.append(traceback)
+    content_parts.extend(f"plot saved: {image}" for image in res.images)
+    structured = {
+        "ok": res.ok,
+        "stdout": stdout,
+        "stderr": stderr,
+        "result_repr": result_repr or None,
+        "error_traceback": traceback or None,
+        "images": list(res.images),
+        "timed_out": res.timed_out,
+        "restarted": res.restarted,
+        "interrupt_attempted": res.interrupt_attempted,
+        "interrupt_failed": res.interrupt_failed,
+        "restart_attempted": res.restart_attempted,
+        "restart_failed": res.restart_failed,
+        "protocol_failed": res.protocol_failed,
+    }
+    sanitized_streams = {
+        name: metadata
+        for name, metadata in (
+            ("stdout", stdout_sanitized),
+            ("stderr", stderr_sanitized),
+            ("result", result_sanitized),
+            ("traceback", traceback_sanitized),
+        )
+        if metadata is not None
+    }
+    if sanitized_streams:
+        structured.update(
+            {
+                "binary_output_sanitized": True,
+                "sanitized_streams": sanitized_streams,
+            }
+        )
+    return ToolOutcome(
+        success=res.ok,
+        content="\n".join(content_parts),
+        structured=structured,
+        artifacts=res.images,
+    )
+
+
 class CodeExecTool:
     definition = ToolDef(
         name="code_exec",
@@ -191,64 +253,7 @@ class CodeExecTool:
         assert ctx.sandbox is not None
         inner = _inner_timeout(ctx.timeout_s)
         if args.language == "python":
-            # Persistent IPython kernel (BP-08)
-            assert ctx.kernel is not None
-            # Cap the kernel timeout to slightly less than the tool timeout
-            # (floored: a tiny tool timeout must not go zero/negative on the kernel)
-            kernel_timeout = max(5, min(ctx.timeout_s - 5, 120))
-            res = await ctx.kernel.execute(args.code, timeout_s=kernel_timeout)
-            stdout, stdout_sanitized = sanitize_execution_output(res.stdout, stream="stdout")
-            stderr, stderr_sanitized = sanitize_execution_output(res.stderr, stream="stderr")
-            result_repr, result_sanitized = sanitize_execution_output(
-                res.result_repr or "", stream="result"
-            )
-            traceback, traceback_sanitized = sanitize_execution_output(
-                res.error_traceback or "", stream="traceback"
-            )
-            content_parts = [part for part in (stdout, stderr) if part]
-            if result_repr:
-                content_parts.append(f"→ {result_repr}")
-            if traceback:
-                content_parts.append(traceback)
-            content_parts.extend(f"plot saved: {image}" for image in res.images)
-            structured = {
-                "ok": res.ok,
-                "stdout": stdout,
-                "stderr": stderr,
-                "result_repr": result_repr or None,
-                "error_traceback": traceback or None,
-                "images": list(res.images),
-                "timed_out": res.timed_out,
-                "restarted": res.restarted,
-                "interrupt_attempted": res.interrupt_attempted,
-                "interrupt_failed": res.interrupt_failed,
-                "restart_attempted": res.restart_attempted,
-                "restart_failed": res.restart_failed,
-                "protocol_failed": res.protocol_failed,
-            }
-            sanitized_streams = {
-                name: metadata
-                for name, metadata in (
-                    ("stdout", stdout_sanitized),
-                    ("stderr", stderr_sanitized),
-                    ("result", result_sanitized),
-                    ("traceback", traceback_sanitized),
-                )
-                if metadata is not None
-            }
-            if sanitized_streams:
-                structured.update(
-                    {
-                        "binary_output_sanitized": True,
-                        "sanitized_streams": sanitized_streams,
-                    }
-                )
-            return ToolOutcome(
-                success=res.ok,
-                content="\n".join(content_parts),
-                structured=structured,
-                artifacts=res.images,
-            )
+            return await _run_python_cell(ctx, args.code)
 
         # Node: one-shot (no cross-cell state — documented).
         fname = "_codeact.js"

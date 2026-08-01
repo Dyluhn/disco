@@ -57,6 +57,51 @@ def _call(name: str, **arguments) -> ToolCall:
     return ToolCall(tool_name=name, arguments=arguments)
 
 
+def _check_exec_capture(r) -> bool:
+    """1. exec genuinely captures (real output + a non-trivial exit code)."""
+    return bool(
+        r.structured
+        and r.structured.get("stdout", "").strip() == "CAPTURED_LIVE"
+        and r.structured.get("exit_code") == 7
+    )
+
+
+def _check_file_roundtrip(rd, ls, esc) -> bool:
+    """2. file round-trip through the tools + jail."""
+    return bool(
+        rd.success
+        and rd.content.strip() == "step1"
+        and "todo.txt" in ls.structured["entries"]
+        and esc.success is False
+    )
+
+
+def _check_timeout_surfaced(t) -> bool:
+    """3. timeout → timed_out surfaced, partial output preserved."""
+    return bool(
+        t.success is False and t.structured.get("timed_out") is True and "partial" in t.content
+    )
+
+
+def _check_sealed_by_default(net) -> bool:
+    """4a. containment: sealed by default (no network)."""
+    return bool("BLOCKED" in net.content or not net.success)
+
+
+def _check_secret_non_leak(env) -> tuple[bool, bool]:
+    """4b. containment: the host-env secret is absent from the box (and exec really ran).
+
+    Returns `(leaked, passed)`.
+    """
+    leaked = SENTINEL in (env.structured.get("stdout", "") or "")
+    return leaked, bool((not leaked) and len(env.structured.get("stdout", "")) > 0)
+
+
+def _check_death_surfaced(died) -> bool:
+    """5a. death surfaced as a clean sandbox_error ToolResult (no raise)."""
+    return bool(died.success is False and (died.structured or {}).get("kind") == "sandbox_error")
+
+
 async def main() -> None:
     os.environ["PMX_LEAK_TEST"] = SENTINEL  # a secret in the agent-server env
     svc = _service()
@@ -73,14 +118,9 @@ async def main() -> None:
 
     # 1. exec genuinely captures (real output + a non-trivial exit code)
     r = await ex.execute(_call("shell", command="echo CAPTURED_LIVE; exit 7"))
-    captured = (
-        r.structured
-        and r.structured.get("stdout", "").strip() == "CAPTURED_LIVE"
-        and r.structured.get("exit_code") == 7
-    )
     ok(
         "1. exec genuinely captures real output + exit code",
-        bool(captured),
+        _check_exec_capture(r),
         f"stdout={r.structured.get('stdout', '').strip()!r} exit={r.structured.get('exit_code')}",
     )
 
@@ -91,10 +131,7 @@ async def main() -> None:
     esc = await ex.execute(_call("file_read", path="../../etc/passwd"))
     ok(
         "2. file round-trip via tools + workspace jail",
-        rd.success
-        and rd.content.strip() == "step1"
-        and "todo.txt" in ls.structured["entries"]
-        and esc.success is False,
+        _check_file_roundtrip(rd, ls, esc),
         f"read={rd.content.strip()!r} jail_rejected={not esc.success}",
     )
 
@@ -102,7 +139,7 @@ async def main() -> None:
     t = await ex.execute(_call("shell", command="echo partial; sleep 30"))
     ok(
         "3. timeout surfaced (timed_out, partial output)",
-        t.success is False and t.structured.get("timed_out") is True and "partial" in t.content,
+        _check_timeout_surfaced(t),
         f"timed_out={t.structured.get('timed_out')} exit={t.structured.get('exit_code')}",
     )
 
@@ -115,16 +152,16 @@ async def main() -> None:
     )
     ok(
         "4a. sealed by default (no network)",
-        "BLOCKED" in net.content or not net.success,
+        _check_sealed_by_default(net),
         net.content.strip()[:30],
     )
 
     # 4b. containment: the host-env secret is absent from the box (and exec really ran)
     env = await ex.execute(_call("shell", command="env"))
-    leaked = SENTINEL in (env.structured.get("stdout", "") or "")
+    leaked, secret_non_leak_ok = _check_secret_non_leak(env)
     ok(
         "4b. secret non-leak (host env absent in box)",
-        (not leaked) and len(env.structured.get("stdout", "")) > 0,
+        secret_non_leak_ok,
         "secret absent; env captured" if not leaked else "LEAKED!",
     )
 
@@ -160,15 +197,15 @@ async def main() -> None:
     fresh = await dx.execute(_call("shell", command="echo FRESH_BOX_OK"))
     healed = fresh.success and "FRESH_BOX_OK" in fresh.content
 
-    ok("5. warm-up call ran on the box", warm.success and "alive" in warm.content, "")
+    ok("5. warm-up call ran on the box", bool(warm.success and "alive" in warm.content), "")
     ok(
         "5a. death surfaced as a clean sandbox_error ToolResult (no raise)",
-        died.success is False and (died.structured or {}).get("kind") == "sandbox_error",
+        _check_death_surfaced(died),
         f"kind={(died.structured or {}).get('kind')}; content={died.content[:40]!r}",
     )
     ok(
         "5b. HEADLINE: session re-created the box → next call healthy (no wedge)",
-        recreated and healed,
+        bool(recreated and healed),
         f"generation {gen_before}→{death_session.generation}; fresh box healthy={healed}",
     )
     await death_session.destroy()

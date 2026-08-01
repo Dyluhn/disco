@@ -12,6 +12,14 @@ class ServerStatusArgs(BaseModel):
     pass
 
 
+def _strip_session_prefix(sess_name: str, prefixes: tuple[str, ...]) -> str:
+    """Drop a leading manager namespace prefix, trying each candidate in turn."""
+    for pref in prefixes:
+        if sess_name.startswith(pref):
+            return sess_name[len(pref) :]
+    return sess_name
+
+
 class ServerStatusTool:
     definition = ToolDef(
         name="server_status",
@@ -63,10 +71,7 @@ class ServerStatusTool:
             if owner is not None and owner.pid is not None:
                 sess_name = owner.session
                 if sess_name:
-                    for pref in prefixes:
-                        if sess_name.startswith(pref):
-                            sess_name = sess_name[len(pref) :]
-                            break
+                    sess_name = _strip_session_prefix(sess_name, prefixes)
 
                 sess_part = f" [session: {sess_name}]" if sess_name else " [session: null]"
                 out_lines.append(
