@@ -462,6 +462,38 @@ async def _deck_export_capabilities_response(
     return {"pptx": True, "html": True, "pdf": available, "pdf_reason": reason}
 
 
+async def _write_deck_targets_with_rollback(
+    session: Any,
+    live_runtime: ConversationRuntime,
+    conversation_id: str,
+    targets: list[tuple[str, bytes]],
+) -> None:
+    """Write every target file, and on ANY write failure best-effort restore
+    the prior bytes for targets already written before surfacing a clean 500.
+
+    Split out of ``_patch_deck_response`` so the write+rollback mechanics read
+    as one named unit; the caller still wraps this in
+    ``live_runtime.workspace_mutation`` for the mutation-boundary bookkeeping."""
+    prior: dict[str, bytes | None] = {
+        rel: await _read_artifact_bytes(live_runtime, conversation_id, rel) for rel, _ in targets
+    }
+    try:
+        for rel, data in targets:
+            await session.write_file(rel, data)
+    except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
+        for rel, _ in targets:
+            restore = prior[rel]
+            if restore is not None:
+                try:
+                    await session.write_file(rel, restore)
+                except Exception:  # noqa: BLE001 — best-effort restore
+                    pass
+        raise HTTPException(
+            status_code=500,
+            detail={"reason": "write_failed", "message": str(exc)},
+        ) from exc
+
+
 async def _patch_deck_response(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -531,25 +563,7 @@ async def _patch_deck_response(
         "deck.patch",
         paths=tuple(sorted(rel for rel, _ in targets)),
     ):
-        prior: dict[str, bytes | None] = {
-            rel: await _read_artifact_bytes(live_runtime, conversation_id, rel)
-            for rel, _ in targets
-        }
-        try:
-            for rel, data in targets:
-                await session.write_file(rel, data)
-        except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
-            for rel, _ in targets:
-                restore = prior[rel]
-                if restore is not None:
-                    try:
-                        await session.write_file(rel, restore)
-                    except Exception:  # noqa: BLE001 — best-effort restore
-                        pass
-            raise HTTPException(
-                status_code=500,
-                detail={"reason": "write_failed", "message": str(exc)},
-            ) from exc
+        await _write_deck_targets_with_rollback(session, live_runtime, conversation_id, targets)
 
     if was_finished:
         try:

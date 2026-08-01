@@ -72,6 +72,47 @@ def _audio_generation_failure(
     return {"reason": reason, "detail": str(exc)}
 
 
+def _clean_post_report_messages(events: list[Any], report_seq: int) -> list[MessageEvent]:
+    """Return post-report user/assistant messages in event order.
+
+    System-plumbing messages (``<system-reminder>`` / ``<reground-anchors>``)
+    are silently skipped — same filter as ``useDeepResearch.followUps``.
+    """
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and (e.seq or 0) > report_seq
+        and e.message.role in ("user", "assistant")
+        and not (e.message.content or "").startswith("<system-reminder>")
+        and not (e.message.content or "").startswith("<reground-anchors>")
+    ]
+
+
+def _pair_selected_follow_ups(
+    post_report: list[MessageEvent],
+    selected: set[int],
+) -> list[tuple[str, str]]:
+    """Pair each selected USER message with its immediately following
+    assistant reply, in event order."""
+    pairs: list[tuple[str, str]] = []
+    i = 0
+    while i < len(post_report):
+        msg = post_report[i]
+        if msg.message.role == "user" and (msg.seq or -1) in selected:
+            question = msg.message.content or ""
+            answer = ""
+            if i + 1 < len(post_report) and post_report[i + 1].message.role == "assistant":
+                answer = post_report[i + 1].message.content or ""
+                i += 2
+            else:
+                i += 1
+            pairs.append((question, answer))
+        else:
+            i += 1
+    return pairs
+
+
 def _gather_follow_up_pairs(
     events: list[Any],
     report: ReportEvent,
@@ -90,34 +131,8 @@ def _gather_follow_up_pairs(
     """
     report_seq = report.seq or 0
     selected = set(follow_up_seqs)
-
-    # Collect all clean post-report messages in event order.
-    post_report: list[MessageEvent] = [
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and (e.seq or 0) > report_seq
-        and e.message.role in ("user", "assistant")
-        and not (e.message.content or "").startswith("<system-reminder>")
-        and not (e.message.content or "").startswith("<reground-anchors>")
-    ]
-
-    pairs: list[tuple[str, str]] = []
-    i = 0
-    while i < len(post_report):
-        msg = post_report[i]
-        if msg.message.role == "user" and (msg.seq or -1) in selected:
-            question = msg.message.content or ""
-            answer = ""
-            if i + 1 < len(post_report) and post_report[i + 1].message.role == "assistant":
-                answer = post_report[i + 1].message.content or ""
-                i += 2
-            else:
-                i += 1
-            pairs.append((question, answer))
-        else:
-            i += 1
-    return pairs
+    post_report = _clean_post_report_messages(events, report_seq)
+    return _pair_selected_follow_ups(post_report, selected)
 
 
 # ── Helper: resolve the export payload (bytes + media type + extension) ───────
@@ -238,6 +253,181 @@ async def _resolve_audio_inputs(
 # ── Router factory ────────────────────────────────────────────────────────────
 
 
+async def _export_report_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    fmt: str,
+    body: ExportBody,
+) -> Response:
+    valid_fmts = frozenset({"md", "pdf"})
+    if fmt not in valid_fmts:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown export format: {fmt!r}. Valid: md, pdf",
+        )
+
+    # Resolve the export bytes (follow-up-aware md/pdf inline, else runtime path).
+    payload, media_type, ext = await _resolve_export_payload(
+        store,
+        runtime,
+        conversation_id,
+        fmt,
+        body.follow_up_seqs or [],
+        theme=body.theme,
+        mode=body.mode,
+    )
+
+    # Build a safe filename from the conversation id
+    safe_cid = conversation_id.replace("/", "-").replace("..", "-")
+    filename = f"report-{safe_cid}{ext}"
+
+    headers: dict[str, str] = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    }
+    if media_type:
+        headers["Content-Type"] = media_type
+
+    return Response(
+        content=payload,
+        status_code=200,
+        media_type=media_type,
+        headers=headers,
+    )
+
+
+async def _report_audio_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    mode: str,
+    body: AudioBody,
+) -> dict:
+    report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
+        store, conversation_id, mode, body.follow_up_seqs or []
+    )
+    try:
+        mp3_path, transcript_path = await generate_report_audio(
+            report,
+            conversation_id=conversation_id,
+            tts_settings=tts,
+            out_dir=out_dir,
+            mode=mode,
+            follow_ups=follow_ups,
+            # Prefer an encrypted-store key for the remote TTS provider; falls
+            # back to the env var by name when the runtime/store isn't wired.
+            resolve_key=runtime._resolve_secret if runtime is not None else None,
+        )
+    except TtsDisabled:
+        raise HTTPException(
+            status_code=503, detail={"ok": False, "reason": "tts_disabled"}
+        ) from None
+    except (TtsBackendError, TurnScriptError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"ok": False, **_audio_generation_failure(exc)},
+        ) from exc
+
+    return {
+        "ok": True,
+        "mp3_url": f"/conversations/{conversation_id}/report/audio/{mp3_path.name}",
+        "transcript_url": (f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"),
+    }
+
+
+async def _report_audio_stream_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    mode: str,
+    body: AudioBody,
+) -> StreamingResponse:
+    report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
+        store, conversation_id, mode, body.follow_up_seqs or []
+    )
+
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _on_progress(event: dict[str, Any]) -> None:
+        await queue.put(event)
+
+    async def _run() -> None:
+        try:
+            mp3_path, transcript_path = await generate_report_audio(
+                report,
+                conversation_id=conversation_id,
+                tts_settings=tts,
+                out_dir=out_dir,
+                mode=mode,
+                follow_ups=follow_ups,
+                resolve_key=runtime._resolve_secret if runtime is not None else None,
+                on_progress=_on_progress,
+            )
+            await queue.put(
+                {
+                    "stage": "done",
+                    "mp3_url": (f"/conversations/{conversation_id}/report/audio/{mp3_path.name}"),
+                    "transcript_url": (
+                        f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
+                    ),
+                }
+            )
+        except TtsDisabled:
+            await queue.put({"stage": "error", "reason": "tts_disabled"})
+        except (TtsBackendError, TurnScriptError) as exc:
+            await queue.put({"stage": "error", **_audio_generation_failure(exc)})
+        except Exception as exc:  # never hang the stream on an unexpected error
+            await queue.put({"stage": "error", "reason": "internal", "detail": str(exc)})
+        finally:
+            await queue.put(None)  # sentinel: generation finished
+
+    async def _events():
+        task = asyncio.create_task(_run())
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event)}\n\n"
+        finally:
+            # Client disconnect / generator close: stop the background run.
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+    return StreamingResponse(
+        _events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _report_audio_file_response(conversation_id: str, name: str) -> Response:
+    if "/" in name or ".." in name:
+        raise HTTPException(status_code=404)
+    _, ext = posixpath.splitext(name)
+    media_type = _AUDIO_MEDIA_TYPES.get(ext.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404)
+    cid_cache = (report_audio_cache_dir() / conversation_id).resolve()
+    fpath = (cid_cache / name).resolve()
+    if not fpath.is_relative_to(cid_cache) or not fpath.is_file():
+        raise HTTPException(status_code=404)
+    return Response(
+        content=fpath.read_bytes(),
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
 def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
@@ -260,41 +450,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         if runtime is None:
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-
-        valid_fmts = frozenset({"md", "pdf"})
-        if fmt not in valid_fmts:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown export format: {fmt!r}. Valid: md, pdf",
-            )
-
-        # Resolve the export bytes (follow-up-aware md/pdf inline, else runtime path).
-        payload, media_type, ext = await _resolve_export_payload(
-            store,
-            runtime,
-            conversation_id,
-            fmt,
-            body.follow_up_seqs or [],
-            theme=body.theme,
-            mode=body.mode,
-        )
-
-        # Build a safe filename from the conversation id
-        safe_cid = conversation_id.replace("/", "-").replace("..", "-")
-        filename = f"report-{safe_cid}{ext}"
-
-        headers: dict[str, str] = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        }
-        if media_type:
-            headers["Content-Type"] = media_type
-
-        return Response(
-            content=payload,
-            status_code=200,
-            media_type=media_type,
-            headers=headers,
-        )
+        return await _export_report_response(store, runtime, conversation_id, fmt, body)
 
     @router.post("/conversations/{conversation_id}/report/audio")
     async def report_audio(
@@ -321,38 +477,7 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         Settings; 502 → synth/LLM failure. 200 →
         ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
-            store, conversation_id, mode, body.follow_up_seqs or []
-        )
-        try:
-            mp3_path, transcript_path = await generate_report_audio(
-                report,
-                conversation_id=conversation_id,
-                tts_settings=tts,
-                out_dir=out_dir,
-                mode=mode,
-                follow_ups=follow_ups,
-                # Prefer an encrypted-store key for the remote TTS provider; falls
-                # back to the env var by name when the runtime/store isn't wired.
-                resolve_key=runtime._resolve_secret if runtime is not None else None,
-            )
-        except TtsDisabled:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "tts_disabled"}
-            ) from None
-        except (TtsBackendError, TurnScriptError) as exc:
-            raise HTTPException(
-                status_code=502,
-                detail={"ok": False, **_audio_generation_failure(exc)},
-            ) from exc
-
-        return {
-            "ok": True,
-            "mp3_url": f"/conversations/{conversation_id}/report/audio/{mp3_path.name}",
-            "transcript_url": (
-                f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
-            ),
-        }
+        return await _report_audio_response(store, runtime, conversation_id, mode, body)
 
     @router.post("/conversations/{conversation_id}/report/audio/stream")
     async def report_audio_stream(
@@ -378,94 +503,13 @@ def make_report_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         (raised before the stream opens)."""
         body = body or AudioBody()
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
-            store, conversation_id, mode, body.follow_up_seqs or []
-        )
-
-        queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
-
-        async def _on_progress(event: dict[str, Any]) -> None:
-            await queue.put(event)
-
-        async def _run() -> None:
-            try:
-                mp3_path, transcript_path = await generate_report_audio(
-                    report,
-                    conversation_id=conversation_id,
-                    tts_settings=tts,
-                    out_dir=out_dir,
-                    mode=mode,
-                    follow_ups=follow_ups,
-                    resolve_key=runtime._resolve_secret if runtime is not None else None,
-                    on_progress=_on_progress,
-                )
-                await queue.put(
-                    {
-                        "stage": "done",
-                        "mp3_url": (
-                            f"/conversations/{conversation_id}/report/audio/{mp3_path.name}"
-                        ),
-                        "transcript_url": (
-                            f"/conversations/{conversation_id}/report/audio/{transcript_path.name}"
-                        ),
-                    }
-                )
-            except TtsDisabled:
-                await queue.put({"stage": "error", "reason": "tts_disabled"})
-            except (TtsBackendError, TurnScriptError) as exc:
-                await queue.put({"stage": "error", **_audio_generation_failure(exc)})
-            except Exception as exc:  # never hang the stream on an unexpected error
-                await queue.put({"stage": "error", "reason": "internal", "detail": str(exc)})
-            finally:
-                await queue.put(None)  # sentinel: generation finished
-
-        async def _events():
-            task = asyncio.create_task(_run())
-            try:
-                while True:
-                    event = await queue.get()
-                    if event is None:
-                        break
-                    yield f"data: {json.dumps(event)}\n\n"
-            finally:
-                # Client disconnect / generator close: stop the background run.
-                if not task.done():
-                    task.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await task
-
-        return StreamingResponse(
-            _events(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-store",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        return await _report_audio_stream_response(store, runtime, conversation_id, mode, body)
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
     async def report_audio_file(conversation_id: str, name: str, request: Request) -> Response:
         """Serve a cached audio-overview file (mp3 / transcript) as an attachment.
         Jailed: canonical basename only + resolve-jail to this conversation's cache."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        if "/" in name or ".." in name:
-            raise HTTPException(status_code=404)
-        _, ext = posixpath.splitext(name)
-        media_type = _AUDIO_MEDIA_TYPES.get(ext.lower())
-        if media_type is None:
-            raise HTTPException(status_code=404)
-        cid_cache = (report_audio_cache_dir() / conversation_id).resolve()
-        fpath = (cid_cache / name).resolve()
-        if not fpath.is_relative_to(cid_cache) or not fpath.is_file():
-            raise HTTPException(status_code=404)
-        return Response(
-            content=fpath.read_bytes(),
-            media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{name}"',
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "private, no-store",
-            },
-        )
+        return _report_audio_file_response(conversation_id, name)
 
     return router
