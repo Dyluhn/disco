@@ -97,6 +97,24 @@ EPIC10B_RESOLVED_IDS = PKG10_SANDBOX_TOOLS_RESOLVED_IDS
 
 # --- Epic 10-C (sealed 2026-08-01) — Epic 10 closes here --------------------
 
+# Wave 2, resolved IN SOURCE: all 36 PKG-10-TOOLS rows. Four lanes,
+# twelve files: `files.py` (13), `browser.py` (7), `design_lint.py` (6),
+# `find_and_edit.py` (2), `mutation_batch.py` (2), `run_script.py` (2),
+# `server.py` (1), `system.py` (1), `scripts/verify_agent_tools_local.py` (1)
+# and `tests/test_browser_daemon.py` (1).
+PKG10_TOOLS_RESOLVED_IDS = frozenset(
+    f"PY-{number:04d}"
+    for number in (724, *range(761, 789), *range(792, 797), 802, 887)
+)
+
+# The PKG-10-SANDBOX browser cluster ONLY — accurately named because it is a
+# subset: `_browser_daemon.py` (6) and `scripts/verify_generation_rotation.py`
+# (2). The other 37 SANDBOX rows sealed in 10-B and the remaining 3
+# (PY-0846/0873/0877) are adjudicated below, not resolved.
+PKG10_SANDBOX_BROWSER_RESOLVED_IDS = frozenset(
+    f"PY-{number:04d}" for number in (*range(725, 727), *range(729, 735))
+)
+
 # The four owner-ADJUDICATED public-width rows. These are NOT resolved in
 # source: every class still exceeds the 12-public-method cap, which is exactly
 # what adjudication means. They leave the active ledger and are simultaneously
@@ -138,10 +156,20 @@ EPIC10_ADJUDICATED_IDS = (
     PKG10_PROTOCOL_WIDTH_ADJUDICATED_IDS | PKG10_INTRINSIC_WIDTH_ADJUDICATED_IDS
 )
 
+# Epic 10-C registered 48: 44 resolved in source (TOOLS 36 + SANDBOX browser 8)
+# plus the 4 adjudicated. EXPECTED_ACTIVE_DEBT_ROWS 271 -> 223, the original
+# Epic-10 target (383 - 160), closing the epic fully disposed:
+# 156 resolved + 4 adjudicated = 160/160.
+EPIC10C_RESOLVED_IDS = (
+    PKG10_TOOLS_RESOLVED_IDS
+    | PKG10_SANDBOX_BROWSER_RESOLVED_IDS
+    | EPIC10_ADJUDICATED_IDS
+)
+
 # --- Epic 10 aggregate -----------------------------------------------------
 # `generate_debt.py` imports ONLY this name, so sealing 10-B and 10-C means
 # adding their sets above and unioning them in here — the generator itself
 # never has to change again for Epic 10, and stays inside its 700-line budget.
 EPIC10_RESOLVED_IDS = (
-    EPIC10A_RESOLVED_IDS | EPIC10B_RESOLVED_IDS | EPIC10_ADJUDICATED_IDS
+    EPIC10A_RESOLVED_IDS | EPIC10B_RESOLVED_IDS | EPIC10C_RESOLVED_IDS
 )

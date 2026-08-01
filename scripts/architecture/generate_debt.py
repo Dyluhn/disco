@@ -231,14 +231,25 @@ RESOLVED_IDS = (
     | PKG09_CONNECTORS_RESOLVED_IDS
     | EPIC10_RESOLVED_IDS
 )
-# Epic 10-A registered 75 rows (EXECUTOR 9 + SANDBOX-host 18 + MEDIA 31 +
-# PROJECTS 17): 383 -> 308. Epic 10-B registered 37 (the tools/sandbox subset of
-# PKG-10-SANDBOX, of 40): 308 -> 271. Every id in both is `PY-`, so
-# EXPECTED_OBSERVATIONS is unchanged, and NEITHER sub-epic adjudicated a row, so
-# the tree-count offset stays at the standing +2 (EventStore, BuildKernel).
-# Reconciliation at the 10-B seal: 209 python tree violations + 62 TypeScript
-# rows = 271 = 308 - 37.
-EXPECTED_ACTIVE_DEBT_ROWS = 267
+# Epic 10-A registered 75 rows: 383 -> 308. Epic 10-B registered 37: 308 -> 271.
+# Epic 10-C registers 48 — 44 resolved in source (PKG-10-TOOLS 36 + the
+# PKG-10-SANDBOX browser cluster 8) plus 4 owner-ADJUDICATED width rows
+# (PY-0836/0846/0873/0877): 271 -> 223, the original Epic-10 target (383 - 160).
+# Epic 10 closes fully disposed: 156 resolved + 4 adjudicated = 160/160.
+# Every id is `PY-`, so EXPECTED_OBSERVATIONS is unchanged.
+#
+# CORRECTION (root, 2026-08-01): the "standing +2 tree-count offset
+# (EventStore, BuildKernel)" this comment previously asserted does not exist.
+# `budget.collect_current_violations` FILTERS every registered typed
+# classification, so PY-0664 and PY-0188 are absent from the tree count rather
+# than carried in it. Measured at the 10-B seal: 209 tree violations == 209
+# active python rows, exactly, with zero difference in either direction.
+# The 4 rows adjudicated in 10-C are likewise filtered, via the new
+# `policy.json` -> typed_classifications.adjudicated_width_non_violations
+# registry that `budget.check_adjudicated_width_non_violations` re-proves
+# against the live scan on every run. Reconciliation at the 10-C seal:
+# 161 python tree violations + 62 TypeScript rows = 223.
+EXPECTED_ACTIVE_DEBT_ROWS = 223
 EXPECTED_OBSERVATIONS = 12
 LOCATION_OVERRIDES = {
     **CURRENT_LOCATION_OVERRIDES,

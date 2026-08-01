@@ -6707,7 +6707,7 @@
   {
     "id": "PY-0724",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/scripts/verify_agent_tools_local.py:main:60-176",
@@ -6716,7 +6716,7 @@
   {
     "id": "PY-0725",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/scripts/verify_generation_rotation.py:main:95-221",
@@ -6725,7 +6725,7 @@
   {
     "id": "PY-0726",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/scripts/verify_generation_rotation.py:main:95-221",
@@ -6752,7 +6752,7 @@
   {
     "id": "PY-0729",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:BrowserState:165-506",
@@ -6761,7 +6761,7 @@
   {
     "id": "PY-0730",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:_count_visible_semantic_elements:597-731",
@@ -6770,7 +6770,7 @@
   {
     "id": "PY-0731",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:BrowserHandler:734-1479",
@@ -6779,7 +6779,7 @@
   {
     "id": "PY-0732",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:_dispatch_parsed:1059-1421",
@@ -6788,7 +6788,7 @@
   {
     "id": "PY-0733",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:_dispatch_parsed:1059-1421",
@@ -6797,7 +6797,7 @@
   {
     "id": "PY-0734",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-SANDBOX",
     "location": "packages/tools/src/disco/tools/builtin/_browser_daemon.py:<module>:1-1520",
@@ -7040,7 +7040,7 @@
   {
     "id": "PY-0761",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:BrowserTool:333-1012",
@@ -7049,7 +7049,7 @@
   {
     "id": "PY-0762",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:run:372-519",
@@ -7058,7 +7058,7 @@
   {
     "id": "PY-0763",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:run:372-519",
@@ -7067,7 +7067,7 @@
   {
     "id": "PY-0764",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:_freshness_response_error:613-711",
@@ -7076,7 +7076,7 @@
   {
     "id": "PY-0765",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:_ensure_daemon:820-914",
@@ -7085,7 +7085,7 @@
   {
     "id": "PY-0766",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:_render_console:931-973",
@@ -7094,7 +7094,7 @@
   {
     "id": "PY-0767",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/browser.py:<module>:1-1016",
@@ -7103,7 +7103,7 @@
   {
     "id": "PY-0768",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:_rule_direction_conformance:1150-1226",
@@ -7112,7 +7112,7 @@
   {
     "id": "PY-0769",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:_rule_web_text_over_image_no_scrim:1419-1475",
@@ -7121,7 +7121,7 @@
   {
     "id": "PY-0770",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:_rule_pill_buttons:1545-1590",
@@ -7130,7 +7130,7 @@
   {
     "id": "PY-0771",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:_rule_deck_glass:1797-1886",
@@ -7139,7 +7139,7 @@
   {
     "id": "PY-0772",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:lint_design:2044-2149",
@@ -7148,7 +7148,7 @@
   {
     "id": "PY-0773",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/design_lint.py:<module>:1-2331",
@@ -7157,7 +7157,7 @@
   {
     "id": "PY-0774",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:_best_fuzzy_old_match_lines:607-649",
@@ -7166,7 +7166,7 @@
   {
     "id": "PY-0775",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:guard_fresh_edit:773-910",
@@ -7175,7 +7175,7 @@
   {
     "id": "PY-0776",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:guard_fresh_edit:773-910",
@@ -7184,7 +7184,7 @@
   {
     "id": "PY-0777",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:1249-1434",
@@ -7193,7 +7193,7 @@
   {
     "id": "PY-0778",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:1249-1434",
@@ -7202,7 +7202,7 @@
   {
     "id": "PY-0779",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:1469-1601",
@@ -7211,7 +7211,7 @@
   {
     "id": "PY-0780",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:1469-1601",
@@ -7220,7 +7220,7 @@
   {
     "id": "PY-0781",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:2176-2310",
@@ -7229,7 +7229,7 @@
   {
     "id": "PY-0782",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:2494-2675",
@@ -7238,7 +7238,7 @@
   {
     "id": "PY-0783",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:2494-2675",
@@ -7247,7 +7247,7 @@
   {
     "id": "PY-0784",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:2716-2861",
@@ -7256,7 +7256,7 @@
   {
     "id": "PY-0785",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:run:2716-2861",
@@ -7265,7 +7265,7 @@
   {
     "id": "PY-0786",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/files.py:<module>:1-2861",
@@ -7274,7 +7274,7 @@
   {
     "id": "PY-0787",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/find_and_edit.py:run:584-772",
@@ -7283,7 +7283,7 @@
   {
     "id": "PY-0788",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/find_and_edit.py:run:584-772",
@@ -7319,7 +7319,7 @@
   {
     "id": "PY-0792",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/mutation_batch.py:commit_deterministic_file_batch:135-325",
@@ -7328,7 +7328,7 @@
   {
     "id": "PY-0793",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/mutation_batch.py:commit_deterministic_file_batch:135-325",
@@ -7337,7 +7337,7 @@
   {
     "id": "PY-0794",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/run_script.py:run:221-504",
@@ -7346,7 +7346,7 @@
   {
     "id": "PY-0795",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/run_script.py:run:221-504",
@@ -7355,7 +7355,7 @@
   {
     "id": "PY-0796",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/server.py:run:30-78",
@@ -7409,7 +7409,7 @@
   {
     "id": "PY-0802",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/src/disco/tools/builtin/system.py:run:190-257",
@@ -8174,7 +8174,7 @@
   {
     "id": "PY-0887",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-10-TOOLS",
     "location": "packages/tools/tests/test_browser_daemon.py:<module>:1-1597",
