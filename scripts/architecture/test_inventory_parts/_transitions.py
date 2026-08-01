@@ -165,6 +165,47 @@ def check_collected_additions(
     )
 
 
+def check_null_advance(
+    transition: dict[str, Any], problems: list[str],
+) -> None:
+    """Validate a transition row that owns no addition at all.
+
+    Every source-identity advance must be attributable to a named package, so
+    the chain needs a link even when an epic changes no test.  Epic 11-A is the
+    first to reach a seal in that state: a pure source decomposition with a
+    byte-identical inventory.  Before this, the only rows that existed happened
+    to add tests, so ``must own at least one exact addition`` was never wrong --
+    it was merely never exercised by a null epic.
+
+    A null row is therefore not permitted to be *empty*, which would assert
+    nothing.  It must PIN every python root with an unchanged count.  That
+    turns absence of evidence into evidence of absence, because
+    :func:`check_collected_row` independently re-proves those same counts
+    against live collection on every run -- the terminal row's ``after_count``
+    must equal the current count exactly.  A null row consequently cannot hide
+    a deletion (still refused outright by ``_assert_no_deletions``), cannot
+    hide a relocation, and cannot survive the tree drifting underneath it.
+    """
+    owner = transition.get("package", "<invalid>")
+    rows = transition.get("collected_roots")
+    if not isinstance(rows, dict) or set(rows) != PYTHON_ROOTS:
+        problems.append(
+            f"{owner} owns no addition, so it must pin every collected root "
+            f"as unchanged; got {sorted(rows) if isinstance(rows, dict) else rows!r}"
+        )
+        return
+    for name in sorted(PYTHON_ROOTS):
+        row = rows[name]
+        label = f"{owner}.collected_roots.{name}"
+        if not isinstance(row, dict):
+            problems.append(f"{label} must be an exact object")
+            continue
+        if row.get("before_count") != row.get("after_count"):
+            problems.append(f"{label} null advance must not change its collected count")
+        if row.get("relocated_count", 0):
+            problems.append(f"{label} null advance must not relocate a test")
+
+
 def check_mapping_additions(
     transition: dict[str, Any], baseline: dict[str, Any],
     claims: dict[str, set[str]], problems: list[str],

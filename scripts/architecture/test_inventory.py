@@ -551,8 +551,15 @@ def regenerate_inventory(
     accepted_collected_roots: dict[str, list[str]] | None = None,
     accepted_mapping_static: dict[str, Any] | None = None,
     module_split_transitions: list[dict[str, Any]] | None = None,
+    null_advance: bool = False,
 ) -> dict[str, Any]:
-    """Regenerate after proving the transition from accepted exact authority."""
+    """Regenerate after proving the transition from accepted exact authority.
+
+    ``null_advance`` authorizes the identity to advance when the epic changed
+    no test at all.  It cannot suppress a real delta: a run that did add tests
+    takes the ordinary branch regardless, so the flag only ever permits the
+    row that pins every collected root as unchanged.
+    """
     resolved_root = REPO_ROOT if root is None else root
     if not re.fullmatch(r"PKG-\d{2}-[A-Z0-9-]+", package):
         raise ValueError(f"invalid owning package: {package}")
@@ -633,6 +640,7 @@ def regenerate_inventory(
         raise RuntimeError(f"module split transition counts are not exact: {count_problems}")
 
     changed_roots = [name for name, added in added_by_root.items() if added]
+    owns_addition = bool(changed_roots or any(static_added.values()))
     transition = {
         "package": package,
         "root": changed_roots[0] if len(changed_roots) == 1 else "multiple",
@@ -646,11 +654,15 @@ def regenerate_inventory(
                 len(authorized.get(f"collected.{name}", ())),
             )
             for name in PYTHON_ROOTS
-            if added_by_root[name] or authorized.get(f"collected.{name}")
+            # A null advance pins EVERY root, so the row asserts the counts it
+            # claims rather than asserting nothing; see _transitions.
+            if not owns_addition
+            or added_by_root[name]
+            or authorized.get(f"collected.{name}")
         },
         "mapping_static_additions": static_added,
     }
-    if changed_roots or any(static_added.values()):
+    if owns_addition or (null_advance and source_identity != previous_identity):
         transitions = [
             item
             for item in transitions
@@ -658,7 +670,11 @@ def regenerate_inventory(
         ]
         transitions.append(transition)
     elif source_identity != previous_identity:
-        raise RuntimeError("source identity advance requires an exact additive transition")
+        raise RuntimeError(
+            "source identity advance requires an exact additive transition; an "
+            "epic that changes no test must pass null_advance=True, which records "
+            "a row pinning every collected root as unchanged"
+        )
 
     counts = {name: len(ids) for name, ids in current_roots.items()}
     frontend = {

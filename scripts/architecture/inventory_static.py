@@ -388,7 +388,7 @@ def _check_transition_row(
     collected_count = _transitions.check_collected_additions(row, baseline, claims, problems)
     mapping_count = _transitions.check_mapping_additions(row, baseline, claims, problems)
     if collected_count + mapping_count == 0:
-        problems.append(f"{label} must own at least one exact addition")
+        _transitions.check_null_advance(row, problems)
     return row
 
 
