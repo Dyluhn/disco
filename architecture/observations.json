@@ -74,7 +74,7 @@
   {
     "id": "DM-019",
     "kind": "distributed_concern",
-    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",
     "concern": "secret-key rotation has no re-encryption migration and can lock all stored secrets",
     "owner_package": "PKG-11-SETTINGS",
     "source_disposition_id": "DM-019"

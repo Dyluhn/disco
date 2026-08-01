@@ -167,7 +167,7 @@
     "state": "active",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-11-SETTINGS",
-    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",
     "role_category": "secret-key rotation has no re-encryption migration and can lock all stored secrets"
   },
   {
@@ -1919,7 +1919,7 @@
   {
     "id": "PY-0192",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:DeepResearchService:66-1083",
@@ -1937,7 +1937,7 @@
   {
     "id": "PY-0194",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_maybe_run_deep_research:350-435",
@@ -1946,7 +1946,7 @@
   {
     "id": "PY-0195",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:437-590",
@@ -1955,7 +1955,7 @@
   {
     "id": "PY-0196",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_propose_deep_research_plan:437-590",
@@ -1964,7 +1964,7 @@
   {
     "id": "PY-0197",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:592-860",
@@ -1973,7 +1973,7 @@
   {
     "id": "PY-0198",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_execute_deep_research:592-860",
@@ -1982,7 +1982,7 @@
   {
     "id": "PY-0199",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:_follow_up_deep_research:878-1055",
@@ -1991,7 +1991,7 @@
   {
     "id": "PY-0200",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/agent-server/src/disco/agent_server/deep_research_service.py:<module>:1-1083",
@@ -2666,7 +2666,7 @@
   {
     "id": "PY-0275",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:_test_tts_probe:85-196",
@@ -2675,7 +2675,7 @@
   {
     "id": "PY-0276",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:_test_tts_probe:85-196",
@@ -2684,7 +2684,7 @@
   {
     "id": "PY-0277",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:make_probes_router:199-382",
@@ -2693,7 +2693,7 @@
   {
     "id": "PY-0278",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -2702,7 +2702,7 @@
   {
     "id": "PY-0279",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -2711,7 +2711,7 @@
   {
     "id": "PY-0280",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/routes/probes.py:test_mcp:264-380",
@@ -3116,7 +3116,7 @@
   {
     "id": "PY-0325",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_model_probe.py:_do_live_model_probe:30-90",
@@ -3125,7 +3125,7 @@
   {
     "id": "PY-0326",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_model_probe.py:_models_context_length:93-151",
@@ -3134,7 +3134,7 @@
   {
     "id": "PY-0327",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:RuntimeSettings:301-845",
@@ -3143,7 +3143,7 @@
   {
     "id": "PY-0328",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/agent-server/src/disco/agent_server/runtime_settings.py:RuntimeSettings:301-845",
@@ -3467,7 +3467,7 @@
   {
     "id": "PY-0364",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState:154-1036",
@@ -3476,7 +3476,7 @@
   {
     "id": "PY-0365",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:ConfigState:154-1036",
@@ -3485,7 +3485,7 @@
   {
     "id": "PY-0366",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/config_state.py:<module>:1-1043",
@@ -3503,7 +3503,7 @@
   {
     "id": "PY-0368",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/provider_config_service.py:enable_provider_model:205-281",
@@ -3512,7 +3512,7 @@
   {
     "id": "PY-0369",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/config.py:make_config_router:28-167",
@@ -3521,7 +3521,7 @@
   {
     "id": "PY-0370",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/providers.py:_normalize_openai_compat:170-218",
@@ -3530,7 +3530,7 @@
   {
     "id": "PY-0371",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/app-server/src/disco/app_server/routes/providers.py:make_providers_router:305-443",
@@ -4304,7 +4304,7 @@
   {
     "id": "PY-0457",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config.py:default_config:545-691",
@@ -4313,7 +4313,7 @@
   {
     "id": "PY-0458",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:ConfigStore:49-568",
@@ -4322,7 +4322,7 @@
   {
     "id": "PY-0459",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:ConfigStore:49-568",
@@ -4331,7 +4331,7 @@
   {
     "id": "PY-0460",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/config_store.py:_operator_approvals:441-524",
@@ -4448,10 +4448,10 @@
   {
     "id": "PY-0473",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-SETTINGS",
-    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",
     "role_category": "python service public methods gt 12 candidate"
   },
   {
@@ -6527,7 +6527,7 @@
   {
     "id": "PY-0704",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/engine.py:DeepResearchRun:95-866",
@@ -6536,7 +6536,7 @@
   {
     "id": "PY-0705",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/engine.py:_drain_and_synthesize:406-569",
@@ -6545,7 +6545,7 @@
   {
     "id": "PY-0706",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/engine.py:_drain_and_synthesize:406-569",
@@ -6554,7 +6554,7 @@
   {
     "id": "PY-0707",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/engine.py:refine_section:775-848",
@@ -6563,7 +6563,7 @@
   {
     "id": "PY-0708",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/gather.py:gather_for_subquestion:204-353",
@@ -6572,7 +6572,7 @@
   {
     "id": "PY-0709",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/gather.py:gather_for_subquestion:204-353",
@@ -6581,7 +6581,7 @@
   {
     "id": "PY-0710",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/synthesis.py:_repair_tables:254-314",
@@ -6590,7 +6590,7 @@
   {
     "id": "PY-0711",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/synthesis.py:synthesize_section:563-820",
@@ -6599,7 +6599,7 @@
   {
     "id": "PY-0712",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/synthesis.py:synthesize_section:563-820",
@@ -6608,7 +6608,7 @@
   {
     "id": "PY-0713",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/deep_research/synthesis.py:<module>:1-903",
@@ -6617,7 +6617,7 @@
   {
     "id": "PY-0714",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/live.py:build_multi_search:575-616",
@@ -6626,7 +6626,7 @@
   {
     "id": "PY-0715",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/live.py:build_live_retrieval:631-732",
@@ -6635,7 +6635,7 @@
   {
     "id": "PY-0716",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/live.py:search:79-129",
@@ -6644,7 +6644,7 @@
   {
     "id": "PY-0717",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/source_adapters.py:search:259-311",
@@ -6653,7 +6653,7 @@
   {
     "id": "PY-0718",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/source_adapters.py:search:376-445",
@@ -6662,7 +6662,7 @@
   {
     "id": "PY-0719",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/streaming.py:_to_blocks:120-254",
@@ -6671,7 +6671,7 @@
   {
     "id": "PY-0720",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/streaming.py:_to_blocks:120-254",
@@ -6680,7 +6680,7 @@
   {
     "id": "PY-0721",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/streaming.py:_generate_visible_answer:428-503",
@@ -6689,7 +6689,7 @@
   {
     "id": "PY-0722",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/streaming.py:stream_research_answer:506-666",
@@ -6698,7 +6698,7 @@
   {
     "id": "PY-0723",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/retrieval/src/disco/retrieval/streaming.py:stream_research_answer:506-666",
@@ -7625,7 +7625,7 @@
   {
     "id": "PY-0826",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-RETRIEVAL",
     "location": "packages/tools/src/disco/tools/mcp/retrieval_tier.py:search:306-366",

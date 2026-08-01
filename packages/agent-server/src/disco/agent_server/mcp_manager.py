@@ -202,9 +202,13 @@ class McpManager:
             self._approval_pending.clear()
             await self._start_mcp_pool()
             servers = self._config_store.load().mcp.servers
-            pool_status = self._pool.server_status() if self._pool is not None else {}
+            pool_status = (
+                self._pool.server_status() if self._pool is not None else {}
+            )
             pool_tools = (
-                [tool.name for tool in self._pool.snapshot()] if self._pool is not None else []
+                [tool.name for tool in self._pool.snapshot()]
+                if self._pool is not None
+                else []
             )
             connected = sorted(
                 {
@@ -216,7 +220,9 @@ class McpManager:
                     *(name for name, status in pool_status.items() if status == "connected"),
                 }
             )
-            server_statuses = {name: dict(state) for name, state in self._http_status.items()}
+            server_statuses = {
+                name: dict(state) for name, state in self._http_status.items()
+            }
             server_statuses.update(
                 {name: {"status": status} for name, status in pool_status.items()}
             )
@@ -735,9 +741,11 @@ class McpManager:
             )
 
         if mcp_entries:
-            self._retrieval_searches, self._retrieval_extractions = build_retrieval_providers(
-                mcp_entries,
-                call_fn=self._mcp_call_target.call_tool,
+            self._retrieval_searches, self._retrieval_extractions = (
+                build_retrieval_providers(
+                    mcp_entries,
+                    call_fn=self._mcp_call_target.call_tool,
+                )
             )
             _LOG.info(
                 "MCP retrieval: built %d search + %d extraction provider(s)",

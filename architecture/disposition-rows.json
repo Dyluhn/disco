@@ -10858,7 +10858,7 @@
   {
     "id": "PY-0473",
     "disposition": "VIOLATION",
-    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",
     "role_category": "python service public methods gt 12 candidate",
     "metrics": "physical=133;logical=99;complexity=n/a;public=13;collaborators=2;fan-in=23;fan-out=11",
     "authority": "settings/provider persistence authority",
@@ -22703,7 +22703,7 @@
   {
     "id": "DM-019",
     "disposition": "DISTRIBUTED_CONCERN",
-    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-351",
+    "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",
     "role_category": "secret-key rotation has no re-encryption migration and can lock all stored secrets",
     "metrics": "cluster concern; exact constituent metrics are in artifacts 01/02 and scanner JSON",
     "authority": "settings/provider persistence authority",

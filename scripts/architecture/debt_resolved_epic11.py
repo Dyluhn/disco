@@ -50,5 +50,53 @@ EPIC11A_RESOLVED_IDS = (
     PKG11_BUILD_SPECS_RESOLVED_IDS | PKG11_AUTH_QUOTA_CORESTRIPE_RESOLVED_IDS
 )
 
+
+# --- Epic 11-B: PKG-11-RETRIEVAL 29 + PKG-11-SETTINGS 22 = 51 --------------
+#
+# Cleared in source across three serialized waves (the wave plan is
+# PY-0328-0365-0459-0473-SEAM-EVALUATION-2026-08-01.md):
+#   wave 1  PKG-11-RETRIEVAL, 4 disjoint lanes                       29
+#   wave 2  PKG-11-SETTINGS ordinary rows, 3 disjoint lanes          13
+#   wave 3  PKG-11-SETTINGS width rows, sequential 3a -> 3b -> 3c     9
+#
+# The four width rows (PY-0328/0365/0459/0473) all had a GENUINE SEAM and
+# NONE was adjudicated, so `architecture/policy.json` is untouched by 11-B and
+# the tree-count identity still holds exactly: tree == active python rows.
+# They could not be cleared by the `_parts/` extraction that clears the other
+# 47, because `class_public_methods` counts non-underscore defs in the class
+# body — a thin delegating method still counts and a mixin would be evasion.
+# Each was cleared by genuinely moving authority off the class onto
+# collaborators exposed as plain `__init__` attributes (a property would still
+# count), with real consumer migration:
+#   ConfigStore   23 -> 7   ConfigState 51 -> 1
+#   SecretStore   13 -> 9   RuntimeSettings 14 -> 12
+#
+# EXPECTED_ACTIVE_DEBT_ROWS 166 -> 115 (53 python + 62 typescript).
+PKG11_RETRIEVAL_RESOLVED_IDS = frozenset(
+    {
+        "PY-0192", "PY-0194", "PY-0195", "PY-0196", "PY-0197",
+        "PY-0198", "PY-0199", "PY-0200", "PY-0704", "PY-0705",
+        "PY-0706", "PY-0707", "PY-0708", "PY-0709", "PY-0710",
+        "PY-0711", "PY-0712", "PY-0713", "PY-0714", "PY-0715",
+        "PY-0716", "PY-0717", "PY-0718", "PY-0719", "PY-0720",
+        "PY-0721", "PY-0722", "PY-0723", "PY-0826"
+    }
+)
+
+PKG11_SETTINGS_RESOLVED_IDS = frozenset(
+    {
+        "PY-0275", "PY-0276", "PY-0277", "PY-0278", "PY-0279",
+        "PY-0280", "PY-0325", "PY-0326", "PY-0327", "PY-0328",
+        "PY-0364", "PY-0365", "PY-0366", "PY-0368", "PY-0369",
+        "PY-0370", "PY-0371", "PY-0457", "PY-0458", "PY-0459",
+        "PY-0460", "PY-0473"
+    }
+)
+
+EPIC11B_RESOLVED_IDS = (
+    PKG11_RETRIEVAL_RESOLVED_IDS | PKG11_SETTINGS_RESOLVED_IDS
+)
+
+
 # --- Epic 11 aggregate -----------------------------------------------------
-EPIC11_RESOLVED_IDS = EPIC11A_RESOLVED_IDS
+EPIC11_RESOLVED_IDS = EPIC11A_RESOLVED_IDS | EPIC11B_RESOLVED_IDS
