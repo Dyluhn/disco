@@ -229,6 +229,45 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         bootstrap_cross_host_exchange = (
             method == "POST" and _PATH_PREVIEW_BOOTSTRAP_RE.fullmatch(path) is not None
         )
+        quarantine_response = self._reject_preview_host_crossing(
+            request,
+            path,
+            host,
+            isolated_path=isolated_path,
+            isolated_preview_host=isolated_preview_host,
+            bootstrap_cross_host_exchange=bootstrap_cross_host_exchange,
+        )
+        if quarantine_response is not None:
+            return quarantine_response
+        quarantine_response = self._reject_preview_service_worker_or_legacy(
+            request, isolated_path=isolated_path, legacy_preview_path=legacy_preview_path
+        )
+        if quarantine_response is not None:
+            return quarantine_response
+        canonical_response = await self._canonical_preview_capability_response(
+            request, path, method, isolated_path=isolated_path, call_next=call_next
+        )
+        if canonical_response is not None:
+            return canonical_response
+        if self._is_exempt_route(request, path, method):
+            return await call_next(request)
+        forbidden_origin_response = self._forbidden_origin_response(request)
+        if forbidden_origin_response is not None:
+            return forbidden_origin_response
+        if isolated_path:
+            return await self._isolated_path_preview_response(request, call_next)
+        return await self._dispatch_authenticated_request(request, call_next, path, method)
+
+    def _reject_preview_host_crossing(
+        self,
+        request: Request,
+        path: str,
+        host: str,
+        *,
+        isolated_path: bool,
+        isolated_preview_host: bool,
+        bootstrap_cross_host_exchange: bool,
+    ) -> Response | None:
         if (
             local_preview_origin_crosses_host(request.headers.get("origin"), host)
             and not bootstrap_cross_host_exchange
@@ -249,6 +288,11 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             # normally the outer gate; this keeps the boundary sound even if
             # middleware ordering changes.
             return _private_no_store(Response("isolated preview route required", status_code=403))
+        return None
+
+    def _reject_preview_service_worker_or_legacy(
+        self, request: Request, *, isolated_path: bool, legacy_preview_path: bool
+    ) -> Response | None:
         if (isolated_path or legacy_preview_path) and (
             request.headers.get("sec-fetch-dest", "").strip().lower() == "serviceworker"
             or request.headers.get("service-worker", "").strip().lower() == "script"
@@ -259,56 +303,82 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
             # full session. Canonical callers use the isolated capability route;
             # the deprecated direct path now fails closed.
             return _private_no_store(Response("preview capability required", status_code=403))
+        return None
+
+    async def _canonical_preview_capability_response(
+        self,
+        request: Request,
+        path: str,
+        method: str,
+        *,
+        isolated_path: bool,
+        call_next: RequestResponseEndpoint,
+    ) -> Response | None:
         canonical_cap = request.scope.get("state", {}).get("canonical_preview_capability")
-        if isolated_path and isinstance(canonical_cap, PreviewCapability):
-            match = _PATH_PREVIEW_RE.match(path)
-            assert match is not None
-            if (
-                canonical_cap.authority_id is None
-                or canonical_cap.conversation_id != match.group("cid")
-                or method not in canonical_cap.http_methods
-            ):
-                return _private_no_store(Response("preview capability required", status_code=403))
-            owner = await self._store.conversation_owner_id(canonical_cap.conversation_id)
-            if owner is None:
-                return _private_no_store(Response("conversation not found", status_code=404))
-            if owner != canonical_cap.owner_id:
-                return _private_no_store(Response("conversation forbidden", status_code=403))
-            request.state.preview_capability = canonical_cap
-            return _private_no_store(await call_next(request))
+        if not (isolated_path and isinstance(canonical_cap, PreviewCapability)):
+            return None
+        match = _PATH_PREVIEW_RE.match(path)
+        assert match is not None
+        if (
+            canonical_cap.authority_id is None
+            or canonical_cap.conversation_id != match.group("cid")
+            or method not in canonical_cap.http_methods
+        ):
+            return _private_no_store(Response("preview capability required", status_code=403))
+        owner = await self._store.conversation_owner_id(canonical_cap.conversation_id)
+        if owner is None:
+            return _private_no_store(Response("conversation not found", status_code=404))
+        if owner != canonical_cap.owner_id:
+            return _private_no_store(Response("conversation forbidden", status_code=403))
+        request.state.preview_capability = canonical_cap
+        return _private_no_store(await call_next(request))
+
+    def _is_exempt_route(self, request: Request, path: str, method: str) -> bool:
         if _is_public_http(path, method):
-            return await call_next(request)
+            return True
         # WO-A2.2: the host-service bus uses its own bearer-token auth and must
         # never be authenticated by session cookies, admin pairing, query params,
         # or CSRF tokens. Bypass the `/_disco/svc/` prefix so the bus route itself
         # enforces the strict dotted-service shape and returns 400 for malformed names.
-        if is_bus_route_raw(request.scope.get("raw_path", b"")):
-            return await call_next(request)
+        return is_bus_route_raw(request.scope.get("raw_path", b""))
+
+    def _forbidden_origin_response(self, request: Request) -> Response | None:
         origin = request.headers.get("origin")
         # allowlist OR same-host (the single-front-door deploy: Origin == Host).
         if origin and not origin_permitted(origin, request.headers.get("host")):
             return Response("forbidden origin", status_code=403)
-        if isolated_path:
-            _is_path_preview, preview_error = await self._authenticate_path_preview(request)
-            if preview_error is not None:
-                return _private_no_store(preview_error)
-            return _private_no_store(await call_next(request))
+        return None
+
+    async def _isolated_path_preview_response(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        _is_path_preview, preview_error = await self._authenticate_path_preview(request)
+        if preview_error is not None:
+            return _private_no_store(preview_error)
+        return _private_no_store(await call_next(request))
+
+    async def _dispatch_authenticated_request(
+        self, request: Request, call_next: RequestResponseEndpoint, path: str, method: str
+    ) -> Response:
         session = self._authenticate_request(request)
         if session is None:
             return Response("auth required", status_code=401)
         request.state.auth_session = session
         if _is_admin_path(path) and not session.is_admin:
             return Response("admin required", status_code=403)
-        if (
-            method in _UNSAFE_METHODS
-            and not _is_testclient(request)
-            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
-        ):
+        if self._csrf_check_failed(method, request, session):
             return Response("csrf required", status_code=403)
         owner_check = await self._authorize_conversation_path(request, session)
         if owner_check is not None:
             return owner_check
         return await call_next(request)
+
+    def _csrf_check_failed(self, method: str, request: Request, session: AuthSession) -> bool:
+        return (
+            method in _UNSAFE_METHODS
+            and not _is_testclient(request)
+            and not SessionSigner.csrf_valid(session, request.headers.get(CSRF_HEADER))
+        )
 
     async def _authenticate_path_preview(self, request: Request) -> tuple[bool, Response | None]:
         """Accept only a signed, path-scoped static-preview capability.
