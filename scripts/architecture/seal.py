@@ -70,6 +70,19 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/debt_resolved_epic10.py",
     "scripts/architecture/generate_inventories.py",
     "scripts/architecture/yaml_parser.py",
+    # Epic 10-D decomposed the two authorities that had run out of budget.
+    # Their interiors carry the same change-controlled bytes the parents did,
+    # so they are hash-gated individually: a sealed wrapper over unsealed
+    # helpers is precisely the weakening this module's docstring warns about.
+    "scripts/architecture/public_api_parts/__init__.py",
+    "scripts/architecture/public_api_parts/_authority.py",
+    "scripts/architecture/public_api_parts/_constants.py",
+    "scripts/architecture/public_api_parts/_contracts.py",
+    "scripts/architecture/public_api_parts/_members.py",
+    "scripts/architecture/public_api_parts/_surface.py",
+    "scripts/architecture/test_inventory_parts/__init__.py",
+    "scripts/architecture/test_inventory_parts/_rows.py",
+    "scripts/architecture/test_inventory_parts/_splits.py",
     "docs/governance/SEAL-INVOCATION.json",
 )
 

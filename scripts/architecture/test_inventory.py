@@ -1,4 +1,12 @@
-"""Fail-closed static and runtime test-inventory gate."""
+"""Fail-closed static and runtime test-inventory gate.
+
+Pure row helpers and the module-split transition authority live in
+:mod:`architecture.test_inventory_parts`; see that package's docstring for why
+this module keeps the collectors and orchestrators (the adversarial suite
+monkeypatches them here) and why the split happened at all — this file is
+classified a *test* module by its own filename, so its caps were never the
+ones the 10-C handover recorded.
+"""
 
 from __future__ import annotations
 
@@ -17,9 +25,24 @@ from .inventory_static import (
     scan_mapping_static,
 )
 from .policy import REPO_ROOT, load_json
+from .test_inventory_parts import _splits
+from .test_inventory_parts._rows import (
+    LIVE_CONFIGS,
+    PLAYWRIGHT_CONFIGS,
+    PLAYWRIGHT_TEST_DIRS,
+    PYTHON_ROOTS,
+)
+from .test_inventory_parts._rows import canonical_row as _canonical_row
+from .test_inventory_parts._rows import check_count as _check_count
+from .test_inventory_parts._rows import collection_env as _collection_env
+from .test_inventory_parts._rows import collector_commands as _collector_commands
+from .test_inventory_parts._rows import compare_exact as _compare_exact
+from .test_inventory_parts._rows import forbidden_marker as _forbidden_marker
+from .test_inventory_parts._rows import frontend_relative as _frontend_relative
+from .test_inventory_parts._rows import stored_rows as _stored_rows
+from .test_inventory_parts._rows import stored_strings as _stored_strings
 
 commit_identity_resolves = inventory_static.commit_identity_resolves
-PYTHON_ROOTS = ("packages", "harness", "integrations", "tests")
 SANDBOX_INTEGRATION_DESELECTED_IDS = (
     "packages/tools/tests/test_sandbox_integration.py::test_real_hostconfig_pidmode_is_never_host",
     "packages/tools/tests/test_sandbox_integration.py::test_pid_and_net_namespace_inodes_differ_from_host",
@@ -27,16 +50,6 @@ SANDBOX_INTEGRATION_DESELECTED_IDS = (
     "packages/tools/tests/test_sandbox_integration.py::test_host_process_survives_every_signal_bypass_form",
     "packages/tools/tests/test_sandbox_integration.py::test_guest_symlink_escape_refused_live",
 )
-PLAYWRIGHT_TEST_DIRS = {
-    "playwright.config.ts": "e2e",
-    "live-smoke.config.ts": "e2e-live",
-    "playwright.live.config.ts": "e2e-live",
-    "playwright.security-policy.config.ts": "e2e-policy",
-    "playwright.trace-policy.config.ts": "e2e-policy",
-    "e2e-full/full.config.ts": "e2e-full/scenarios",
-}
-PLAYWRIGHT_CONFIGS = tuple(PLAYWRIGHT_TEST_DIRS)
-LIVE_CONFIGS = ("live-smoke.config.ts", "playwright.live.config.ts")
 _PLAYWRIGHT_ROW = re.compile(r"^\s+\[[^\]]+\]\s+›\s+(.+?):\d+:\d+\s+›\s+(.+)$")
 _PLAYWRIGHT_TOTAL = re.compile(r"^Total:\s+(\d+)\s+tests?\s+in\s+(\d+)\s+files?$")
 
@@ -45,48 +58,6 @@ def load_test_inventory(root: Path | None = None) -> dict[str, Any]:
     """Load the inventory owned by the explicit repository root."""
     resolved_root = REPO_ROOT if root is None else root
     return load_json(resolved_root / "architecture" / "test-inventory.json")
-
-
-def _collection_env(root: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(root)
-    env["PYTEST_ADDOPTS"] = ""
-    return env
-
-
-def _collector_commands() -> dict[str, Any]:
-    return {
-        "pytest": [
-            "python",
-            "-m",
-            "pytest",
-            "-o",
-            "addopts=",
-            "-m",
-            "<marker>",
-            "--collect-only",
-            "-q",
-            "<root>",
-        ],
-        "vitest": [
-            "frontend/node_modules/.bin/vitest",
-            "list",
-            "--root",
-            "<frontend-absolute>",
-            "--config",
-            "<frontend-absolute>/vite.config.ts",
-            "--json",
-        ],
-        "playwright": {
-            config: [
-                "frontend/node_modules/.bin/playwright",
-                "test",
-                "--list",
-                f"--config={config}",
-            ]
-            for config in PLAYWRIGHT_CONFIGS
-        },
-    }
 
 
 def _collect_pytest_ids(
@@ -136,76 +107,6 @@ def _check_sandbox_deselections(root: Path, problems: list[str]) -> None:
         )
 
 
-def _canonical_row(row: Any) -> str:
-    return json.dumps(row, sort_keys=True, separators=(",", ":"))
-
-
-def _stored_strings(
-    owner: dict[str, Any],
-    key: str,
-    label: str,
-    problems: list[str],
-    *,
-    unique: bool = True,
-) -> list[str]:
-    value = owner.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        problems.append(f"{label} must be an exact string list")
-        return []
-    if value != sorted(value):
-        problems.append(f"{label} must be sorted")
-    if unique and len(value) != len(set(value)):
-        problems.append(f"{label} must contain unique identities")
-    if not value:
-        problems.append(f"{label} must not be empty")
-    return value
-
-
-def _stored_rows(
-    owner: dict[str, Any],
-    key: str,
-    label: str,
-    problems: list[str],
-) -> list[dict[str, Any]]:
-    value = owner.get(key)
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
-        problems.append(f"{label} must be an exact object list")
-        return []
-    if value != sorted(value, key=_canonical_row):
-        problems.append(f"{label} must be canonically sorted")
-    return value
-
-
-def _compare_exact(
-    label: str,
-    stored: list[Any],
-    actual: list[Any],
-    problems: list[str],
-) -> None:
-    if stored == actual:
-        return
-    stored_rows = [_canonical_row(item) for item in stored]
-    actual_rows = [_canonical_row(item) for item in actual]
-    deleted = sorted(set(stored_rows) - set(actual_rows))
-    added = sorted(set(actual_rows) - set(stored_rows))
-    problems.append(
-        f"{label} drift: stored {len(stored)}, actual {len(actual)}, "
-        f"deleted={deleted}, added={added}"
-    )
-
-
-def _check_count(
-    owner: dict[str, Any],
-    key: str,
-    actual: int,
-    label: str,
-    problems: list[str],
-) -> None:
-    stored = owner.get(key)
-    if not isinstance(stored, int) or isinstance(stored, bool) or stored != actual:
-        problems.append(f"{label} count drift: stored {stored!r}, actual {actual}")
-
-
 def _check_collected_ids(
     baseline: dict[str, Any],
     root: Path,
@@ -241,11 +142,6 @@ def _check_collected_ids(
         )
     _check_count(collected, "total", actual_total, "collected.total", problems)
     return {"collected_total": actual_total}
-
-
-def _forbidden_marker(row: dict[str, Any]) -> bool:
-    marker = str(row.get("marker", "")).lower()
-    return any(name in marker for name in ("xfail", "todo", "only"))
 
 
 def _check_mapping_static(
@@ -286,17 +182,6 @@ def _check_mapping_static(
         "python_static_ids": actual["python_static_test_id_count"],
         "typescript_static_ids": actual["typescript_static_test_id_count"],
     }
-
-
-def _frontend_relative(root: Path, raw_path: str) -> str:
-    path = Path(raw_path)
-    if not path.is_absolute():
-        path = root / "frontend" / path
-    resolved = path.resolve()
-    try:
-        return resolved.relative_to(root.resolve()).as_posix()
-    except ValueError as exc:
-        raise ValueError(f"collector path escapes repository: {raw_path}") from exc
 
 
 def _collect_vitest(root: Path) -> tuple[list[str], list[str], str]:
@@ -517,6 +402,18 @@ def _check_frontend_collection(
         _check_count(frontend, key, actual, f"frontend.{key}", problems)
 
 
+def _split_record_problems(baseline: dict[str, Any], root: Path) -> list[str]:
+    """Validate stored module-split records against the live file inventory."""
+    problems: list[str] = []
+    records = _splits.split_authority(baseline, root, problems)
+    mapping = baseline.get("mapping_static")
+    files = mapping.get("python_test_files") if isinstance(mapping, dict) else None
+    if not isinstance(files, list):
+        problems.append("module split records need a python_test_files authority")
+        return problems
+    return problems + _splits.path_disposition_problems(records, files)
+
+
 def check_test_inventory(root: Path | None = None) -> dict[str, Any]:
     """Execute every collector and compare all exact identities."""
     resolved_root = REPO_ROOT if root is None else root
@@ -525,6 +422,7 @@ def check_test_inventory(root: Path | None = None) -> dict[str, Any]:
     if baseline.get("schema") != "disclaude-architecture-test-inventory-v1":
         problems.append("test inventory schema mismatch")
     problems += inventory_static.candidate_inventory_problems(baseline, resolved_root)
+    problems += _split_record_problems(baseline, resolved_root)
     static = _check_mapping_static(baseline, resolved_root, problems)
     _check_frontend_collection(baseline, resolved_root, problems)
     _check_sandbox_deselections(resolved_root, problems)
@@ -541,13 +439,51 @@ def _assert_no_deletions(
     label: str,
     previous: list[Any],
     current: list[Any],
+    *,
+    authorized: set[str] | None = None,
 ) -> list[Any]:
+    """Return additions, refusing any deletion no authority explains.
+
+    ``authorized`` carries the canonical rows a ``module_split_transitions``
+    record has already justified. It defaults to nothing, so a caller that
+    supplies no authority keeps the original absolute refusal.
+    """
+    allowed = set() if authorized is None else authorized
     current_rows = {_canonical_row(item) for item in current}
-    deleted = [item for item in previous if _canonical_row(item) not in current_rows]
+    deleted = [
+        item
+        for item in previous
+        if _canonical_row(item) not in current_rows
+        and _canonical_row(item) not in allowed
+    ]
     if deleted:
         raise RuntimeError(f"unexplained deletion in {label}: {deleted}")
     previous_rows = {_canonical_row(item) for item in previous}
     return [item for item in current if _canonical_row(item) not in previous_rows]
+
+
+def _split_authorizations(
+    root: Path,
+    split_rows: list[dict[str, Any]],
+    previous_roots: dict[str, list[str]],
+    current_roots: dict[str, list[str]],
+    previous_mapping: dict[str, Any],
+    current_mapping: dict[str, Any],
+) -> tuple[dict[str, set[str]], list[dict[str, Any]], Any]:
+    """Validate the effective module-split records and derive what they allow."""
+    problems: list[str] = []
+    records = _splits.split_authority(
+        {"module_split_transitions": split_rows}, root, problems
+    )
+    problems += _splits.path_disposition_problems(
+        records, current_mapping["python_test_files"]
+    )
+    if problems:
+        raise RuntimeError(f"module split transitions are invalid: {problems}")
+    authorized, accounted, ledger = _splits.build_authorizations(
+        records, previous_mapping, current_mapping, previous_roots, current_roots
+    )
+    return authorized, accounted, ledger
 
 
 def _accepted_authorities(
@@ -595,6 +531,7 @@ def regenerate_inventory(
     package: str = "PKG-02-GATE",
     accepted_collected_roots: dict[str, list[str]] | None = None,
     accepted_mapping_static: dict[str, Any] | None = None,
+    module_split_transitions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Regenerate after proving the transition from accepted exact authority."""
     resolved_root = REPO_ROOT if root is None else root
@@ -630,13 +567,30 @@ def regenerate_inventory(
     ):
         raise RuntimeError("live configs do not select identical 38/36 source authority")
 
+    split_rows = (
+        load_test_inventory(resolved_root).get("module_split_transitions", [])
+        if module_split_transitions is None
+        else module_split_transitions
+    )
+    authorized, accounted_markers, ledger = _split_authorizations(
+        resolved_root, split_rows, previous_roots, current_roots,
+        previous_mapping, current_mapping,
+    )
     added_by_root = {
-        name: _assert_no_deletions(f"collected.{name}", previous_roots[name], current_roots[name])
+        name: _assert_no_deletions(
+            f"collected.{name}",
+            previous_roots[name],
+            current_roots[name],
+            authorized=authorized.get(f"collected.{name}"),
+        )
         for name in PYTHON_ROOTS
     }
     static_added = {
         key: _assert_no_deletions(
-            f"mapping_static.{key}", previous_mapping[key], current_mapping[key]
+            f"mapping_static.{key}",
+            previous_mapping[key],
+            current_mapping[key],
+            authorized=authorized.get(f"mapping_static.{key}"),
         )
         for key in (
             "python_test_files",
@@ -650,9 +604,14 @@ def regenerate_inventory(
         "mapping_static.markers",
         previous_mapping["markers"],
         current_mapping["markers"],
+        authorized=authorized.get("mapping_static.markers"),
     )
-    if marker_added:
-        raise RuntimeError(f"skip/xfail/todo/only marker growth is forbidden: {marker_added}")
+    marker_growth = _splits.unaccounted_marker_growth(marker_added, accounted_markers)
+    if marker_growth:
+        raise RuntimeError(f"skip/xfail/todo/only marker growth is forbidden: {marker_growth}")
+    count_problems = ledger.count_problems()
+    if count_problems:
+        raise RuntimeError(f"module split transition counts are not exact: {count_problems}")
 
     changed_roots = [name for name, added in added_by_root.items() if added]
     transition = {
@@ -737,8 +696,12 @@ def regenerate_inventory(
             "command_drift_fails": True,
             "additions_allowed_only_when_baseline_updated_in_owning_package": True,
             "real_collection_distinct_from_mapping_static": True,
+            "module_splits_require_an_exact_transition_record": True,
         },
         "additive_transitions": sorted(transitions, key=lambda item: _canonical_row(item)),
+        "module_split_transitions": sorted(
+            split_rows, key=lambda item: item["old_path"]
+        ),
     }
     inventory_static.validate_regenerated_inventory(inventory, resolved_root)
     output = resolved_root / "architecture" / "test-inventory.json"
