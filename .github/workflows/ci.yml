@@ -72,6 +72,15 @@ jobs:
       - name: Persistent non-web conformance
         run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
 
+      # The adversarial suite guarding the seal, ownership and inventory
+      # machinery. It is also inside `testpaths`, so the unit-test step below
+      # covers it — this step names the path explicitly so the gate survives
+      # any future narrowing of testpaths. It was inventoried but never run
+      # for the whole campaign, and the first execution found nine real
+      # defects; it does not go unnamed again.
+      - name: Architecture machinery tests (tests/architecture)
+        run: uv run pytest -q tests/architecture
+
       - name: Python type-check (basedpyright — strict, zero type errors tree-wide)
         run: uv run basedpyright
 

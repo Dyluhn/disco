@@ -57,7 +57,11 @@ asyncio_mode = "auto"
 # configuration deprecation before collection, which makes every strict
 # warnings-as-errors campaign fail without exercising a single test.
 asyncio_default_fixture_loop_scope = "function"
-testpaths = ["packages"]
+# `packages` alone left tests/architecture — 8,409 lines of adversarial tests
+# guarding the governance machinery — outside every default run, local and CI
+# alike. Named explicitly rather than as bare `tests`, which would also pull
+# in the unrelated tests/unbiased_gate suite.
+testpaths = ["packages", "tests/architecture"]
 markers = [
     "integration",
     # W7: fast input/output boundary CONTRACTS (W1 sandbox-error typing, W2 task supervision,
