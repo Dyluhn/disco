@@ -233,7 +233,11 @@ class TestMappingStatic:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         mapping = baseline["mapping_static"]
         expected_counts = {
-            "python_test_file_count": 786,
+            # 787 from Epic 11-C: packages/tools/tests/_appkit_verify_doubles.py,
+            # the doubles extracted out of test_verify_appkit_app.py to clear
+            # PY-0889. It defines no test — the collected node-id set is
+            # unchanged at 9,278 — but it is a file under a tests/ root.
+            "python_test_file_count": 787,
             "python_static_test_id_count": 9341,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
