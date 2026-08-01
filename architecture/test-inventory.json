@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
+  "source_identity": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
   "collected": {
     "counts": {
       "packages": 9870,
@@ -11469,7 +11469,7 @@
     }
   },
   "mapping_static": {
-    "identity": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
+    "identity": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
     "python_test_file_count": 786,
     "python_static_test_id_count": 9341,
     "python_test_files": [
@@ -23068,7 +23068,7 @@
       },
       {
         "path": "packages/tools/tests/test_find_and_edit.py",
-        "line": 91,
+        "line": 92,
         "fixture": "_clean_read_tracker",
         "scope": "pytest.fixture(autouse=True)"
       },
@@ -23206,7 +23206,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_sw2_egress_exploits.py",
-        "line": 241,
+        "line": 246,
         "fixture": "_close_test_event_stores",
         "scope": "pytest.fixture(autouse=True)"
       },
@@ -23434,7 +23434,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_wo_a4_bus_quota_integration.py",
-        "line": 53,
+        "line": 57,
         "fixture": "a4",
         "scope": "pytest.fixture"
       },
@@ -24115,17 +24115,17 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/core/tests/test_secrets.py",
-        "line": 125,
-        "marker": "pytest.mark.skipif",
-        "source": ""
-      },
-      {
-        "framework": "pytest",
         "path": "packages/tools/tests/test_projects.py",
         "line": 127,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"running as root \u2014 chmod read-only is not enforced\")"
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/core/tests/test_secrets.py",
+        "line": 131,
+        "marker": "pytest.mark.skipif",
+        "source": ""
       },
       {
         "framework": "pytest",
@@ -24193,7 +24193,7 @@
       {
         "framework": "pytest",
         "path": "packages/core/tests/test_secrets.py",
-        "line": 248,
+        "line": 254,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -24242,7 +24242,7 @@
       {
         "framework": "pytest",
         "path": "packages/agent-server/tests/test_sw2_egress_exploits.py",
-        "line": 329,
+        "line": 334,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"WeasyPrint unavailable\")"
       },
@@ -28576,6 +28576,39 @@
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-11-SETTINGS",
+      "root": "multiple",
+      "source_identity_before": "b01c13fe1a5eb35a1e8d199ddbe524766fee6c72",
+      "source_identity_after": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/tools/tests/test_find_and_edit.py",
+            "line": 92,
+            "fixture": "_clean_read_tracker",
+            "scope": "pytest.fixture(autouse=True)"
+          },
+          {
+            "path": "packages/agent-server/tests/test_sw2_egress_exploits.py",
+            "line": 246,
+            "fixture": "_close_test_event_stores",
+            "scope": "pytest.fixture(autouse=True)"
+          },
+          {
+            "path": "packages/agent-server/tests/test_wo_a4_bus_quota_integration.py",
+            "line": 57,
+            "fixture": "a4",
+            "scope": "pytest.fixture"
+          }
+        ]
       }
     }
   ],
