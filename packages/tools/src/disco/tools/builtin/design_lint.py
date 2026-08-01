@@ -31,2123 +31,548 @@ Epic G can use it as a verification probe and re-linting is non-productive work.
 
 Layering: tools -> core is allowed; this imports `DesignSpec` + the canonical
 choice keys from `disco.core.appkit` (the single source of truth recipes write).
+
+Package split (PKG-10C): the constants, finding model, scanning helpers, deck-
+slide helpers, suppression logic, every rule family, and the pure engine driver
+now live under `design_lint_parts/` — cohesive modules each well under the
+module/class/callable size + complexity budgets. This module is the sole public
+facade: every name it used to define locally is re-imported here unchanged
+(including private ones — tests and production code reach several `_rule_*`
+functions and internal constants through this module object, some via
+monkeypatch), so nothing importing `disco.tools.builtin.design_lint` needs to
+change. `design_lint_parts` is a private implementation detail; external code
+must never import from it directly.
 """
 
 from __future__ import annotations
 
-import html as html_lib
-import re
-import shlex
-from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+import re as re
+import shlex as shlex
+from collections.abc import Mapping as Mapping
+from dataclasses import dataclass as dataclass
+from typing import TYPE_CHECKING as TYPE_CHECKING
+from typing import Any
 
 from disco.core import SecurityRisk
 from disco.core.appkit import (
-    CHOICE_COMPONENT_BUTTON_RADIUS,
-    CHOICE_EFFECTS_GLOW,
-    CHOICE_EFFECTS_GRADIENT_TEXT,
-    CHOICE_ICONS_STYLE,
-    CHOICE_LAYOUT_SECTION_SEQUENCE,
-    CHOICE_MOTION_DENSITY,
-    CHOICE_PALETTE_ACCENT,
-    CHOICE_PALETTE_PRIMARY,
-    CHOICE_TYPOGRAPHY_BODY,
-    CHOICE_TYPOGRAPHY_HEADING,
-    MAX_DESIGNSPEC_BYTES,
+    CHOICE_COMPONENT_BUTTON_RADIUS as CHOICE_COMPONENT_BUTTON_RADIUS,
+)
+from disco.core.appkit import (
+    CHOICE_EFFECTS_GLOW as CHOICE_EFFECTS_GLOW,
+)
+from disco.core.appkit import (
+    CHOICE_EFFECTS_GRADIENT_TEXT as CHOICE_EFFECTS_GRADIENT_TEXT,
+)
+from disco.core.appkit import (
+    CHOICE_ICONS_STYLE as CHOICE_ICONS_STYLE,
+)
+from disco.core.appkit import (
+    CHOICE_LAYOUT_SECTION_SEQUENCE as CHOICE_LAYOUT_SECTION_SEQUENCE,
+)
+from disco.core.appkit import (
+    CHOICE_MOTION_DENSITY as CHOICE_MOTION_DENSITY,
+)
+from disco.core.appkit import (
+    CHOICE_PALETTE_ACCENT as CHOICE_PALETTE_ACCENT,
+)
+from disco.core.appkit import (
+    CHOICE_PALETTE_PRIMARY as CHOICE_PALETTE_PRIMARY,
+)
+from disco.core.appkit import (
+    CHOICE_TYPOGRAPHY_BODY as CHOICE_TYPOGRAPHY_BODY,
+)
+from disco.core.appkit import (
+    CHOICE_TYPOGRAPHY_HEADING as CHOICE_TYPOGRAPHY_HEADING,
+)
+from disco.core.appkit import (
+    MAX_DESIGNSPEC_BYTES as MAX_DESIGNSPEC_BYTES,
+)
+from disco.core.appkit import (
     load_design_spec_from_bytes,
 )
 from disco.core.appkit.spec import DesignSpec
-from disco.core.context import ArtifactMemoryStore
-from disco.core.design import DesignDirection, direction_from_markdown
+from disco.core.context import ArtifactMemoryStore as ArtifactMemoryStore
+from disco.core.design import DesignDirection
+from disco.core.design import direction_from_markdown as direction_from_markdown
 from disco.core.effects import EffectCapability
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+from pydantic import ConfigDict as ConfigDict
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..behavior import declares
 from ._outcomes import fail_outcome
 
-if TYPE_CHECKING:
-    from ..sandbox.base import SandboxInstance
-
-# The canonical choice keys design_lint can SUPPRESS a finding for. EVERY one is
-# defined in core (`disco.core.appkit`) and imported above — there is NO local
-# copy, so the linter's vocabulary and core's exported `CANONICAL_CHOICE_KEYS`
-# can never drift (a test asserts this set is a subset of core's). Two of these
-# keys map to a concrete DesignSpec FIELD whose value is matched against the
-# flagged value (palette.primary/accent -> ai_purple; typography.heading/body ->
-# generic_font); the rest name binary slop conditions with no spec field, so a
-# substantive justification keyed to them is the suppression granularity.
-SUPPRESSIBLE_CHOICE_KEYS: frozenset[str] = frozenset(
-    {
-        CHOICE_PALETTE_PRIMARY,
-        CHOICE_PALETTE_ACCENT,
-        CHOICE_TYPOGRAPHY_HEADING,
-        CHOICE_TYPOGRAPHY_BODY,
-        CHOICE_EFFECTS_GRADIENT_TEXT,
-        CHOICE_EFFECTS_GLOW,
-        CHOICE_COMPONENT_BUTTON_RADIUS,
-        CHOICE_ICONS_STYLE,
-        CHOICE_MOTION_DENSITY,
-        CHOICE_LAYOUT_SECTION_SEQUENCE,
-    }
+# ---- compatibility re-exports (PKG-10C) ---------------------------------------
+# Names this module defined BEFORE the design_lint_parts split. Consumers and the
+# test suite reach several of them through this module object (including via
+# monkeypatch — see `_engine.lint_design`, called by bare name from `run()` below
+# so a `monkeypatch.setattr(design_lint_module, "lint_design", ...)` is honored),
+# so the facade must keep exposing every one, unchanged.
+from .design_lint_parts._constants import (
+    _AI_PURPLE_HEXES as _AI_PURPLE_HEXES,
 )
-
-_MIN_REASON_LEN = 12  # mirrors spec.Justification._reason_substantive
-
-# ---- curated slop constants ---------------------------------------------------
-
-# Median/default fonts — the LLM tell. Matched only in a FONT context (see rule).
-_GENERIC_FONTS: frozenset[str] = frozenset(
-    {
-        "inter",
-        "geist",
-        "system-ui",
-        "ui-sans-serif",
-        "-apple-system",
-        "blinkmacsystemfont",
-        "sf pro",
-        "sf pro text",
-        "sf pro display",
-        "segoe ui",
-        "arial",
-        "helvetica",
-        "helvetica neue",
-        "roboto",
-    }
+from .design_lint_parts._constants import (
+    _AI_PURPLE_RGB as _AI_PURPLE_RGB,
 )
-
-# The #7c3aed violet family (+ the indigo it's usually paired with). Hex only;
-# a couple of rgb() spellings of the canonical purples too.
-_AI_PURPLE_HEXES: frozenset[str] = frozenset(
-    {
-        "#7c3aed",
-        "#8b5cf6",
-        "#6d28d9",
-        "#5b21b6",
-        "#a855f7",
-        "#9333ea",
-        "#7e22ce",
-        "#c084fc",
-        "#6366f1",
-        "#818cf8",
-        "#4f46e5",
-        "#4338ca",
-        "#a78bfa",
-    }
+from .design_lint_parts._constants import (
+    _ANIMATION_THRESHOLD as _ANIMATION_THRESHOLD,
 )
-_AI_PURPLE_RGB: frozenset[str] = frozenset(
-    {
-        "rgb(124,58,237)",
-        "rgb(139,92,246)",
-        "rgb(99,102,241)",
-        "rgb(168,85,247)",
-    }
+from .design_lint_parts._constants import (
+    _BACKDROP_DECL_RE as _BACKDROP_DECL_RE,
 )
-
-# Neon accents for the dark-neon-glow tell.
-_NEON_HEXES: frozenset[str] = frozenset(
-    {
-        "#39ff14",
-        "#00ff00",
-        "#0f0",
-        "#00ffff",
-        "#0ff",
-        "#ff00ff",
-        "#f0f",
-        "#fe53bb",
-        "#08f7fe",
-        "#ff2079",
-        "#00f5d4",
-        "#f5d300",
-        "#ff073a",
-        "#bc13fe",
-        "#00ffea",
-    }
+from .design_lint_parts._constants import (
+    _BACKGROUND_DECL_RE as _BACKGROUND_DECL_RE,
 )
-
-# Pill (fully-rounded) radius values.
-_PILL_RADII: tuple[str, ...] = ("9999px", "999px", "9999rem", "100vmax", "100vh", "50%")
-
-_BUTTON_SELECTOR_TOKENS: tuple[str, ...] = (
-    "button",
-    ".btn",
-    ".button",
-    "[type=submit]",
-    "[type='submit']",
-    "btn",
+from .design_lint_parts._constants import (
+    _BUTTON_SELECTOR_TOKENS as _BUTTON_SELECTOR_TOKENS,
 )
-
-_HEADING_SELECTOR_TOKENS: tuple[str, ...] = (
-    "h1",
-    "h2",
-    "hero",
-    "headline",
-    "banner",
-    "masthead",
-    "display",
-    "title",
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_ARCHETYPE_MONOTONY as _CHOICE_DECK_ARCHETYPE_MONOTONY,
 )
-
-# Broad emoji ranges (pictographs, symbols, transport, dingbats, supplemental).
-_EMOJI_RE = re.compile(
-    "[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f0ff\U00002b00-\U00002bff]"
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_GLASS as _CHOICE_DECK_GLASS,
 )
-
-_CSS_BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
-_HEX_RE = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b")
-_FONT_CONTEXT_RE = re.compile(r"font-family|font\s*:|--font|family=|googleapis\.com/css", re.I)
-_SECTION_OPEN_RE = re.compile(r"<section\b(?P<attrs>[^>]*)>", re.I | re.DOTALL)
-_STYLE_ATTR_RE = re.compile(r"\bstyle\s*=\s*(['\"])(?P<style>.*?)\1", re.I | re.DOTALL)
-_CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*(['\"])(?P<class>.*?)\1", re.I | re.DOTALL)
-_SCRIPT_STYLE_RE = re.compile(r"<(script|style|template)\b[^>]*>.*?</\1\s*>", re.I | re.DOTALL)
-_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_TAG_RE = re.compile(r"<[^>]+>")
-_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?")
-_FONT_SIZE_DECL_RE = re.compile(
-    r"font-size\s*:\s*(?P<value>[0-9]*\.?[0-9]+)\s*(?P<unit>px|pt|vw|rem|em)?\b",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_HANDWRITTEN_HTML as _CHOICE_DECK_HANDWRITTEN_HTML,
 )
-_LINE_HEIGHT_DECL_RE = re.compile(r"line-height:\s*(\d*\.?\d+)\s*;", re.I)
-_BACKDROP_DECL_RE = re.compile(
-    r"(?:-webkit-)?backdrop-filter\s*:\s*(?P<value>[^;{}]+)",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_IMAGERY as _CHOICE_DECK_IMAGERY,
 )
-_BACKGROUND_DECL_RE = re.compile(
-    r"(?:background|background-color|background-image)\s*:\s*(?P<value>[^;{}]+)",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_ORPHAN_SLIDE as _CHOICE_DECK_ORPHAN_SLIDE,
 )
-
-_ANIMATION_THRESHOLD = 12  # transition/animation declarations over this = soup
-_MAX_FONT_FAMILIES = 3
-_MIN_FONT_SIZE_PX = 14.0
-_MAX_BRAND_COLORS = 6
-_COLOR_SATURATION_FLOOR = 60
-_COLOR_MERGE_DISTANCE = 40.0
-_MIN_LINE_HEIGHT = 1.2
-_EMOJI_THRESHOLD = 3  # this many emoji glyphs in markup = emoji-as-icons
-_DECK_TEXT_WORD_LIMIT = 90
-_DECK_BULLET_LIMIT = 6
-_DECK_TYPE_FLOOR_PX = 24.0
-_DECK_BASE_WIDTH_PX = 1920.0
-_CHOICE_DECK_TYPE_FLOOR = "deck.type_floor"
-_CHOICE_DECK_TEXT_BUDGET = "deck.text_budget"
-_CHOICE_DECK_ARCHETYPE_MONOTONY = "deck.archetype_monotony"
-_CHOICE_DECK_IMAGERY = "deck.imagery"
-_CHOICE_DECK_GLASS = "deck.glass"
-_CHOICE_DECK_ORPHAN_SLIDE = "deck.orphan_slide"
-_CHOICE_DECK_HANDWRITTEN_HTML = "deck.handwritten_html"
-_CHOICE_WEB_TEXT_OVER_IMAGE = "web.text_over_image"
-_CHOICE_WEB_HOVER_A11Y = "web.hover_a11y"
-_CHOICE_WEB_HOVER_SCALE = "web.hover_scale"
-_CHOICE_WEB_GLASS = "web.glass"
-_CHOICE_WEB_DEFAULT_HIDDEN_CONTENT = "web.default_hidden_content"
-_CHOICE_WEB_FONT_COUNT = "web.font_count"
-_CHOICE_WEB_FONT_SIZE = "web.font_size"
-_CHOICE_WEB_COLOR_COUNT = "web.color_count"
-_CHOICE_WEB_LINE_HEIGHT = "web.line_height"
-_DECK_PIPELINE_GENERATOR_MARKER = "disco-slides-generate:pipeline-html"
-
-_WEB_BANNED_DEFAULT_FONTS: frozenset[str] = frozenset({"inter", "roboto", "arial"})
-_WEB_HEADING_SELECTOR_RE = re.compile(
-    r"(^|[\s,>+~])(?:body|h[1-6])(?:$|[\s,>+~:#.\[])|"
-    r"(?:hero|headline|heading|masthead|display|title)",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_TEXT_BUDGET as _CHOICE_DECK_TEXT_BUDGET,
 )
-_WEB_INTERACTIVE_SELECTOR_RE = re.compile(
-    r"(^|[\s,>+~])(?:a|button|input|select|textarea|summary)(?:$|[\s,>+~:#.\[])|"
-    r"\.(?:btn|button|cta)\b|\[role=['\"]?button|\[tabindex",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_DECK_TYPE_FLOOR as _CHOICE_DECK_TYPE_FLOOR,
 )
-_WEB_MEDIA_CONTAINER_RE = re.compile(
-    r"<(?P<tag>section|header|div|article)\b(?P<attrs>[^>]*)>"
-    r"(?P<body>.*?)</(?P=tag)\s*>",
-    re.I | re.DOTALL,
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_COLOR_COUNT as _CHOICE_WEB_COLOR_COUNT,
 )
-_WEB_TEXT_TAG_RE = re.compile(r"<\s*(?:h[1-6]|p|a|span|strong|em)\b", re.I)
-_WEB_HEROISH_RE = re.compile(
-    r"\b(?:hero|masthead|banner|cover|full-bleed|relative|absolute)\b", re.I
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_DEFAULT_HIDDEN_CONTENT as _CHOICE_WEB_DEFAULT_HIDDEN_CONTENT,
 )
-_WEB_HIDDEN_DECL_RE = re.compile(
-    r"(?:opacity\s*:\s*(?:0|0\.0+)\s*(?:!important\s*)?(?:;|$)|"
-    r"visibility\s*:\s*hidden\s*(?:!important\s*)?(?:;|$))",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_FONT_COUNT as _CHOICE_WEB_FONT_COUNT,
 )
-_WEB_JS_GATED_SELECTOR_RE = re.compile(
-    r"(^|[,\s>+~])(?:html\.js|\.js(?:[\s>+~.]|$)|\.js-enabled\b|"
-    r"\.js-gated\b|\.has-js\b)",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_FONT_SIZE as _CHOICE_WEB_FONT_SIZE,
 )
-_WEB_CONTENT_SELECTOR_RE = re.compile(
-    r"(^|[,\s>+~])(?:section|div)(?:$|[\s>+~.#:\[])|"
-    r"\.(?:section|content|copy|text|hero|panel|card|feature|tile|block|"
-    r"reveal|scroll-reveal|fade|fade-up|split|stack|grid)\b",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_GLASS as _CHOICE_WEB_GLASS,
 )
-_WEB_HEADING_TARGET_RE = re.compile(
-    r"(^|[\s>+~])h[1-6](?:$|[\s>+~:#.\[])|"
-    r"(?:hero|headline|heading|masthead|display|title)",
-    re.I,
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_HOVER_A11Y as _CHOICE_WEB_HOVER_A11Y,
 )
-
-# Extensions split by how we scan them.
-_CSS_EXTS: frozenset[str] = frozenset({".css", ".scss", ".sass", ".less"})
-_MARKUP_EXTS: frozenset[str] = frozenset(
-    {".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte", ".astro", ".js", ".ts"}
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_HOVER_SCALE as _CHOICE_WEB_HOVER_SCALE,
 )
-SCAN_EXTS: frozenset[str] = _CSS_EXTS | _MARKUP_EXTS
-
-# Directories never worth scanning (deps/build output/vcs/the .disco spec dir).
-_SKIP_DIRS: frozenset[str] = frozenset(
-    {
-        "node_modules",
-        ".git",
-        "dist",
-        "build",
-        ".next",
-        ".nuxt",
-        ".svelte-kit",
-        ".astro",
-        "out",
-        "coverage",
-        "__pycache__",
-        "vendor",
-        ".disco",
-        ".cache",
-        ".vercel",
-    }
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_LINE_HEIGHT as _CHOICE_WEB_LINE_HEIGHT,
 )
-
-# Walk / read caps so a hostile or huge workspace can't blow up the scan.
-_MAX_FILES = 400
-_MAX_DEPTH = 12
-_MAX_FILE_BYTES = 512 * 1024
-# Source files cap; the designspec cap is core's (`MAX_DESIGNSPEC_BYTES`) so the
-# pre-read probe bounds against the SAME limit the loader enforces post-read.
-_MAX_SPEC_BYTES = MAX_DESIGNSPEC_BYTES
-# Small ceiling for the in-sandbox `wc -c` size probe — it only stats one file.
-_SIZE_PROBE_TIMEOUT_S = 10
-
-
-async def _bounded_read(sandbox: SandboxInstance, path: str, cap: int) -> bytes | None:
-    """Read a file ONLY if it is within `cap` bytes — and prove that BEFORE pulling
-    any bytes into this process. We stat the size in-sandbox (`wc -c < file` streams
-    the file through the guest's own `wc`; nothing lands in Python memory) and refuse
-    to `read_file` an over-cap (or unmeasurable) file. A multi-GB hostile file is
-    therefore never a memory/time bomb here, regardless of any post-read length check.
-
-    Returns the file bytes when readable and within `cap`; None when the size can't
-    be determined (non-zero exit / unparseable) or exceeds `cap` — the caller treats
-    None as absent/oversized (a source file is skipped; the designspec is treated as
-    present-but-invalid, so rules fire and nothing is suppressed)."""
-    try:
-        res = await sandbox.exec_shell(
-            f"wc -c < {shlex.quote(path)}", timeout_s=_SIZE_PROBE_TIMEOUT_S
-        )
-    except Exception:  # noqa: BLE001 — probe failed → treat as unmeasurable
-        return None
-    if res.exit_code != 0 or res.timed_out:
-        return None
-    try:
-        size = int(res.stdout.strip())
-    except (ValueError, AttributeError):
-        return None
-    if size < 0 or size > cap:
-        return None
-    try:
-        return await sandbox.read_file(path)
-    except Exception:  # noqa: BLE001 — vanished/unreadable between probe and read
-        return None
-
-
-# ---- finding model ------------------------------------------------------------
-
-
-class DesignFinding(BaseModel):
-    """One structured slop finding. `choice_key` is the canonical key whose
-    justification (in `.disco/designspec.json`) would suppress it."""
-
-    model_config = ConfigDict(frozen=True)
-
-    rule_id: str
-    severity: str  # "error" | "warning" | "info"
-    path: str
-    line: int
-    evidence: str
-    choice_key: str
-    message: str
-
-
-# rule_id -> (severity, rank-priority). Lower priority sorts first within a
-# severity. Severity dominates the sort (error < warning < info).
-_RULE_META: dict[str, tuple[str, int]] = {
-    "deck_type_floor": ("error", 5),
-    "ai_purple": ("error", 10),
-    "generic_font": ("warning", 20),
-    "direction_font_mismatch": ("warning", 25),
-    "gradient_hero_text": ("warning", 30),
-    "dark_neon_glow": ("warning", 40),
-    "deck_text_budget": ("warning", 45),
-    "deck_bullet_monotony": ("warning", 46),
-    "deck_missing_imagery": ("warning", 47),
-    "deck_glass_missing_saturate": ("warning", 48),
-    "deck_glass_flat_backdrop": ("warning", 49),
-    "deck_orphan_slide": ("warning", 50),
-    "deck_handwritten_html": ("warning", 51),
-    "web_banned_default_font": ("warning", 50),
-    "web_reflexive_hover_scale": ("warning", 51),
-    "web_hover_only_interactivity": ("warning", 52),
-    "web_text_over_image_no_scrim": ("warning", 53),
-    "web_glass_missing_saturate": ("warning", 54),
-    "web_glass_flat_backdrop": ("warning", 55),
-    "web_default_hidden_content": ("warning", 56),
-    "too_many_fonts": ("warning", 57),
-    "centered_hero_3_cards_cta": ("warning", 50),
-    "too_many_animations": ("info", 60),
-    "direction_palette_drift": ("info", 65),
-    "too_many_colors": ("info", 66),
-    "font_size_too_small": ("info", 67),
-    "tight_line_height": ("info", 68),
-    "pill_button_monoculture": ("info", 70),
-    "emoji_as_icons": ("info", 80),
-}
-_SEVERITY_RANK: dict[str, int] = {"error": 0, "warning": 1, "info": 2}
-
-
-# ---- small scanning helpers ---------------------------------------------------
-
-
-def _line_of(text: str, offset: int) -> int:
-    """1-based line number of a character offset."""
-    return text.count("\n", 0, max(offset, 0)) + 1
-
-
-def _ext_of(path: str) -> str:
-    base = path.rsplit("/", 1)[-1]
-    dot = base.rfind(".")
-    return base[dot:].lower() if dot > 0 else ""
-
-
-def _luminance(hexstr: str) -> float | None:
-    """Relative luminance (0..1) of a #rgb/#rrggbb color, or None if unparseable."""
-    h = hexstr.lstrip("#")
-    if len(h) == 3:
-        h = "".join(c * 2 for c in h)
-    if len(h) != 6:
-        return None
-    try:
-        r = int(h[0:2], 16) / 255
-        g = int(h[2:4], 16) / 255
-        b = int(h[4:6], 16) / 255
-    except ValueError:
-        return None
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def _norm_color(raw: str) -> str:
-    """Lowercase + strip whitespace inside rgb()/hex so spellings collapse."""
-    return re.sub(r"\s+", "", raw.strip().lower())
-
-
-def _resolve_rgb(raw: str) -> tuple[int, int, int] | None:
-    """Resolve a `#rgb`/`#rrggbb`/`rgb(r,g,b)` color to an (r,g,b) int tuple, or
-    None if unparseable. Resolving to RGB lets a hex field value and an `rgb()`
-    flagged value compare as the SAME color so suppression is spelling-agnostic
-    (the DesignSpec palette is hex-only; the implementation may write either)."""
-    s = _norm_color(raw)
-    if s.startswith("#"):
-        h = s[1:]
-        if len(h) == 3:
-            h = "".join(c * 2 for c in h)
-        if len(h) != 6:
-            return None
-        try:
-            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-        except ValueError:
-            return None
-    m = re.match(r"rgba?\((\d+),(\d+),(\d+)", s)
-    if m is not None:
-        try:
-            return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            return None
-    return None
-
-
-@dataclass(frozen=True)
-class _DeckSlide:
-    """One slide section found in a generated HTML deck."""
-
-    number: int
-    line: int
-    attrs: str
-    html: str
-    open_start: int
-    html_start: int
-
-
-def _attr_value(attrs: str, name: str) -> str | None:
-    m = re.search(
-        rf"\b{re.escape(name)}\s*=\s*(['\"])(?P<value>.*?)\1",
-        attrs,
-        re.I | re.DOTALL,
-    )
-    return m.group("value") if m is not None else None
-
-
-def _has_attr(attrs: str, name: str) -> bool:
-    return re.search(rf"\b{re.escape(name)}\s*=", attrs, re.I) is not None
-
-
-def _class_tokens(raw: str) -> set[str]:
-    return {token.strip().lower() for token in re.split(r"\s+", raw) if token.strip()}
-
-
-def _has_class(attrs: str, token: str) -> bool:
-    classes = _attr_value(attrs, "class")
-    return classes is not None and token.lower() in _class_tokens(classes)
-
-
-def _has_deck_wrapper(text: str) -> bool:
-    return any("deck" in _class_tokens(m.group("class")) for m in _CLASS_ATTR_RE.finditer(text))
-
-
-def _is_deck_section_candidate(attrs: str) -> bool:
-    return (
-        _has_attr(attrs, "data-slide-id")
-        or _has_attr(attrs, "data-label")
-        or _has_class(attrs, "slide")
-    )
-
-
-def _extract_deck_slides(text: str) -> list[_DeckSlide]:
-    """Return slide sections only when the markup looks like a deck artifact.
-
-    The actual deck renderer stamps `<div class="deck">` and
-    `<section class="slide" data-slide-id=... data-layout=...>`. Some artifact
-    paths use `<section data-label=...>` instead, so repeated data-label sections
-    are also accepted as deck-like. Ordinary web pages with a single labelled
-    section stay out of the deck rule pack.
-    """
-    candidates: list[tuple[re.Match[str], str, int, int]] = []
-    strong_markers = 0
-    data_label_markers = 0
-    for m in _SECTION_OPEN_RE.finditer(text):
-        attrs = m.group("attrs") or ""
-        if not _is_deck_section_candidate(attrs):
-            continue
-        close = re.search(r"</section\s*>", text[m.end() :], re.I)
-        if close is None:
-            continue
-        body_start = m.end()
-        body_end = m.end() + close.start()
-        candidates.append((m, attrs, body_start, body_end))
-        if _has_attr(attrs, "data-slide-id") or _has_class(attrs, "slide"):
-            strong_markers += 1
-        if _has_attr(attrs, "data-label"):
-            data_label_markers += 1
-
-    if not candidates:
-        return []
-    if not (_has_deck_wrapper(text) or strong_markers > 0 or data_label_markers >= 2):
-        return []
-
-    slides: list[_DeckSlide] = []
-    for i, (m, attrs, body_start, body_end) in enumerate(candidates, 1):
-        slides.append(
-            _DeckSlide(
-                number=i,
-                line=_line_of(text, m.start()),
-                attrs=attrs,
-                html=text[body_start:body_end],
-                open_start=m.start(),
-                html_start=body_start,
-            )
-        )
-    return slides
-
-
-def _visible_text(fragment: str) -> str:
-    without_invisible = _SCRIPT_STYLE_RE.sub(" ", fragment)
-    without_comments = _COMMENT_RE.sub(" ", without_invisible)
-    without_tags = _TAG_RE.sub(" ", without_comments)
-    return re.sub(r"\s+", " ", html_lib.unescape(without_tags)).strip()
-
-
-def _word_count(fragment: str) -> int:
-    return len(_WORD_RE.findall(_visible_text(fragment)))
-
-
-def _bullet_count(fragment: str) -> int:
-    return len(re.findall(r"<li\b", fragment, re.I))
-
-
-def _font_size_px(value: str, unit: str | None) -> float | None:
-    try:
-        number = float(value)
-    except ValueError:
-        return None
-    u = (unit or "px").lower()
-    if u == "px":
-        return number
-    if u == "pt":
-        return number * (96.0 / 72.0)
-    if u == "vw":
-        return number * (_DECK_BASE_WIDTH_PX / 100.0)
-    if u in {"rem", "em"}:
-        return number * 16.0
-    return None
-
-
-def _style_attrs(slide: _DeckSlide) -> list[tuple[str, int]]:
-    styles: list[tuple[str, int]] = []
-    for m in _STYLE_ATTR_RE.finditer(slide.attrs):
-        styles.append((m.group("style"), slide.open_start + m.start()))
-    for m in _STYLE_ATTR_RE.finditer(slide.html):
-        styles.append((m.group("style"), slide.html_start + m.start()))
-    return styles
-
-
-def _deck_image_count(slides: list[_DeckSlide]) -> int:
-    count = 0
-    for slide in slides:
-        raw = f"{slide.attrs}\n{slide.html}"
-        count += len(re.findall(r"<\s*(?:img|picture|source)\b", raw, re.I))
-        count += len(re.findall(r"\bbackground(?:-image)?\s*:[^;{}]*url\(", raw, re.I))
-    return count
-
-
-def _has_colorful_backdrop(raw: str) -> bool:
-    return (
-        re.search(
-            r"(?:linear|radial|conic)-gradient|url\(|<\s*(?:img|picture|video)\b",
-            raw,
-            re.I,
-        )
-        is not None
-    )
-
-
-def _is_flat_background_value(value: str) -> bool:
-    low = value.strip().lower()
-    if not low or any(tok in low for tok in ("gradient(", "url(", "image-set(")):
-        return False
-    if low.startswith("var("):
-        return False
-    if re.search(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?\b|rgba?\(|hsla?\(|oklch\(|oklab\(", low):
-        return True
-    named = re.fullmatch(r"[a-z]+", low)
-    return named is not None and low not in {"none", "transparent", "inherit", "initial"}
-
-
-def _style_has_flat_background(style: str) -> bool:
-    return any(
-        _is_flat_background_value(m.group("value")) for m in _BACKGROUND_DECL_RE.finditer(style)
-    )
-
-
-def _slide_has_flat_backdrop(slide: _DeckSlide) -> bool:
-    return any(
-        _style_has_flat_background(m.group("style")) for m in _STYLE_ATTR_RE.finditer(slide.attrs)
-    )
-
-
-def _global_deck_backdrop_is_flat(text: str) -> bool:
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).lower()
-        if not any(tok in selector for tok in (".slide", ".deck", "body")):
-            continue
-        body = m.group(2)
-        if _has_colorful_backdrop(body):
-            return False
-        if _style_has_flat_background(body):
-            return True
-    return False
-
-
-def _backdrop_without_saturate(style: str) -> str | None:
-    for m in _BACKDROP_DECL_RE.finditer(style):
-        value = m.group("value")
-        if "saturate(" not in value.lower():
-            return m.group(0).strip()
-    return None
-
-
-def _style_has_backdrop_filter(style: str) -> bool:
-    return _BACKDROP_DECL_RE.search(style) is not None
-
-
-# ---- suppression --------------------------------------------------------------
-
-
-def _normalize_choice(raw: str) -> str:
-    """Canonicalize a justification's `choice` so a recipe-written key and a
-    hand-written one collapse. Lowercase, drop an optional `=value` suffix (the
-    field+value form `palette.primary=#7c3aed`), and unify space/slash separators
-    to '.'. Underscores are PRESERVED — they're meaningful inside the canonical
-    keys design_lint owns (`effects.gradient_text`, `component.button_radius`,
-    `layout.section_sequence`), so each constant normalizes to itself."""
-    s = raw.strip().lower().split("=", 1)[0].strip()
-    s = s.replace(" ", "").replace("/", ".")
-    return s
-
-
-def _justified_keys(design_spec: DesignSpec | None) -> set[str]:
-    """The set of canonical choice keys SUBSTANTIVELY justified by the spec.
-
-    A justification only counts if its reason clears the substantive-length bar
-    (the same bar the DesignSpec schema enforces — re-checked here so a raw,
-    hand-edited spec that slipped a stub reason past loading can't suppress)."""
-    if design_spec is None:
-        return set()
-    out: set[str] = set()
-    for j in design_spec.justifications:
-        if len((j.reason or "").strip()) >= _MIN_REASON_LEN:
-            out.add(_normalize_choice(j.choice))
-    return out
-
-
-def _font_justified(design_spec: DesignSpec | None, token: str, justified: set[str]) -> bool:
-    """generic_font is suppressed only by a FIELD+VALUE match: the spec must
-    actually DECLARE that exact font in heading/body AND justify the matching
-    typography key. Declaring Inter without saying why never suppresses."""
-    if design_spec is None:
-        return False
-    t = token.strip().lower()
-    typ = design_spec.typography
-    if t == typ.heading_font.strip().lower() and CHOICE_TYPOGRAPHY_HEADING in justified:
-        return True
-    if t == typ.body_font.strip().lower() and CHOICE_TYPOGRAPHY_BODY in justified:
-        return True
-    return False
-
-
-# ---- the rules ----------------------------------------------------------------
-
-
-def _rule_generic_font(
-    path: str, text: str, design_spec: DesignSpec | None, justified: set[str]
-) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    seen: set[str] = set()
-    body_font = design_spec.typography.body_font.strip().lower() if design_spec is not None else ""
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if not _FONT_CONTEXT_RE.search(line):
-            continue
-        # Only the PRIMARY (chosen) family is the tell — fallbacks like
-        # `system-ui`/`sans-serif` after the real font are legitimate and must
-        # not be flagged. Collect the chosen family from each declaration.
-        for token in _primary_families(line):
-            if token in seen or token not in _GENERIC_FONTS:
-                continue
-            seen.add(token)
-            if _font_justified(design_spec, token, justified):
-                continue
-            choice = CHOICE_TYPOGRAPHY_BODY if token == body_font else CHOICE_TYPOGRAPHY_HEADING
-            findings.append(
-                DesignFinding(
-                    rule_id="generic_font",
-                    severity="warning",
-                    path=path,
-                    line=lineno,
-                    evidence=f"font '{token}' in: {line.strip()[:140]}",
-                    choice_key=choice,
-                    message=(
-                        f"Generic/default font '{token}' as the primary family — the LLM-median "
-                        "tell. Declare a deliberate family in .disco/designspec.json and justify "
-                        "it, or pick a real pairing (see SiteRecipe)."
-                    ),
-                )
-            )
-    return findings
-
-
-def _rule_web_banned_default_font(
-    path: str, text: str, design_spec: DesignSpec | None, justified: set[str]
-) -> list[DesignFinding]:
-    """Web-specific default-font tell: Inter/Roboto/Arial as the first family on
-    body or heading rules. This is narrower than `generic_font`, which also covers
-    app-wide variables/imports and broader system stacks."""
-    findings: list[DesignFinding] = []
-    seen: set[tuple[str, str]] = set()
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        if not _selector_targets_body_or_heading(selector):
-            continue
-        body = m.group(2)
-        for fm in re.finditer(r"font-family\s*:\s*([^;{}]+)", body, re.I):
-            token = _first_font_family(fm.group(1))
-            if token not in _WEB_BANNED_DEFAULT_FONTS:
-                continue
-            key = (selector.lower(), token)
-            if key in seen:
-                continue
-            seen.add(key)
-            if _font_justified(design_spec, token, justified):
-                continue
-            choice = (
-                CHOICE_TYPOGRAPHY_BODY
-                if re.search(r"(^|[\s,>+~])body(?:$|[\s,>+~:#.\[])", selector, re.I)
-                else CHOICE_TYPOGRAPHY_HEADING
-            )
-            findings.append(
-                DesignFinding(
-                    rule_id="web_banned_default_font",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, m.start(2) + fm.start()),
-                    evidence=f"{selector} {{ font-family: {fm.group(1).strip()} }}",
-                    choice_key=choice,
-                    message=(
-                        f"Web default font '{token}' is the first family on a body/heading "
-                        "rule. Commit a deliberate font pairing or justify the exact brand font."
-                    ),
-                )
-            )
-    return findings
-
-
-def _primary_families(line: str) -> list[str]:
-    """The CHOSEN (primary) font families declared on a line — the first family
-    in each `font-family`/`--font*` declaration and every family imported via a
-    Google-Fonts `family=` URL. Fallbacks after the primary are intentionally
-    excluded (a `system-ui` fallback is not slop)."""
-    low = line.lower()
-    out: list[str] = []
-
-    def _first(value: str) -> str:
-        return value.split(",", 1)[0].strip().strip("'\"")
-
-    for m in re.finditer(r"font-family\s*:\s*([^;{}]+)", low):
-        out.append(_first(m.group(1)))
-    for m in re.finditer(r"(?P<name>--[a-z0-9-]*font[a-z0-9-]*)\s*:\s*([^;{}]+)", low):
-        if re.search(
-            r"font-(?:size|weight|style|feature|variation|variant|smoothing)|"
-            r"(?:size|weight|style)$",
-            m.group("name"),
-        ):
-            continue
-        out.append(_first(m.group(2)))
-    for m in re.finditer(r"--(?:display|ui|reading|mono)\s*:\s*([^;{}]+)", low):
-        out.append(_first(m.group(1)))
-    for m in re.finditer(r"family=([^&\"'<>;:]+)", low):
-        for fam in re.split(r"[|]|&family=", m.group(1)):
-            out.append(fam.split(":", 1)[0].replace("+", " ").strip())
-    return [f for f in out if f]
-
-
-def _first_font_family(value: str) -> str:
-    return value.split(",", 1)[0].strip().strip("'\"").lower()
-
-
-def _selector_targets_body_or_heading(selector: str) -> bool:
-    return _WEB_HEADING_SELECTOR_RE.search(selector) is not None
-
-
-def _selector_targets_interactive(selector: str) -> bool:
-    return _WEB_INTERACTIVE_SELECTOR_RE.search(selector) is not None
-
-
-def _class_has_hover_utility(raw: str) -> bool:
-    return any(token.startswith("hover:") or ":hover:" in token for token in raw.split())
-
-
-def _class_has_focus_visible_utility(raw: str) -> bool:
-    return any(
-        token.startswith("focus-visible:") or ":focus-visible:" in token for token in raw.split()
-    )
-
-
-def _has_scrim_or_overlay(raw: str) -> bool:
-    low = raw.lower()
-    return any(
-        token in low
-        for token in (
-            "linear-gradient",
-            "radial-gradient",
-            "conic-gradient",
-            "scrim",
-            "overlay",
-            "rgba(",
-            "hsla(",
-            "color-mix(",
-            "::before",
-            "::after",
-            "bg-black/",
-            "bg-white/",
-            "inset-0",
-            "absolute inset",
-        )
-    )
-
-
-def _has_background_image_url(raw: str) -> bool:
-    return re.search(r"background(?:-image)?\s*:[^;{}]*url\(", raw, re.I) is not None
-
-
-def _justified_palette_rgbs(
-    design_spec: DesignSpec | None, justified: set[str]
-) -> set[tuple[int, int, int]]:
-    """The resolved (r,g,b) of each palette ROLE the spec DECLARES *and*
-    justifies. A purple finding is suppressed only if its color IS one of these —
-    i.e. the spec's own primary/accent value is that exact violet. Justifying one
-    color can never excuse a DIFFERENT one."""
-    if design_spec is None:
-        return set()
-    out: set[tuple[int, int, int]] = set()
-    pal = design_spec.palette
-    if CHOICE_PALETTE_PRIMARY in justified:
-        rgb = _resolve_rgb(pal.primary)
-        if rgb is not None:
-            out.add(rgb)
-    if CHOICE_PALETTE_ACCENT in justified and pal.accent is not None:
-        rgb = _resolve_rgb(pal.accent)
-        if rgb is not None:
-            out.add(rgb)
-    return out
-
-
-def _rule_ai_purple(
-    path: str, text: str, design_spec: DesignSpec | None, justified: set[str]
-) -> list[DesignFinding]:
-    # VALUE-AWARE suppression: a flagged violet is suppressed ONLY when a
-    # justified palette role (primary/accent) actually declares THAT exact color.
-    justified_rgbs = _justified_palette_rgbs(design_spec, justified)
-    findings: list[DesignFinding] = []
-    low = text.lower()
-    seen: set[str] = set()
-    for m in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?|rgb\([^)]*\)", low):
-        val = _norm_color(m.group(0))
-        if val in seen:
-            continue
-        if val in _AI_PURPLE_HEXES or val in _AI_PURPLE_RGB:
-            seen.add(val)
-            flagged_rgb = _resolve_rgb(val)
-            if flagged_rgb is not None and flagged_rgb in justified_rgbs:
-                continue  # the spec declares + justifies THIS exact violet
-            findings.append(
-                DesignFinding(
-                    rule_id="ai_purple",
-                    severity="error",
-                    path=path,
-                    line=_line_of(low, m.start()),
-                    evidence=m.group(0),
-                    choice_key=CHOICE_PALETTE_PRIMARY,
-                    message=(
-                        f"AI-purple primary ({m.group(0)}) — the single most common generated "
-                        "site tell. Pick a palette that suits the subject, or justify "
-                        "palette.primary in .disco/designspec.json if the violet is intended."
-                    ),
-                )
-            )
-    return findings
-
-
-# ---- direction conformance (advisory: the committed direction is ground truth) --
-
-# Generic fallbacks that are NEVER an intentional brand font choice — a
-# `direction_font_mismatch` must stay quiet for these (a `system-ui`/`serif`
-# fallback AFTER the chosen family is legitimate, not a contradiction).
-_DIRECTION_GENERIC_FONTS: frozenset[str] = frozenset(
-    {
-        "serif",
-        "sans-serif",
-        "monospace",
-        "system-ui",
-        "-apple-system",
-        "blinkmacsystemfont",
-        "cursive",
-        "fantasy",
-        "inherit",
-        "initial",
-        "unset",
-        "revert",
-        "currentcolor",
-    }
+from .design_lint_parts._constants import (
+    _CHOICE_WEB_TEXT_OVER_IMAGE as _CHOICE_WEB_TEXT_OVER_IMAGE,
 )
-
-# Off-palette color thresholds (RGB space; the diagonal is ~441). A brand color
-# must be BOTH saturated (a real hue — not a neutral/grey or a tint/shade toward
-# white/black) AND far from EVERY committed color before it counts as drift.
-# Conservative on purpose: near-matches, tints and shades legitimately vary, so
-# the rule stays quiet rather than false-positive (severity is `info`).
-_DIRECTION_MIN_SATURATION = 60
-_DIRECTION_DRIFT_MIN_DISTANCE = 120.0
-
-
-def _norm_font_name(name: str) -> str:
-    return re.sub(r"\s+", " ", name.strip().strip("'\"").lower())
-
-
-def _direction_committed_families(direction: DesignDirection) -> set[str]:
-    fp = direction.font_pairing
-    return {
-        _norm_font_name(fp.heading.family),
-        _norm_font_name(fp.body.family),
-        _norm_font_name(fp.mono.family),
-    }
-
-
-def _direction_committed_rgbs(direction: DesignDirection) -> list[tuple[int, int, int]]:
-    raw = [direction.palette_seed, *(a.hex for a in direction.accents)]
-    return [rgb for rgb in (_resolve_rgb(v) for v in raw) if rgb is not None]
-
-
-def _rgb_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
-    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
-
-
-def _rgb_saturation(rgb: tuple[int, int, int]) -> int:
-    return max(rgb) - min(rgb)
-
-
-def _is_generic_font_family(token: str) -> bool:
-    return token in _DIRECTION_GENERIC_FONTS or token.startswith("ui-") or "var(" in token
-
-
-def _rule_too_many_fonts(path: str, text: str) -> list[DesignFinding]:
-    families: dict[str, int] = {}
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if (
-            not _FONT_CONTEXT_RE.search(line)
-            and re.search(r"--(?:display|ui|reading|mono)\s*:", line, re.I) is None
-        ):
-            continue
-        for token in _primary_families(line):
-            family = _norm_font_name(token)
-            if not family or _is_generic_font_family(family):
-                continue
-            families.setdefault(family, lineno)
-
-    if len(families) <= _MAX_FONT_FAMILIES:
-        return []
-
-    listed = ", ".join(sorted(families))
-    first_line = min(families.values())
-    return [
-        DesignFinding(
-            rule_id="too_many_fonts",
-            severity="warning",
-            path=path,
-            line=first_line,
-            evidence=f"{len(families)} primary font families: {listed}",
-            choice_key=_CHOICE_WEB_FONT_COUNT,
-            message=(
-                f"{len(families)} distinct primary font families (> {_MAX_FONT_FAMILIES}). "
-                "Use a focused heading/body/mono system unless the brand truly needs more."
-            ),
-        )
-    ]
-
-
-def _rule_font_size_too_small(path: str, text: str) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    seen_values: set[str] = set()
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        body = m.group(2)
-        for decl in _FONT_SIZE_DECL_RE.finditer(body):
-            if decl.start() > 0 and body[decl.start() - 1] == "-":
-                continue
-            value = decl.group("value")
-            unit = decl.group("unit")
-            if (unit or "").lower() not in {"px", "pt"}:
-                continue
-            px = _font_size_px(value, unit)
-            if px is None or px == 0 or px >= _MIN_FONT_SIZE_PX:
-                continue
-            evidence = decl.group(0).strip()
-            key = evidence.lower()
-            if key in seen_values:
-                continue
-            seen_values.add(key)
-            findings.append(
-                DesignFinding(
-                    rule_id="font_size_too_small",
-                    severity="info",
-                    path=path,
-                    line=_line_of(text, m.start(2) + decl.start()),
-                    evidence=f"{selector} {{ {evidence} }}",
-                    choice_key=_CHOICE_WEB_FONT_SIZE,
-                    message=(
-                        f"{evidence} resolves to {px:.1f}px, below the "
-                        f"{_MIN_FONT_SIZE_PX:.0f}px readable web floor."
-                    ),
-                )
-            )
-    return findings
-
-
-def _rule_too_many_colors(path: str, text: str) -> list[DesignFinding]:
-    colors: list[tuple[tuple[int, int, int], str, int]] = []
-    low = text.lower()
-    for m in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?|rgb\([^)]*\)", low):
-        val = _norm_color(m.group(0))
-        rgb = _resolve_rgb(val)
-        if rgb is None or _rgb_saturation(rgb) < _COLOR_SATURATION_FLOOR:
-            continue
-        if any(_rgb_distance(rgb, kept) <= _COLOR_MERGE_DISTANCE for kept, _, _ in colors):
-            continue
-        colors.append((rgb, val, m.start()))
-
-    if len(colors) <= _MAX_BRAND_COLORS:
-        return []
-
-    listed = ", ".join(color for _, color, _ in colors[:10])
-    return [
-        DesignFinding(
-            rule_id="too_many_colors",
-            severity="info",
-            path=path,
-            line=_line_of(text, colors[0][2]),
-            evidence=f"{len(colors)} saturated brand colors: {listed}",
-            choice_key=_CHOICE_WEB_COLOR_COUNT,
-            message=(
-                f"{len(colors)} distinct saturated brand colors (> {_MAX_BRAND_COLORS}). "
-                "Normal palettes should cluster around a small set of intentional hues."
-            ),
-        )
-    ]
-
-
-def _rule_tight_line_height(path: str, text: str) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        selector_parts = [part.strip() for part in selector.split(",") if part.strip()]
-        if selector_parts and all(
-            _WEB_HEADING_TARGET_RE.search(part) is not None for part in selector_parts
-        ):
-            continue
-        body = m.group(2)
-        for decl in _LINE_HEIGHT_DECL_RE.finditer(body):
-            if decl.start() > 0 and body[decl.start() - 1] == "-":
-                continue
-            try:
-                value = float(decl.group(1))
-            except ValueError:
-                continue
-            if value >= _MIN_LINE_HEIGHT:
-                continue
-            findings.append(
-                DesignFinding(
-                    rule_id="tight_line_height",
-                    severity="info",
-                    path=path,
-                    line=_line_of(text, m.start(2) + decl.start()),
-                    evidence=f"{selector} {{ {decl.group(0).strip()} }}",
-                    choice_key=_CHOICE_WEB_LINE_HEIGHT,
-                    message=(
-                        f"Unitless line-height {value:g} is below {_MIN_LINE_HEIGHT:g}; "
-                        "body copy below this tends to read cramped."
-                    ),
-                )
-            )
-            break
-    return findings
-
-
-def _rule_direction_conformance(
-    path: str, text: str, direction: DesignDirection
-) -> list[DesignFinding]:
-    """ADVISORY conformance — flag built fonts/colors that CONTRADICT the committed
-    design direction. Ground truth is the committed DIRECTION itself, so these are
-    NEVER run through designspec justifications. Conservative: only intentional,
-    prominent choices fire; generic fallbacks, unresolved `var()` references and
-    neutral/tint colors are skipped so the rule stays quiet rather than false-fire."""
-
-    findings: list[DesignFinding] = []
-    committed_families = _direction_committed_families(direction)
-
-    seen_fonts: set[str] = set()
-    for lineno, line in enumerate(text.splitlines(), 1):
-        if not _FONT_CONTEXT_RE.search(line):
-            continue
-        for token in _primary_families(line):
-            if token in seen_fonts:
-                continue
-            seen_fonts.add(token)
-            if (
-                not token
-                or token in _DIRECTION_GENERIC_FONTS
-                or token in committed_families
-                or token.startswith("ui-")
-                or "var(" in token
-            ):
-                continue  # generic fallback / committed family / unresolved var
-            findings.append(
-                DesignFinding(
-                    rule_id="direction_font_mismatch",
-                    severity="warning",
-                    path=path,
-                    line=lineno,
-                    evidence=f"font '{token}' in: {line.strip()[:140]}",
-                    choice_key=CHOICE_TYPOGRAPHY_HEADING,
-                    message=(
-                        f"Font '{token}' is not in the committed design direction "
-                        f"({direction.id}: heading={direction.font_pairing.heading.family}, "
-                        f"body={direction.font_pairing.body.family}, "
-                        f"mono={direction.font_pairing.mono.family}). Use the committed "
-                        "families or re-commit the direction."
-                    ),
-                )
-            )
-
-    committed_rgbs = _direction_committed_rgbs(direction)
-    if committed_rgbs:
-        low = text.lower()
-        seen_colors: set[str] = set()
-        for m in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?|rgb\([^)]*\)", low):
-            val = _norm_color(m.group(0))
-            if val in seen_colors:
-                continue
-            seen_colors.add(val)
-            rgb = _resolve_rgb(val)
-            if rgb is None or _rgb_saturation(rgb) < _DIRECTION_MIN_SATURATION:
-                continue  # unresolved / neutral-grey / tint-or-shade → stay quiet
-            if min(_rgb_distance(rgb, c) for c in committed_rgbs) <= _DIRECTION_DRIFT_MIN_DISTANCE:
-                continue  # near a committed color (incl. same-hue variation)
-            findings.append(
-                DesignFinding(
-                    rule_id="direction_palette_drift",
-                    severity="info",
-                    path=path,
-                    line=_line_of(low, m.start()),
-                    evidence=m.group(0),
-                    choice_key=CHOICE_PALETTE_PRIMARY,
-                    message=(
-                        f"Color {m.group(0)} is far from the committed direction palette "
-                        f"({direction.id}: seed={direction.palette_seed}, accents "
-                        f"{', '.join(a.hex for a in direction.accents)}). Derive brand "
-                        "colors from the committed seed/accents."
-                    ),
-                )
-            )
-    return findings
-
-
-def _rule_gradient_hero_text(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
-    if CHOICE_EFFECTS_GRADIENT_TEXT in justified:
-        return []
-    findings: list[DesignFinding] = []
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).lower()
-        body = m.group(2).lower()
-        if not any(tok in selector for tok in _HEADING_SELECTOR_TOKENS):
-            continue
-        clipped = ("background-clip" in body and "text" in body) or (
-            "-webkit-background-clip" in body and "text" in body
-        )
-        gradient = (
-            "linear-gradient" in body or "conic-gradient" in body or "radial-gradient" in body
-        )
-        if clipped and gradient:
-            findings.append(
-                DesignFinding(
-                    rule_id="gradient_hero_text",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, m.start()),
-                    evidence=m.group(1).strip()[:120],
-                    choice_key=CHOICE_EFFECTS_GRADIENT_TEXT,
-                    message=(
-                        "Gradient-clipped hero text (background-clip:text over a gradient on a "
-                        "heading) — a generated-site cliche. Use a solid type treatment, or "
-                        "justify effects.gradient_text in .disco/designspec.json."
-                    ),
-                )
-            )
-    return findings
-
-
-def _rule_dark_neon_glow(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
-    if CHOICE_EFFECTS_GLOW in justified:
-        return []
-    low = text.lower()
-    # dark surface: a low-luminance hex on a root/body/app surface declaration
-    dark = False
-    _dark_re = r"(background[^;{}]*?|--bg[^;:]*?|--background[^;:]*?):[^;{}]*?(#[0-9a-f]{3,6})"
-    for bm in re.finditer(_dark_re, low):
-        lum = _luminance(bm.group(2))
-        if lum is not None and lum < 0.22:
-            dark = True
-            break
-    if not dark:
-        return []
-    # neon accent present
-    neon_match: re.Match[str] | None = None
-    for nm in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?", low):
-        if _norm_color(nm.group(0)) in _NEON_HEXES:
-            neon_match = nm
-            break
-    if neon_match is None:
-        return []
-    # glow: a shadow/blur effect
-    glow = bool(re.search(r"box-shadow|text-shadow|drop-shadow|filter\s*:[^;{}]*blur", low))
-    if not glow:
-        return []
-    return [
-        DesignFinding(
-            rule_id="dark_neon_glow",
-            severity="warning",
-            path=path,
-            line=_line_of(low, neon_match.start()),
-            evidence=neon_match.group(0),
-            choice_key=CHOICE_EFFECTS_GLOW,
-            message=(
-                "Dark surface + neon accent + glow — the 'cyberpunk SaaS' generated look. Tone the "
-                "accent and drop the glow, or justify effects.glow in .disco/designspec.json."
-            ),
-        )
-    ]
-
-
-def _rule_too_many_animations(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
-    if CHOICE_MOTION_DENSITY in justified:
-        return []
-    low = text.lower()
-    count = len(re.findall(r"\b(transition|animation)\s*:", low))
-    count += len(re.findall(r"@keyframes\b", low))
-    count += len(re.findall(r"\banimate-[a-z]", low))  # tailwind animate utilities
-    if count <= _ANIMATION_THRESHOLD:
-        return []
-    return [
-        DesignFinding(
-            rule_id="too_many_animations",
-            severity="info",
-            path=path,
-            line=1,
-            evidence=f"{count} animation/transition declarations",
-            choice_key=CHOICE_MOTION_DENSITY,
-            message=(
-                f"{count} animation/transition declarations (> {_ANIMATION_THRESHOLD}) — motion "
-                "soup. Reserve motion for a few intentional moments, or justify motion.density."
-            ),
-        )
-    ]
-
-
-def _rule_web_reflexive_hover_scale(path: str, text: str) -> list[DesignFinding]:
-    selectors: dict[str, int] = {}
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        body = m.group(2)
-        if ":hover" not in selector.lower():
-            continue
-        if re.search(r"\btransform\s*:[^;{}]*scale(?:3d|x|y)?\(", body, re.I):
-            for part in selector.split(","):
-                hover_selector = part.strip()
-                if ":hover" in hover_selector.lower():
-                    selectors.setdefault(hover_selector, _line_of(text, m.start()))
-
-    for m in re.finditer(r"\bclass\s*=\s*(['\"])(?P<class>.*?)\1", text, re.I | re.DOTALL):
-        classes = m.group("class")
-        hover_scale = [token for token in classes.split() if token.startswith("hover:scale")]
-        if not hover_scale:
-            continue
-        selectors.setdefault(" ".join(sorted(hover_scale)), _line_of(text, m.start()))
-
-    if len(selectors) <= 3:
-        return []
-    first_selector, first_line = next(iter(selectors.items()))
-    return [
-        DesignFinding(
-            rule_id="web_reflexive_hover_scale",
-            severity="warning",
-            path=path,
-            line=first_line,
-            evidence=f"{len(selectors)} hover scale selectors; first: {first_selector[:100]}",
-            choice_key=_CHOICE_WEB_HOVER_SCALE,
-            message=(
-                "Hover scale appears on more than three distinct selectors — the reflexive "
-                "template interaction tell. Reserve scale for one or two meaningful affordances."
-            ),
-        )
-    ]
-
-
-def _rule_web_hover_only_interactivity(
-    path: str, text: str, *, workspace_has_focus_visible: bool
-) -> list[DesignFinding]:
-    if workspace_has_focus_visible:
-        return []
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        if ":hover" not in selector.lower() or not _selector_targets_interactive(selector):
-            continue
-        return [
-            DesignFinding(
-                rule_id="web_hover_only_interactivity",
-                severity="warning",
-                path=path,
-                line=_line_of(text, m.start()),
-                evidence=selector[:120],
-                choice_key=_CHOICE_WEB_HOVER_A11Y,
-                message=(
-                    "Interactive elements have hover styling but the workspace has no "
-                    ":focus-visible state. Add keyboard-visible focus treatment."
-                ),
-            )
-        ]
-
-    for m in re.finditer(
-        r"<(?P<tag>a|button|input|select|textarea|summary)\b(?P<attrs>[^>]*)>",
-        text,
-        re.I | re.DOTALL,
-    ):
-        attrs = m.group("attrs")
-        classes = _attr_value(attrs, "class") or ""
-        if not _class_has_hover_utility(classes):
-            continue
-        return [
-            DesignFinding(
-                rule_id="web_hover_only_interactivity",
-                severity="warning",
-                path=path,
-                line=_line_of(text, m.start()),
-                evidence=f'<{m.group("tag")} class="{classes[:90]}">',
-                choice_key=_CHOICE_WEB_HOVER_A11Y,
-                message=(
-                    "Interactive elements have hover utility classes but the workspace has no "
-                    "focus-visible state. Add keyboard-visible focus treatment."
-                ),
-            )
-        ]
-    return []
-
-
-def _rule_web_text_over_image_no_scrim(path: str, text: str) -> list[DesignFinding]:
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        body = m.group(2)
-        if not _has_background_image_url(body):
-            continue
-        if (
-            not _selector_targets_body_or_heading(selector)
-            and _WEB_HEROISH_RE.search(selector) is None
-        ):
-            continue
-        if _has_scrim_or_overlay(body):
-            continue
-        return [
-            DesignFinding(
-                rule_id="web_text_over_image_no_scrim",
-                severity="warning",
-                path=path,
-                line=_line_of(text, m.start()),
-                evidence=f"{selector} uses background image without gradient/overlay",
-                choice_key=_CHOICE_WEB_TEXT_OVER_IMAGE,
-                message=(
-                    "Text appears intended over imagery without a scrim/overlay heuristic. Add "
-                    "a gradient scrim, overlay layer, card, or blur protection and verify contrast."
-                ),
-            )
-        ]
-
-    for m in _WEB_MEDIA_CONTAINER_RE.finditer(text):
-        attrs = m.group("attrs") or ""
-        body = m.group("body") or ""
-        raw = f"{attrs}\n{body}"
-        styled_background = _has_background_image_url(attrs)
-        layered_image = "<img" in body.lower() and _WEB_TEXT_TAG_RE.search(body) is not None
-        if not styled_background and not layered_image:
-            continue
-        if _WEB_TEXT_TAG_RE.search(body) is None:
-            continue
-        if layered_image and _WEB_HEROISH_RE.search(raw) is None:
-            continue
-        if _has_scrim_or_overlay(raw):
-            continue
-        return [
-            DesignFinding(
-                rule_id="web_text_over_image_no_scrim",
-                severity="warning",
-                path=path,
-                line=_line_of(text, m.start()),
-                evidence=f"<{m.group('tag')}{attrs[:100]}>",
-                choice_key=_CHOICE_WEB_TEXT_OVER_IMAGE,
-                message=(
-                    "Text appears over background/image media without a scrim/overlay sibling. "
-                    "Add a protection layer and verify worst-case contrast."
-                ),
-            )
-        ]
-    return []
-
-
-def _rule_web_glass(path: str, text: str) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    glass_uses: list[tuple[int, str]] = []
-
-    for m in _CSS_BLOCK_RE.finditer(text):
-        body = m.group(2)
-        if not _style_has_backdrop_filter(body):
-            continue
-        evidence = _backdrop_without_saturate(body)
-        if evidence is not None:
-            findings.append(
-                DesignFinding(
-                    rule_id="web_glass_missing_saturate",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, m.start()),
-                    evidence=evidence,
-                    choice_key=_CHOICE_WEB_GLASS,
-                    message="backdrop-filter without saturate() makes site glass read as gray mud",
-                )
-            )
-        glass_uses.append((m.start(), evidence or "backdrop-filter"))
-
-    for m in _STYLE_ATTR_RE.finditer(text):
-        style = m.group("style")
-        if not _style_has_backdrop_filter(style):
-            continue
-        evidence = _backdrop_without_saturate(style)
-        if evidence is not None:
-            findings.append(
-                DesignFinding(
-                    rule_id="web_glass_missing_saturate",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, m.start()),
-                    evidence=evidence,
-                    choice_key=_CHOICE_WEB_GLASS,
-                    message="backdrop-filter without saturate() makes site glass read as gray mud",
-                )
-            )
-        glass_uses.append((m.start(), evidence or "backdrop-filter"))
-
-    if not glass_uses:
-        return findings
-    if _has_colorful_backdrop(text):
-        return findings
-    if not _style_has_flat_background(text):
-        return findings
-
-    offset, evidence = glass_uses[0]
-    findings.append(
-        DesignFinding(
-            rule_id="web_glass_flat_backdrop",
-            severity="warning",
-            path=path,
-            line=_line_of(text, offset),
-            evidence=evidence,
-            choice_key=_CHOICE_WEB_GLASS,
-            message=(
-                "site glass sits over a flat single-color backdrop; glass needs colorful, "
-                "gradient, image, or video content behind it"
-            ),
-        )
-    )
-    return findings
-
-
-def _rule_pill_buttons(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
-    if CHOICE_COMPONENT_BUTTON_RADIUS in justified:
-        return []
-    low = text.lower()
-    pill = 0
-    nonpill = 0
-    first: tuple[int, str] | None = None
-    # CSS: button-ish selector blocks with a border-radius
-    for m in _CSS_BLOCK_RE.finditer(low):
-        selector = m.group(1)
-        body = m.group(2)
-        if not any(tok in selector for tok in _BUTTON_SELECTOR_TOKENS):
-            continue
-        rm = re.search(r"border-radius\s*:\s*([^;{}]+)", body)
-        if rm is None:
-            continue
-        value = rm.group(1).strip()
-        if any(p in value for p in _PILL_RADII):
-            pill += 1
-            if first is None:
-                first = (_line_of(low, m.start()), m.group(1).strip()[:80])
-        else:
-            nonpill += 1
-    # Markup: tailwind rounded-full on button-ish elements
-    for m in re.finditer(r'class\s*=\s*"([^"]*)"', low):
-        cls = m.group(1)
-        if ("btn" in cls or "button" in cls) and "rounded-full" in cls:
-            pill += 1
-            if first is None:
-                first = (_line_of(low, m.start()), "rounded-full")
-    if pill >= 2 and nonpill == 0 and first is not None:
-        return [
-            DesignFinding(
-                rule_id="pill_button_monoculture",
-                severity="info",
-                path=path,
-                line=first[0],
-                evidence=first[1],
-                choice_key=CHOICE_COMPONENT_BUTTON_RADIUS,
-                message=(
-                    "Every button is a full pill — a one-note component language. Vary the radius "
-                    "by emphasis, or justify component.button_radius in .disco/designspec.json."
-                ),
-            )
-        ]
-    return []
-
-
-def _rule_emoji_icons(path: str, text: str, justified: set[str]) -> list[DesignFinding]:
-    if CHOICE_ICONS_STYLE in justified:
-        return []
-    matches = _EMOJI_RE.findall(text)
-    if len(matches) < _EMOJI_THRESHOLD:
-        return []
-    first = next(iter(_EMOJI_RE.finditer(text)))
-    sample = "".join(dict.fromkeys(matches[:6]))
-    return [
-        DesignFinding(
-            rule_id="emoji_as_icons",
-            severity="info",
-            path=path,
-            line=_line_of(text, first.start()),
-            evidence=f"{len(matches)} emoji used as icons (e.g. {sample})",
-            choice_key=CHOICE_ICONS_STYLE,
-            message=(
-                "Emoji standing in for icons — reads as a placeholder. Use a real icon set, or "
-                "justify icons.style in .disco/designspec.json."
-            ),
-        )
-    ]
-
-
-def _rule_centered_hero_3_cards_cta(
-    markup: list[tuple[str, str]], justified: set[str]
-) -> list[DesignFinding]:
-    """Workspace-level section-sequence check across the markup files."""
-    if CHOICE_LAYOUT_SECTION_SEQUENCE in justified:
-        return []
-    centering = ("text-center", "items-center", "justify-center", "mx-auto", "text-align:center")
-    for path, text in markup:
-        low = re.sub(r"\s+", " ", text.lower())
-        # hero (centered)
-        hero = re.search(r'(<section[^>]*|class\s*=\s*"[^"]*)hero', low)
-        if hero is None:
-            continue
-        window = low[hero.start() : hero.start() + 400]
-        if not any(c in window for c in centering):
-            continue
-        hero_idx = hero.start()
-        # exactly three cards: a 3-col grid OR exactly three card-classed elements
-        cards_idx: int | None = None
-        grid = re.search(r"grid-cols-3|repeat\(3,|grid-template-columns\s*:\s*repeat\(\s*3", low)
-        card_iter = list(re.finditer(r'class\s*=\s*"[^"]*card', low))
-        if grid is not None and grid.start() > hero_idx:
-            cards_idx = grid.start()
-        elif len(card_iter) == 3 and card_iter[0].start() > hero_idx:
-            cards_idx = card_iter[0].start()
-        if cards_idx is None:
-            continue
-        # a CTA strictly AFTER the cards (search the tail so a "Get started" button
-        # sitting INSIDE the hero can't be mistaken for the closing CTA).
-        cta = re.search(
-            r'(class\s*=\s*"[^"]*cta|<section[^>]*cta|get started|sign up|start free)',
-            low[cards_idx:],
-        )
-        if cta is None:
-            continue
-        return [
-            DesignFinding(
-                rule_id="centered_hero_3_cards_cta",
-                severity="warning",
-                path=path,
-                line=_line_of(text, 0),
-                evidence="centered hero -> 3 feature cards -> CTA",
-                choice_key=CHOICE_LAYOUT_SECTION_SEQUENCE,
-                message=(
-                    "The centered-hero / three-cards / CTA sequence is THE generated-landing-page "
-                    "shape. Compose from the section-variant catalog instead, or justify "
-                    "layout.section_sequence in .disco/designspec.json."
-                ),
-            )
-        ]
-    return []
-
-
-def _rule_deck_type_floor(path: str, text: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    for slide in slides:
-        for style, offset in _style_attrs(slide):
-            for m in _FONT_SIZE_DECL_RE.finditer(style):
-                px = _font_size_px(m.group("value"), m.group("unit"))
-                if px is None or px >= _DECK_TYPE_FLOOR_PX:
-                    continue
-                evidence = m.group(0).strip()
-                findings.append(
-                    DesignFinding(
-                        rule_id="deck_type_floor",
-                        severity="error",
-                        path=path,
-                        line=_line_of(text, offset + m.start()),
-                        evidence=evidence,
-                        choice_key=_CHOICE_DECK_TYPE_FLOOR,
-                        message=(
-                            f"Deck slide type floor violation on slide {slide.number}: "
-                            f"inline {evidence} resolves below 24px."
-                        ),
-                    )
-                )
-    return findings
-
-
-def _rule_deck_text_budget(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    for slide in slides:
-        words = _word_count(slide.html)
-        bullets = _bullet_count(slide.html)
-        if words <= _DECK_TEXT_WORD_LIMIT and bullets <= _DECK_BULLET_LIMIT:
-            continue
-        findings.append(
-            DesignFinding(
-                rule_id="deck_text_budget",
-                severity="warning",
-                path=path,
-                line=slide.line,
-                evidence=f"{words} words, {bullets} bullet lines",
-                choice_key=_CHOICE_DECK_TEXT_BUDGET,
-                message=(
-                    f"too much text on slide {slide.number}: {words} words and "
-                    f"{bullets} bullet lines. Keep slides under about 90 words "
-                    "and no more than 6 bullet lines."
-                ),
-            )
-        )
-    return findings
-
-
-def _slide_is_pure_bullet_list(slide: _DeckSlide) -> bool:
-    layout = (_attr_value(slide.attrs, "data-layout") or "").strip().lower()
-    if layout in {"image_right", "image_left", "full_image", "section_header", "title", "closing"}:
-        return False
-    if layout in {"bullets", "bullet", "bullet_list"}:
-        return _bullet_count(slide.html) > 0
-    if _bullet_count(slide.html) == 0:
-        return False
-    if re.search(r"<\s*(?:img|picture|svg|canvas|video|table|figure)\b", slide.html, re.I):
-        return False
-    non_bullet_blocks = re.findall(r"<\s*(?:p|blockquote|pre|table|figure)\b", slide.html, re.I)
-    return len(non_bullet_blocks) == 0
-
-
-def _rule_deck_bullet_monotony(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    run_start: int | None = None
-    for idx, slide in enumerate(slides):
-        if _slide_is_pure_bullet_list(slide):
-            if run_start is None:
-                run_start = idx
-            continue
-        if run_start is not None and idx - run_start >= 3:
-            first = slides[run_start]
-            last = slides[idx - 1]
-            findings.append(
-                DesignFinding(
-                    rule_id="deck_bullet_monotony",
-                    severity="warning",
-                    path=path,
-                    line=first.line,
-                    evidence=f"slides {first.number}-{last.number} are pure bullet lists",
-                    choice_key=_CHOICE_DECK_ARCHETYPE_MONOTONY,
-                    message=(
-                        f"Pure bullet-list monotony across slides {first.number}-{last.number}. "
-                        "Vary the run with imagery, section, quote, chart, or comparison slides."
-                    ),
-                )
-            )
-        run_start = None
-    if run_start is not None and len(slides) - run_start >= 3:
-        first = slides[run_start]
-        last = slides[-1]
-        findings.append(
-            DesignFinding(
-                rule_id="deck_bullet_monotony",
-                severity="warning",
-                path=path,
-                line=first.line,
-                evidence=f"slides {first.number}-{last.number} are pure bullet lists",
-                choice_key=_CHOICE_DECK_ARCHETYPE_MONOTONY,
-                message=(
-                    f"Pure bullet-list monotony across slides {first.number}-{last.number}. "
-                    "Vary the run with imagery, section, quote, chart, or comparison slides."
-                ),
-            )
-        )
-    return findings
-
-
-def _rule_deck_missing_imagery(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    if _deck_image_count(slides) > 0:
-        return []
-    return [
-        DesignFinding(
-            rule_id="deck_missing_imagery",
-            severity="warning",
-            path=path,
-            line=slides[0].line if slides else 1,
-            evidence="0 images across deck slides",
-            choice_key=_CHOICE_DECK_IMAGERY,
-            message="no imagery: cover/divider slides should carry generated art",
-        )
-    ]
-
-
-def _rule_deck_glass(path: str, text: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    glass_uses: list[tuple[_DeckSlide | None, int, str]] = []
-
-    for m in _CSS_BLOCK_RE.finditer(text):
-        body = m.group(2)
-        if not _style_has_backdrop_filter(body):
-            continue
-        evidence = _backdrop_without_saturate(body)
-        if evidence is not None:
-            findings.append(
-                DesignFinding(
-                    rule_id="deck_glass_missing_saturate",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, m.start()),
-                    evidence=evidence,
-                    choice_key=_CHOICE_DECK_GLASS,
-                    message="backdrop-filter without saturate() makes deck glass read as gray mud",
-                )
-            )
-        glass_uses.append((None, m.start(), evidence or "backdrop-filter"))
-
-    for slide in slides:
-        for style, offset in _style_attrs(slide):
-            if not _style_has_backdrop_filter(style):
-                continue
-            evidence = _backdrop_without_saturate(style)
-            if evidence is not None:
-                findings.append(
-                    DesignFinding(
-                        rule_id="deck_glass_missing_saturate",
-                        severity="warning",
-                        path=path,
-                        line=_line_of(text, offset),
-                        evidence=evidence,
-                        choice_key=_CHOICE_DECK_GLASS,
-                        message=(
-                            "backdrop-filter without saturate() makes deck glass read as gray mud"
-                        ),
-                    )
-                )
-            glass_uses.append((slide, offset, evidence or "backdrop-filter"))
-
-    if not glass_uses:
-        return findings
-
-    global_flat = _global_deck_backdrop_is_flat(text)
-    deck_has_colorful_backdrop = any(
-        _has_colorful_backdrop(f"{slide.attrs}\n{slide.html}") for slide in slides
-    )
-    for slide, offset, evidence in glass_uses:
-        if slide is not None:
-            raw = f"{slide.attrs}\n{slide.html}"
-            if _has_colorful_backdrop(raw):
-                continue
-            if _slide_has_flat_backdrop(slide) or global_flat:
-                findings.append(
-                    DesignFinding(
-                        rule_id="deck_glass_flat_backdrop",
-                        severity="warning",
-                        path=path,
-                        line=_line_of(text, offset),
-                        evidence=evidence,
-                        choice_key=_CHOICE_DECK_GLASS,
-                        message=(
-                            f"glass on slide {slide.number} sits over a flat single-color "
-                            "backdrop; glass needs a colorful or image backdrop"
-                        ),
-                    )
-                )
-                break
-            continue
-        if global_flat and not deck_has_colorful_backdrop:
-            findings.append(
-                DesignFinding(
-                    rule_id="deck_glass_flat_backdrop",
-                    severity="warning",
-                    path=path,
-                    line=_line_of(text, offset),
-                    evidence=evidence,
-                    choice_key=_CHOICE_DECK_GLASS,
-                    message=(
-                        "glass sits over a flat single-color deck backdrop; glass needs a "
-                        "colorful or image backdrop"
-                    ),
-                )
-            )
-            break
-    return findings
-
-
-def _slide_text_blocks(slide: _DeckSlide) -> list[tuple[str, str]]:
-    blocks: list[tuple[str, str]] = []
-    for m in re.finditer(
-        r"<(?P<tag>h[1-6]|p|li|blockquote|figcaption)\b[^>]*>"
-        r"(?P<body>.*?)</(?P=tag)\s*>",
-        slide.html,
-        re.I | re.DOTALL,
-    ):
-        text = _visible_text(m.group("body"))
-        if text:
-            blocks.append((m.group("tag").lower(), text))
-    return blocks
-
-
-def _slide_has_media(slide: _DeckSlide) -> bool:
-    return (
-        re.search(
-            r"<\s*(?:img|picture|svg|canvas|video|table)\b",
-            slide.html,
-            re.I,
-        )
-        is not None
-    )
-
-
-def _rule_deck_orphan_slide(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    skip_layouts = {"title", "section_header", "section", "closing", "full_image"}
-    skip_archetypes = {
-        "title",
-        "section_divider",
-        "closing",
-        "full_bleed_image",
-        "photo_grid",
-    }
-    for slide in slides:
-        layout = (_attr_value(slide.attrs, "data-layout") or "").strip().lower()
-        archetype = (_attr_value(slide.attrs, "data-archetype") or "").strip().lower()
-        if layout in skip_layouts or archetype in skip_archetypes or _slide_has_media(slide):
-            continue
-        blocks = _slide_text_blocks(slide)
-        headings = [text for tag, text in blocks if tag.startswith("h")]
-        content = [text for tag, text in blocks if not tag.startswith("h")]
-        if not headings or len(content) > 1:
-            continue
-        if content and len(_WORD_RE.findall(content[0])) > 12:
-            continue
-        findings.append(
-            DesignFinding(
-                rule_id="deck_orphan_slide",
-                severity="warning",
-                path=path,
-                line=slide.line,
-                evidence=(f"slide {slide.number}: title plus {len(content)} short content line(s)"),
-                choice_key=_CHOICE_DECK_ORPHAN_SLIDE,
-                message=(
-                    f"Slide {slide.number} reads like an orphan: a non-divider slide has "
-                    "a title and at most one short content line. Merge it, add substance, "
-                    "or use a real quote/metric/visual archetype."
-                ),
-            )
-        )
-    return findings
-
-
-def _has_slide_nav_markers(text: str) -> bool:
-    return (
-        re.search(
-            r"\b(?:slide-nav|btn-prev|btn-next|currentSlide|goToSlide|nextSlide|prevSlide|"
-            r"ArrowRight|ArrowLeft)\b",
-            text,
-            re.I,
-        )
-        is not None
-    )
-
-
-def _rule_deck_handwritten_html(path: str, text: str) -> list[DesignFinding]:
-    if _DECK_PIPELINE_GENERATOR_MARKER in text:
-        return []
-    data_label_sections = list(
-        re.finditer(r"<section\b[^>]*\bdata-label\s*=", text, re.I | re.DOTALL)
-    )
-    if len(data_label_sections) < 2 or not _has_slide_nav_markers(text):
-        return []
-    first = data_label_sections[0]
-    return [
-        DesignFinding(
-            rule_id="deck_handwritten_html",
-            severity="warning",
-            path=path,
-            line=_line_of(text, first.start()),
-            evidence="<section data-label> slide deck without pipeline generator marker",
-            choice_key=_CHOICE_DECK_HANDWRITTEN_HTML,
-            message=(
-                "Handwritten deck-shaped HTML detected; use slides_generate — the host "
-                "renderer prevents overlap/spill."
-            ),
-        )
-    ]
-
-
-def _inside_css_guard(text: str, offset: int) -> bool:
-    prefix = text[:offset]
-    starts = [prefix.rfind("@media"), prefix.rfind("@supports")]
-    last = max(starts)
-    if last < 0:
-        return False
-    segment = text[last:offset]
-    return segment.count("{") > segment.count("}")
-
-
-def _rule_web_default_hidden_content(path: str, text: str) -> list[DesignFinding]:
-    findings: list[DesignFinding] = []
-    seen: set[str] = set()
-    for m in _CSS_BLOCK_RE.finditer(text):
-        selector = m.group(1).strip()
-        selector_low = selector.lower()
-        if _inside_css_guard(text, m.start()):
-            continue
-        if "@media" in selector_low or "@supports" in selector_low:
-            continue
-        if _WEB_JS_GATED_SELECTOR_RE.search(selector) is not None:
-            continue
-        if _WEB_CONTENT_SELECTOR_RE.search(selector) is None:
-            continue
-        body = m.group(2)
-        hidden = _WEB_HIDDEN_DECL_RE.search(body)
-        if hidden is None:
-            continue
-        key = selector_low
-        if key in seen:
-            continue
-        seen.add(key)
-        findings.append(
-            DesignFinding(
-                rule_id="web_default_hidden_content",
-                severity="warning",
-                path=path,
-                line=_line_of(text, m.start(2) + hidden.start()),
-                evidence=f"{selector} {{ {hidden.group(0).strip()} }}",
-                choice_key=_CHOICE_WEB_DEFAULT_HIDDEN_CONTENT,
-                message=(
-                    "Content is hidden by default without a JS-gated ancestor or media guard. "
-                    "Gate scroll-reveal initial-hidden styles behind html.js (or equivalent) "
-                    "so the page fails visible when JavaScript is unavailable."
-                ),
-            )
-        )
-    return findings
-
-
-# ---- the pure engine ----------------------------------------------------------
-
-
-def lint_design(
-    files: Mapping[str, str],
-    design_spec: DesignSpec | None,
-    *,
-    spec_present: bool,
-    spec_valid: bool,
-    direction: DesignDirection | None = None,
-) -> dict[str, Any]:
-    """Scan an in-memory `{path: text}` map and return the structured verdict.
-
-    `design_spec` is the parsed spec (None when absent OR invalid). `spec_present`
-    / `spec_valid` are reported in the verdict so the agent knows WHY rules fired
-    (a missing/invalid spec suppresses nothing — intent can't be claimed).
-    `direction` is the committed design direction (None when absent/unparseable);
-    when present it drives the ADVISORY conformance rules (font/palette), which are
-    ground-truthed to the direction and never suppressed by a designspec."""
-    justified = _justified_keys(design_spec)
-    findings: list[DesignFinding] = []
-    markup: list[tuple[str, str]] = []
-    workspace_has_focus_visible = any(
-        ":focus-visible" in text.lower() or "focus-visible:" in text.lower()
-        for text in files.values()
-    )
-
-    for path in sorted(files):
-        text = files[path]
-        ext = _ext_of(path)
-        is_css = ext in _CSS_EXTS
-        is_markup = ext in _MARKUP_EXTS
-        if not (is_css or is_markup):
-            continue
-        if is_markup:
-            markup.append((path, text))
-            findings += _rule_deck_handwritten_html(path, text)
-        deck_slides = _extract_deck_slides(text) if is_markup else []
-        # rules that apply to any styled text (css + markup w/ inline styles)
-        findings += _rule_generic_font(path, text, design_spec, justified)
-        if direction is not None:
-            findings += _rule_direction_conformance(path, text, direction)
-        if not deck_slides:
-            findings += _rule_web_banned_default_font(path, text, design_spec, justified)
-            findings += _rule_too_many_fonts(path, text)
-            findings += _rule_font_size_too_small(path, text)
-            findings += _rule_too_many_colors(path, text)
-            findings += _rule_tight_line_height(path, text)
-            findings += _rule_web_reflexive_hover_scale(path, text)
-            findings += _rule_web_hover_only_interactivity(
-                path, text, workspace_has_focus_visible=workspace_has_focus_visible
-            )
-            findings += _rule_web_text_over_image_no_scrim(path, text)
-            findings += _rule_web_glass(path, text)
-            findings += _rule_web_default_hidden_content(path, text)
-        findings += _rule_ai_purple(path, text, design_spec, justified)
-        findings += _rule_gradient_hero_text(path, text, justified)
-        findings += _rule_dark_neon_glow(path, text, justified)
-        findings += _rule_too_many_animations(path, text, justified)
-        findings += _rule_pill_buttons(path, text, justified)
-        if is_markup:
-            findings += _rule_emoji_icons(path, text, justified)
-            if deck_slides:
-                findings += _rule_deck_type_floor(path, text, deck_slides)
-                findings += _rule_deck_text_budget(path, deck_slides)
-                findings += _rule_deck_bullet_monotony(path, deck_slides)
-                findings += _rule_deck_missing_imagery(path, deck_slides)
-                findings += _rule_deck_glass(path, text, deck_slides)
-                findings += _rule_deck_orphan_slide(path, deck_slides)
-
-    findings += _rule_centered_hero_3_cards_cta(markup, justified)
-
-    findings.sort(
-        key=lambda f: (
-            _SEVERITY_RANK.get(f.severity, 9),
-            _RULE_META.get(f.rule_id, ("info", 999))[1],
-            f.path,
-            f.line,
-        )
-    )
-
-    counts: dict[str, int] = {"error": 0, "warning": 0, "info": 0}
-    for f in findings:
-        counts[f.severity] = counts.get(f.severity, 0) + 1
-
-    ok = len(findings) == 0
-    if ok:
-        summary = (
-            f"design_lint: clean — no slop across {len(files)} scanned file(s)."
-            if files
-            else "design_lint: no scannable files found."
-        )
-    else:
-        rule_ids = [f.rule_id for f in findings]
-        summary = (
-            f"design_lint: {len(findings)} finding(s) "
-            f"({counts['error']} error, {counts['warning']} warning, {counts['info']} info) — "
-            f"{', '.join(dict.fromkeys(rule_ids))}."
-        )
-
-    return {
-        "ok": ok,
-        "findings": [f.model_dump() for f in findings],
-        "counts": counts,
-        "summary": summary,
-        "scanned_files": len(files),
-        "design_spec_present": spec_present,
-        "design_spec_valid": spec_valid,
-    }
-
+from .design_lint_parts._constants import (
+    _CLASS_ATTR_RE as _CLASS_ATTR_RE,
+)
+from .design_lint_parts._constants import (
+    _COLOR_MERGE_DISTANCE as _COLOR_MERGE_DISTANCE,
+)
+from .design_lint_parts._constants import (
+    _COLOR_SATURATION_FLOOR as _COLOR_SATURATION_FLOOR,
+)
+from .design_lint_parts._constants import (
+    _COMMENT_RE as _COMMENT_RE,
+)
+from .design_lint_parts._constants import (
+    _CSS_BLOCK_RE as _CSS_BLOCK_RE,
+)
+from .design_lint_parts._constants import (
+    _CSS_EXTS as _CSS_EXTS,
+)
+from .design_lint_parts._constants import (
+    _DECK_BASE_WIDTH_PX as _DECK_BASE_WIDTH_PX,
+)
+from .design_lint_parts._constants import (
+    _DECK_BULLET_LIMIT as _DECK_BULLET_LIMIT,
+)
+from .design_lint_parts._constants import (
+    _DECK_PIPELINE_GENERATOR_MARKER as _DECK_PIPELINE_GENERATOR_MARKER,
+)
+from .design_lint_parts._constants import (
+    _DECK_TEXT_WORD_LIMIT as _DECK_TEXT_WORD_LIMIT,
+)
+from .design_lint_parts._constants import (
+    _DECK_TYPE_FLOOR_PX as _DECK_TYPE_FLOOR_PX,
+)
+from .design_lint_parts._constants import (
+    _DIRECTION_DRIFT_MIN_DISTANCE as _DIRECTION_DRIFT_MIN_DISTANCE,
+)
+from .design_lint_parts._constants import (
+    _DIRECTION_GENERIC_FONTS as _DIRECTION_GENERIC_FONTS,
+)
+from .design_lint_parts._constants import (
+    _DIRECTION_MIN_SATURATION as _DIRECTION_MIN_SATURATION,
+)
+from .design_lint_parts._constants import (
+    _EMOJI_RE as _EMOJI_RE,
+)
+from .design_lint_parts._constants import (
+    _EMOJI_THRESHOLD as _EMOJI_THRESHOLD,
+)
+from .design_lint_parts._constants import (
+    _FONT_CONTEXT_RE as _FONT_CONTEXT_RE,
+)
+from .design_lint_parts._constants import (
+    _FONT_SIZE_DECL_RE as _FONT_SIZE_DECL_RE,
+)
+from .design_lint_parts._constants import (
+    _GENERIC_FONTS as _GENERIC_FONTS,
+)
+from .design_lint_parts._constants import (
+    _HEADING_SELECTOR_TOKENS as _HEADING_SELECTOR_TOKENS,
+)
+from .design_lint_parts._constants import (
+    _HEX_RE as _HEX_RE,
+)
+from .design_lint_parts._constants import (
+    _LINE_HEIGHT_DECL_RE as _LINE_HEIGHT_DECL_RE,
+)
+from .design_lint_parts._constants import (
+    _MARKUP_EXTS as _MARKUP_EXTS,
+)
+from .design_lint_parts._constants import (
+    _MAX_BRAND_COLORS as _MAX_BRAND_COLORS,
+)
+from .design_lint_parts._constants import (
+    _MAX_DEPTH as _MAX_DEPTH,
+)
+from .design_lint_parts._constants import (
+    _MAX_FILE_BYTES as _MAX_FILE_BYTES,
+)
+from .design_lint_parts._constants import (
+    _MAX_FILES as _MAX_FILES,
+)
+from .design_lint_parts._constants import (
+    _MAX_FONT_FAMILIES as _MAX_FONT_FAMILIES,
+)
+from .design_lint_parts._constants import (
+    _MAX_SPEC_BYTES,
+    _SKIP_DIRS,
+    SCAN_EXTS,
+)
+from .design_lint_parts._constants import (
+    _MIN_FONT_SIZE_PX as _MIN_FONT_SIZE_PX,
+)
+from .design_lint_parts._constants import (
+    _MIN_LINE_HEIGHT as _MIN_LINE_HEIGHT,
+)
+from .design_lint_parts._constants import (
+    _NEON_HEXES as _NEON_HEXES,
+)
+from .design_lint_parts._constants import (
+    _PILL_RADII as _PILL_RADII,
+)
+from .design_lint_parts._constants import (
+    _SCRIPT_STYLE_RE as _SCRIPT_STYLE_RE,
+)
+from .design_lint_parts._constants import (
+    _SECTION_OPEN_RE as _SECTION_OPEN_RE,
+)
+from .design_lint_parts._constants import (
+    _SIZE_PROBE_TIMEOUT_S as _SIZE_PROBE_TIMEOUT_S,
+)
+from .design_lint_parts._constants import (
+    _STYLE_ATTR_RE as _STYLE_ATTR_RE,
+)
+from .design_lint_parts._constants import (
+    _TAG_RE as _TAG_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_BANNED_DEFAULT_FONTS as _WEB_BANNED_DEFAULT_FONTS,
+)
+from .design_lint_parts._constants import (
+    _WEB_CONTENT_SELECTOR_RE as _WEB_CONTENT_SELECTOR_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_HEADING_SELECTOR_RE as _WEB_HEADING_SELECTOR_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_HEADING_TARGET_RE as _WEB_HEADING_TARGET_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_HEROISH_RE as _WEB_HEROISH_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_HIDDEN_DECL_RE as _WEB_HIDDEN_DECL_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_INTERACTIVE_SELECTOR_RE as _WEB_INTERACTIVE_SELECTOR_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_JS_GATED_SELECTOR_RE as _WEB_JS_GATED_SELECTOR_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_MEDIA_CONTAINER_RE as _WEB_MEDIA_CONTAINER_RE,
+)
+from .design_lint_parts._constants import (
+    _WEB_TEXT_TAG_RE as _WEB_TEXT_TAG_RE,
+)
+from .design_lint_parts._constants import (
+    _WORD_RE as _WORD_RE,
+)
+from .design_lint_parts._deck_slides import (
+    _attr_value as _attr_value,
+)
+from .design_lint_parts._deck_slides import (
+    _class_tokens as _class_tokens,
+)
+from .design_lint_parts._deck_slides import (
+    _deck_image_count as _deck_image_count,
+)
+from .design_lint_parts._deck_slides import (
+    _DeckSlide as _DeckSlide,
+)
+from .design_lint_parts._deck_slides import (
+    _extract_deck_slides as _extract_deck_slides,
+)
+from .design_lint_parts._deck_slides import (
+    _global_deck_backdrop_is_flat as _global_deck_backdrop_is_flat,
+)
+from .design_lint_parts._deck_slides import (
+    _has_attr as _has_attr,
+)
+from .design_lint_parts._deck_slides import (
+    _has_class as _has_class,
+)
+from .design_lint_parts._deck_slides import (
+    _has_deck_wrapper as _has_deck_wrapper,
+)
+from .design_lint_parts._deck_slides import (
+    _has_slide_nav_markers as _has_slide_nav_markers,
+)
+from .design_lint_parts._deck_slides import (
+    _is_deck_section_candidate as _is_deck_section_candidate,
+)
+from .design_lint_parts._deck_slides import (
+    _slide_has_flat_backdrop as _slide_has_flat_backdrop,
+)
+from .design_lint_parts._deck_slides import (
+    _slide_has_media as _slide_has_media,
+)
+from .design_lint_parts._deck_slides import (
+    _slide_text_blocks as _slide_text_blocks,
+)
+from .design_lint_parts._deck_slides import (
+    _style_attrs as _style_attrs,
+)
+from .design_lint_parts._engine import (
+    _bounded_read,
+    lint_design,
+)
+from .design_lint_parts._engine import (
+    load_committed_direction as load_committed_direction,
+)
+from .design_lint_parts._model import (
+    _MIN_REASON_LEN as _MIN_REASON_LEN,
+)
+from .design_lint_parts._model import (
+    _RULE_META as _RULE_META,
+)
+from .design_lint_parts._model import (
+    _SEVERITY_RANK as _SEVERITY_RANK,
+)
+from .design_lint_parts._model import (
+    SUPPRESSIBLE_CHOICE_KEYS as SUPPRESSIBLE_CHOICE_KEYS,
+)
+from .design_lint_parts._model import (
+    DesignFinding as DesignFinding,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_ai_purple as _rule_ai_purple,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_font_size_too_small as _rule_font_size_too_small,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_generic_font as _rule_generic_font,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_tight_line_height as _rule_tight_line_height,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_too_many_colors as _rule_too_many_colors,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_too_many_fonts as _rule_too_many_fonts,
+)
+from .design_lint_parts._rules_basic import (
+    _rule_web_banned_default_font as _rule_web_banned_default_font,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_bullet_monotony as _rule_deck_bullet_monotony,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_glass as _rule_deck_glass,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_handwritten_html as _rule_deck_handwritten_html,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_missing_imagery as _rule_deck_missing_imagery,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_orphan_slide as _rule_deck_orphan_slide,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_text_budget as _rule_deck_text_budget,
+)
+from .design_lint_parts._rules_deck import (
+    _rule_deck_type_floor as _rule_deck_type_floor,
+)
+from .design_lint_parts._rules_deck import (
+    _slide_is_pure_bullet_list as _slide_is_pure_bullet_list,
+)
+from .design_lint_parts._rules_direction import (
+    _direction_committed_families as _direction_committed_families,
+)
+from .design_lint_parts._rules_direction import (
+    _direction_committed_rgbs as _direction_committed_rgbs,
+)
+from .design_lint_parts._rules_direction import (
+    _rule_direction_conformance as _rule_direction_conformance,
+)
+from .design_lint_parts._rules_effects import (
+    _rule_dark_neon_glow as _rule_dark_neon_glow,
+)
+from .design_lint_parts._rules_effects import (
+    _rule_gradient_hero_text as _rule_gradient_hero_text,
+)
+from .design_lint_parts._rules_effects import (
+    _rule_too_many_animations as _rule_too_many_animations,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_centered_hero_3_cards_cta as _rule_centered_hero_3_cards_cta,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_emoji_icons as _rule_emoji_icons,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_pill_buttons as _rule_pill_buttons,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_web_default_hidden_content as _rule_web_default_hidden_content,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_web_glass as _rule_web_glass,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_web_hover_only_interactivity as _rule_web_hover_only_interactivity,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_web_reflexive_hover_scale as _rule_web_reflexive_hover_scale,
+)
+from .design_lint_parts._rules_web_interaction import (
+    _rule_web_text_over_image_no_scrim as _rule_web_text_over_image_no_scrim,
+)
+from .design_lint_parts._scan_helpers import (
+    _backdrop_without_saturate as _backdrop_without_saturate,
+)
+from .design_lint_parts._scan_helpers import (
+    _bullet_count as _bullet_count,
+)
+from .design_lint_parts._scan_helpers import (
+    _class_has_focus_visible_utility as _class_has_focus_visible_utility,
+)
+from .design_lint_parts._scan_helpers import (
+    _class_has_hover_utility as _class_has_hover_utility,
+)
+from .design_lint_parts._scan_helpers import (
+    _ext_of,
+)
+from .design_lint_parts._scan_helpers import (
+    _first_font_family as _first_font_family,
+)
+from .design_lint_parts._scan_helpers import (
+    _font_size_px as _font_size_px,
+)
+from .design_lint_parts._scan_helpers import (
+    _has_background_image_url as _has_background_image_url,
+)
+from .design_lint_parts._scan_helpers import (
+    _has_colorful_backdrop as _has_colorful_backdrop,
+)
+from .design_lint_parts._scan_helpers import (
+    _has_scrim_or_overlay as _has_scrim_or_overlay,
+)
+from .design_lint_parts._scan_helpers import (
+    _inside_css_guard as _inside_css_guard,
+)
+from .design_lint_parts._scan_helpers import (
+    _is_flat_background_value as _is_flat_background_value,
+)
+from .design_lint_parts._scan_helpers import (
+    _is_generic_font_family as _is_generic_font_family,
+)
+from .design_lint_parts._scan_helpers import (
+    _line_of as _line_of,
+)
+from .design_lint_parts._scan_helpers import (
+    _luminance as _luminance,
+)
+from .design_lint_parts._scan_helpers import (
+    _norm_color as _norm_color,
+)
+from .design_lint_parts._scan_helpers import (
+    _norm_font_name as _norm_font_name,
+)
+from .design_lint_parts._scan_helpers import (
+    _primary_families as _primary_families,
+)
+from .design_lint_parts._scan_helpers import (
+    _resolve_rgb as _resolve_rgb,
+)
+from .design_lint_parts._scan_helpers import (
+    _rgb_distance as _rgb_distance,
+)
+from .design_lint_parts._scan_helpers import (
+    _rgb_saturation as _rgb_saturation,
+)
+from .design_lint_parts._scan_helpers import (
+    _selector_targets_body_or_heading as _selector_targets_body_or_heading,
+)
+from .design_lint_parts._scan_helpers import (
+    _selector_targets_interactive as _selector_targets_interactive,
+)
+from .design_lint_parts._scan_helpers import (
+    _style_has_backdrop_filter as _style_has_backdrop_filter,
+)
+from .design_lint_parts._scan_helpers import (
+    _style_has_flat_background as _style_has_flat_background,
+)
+from .design_lint_parts._scan_helpers import (
+    _visible_text as _visible_text,
+)
+from .design_lint_parts._scan_helpers import (
+    _word_count as _word_count,
+)
+from .design_lint_parts._scan_helpers import (
+    html_lib as html_lib,
+)
+from .design_lint_parts._suppression import (
+    _font_justified as _font_justified,
+)
+from .design_lint_parts._suppression import (
+    _justified_keys as _justified_keys,
+)
+from .design_lint_parts._suppression import (
+    _justified_palette_rgbs as _justified_palette_rgbs,
+)
+from .design_lint_parts._suppression import (
+    _normalize_choice as _normalize_choice,
+)
 
 _RENDER_FINDING_LIMIT = 20
 
@@ -2168,23 +593,6 @@ def _render(verdict: dict[str, Any]) -> str:
     if omitted > 0:
         lines.append(f"…and {omitted} more findings — fix the above first, then re-run.")
     return "\n".join(lines)
-
-
-async def load_committed_direction(ctx: ToolContext) -> DesignDirection | None:
-    """Load the same immutable design direction every lint boundary enforces.
-
-    Absent, unreadable, or unparseable context intentionally resolves to ``None``:
-    the pure direction-conformance rules then no-op. Keeping this best-effort loader
-    shared prevents semantic AppKit mutations from certifying a tree against a
-    weaker contract than the final ``design_lint`` / ``verify_appkit_app`` scan.
-    """
-
-    assert ctx.sandbox is not None
-    try:
-        markdown = await ArtifactMemoryStore(ctx.sandbox).read_design_direction()
-    except Exception:  # noqa: BLE001 — absent/unreadable → no committed direction
-        return None
-    return direction_from_markdown(markdown or "")
 
 
 # ---- the tool wrapper ---------------------------------------------------------
