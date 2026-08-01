@@ -98,5 +98,66 @@ EPIC11B_RESOLVED_IDS = (
 )
 
 
+# --- Epic 11-C -------------------------------------------------------------
+# BUILD-ADAPTERS 19 + AUTH-QUOTA 10 + WORKFLOWS 10 = 39 rows, in seven waves:
+#   wave 1  app_kit.py -> app_kit_parts/ (+ trusted_components)       11
+#   wave 2  verify_appkit_app.py -> verify_appkit_parts/               7
+#   wave 3  five WORKFLOWS route factories reduced in place            6
+#   wave 4  core/auth.py -> auth_parts/                                6
+#   wave 5  AgentAuthMiddleware.dispatch decomposed in place           1
+#   wave 6  routes/workflows.py + core/workflow/models.py              4
+#   wave 7  core/quota.py -> quota_parts/ (+ app-server quota router)  3
+#   root    PY-0889, the appkit-verify test doubles                    1
+#
+# AUTH-QUOTA is 10 here, not 12: its two rider rows (PY-0670/PY-0671) sealed
+# with 11-A.
+#
+# Thirty-four of the 39 are width rows cleared by moving authority into
+# `*_parts/` collaborators; five are mccabe rows, and those cannot be cleared
+# that way — relocating a function carries its branch graph with it. An early
+# attempt on core/auth.py was rejected for exactly that: it moved
+# validated_canonical_preview_url (28) and _is_generated_preview_label (18)
+# verbatim into a parts module, where the scanner reported them unchanged.
+# Each mccabe row was cleared by genuinely decomposing the decision structure
+# first (AgentAuthMiddleware.dispatch 34 -> eight named guards; _walk_schema
+# 17 -> a walker at 1 that only recurses and delegates).
+#
+# NO adjudications — every row had a genuine seam — so `architecture/policy.json`
+# is untouched and the tree-count identity still holds exactly: tree == active
+# python rows.
+#
+# EXPECTED_ACTIVE_DEBT_ROWS 115 -> 76 (14 python + 62 typescript).
+PKG11_BUILD_ADAPTERS_RESOLVED_IDS = frozenset(
+    {
+        "PY-0749", "PY-0750", "PY-0751", "PY-0752", "PY-0753",
+        "PY-0754", "PY-0755", "PY-0756", "PY-0757", "PY-0803",
+        "PY-0804", "PY-0809", "PY-0810", "PY-0811", "PY-0812",
+        "PY-0813", "PY-0814", "PY-0815", "PY-0889"
+    }
+)
+
+PKG11_AUTH_QUOTA_RESOLVED_IDS = frozenset(
+    {
+        "PY-0186", "PY-0372", "PY-0421", "PY-0422", "PY-0423",
+        "PY-0424", "PY-0425", "PY-0426", "PY-0632", "PY-0633"
+    }
+)
+
+PKG11_WORKFLOWS_RESOLVED_IDS = frozenset(
+    {
+        "PY-0251", "PY-0289", "PY-0290", "PY-0291", "PY-0292",
+        "PY-0293", "PY-0298", "PY-0299", "PY-0699", "PY-0700"
+    }
+)
+
+EPIC11C_RESOLVED_IDS = (
+    PKG11_BUILD_ADAPTERS_RESOLVED_IDS
+    | PKG11_AUTH_QUOTA_RESOLVED_IDS
+    | PKG11_WORKFLOWS_RESOLVED_IDS
+)
+
+
 # --- Epic 11 aggregate -----------------------------------------------------
-EPIC11_RESOLVED_IDS = EPIC11A_RESOLVED_IDS | EPIC11B_RESOLVED_IDS
+EPIC11_RESOLVED_IDS = (
+    EPIC11A_RESOLVED_IDS | EPIC11B_RESOLVED_IDS | EPIC11C_RESOLVED_IDS
+)
