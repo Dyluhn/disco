@@ -8,7 +8,7 @@ replacements through `exact_replace` with optimistic concurrency.
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import hashlib as hashlib
 import json
 import posixpath
 import re
@@ -32,12 +32,53 @@ from ._slides_pipeline import (
     _resolve_slides_llm,
 )
 from .files import (
-    ExactReplaceArgs,
-    ExactReplaceEdit,
-    ExactReplaceTool,
-    _all_occurrences,
-    mark_read,
-    record_read,
+    ExactReplaceArgs as ExactReplaceArgs,
+)
+from .files import (
+    ExactReplaceEdit as ExactReplaceEdit,
+)
+from .files import (
+    ExactReplaceTool as ExactReplaceTool,
+)
+from .files import (
+    _all_occurrences as _all_occurrences,
+)
+from .files import (
+    mark_read as mark_read,
+)
+from .files import (
+    record_read as record_read,
+)
+from .find_and_edit_parts.apply import (
+    _apply_file_edits as _apply_file_edits,
+)
+from .find_and_edit_parts.apply import (
+    _mark_skipped as _mark_skipped,
+)
+from .find_and_edit_parts.apply import (
+    _prepare_exact_edits as _prepare_exact_edits,
+)
+from .find_and_edit_parts.apply import (
+    apply_all_edits,
+    summarize_match_results,
+)
+from .find_and_edit_parts.scan import (
+    _context_window as _context_window,
+)
+from .find_and_edit_parts.scan import (
+    _line_for_offset as _line_for_offset,
+)
+from .find_and_edit_parts.scan import (
+    _Match as _Match,
+)
+from .find_and_edit_parts.scan import (
+    _match_record as _match_record,
+)
+from .find_and_edit_parts.scan import (
+    _ReadFile as _ReadFile,
+)
+from .find_and_edit_parts.scan import (
+    scan_selected_files,
 )
 
 _FS = frozenset({Capability.FILESYSTEM})
@@ -82,28 +123,6 @@ class FindAndEditArgs(BaseModel):
         if not self.paths and not self.glob:
             raise ValueError("find_and_edit requires at least one of `paths` or `glob`.")
         return self
-
-
-@dataclass(frozen=True)
-class _Match:
-    global_index: int
-    file_index: int
-    path: str
-    start: int
-    end: int
-    line_start: int
-    line_end: int
-    text: str
-    context: str
-
-
-@dataclass(frozen=True)
-class _ReadFile:
-    path: str
-    text: str
-    sha256: str
-    matches: list[_Match]
-    result: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -255,33 +274,6 @@ async def _select_paths(args: FindAndEditArgs, ctx: ToolContext) -> tuple[list[s
     if len(selected) > args.max_files:
         warnings.append(f"selected {len(selected)} files, exceeding max_files={args.max_files}")
     return selected, warnings
-
-
-def _line_for_offset(text: str, offset: int) -> int:
-    return text.count("\n", 0, max(0, offset)) + 1
-
-
-def _context_window(text: str, line_start: int, line_end: int) -> str:
-    lines = text.splitlines()
-    if not lines:
-        return ""
-    start = max(1, line_start - _CONTEXT_RADIUS_LINES)
-    end = min(len(lines), line_end + _CONTEXT_RADIUS_LINES)
-    width = len(str(end))
-    return "\n".join(f"{line:>{width}}\t{lines[line - 1]}" for line in range(start, end + 1))
-
-
-def _match_record(match: _Match) -> dict[str, Any]:
-    return {
-        "index": match.file_index,
-        "global_index": match.global_index,
-        "start": match.start,
-        "end": match.end,
-        "line_start": match.line_start,
-        "line_end": match.line_end,
-        "matched_text": match.text,
-        "status": "pending",
-    }
 
 
 def _resolve_driver_llm(ctx: ToolContext) -> tuple[str, str, str | None, str | None]:
@@ -470,100 +462,6 @@ async def _decide_match(
     raise AssertionError("bounded decision loop exhausted without a result")
 
 
-def _mark_skipped(match_result: dict[str, Any], reason: str) -> None:
-    match_result["status"] = "skipped"
-    match_result["reason"] = reason
-    match_result.pop("replacement", None)
-
-
-def _prepare_exact_edits(
-    file: _ReadFile,
-    decisions: dict[int, dict[str, Any]],
-) -> tuple[list[ExactReplaceEdit], bool]:
-    matches_by_old: dict[str, list[_Match]] = {}
-    edits_by_old: dict[str, list[_Match]] = {}
-    for match in file.matches:
-        matches_by_old.setdefault(match.text, []).append(match)
-        decision = decisions.get(
-            match.global_index,
-            {"status": "skipped", "reason": "missing_decision"},
-        )
-        rec = file.result["matches"][match.file_index]
-        rec.update(decision)
-        if decision.get("status") == "accepted":
-            edits_by_old.setdefault(match.text, []).append(match)
-
-    # A provider-truncated decision makes the requested edit set incomplete. Keep
-    # the whole file byte-identical instead of applying a silently partial subset.
-    if any(match_result.get("status") == "failed" for match_result in file.result["matches"]):
-        for match_result in file.result["matches"]:
-            if match_result.get("status") == "accepted":
-                _mark_skipped(match_result, "file_decision_failed")
-        return [], False
-
-    edits: list[ExactReplaceEdit] = []
-    multi = False
-    for old_string, accepted_matches in edits_by_old.items():
-        replacements = {str(decisions[m.global_index].get("replacement")) for m in accepted_matches}
-        occurrences = len(_all_occurrences(file.text, old_string))
-        all_regex_matches = matches_by_old.get(old_string, [])
-        if (
-            len(replacements) != 1
-            or occurrences != len(all_regex_matches)
-            or len(accepted_matches) != len(all_regex_matches)
-        ):
-            for match in accepted_matches:
-                _mark_skipped(
-                    file.result["matches"][match.file_index],
-                    "duplicate_match_ambiguous",
-                )
-            continue
-        replacement = next(iter(replacements))
-        edits.append(ExactReplaceEdit(old_string=old_string, new_string=replacement))
-        if occurrences > 1:
-            multi = True
-    return edits, multi
-
-
-async def _apply_file_edits(
-    file: _ReadFile,
-    ctx: ToolContext,
-    decisions: dict[int, dict[str, Any]],
-) -> int:
-    edits, multi = _prepare_exact_edits(file, decisions)
-    if not edits:
-        if any(match.get("status") == "failed" for match in file.result["matches"]):
-            file.result["status"] = "failed"
-            file.result["reason"] = "decision_failed"
-        else:
-            file.result["status"] = "unchanged"
-        return 0
-
-    exact_args = ExactReplaceArgs(
-        path=file.path,
-        edits=edits,
-        expected_sha256=file.sha256,
-        multi=multi,
-    )
-    outcome = await ExactReplaceTool().run(exact_args, ctx)
-    accepted_results = [m for m in file.result["matches"] if m.get("status") == "accepted"]
-    if not outcome.success:
-        reason = f"exact_replace_failed:{outcome.error or 'unknown'}"
-        file.result["status"] = "skipped"
-        file.result["apply_error"] = outcome.error or outcome.content
-        for match_result in accepted_results:
-            _mark_skipped(match_result, reason)
-        return 0
-
-    edited = 0
-    for match_result in accepted_results:
-        match_result["status"] = "edited"
-        edited += 1
-    file.result["status"] = "edited" if edited else "unchanged"
-    file.result["applied_edits"] = len(edits)
-    return edited
-
-
 class FindAndEditTool:
     definition = ToolDef(
         name="find_and_edit",
@@ -610,76 +508,7 @@ class FindAndEditTool:
                 },
             )
 
-        files: list[_ReadFile] = []
-        file_results: list[dict[str, Any]] = []
-        global_matches: list[_Match] = []
-        for path in selected:
-            result: dict[str, Any] = {"path": path, "status": "pending", "matches": []}
-            file_results.append(result)
-            try:
-                raw = await ctx.sandbox.read_file(path)
-            except Exception as exc:  # noqa: BLE001 - unreadable files are recorded skips.
-                result["status"] = "skipped"
-                result["reason"] = "read_error"
-                result["error"] = f"{type(exc).__name__}: {exc}"
-                continue
-            sha = hashlib.sha256(raw).hexdigest()
-            text = raw.decode("utf-8", errors="replace")
-            total_lines = max(1, len(text.splitlines()))
-            mark_read(ctx.conversation_id, path)
-            record_read(
-                ctx.conversation_id,
-                path,
-                sha=sha,
-                start_line=1,
-                end_line=total_lines,
-                full=True,
-            )
-            file_matches: list[_Match] = []
-            for re_match in regex.finditer(text):
-                matched_text = re_match.group(0)
-                result_index = len(result["matches"])
-                if matched_text == "":
-                    rec = {
-                        "index": result_index,
-                        "global_index": len(global_matches),
-                        "start": re_match.start(),
-                        "end": re_match.end(),
-                        "line_start": _line_for_offset(text, re_match.start()),
-                        "line_end": _line_for_offset(text, re_match.end()),
-                        "matched_text": matched_text,
-                        "status": "skipped",
-                        "reason": "zero_length_match",
-                    }
-                    result["matches"].append(rec)
-                    continue
-                line_start = _line_for_offset(text, re_match.start())
-                line_end = _line_for_offset(text, re_match.end())
-                match = _Match(
-                    global_index=len(global_matches),
-                    file_index=result_index,
-                    path=path,
-                    start=re_match.start(),
-                    end=re_match.end(),
-                    line_start=line_start,
-                    line_end=line_end,
-                    text=matched_text,
-                    context=_context_window(text, line_start, line_end),
-                )
-                file_matches.append(match)
-                global_matches.append(match)
-                result["matches"].append(_match_record(match))
-            result["sha256"] = sha
-            result["status"] = "matched" if file_matches else "unchanged"
-            files.append(
-                _ReadFile(
-                    path=path,
-                    text=text,
-                    sha256=sha,
-                    matches=file_matches,
-                    result=result,
-                )
-            )
+        files, file_results, global_matches = await scan_selected_files(selected, regex, ctx)
 
         if len(global_matches) > args.max_matches:
             return ToolOutcome(
@@ -729,26 +558,9 @@ class FindAndEditTool:
         )
         decisions = dict(decision_pairs)
 
-        edited = 0
-        artifacts: list[str] = []
-        for file in files:
-            file_edited = await _apply_file_edits(file, ctx, decisions)
-            edited += file_edited
-            if file_edited:
-                artifacts.append(file.path)
+        edited, artifacts = await apply_all_edits(files, ctx, decisions)
 
-        skipped = sum(
-            1
-            for file in file_results
-            for match in file.get("matches", [])
-            if match.get("status") == "skipped"
-        )
-        failed = sum(
-            1
-            for file in file_results
-            for match in file.get("matches", [])
-            if match.get("status") == "failed"
-        )
+        skipped, failed = summarize_match_results(file_results)
         failure_label = "decision failure" if failed == 1 else "decision failures"
         content = (
             f"find_and_edit: scanned {len(selected)} files, {len(global_matches)} matches, "

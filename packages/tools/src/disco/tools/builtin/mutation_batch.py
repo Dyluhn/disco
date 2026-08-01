@@ -132,24 +132,17 @@ async def _resolved_path(ctx: ToolContext, path: str) -> str:
     return _canonical(await resolver(path))
 
 
-async def commit_deterministic_file_batch(
+async def _resolve_planned_intents(
     ctx: ToolContext,
     intents: Sequence[PlannedFileMutation],
-    *,
-    commit_last: Sequence[str] = (),
-) -> DeterministicBatchResult | ToolOutcome:
-    """Commit a fully materialized file plan with exact host-observed evidence.
+    commit_last: Sequence[str],
+) -> tuple[dict[str, bytes | None], list[str]] | ToolOutcome:
+    """Resolve every intent + ``commit_last`` path and validate the plan is unambiguous.
 
-    All path resolution, conflict checks, reads, deletion-capability checks, and
-    no-op comparisons finish before the first mutation.  Ordinary paths commit
-    in canonical order, followed by ``commit_last`` in the caller's order.
+    Returns ``(planned, commit_last_resolved)`` once every path has resolved to
+    exactly one final state and ``commit_last`` names only planned, alias-free
+    paths — or the prevalidation-failure `ToolOutcome` for the first problem found.
     """
-
-    assert ctx.sandbox is not None
-    sandbox = ctx.sandbox
-    if not intents:
-        return DeterministicBatchResult(changed_paths=(), receipts=())
-
     planned: dict[str, bytes | None] = {}
     try:
         for intent in intents:
@@ -201,7 +194,13 @@ async def commit_deterministic_file_batch(
                 f"path(s): {', '.join(unknown_last)}."
             ),
         )
+    return planned, commit_last_resolved
 
+
+async def _read_before_states(
+    sandbox: Any, planned: dict[str, bytes | None]
+) -> dict[str, bytes | None] | ToolOutcome:
+    """Read every planned path's current on-disk content before any write."""
     before: dict[str, bytes | None] = {}
     for resolved in sorted(planned):
         try:
@@ -219,11 +218,13 @@ async def commit_deterministic_file_batch(
                 path=resolved,
                 underlying=detail,
             )
+    return before
 
-    effective = {path for path, after in planned.items() if before[path] != after}
-    if not effective:
-        return DeterministicBatchResult(changed_paths=(), receipts=())
 
+def _check_delete_availability(
+    sandbox: Any, planned: dict[str, bytes | None], effective: set[str]
+) -> ToolOutcome | None:
+    """Refuse up front if the plan includes a deletion this sandbox cannot perform."""
     if any(planned[path] is None for path in effective) and not callable(
         getattr(sandbox, "delete_file", None)
     ):
@@ -234,13 +235,72 @@ async def commit_deterministic_file_batch(
                 "a stale generated file. Use a supported sandbox or a fresh workspace."
             ),
         )
+    return None
 
+
+def _order_commits(effective: set[str], commit_last_resolved: list[str]) -> list[str]:
+    """Canonical path order, with ``commit_last`` members moved to the end in caller order."""
     last_rank = {path: index for index, path in enumerate(commit_last_resolved)}
-    ordered = sorted(
+    return sorted(
         effective,
         key=lambda path: (1, last_rank[path]) if path in last_rank else (0, path),
     )
 
+
+async def _attribute_commit_failure(
+    ctx: ToolContext,
+    sandbox: Any,
+    resolved: str,
+    intended: bytes | None,
+    expected: bytes | None,
+    *,
+    applied: list[str],
+    receipts: list[MutationReceipt | OpaqueEffectReceipt],
+) -> Literal["unchanged", "committed", "unknown"]:
+    """Re-read a path once to attribute a backend failure's true final state.
+
+    A transport can report failure before or after applying its write primitive.
+    Intended bytes prove commit, unchanged bytes prove no commit, and any third
+    or unreadable state remains explicitly opaque. Mutates ``applied``/
+    ``receipts`` in place exactly as the caller's pre-extraction inline logic did.
+    """
+    observed_known = True
+    try:
+        observed: bytes | None = await sandbox.read_file(resolved)
+    except FileNotFoundError:
+        observed = None
+    except Exception:  # noqa: BLE001 - exact state is genuinely unknown
+        observed = None
+        observed_known = False
+
+    if observed_known and observed == intended:
+        receipts.append(_file_mutation_receipt(resolved, before=expected, after=intended))
+        applied.append(resolved)
+        _clear_grounding(ctx.conversation_id, resolved)
+        return "committed"
+    if observed_known and observed == expected:
+        return "unchanged"
+    receipts.append(
+        OpaqueEffectReceipt(
+            capability=EffectCapability.WORKSPACE_MUTATE,
+            reason=(
+                f"deterministic batch state for {resolved} could not be attributed "
+                "after a backend failure"
+            ),
+        )
+    )
+    _clear_grounding(ctx.conversation_id, resolved)
+    return "unknown"
+
+
+async def _commit_ordered(
+    ctx: ToolContext,
+    sandbox: Any,
+    planned: dict[str, bytes | None],
+    before: dict[str, bytes | None],
+    ordered: list[str],
+) -> DeterministicBatchResult | ToolOutcome:
+    """Commit each path in ``ordered``, in order, stopping at the first handled failure."""
     applied: list[str] = []
     receipts: list[MutationReceipt | OpaqueEffectReceipt] = []
     for resolved in ordered:
@@ -261,34 +321,15 @@ async def commit_deterministic_file_batch(
                     expected_before=expected,
                 )
         except Exception as exc:  # noqa: BLE001 - retain handled partial-state truth
-            observed_known = True
-            try:
-                observed: bytes | None = await sandbox.read_file(resolved)
-            except FileNotFoundError:
-                observed = None
-            except Exception:  # noqa: BLE001 - exact state is genuinely unknown
-                observed = None
-                observed_known = False
-
-            if observed_known and observed == intended:
-                receipts.append(_file_mutation_receipt(resolved, before=expected, after=intended))
-                applied.append(resolved)
-                _clear_grounding(ctx.conversation_id, resolved)
-                failed_state: Literal["unchanged", "committed", "unknown"] = "committed"
-            elif observed_known and observed == expected:
-                failed_state = "unchanged"
-            else:
-                receipts.append(
-                    OpaqueEffectReceipt(
-                        capability=EffectCapability.WORKSPACE_MUTATE,
-                        reason=(
-                            f"deterministic batch state for {resolved} could not be attributed "
-                            "after a backend failure"
-                        ),
-                    )
-                )
-                _clear_grounding(ctx.conversation_id, resolved)
-                failed_state = "unknown"
+            failed_state = await _attribute_commit_failure(
+                ctx,
+                sandbox,
+                resolved,
+                intended,
+                expected,
+                applied=applied,
+                receipts=receipts,
+            )
             detail = _exception_detail(exc)
             return _commit_failure(
                 applied=applied,
@@ -323,6 +364,45 @@ async def commit_deterministic_file_batch(
         changed_paths=tuple(applied),
         receipts=tuple(receipt for receipt in receipts if isinstance(receipt, MutationReceipt)),
     )
+
+
+async def commit_deterministic_file_batch(
+    ctx: ToolContext,
+    intents: Sequence[PlannedFileMutation],
+    *,
+    commit_last: Sequence[str] = (),
+) -> DeterministicBatchResult | ToolOutcome:
+    """Commit a fully materialized file plan with exact host-observed evidence.
+
+    All path resolution, conflict checks, reads, deletion-capability checks, and
+    no-op comparisons finish before the first mutation.  Ordinary paths commit
+    in canonical order, followed by ``commit_last`` in the caller's order.
+    """
+
+    assert ctx.sandbox is not None
+    sandbox = ctx.sandbox
+    if not intents:
+        return DeterministicBatchResult(changed_paths=(), receipts=())
+
+    resolved_plan = await _resolve_planned_intents(ctx, intents, commit_last)
+    if isinstance(resolved_plan, ToolOutcome):
+        return resolved_plan
+    planned, commit_last_resolved = resolved_plan
+
+    before = await _read_before_states(sandbox, planned)
+    if isinstance(before, ToolOutcome):
+        return before
+
+    effective = {path for path, after in planned.items() if before[path] != after}
+    if not effective:
+        return DeterministicBatchResult(changed_paths=(), receipts=())
+
+    unavailable = _check_delete_availability(sandbox, planned, effective)
+    if unavailable is not None:
+        return unavailable
+
+    ordered = _order_commits(effective, commit_last_resolved)
+    return await _commit_ordered(ctx, sandbox, planned, before, ordered)
 
 
 __all__ = [
