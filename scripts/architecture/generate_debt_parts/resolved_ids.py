@@ -13,8 +13,10 @@ from __future__ import annotations
 
 try:
     from ..debt_resolved_epic10 import EPIC10_RESOLVED_IDS
+    from ..debt_resolved_epic11 import EPIC11_RESOLVED_IDS
 except ImportError:
     from debt_resolved_epic10 import EPIC10_RESOLVED_IDS
+    from debt_resolved_epic11 import EPIC11_RESOLVED_IDS
 
 PKG02_RESOLVED_IDS = frozenset({"PY-0890", "PY-0891", "DM-010"})
 PKG03_HARNESS_TRANSPORT_RESOLVED_IDS = frozenset(
@@ -198,4 +200,5 @@ RESOLVED_IDS = (
     | PKG09_RELEASE_RESOLVED_IDS
     | PKG09_CONNECTORS_RESOLVED_IDS
     | EPIC10_RESOLVED_IDS
+    | EPIC11_RESOLVED_IDS
 )

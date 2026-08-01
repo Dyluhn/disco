@@ -62,7 +62,14 @@ except ImportError:
 # registry that `budget.check_adjudicated_width_non_violations` re-proves
 # against the live scan on every run. Reconciliation at the 10-C seal:
 # 161 python tree violations + 62 TypeScript rows = 223.
-EXPECTED_ACTIVE_DEBT_ROWS = 223
+#
+# Epic 11-A registers 57 rows resolved IN SOURCE (no adjudications): all 55
+# PKG-11-BUILD-SPECS rows plus the two PKG-11-AUTH-QUOTA rows PY-0670/0671 that
+# the `pkg08-corestripe` cherry-pick cleared in the same commit. Set-equality
+# against `owner_package` was proven mechanically before the sets were wired;
+# see `debt_resolved_epic11.py`. Reconciliation at the 11-A seal:
+# 104 python tree violations + 62 TypeScript rows = 166.
+EXPECTED_ACTIVE_DEBT_ROWS = 166
 EXPECTED_OBSERVATIONS = 12
 
 # The source identity the disposition rows were sealed against.

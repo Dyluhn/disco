@@ -3548,7 +3548,7 @@
   {
     "id": "PY-0373",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/analytics_primitive.py:_upsert_dashboard_page:121-190",
@@ -3557,7 +3557,7 @@
   {
     "id": "PY-0374",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/analytics_primitive.py:emit_analytics_dashboard_component:469-573",
@@ -3566,7 +3566,7 @@
   {
     "id": "PY-0375",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/analytics_primitive.py:<module>:1-810",
@@ -3575,7 +3575,7 @@
   {
     "id": "PY-0376",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/collection_primitive.py:apply_collection_spec:204-263",
@@ -3584,7 +3584,7 @@
   {
     "id": "PY-0377",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/feature_flags_primitive.py:<module>:1-784",
@@ -3593,7 +3593,7 @@
   {
     "id": "PY-0378",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/form_primitive.py:apply_form_spec:233-342",
@@ -3602,7 +3602,7 @@
   {
     "id": "PY-0379",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/form_primitive.py:apply_form_spec:233-342",
@@ -3611,7 +3611,7 @@
   {
     "id": "PY-0380",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/form_primitive.py:<module>:1-1006",
@@ -3620,7 +3620,7 @@
   {
     "id": "PY-0381",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:_emit_component:569-680",
@@ -3629,7 +3629,7 @@
   {
     "id": "PY-0382",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:_emit_form_component:814-929",
@@ -3638,7 +3638,7 @@
   {
     "id": "PY-0383",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:_emit_worker_ts:1274-1464",
@@ -3647,7 +3647,7 @@
   {
     "id": "PY-0384",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:_emit_owner_guide_md:1647-1753",
@@ -3656,7 +3656,7 @@
   {
     "id": "PY-0385",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:_emit_disco_client_ts:1778-1979",
@@ -3665,7 +3665,7 @@
   {
     "id": "PY-0386",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/generator.py:<module>:1-2677",
@@ -3674,7 +3674,7 @@
   {
     "id": "PY-0387",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_list_primitive.py:local_list_verify:429-567",
@@ -3683,7 +3683,7 @@
   {
     "id": "PY-0388",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_list_primitive.py:local_list_verify:429-567",
@@ -3692,7 +3692,7 @@
   {
     "id": "PY-0389",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:check_schema_sql:136-192",
@@ -3701,7 +3701,7 @@
   {
     "id": "PY-0390",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:check_drizzle_schema:245-307",
@@ -3710,7 +3710,7 @@
   {
     "id": "PY-0391",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:local_api_roundtrip:323-444",
@@ -3719,7 +3719,7 @@
   {
     "id": "PY-0392",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:cloudflare_export_ready:662-839",
@@ -3728,7 +3728,7 @@
   {
     "id": "PY-0393",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:cloudflare_export_ready:662-839",
@@ -3737,7 +3737,7 @@
   {
     "id": "PY-0394",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:cloudflare_export_ready_static:871-988",
@@ -3746,7 +3746,7 @@
   {
     "id": "PY-0395",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/local_verify.py:<module>:1-1002",
@@ -3755,7 +3755,7 @@
   {
     "id": "PY-0396",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:lead_gen_verify:115-198",
@@ -3764,7 +3764,7 @@
   {
     "id": "PY-0397",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:form_verify:316-495",
@@ -3773,7 +3773,7 @@
   {
     "id": "PY-0398",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:form_verify:316-495",
@@ -3782,7 +3782,7 @@
   {
     "id": "PY-0399",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:seo_verify:498-609",
@@ -3791,7 +3791,7 @@
   {
     "id": "PY-0400",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:seo_verify:498-609",
@@ -3800,7 +3800,7 @@
   {
     "id": "PY-0401",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitive_verify.py:collection_verify:612-711",
@@ -3809,7 +3809,7 @@
   {
     "id": "PY-0402",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/primitives.py:register_primitive:162-198",
@@ -3818,7 +3818,7 @@
   {
     "id": "PY-0403",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/records_primitive.py:prepare_records_app_spec:210-256",
@@ -3827,7 +3827,7 @@
   {
     "id": "PY-0404",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/records_primitive.py:_emit_auth_fetch_ts:1148-1273",
@@ -3836,7 +3836,7 @@
   {
     "id": "PY-0405",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/records_primitive.py:generate_records:1396-1560",
@@ -3845,7 +3845,7 @@
   {
     "id": "PY-0406",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/records_primitive.py:generate_records:1396-1560",
@@ -3854,7 +3854,7 @@
   {
     "id": "PY-0407",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/records_primitive.py:<module>:1-1590",
@@ -3863,7 +3863,7 @@
   {
     "id": "PY-0408",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/spec.py:<module>:1-1091",
@@ -3872,7 +3872,7 @@
   {
     "id": "PY-0409",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/stripe_primitive.py:apply_stripe_spec:178-239",
@@ -3881,7 +3881,7 @@
   {
     "id": "PY-0410",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/stripe_primitive.py:_stripe_provenance_check:414-505",
@@ -3890,7 +3890,7 @@
   {
     "id": "PY-0411",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/stripe_worker.py:_emit_stripe_verification_ts:172-303",
@@ -3899,7 +3899,7 @@
   {
     "id": "PY-0412",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/stripe_worker.py:_emit_stripe_fulfillment_ts:349-482",
@@ -3908,7 +3908,7 @@
   {
     "id": "PY-0413",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/webhook_primitive.py:_provenance_check:371-451",
@@ -3917,7 +3917,7 @@
   {
     "id": "PY-0414",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/webhook_worker.py:emit_webhook_worker_ts:68-246",
@@ -3926,7 +3926,7 @@
   {
     "id": "PY-0415",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:_strip_ts_comments:99-131",
@@ -3935,7 +3935,7 @@
   {
     "id": "PY-0416",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:_region_has_run_insert:350-410",
@@ -3944,7 +3944,7 @@
   {
     "id": "PY-0417",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:inspect_worker:568-698",
@@ -3953,7 +3953,7 @@
   {
     "id": "PY-0418",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:inspect_worker:568-698",
@@ -3962,7 +3962,7 @@
   {
     "id": "PY-0419",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:_call_with_string_arg_in_position:701-731",
@@ -3971,7 +3971,7 @@
   {
     "id": "PY-0420",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/appkit/worker_inspect.py:<module>:1-909",
@@ -4142,7 +4142,7 @@
   {
     "id": "PY-0439",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/design/directions.py:<module>:1-1422",
@@ -4295,7 +4295,7 @@
   {
     "id": "PY-0456",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/kits/starter_assets.py:<module>:1-996",
@@ -6221,7 +6221,7 @@
   {
     "id": "PY-0670",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/stripe_host_service.py:_runtime_inputs:517-572",
@@ -6230,7 +6230,7 @@
   {
     "id": "PY-0671",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-AUTH-QUOTA",
     "location": "packages/core/src/disco/core/stripe_host_service.py:_parse_stripe_checkout_url:575-620",
@@ -6239,7 +6239,7 @@
   {
     "id": "PY-0672",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/trusted_components/registry_data/auth-kit/1.0.0/probe/probe.py:main:107-279",
@@ -6248,7 +6248,7 @@
   {
     "id": "PY-0673",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/trusted_components/registry_data/auth-kit/1.0.0/probe/probe.py:main:107-279",
@@ -6257,7 +6257,7 @@
   {
     "id": "PY-0674",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/trusted_components/registry_data/rbac-kit/1.0.0/probe/probe.py:main:92-205",
@@ -6284,7 +6284,7 @@
   {
     "id": "PY-0677",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/tweaks.py:coerce_tweak_value:178-210",
@@ -6293,7 +6293,7 @@
   {
     "id": "PY-0678",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-BUILD-SPECS",
     "location": "packages/core/src/disco/core/tweaks.py:_validate:107-158",

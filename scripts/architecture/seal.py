@@ -68,6 +68,9 @@ PROTECTED: tuple[str, ...] = (
     # at 690 of its own 700-line budget). They decide which rows leave the
     # active ledger, so they are hash-gated exactly like the generator.
     "scripts/architecture/debt_resolved_epic10.py",
+    # Epic 11's sub-epic sets follow the same precedent: they decide which rows
+    # leave the active ledger, so they are hash-gated exactly like the generator.
+    "scripts/architecture/debt_resolved_epic11.py",
     "scripts/architecture/generate_inventories.py",
     "scripts/architecture/yaml_parser.py",
     # Epic 10-D decomposed the two authorities that had run out of budget.
