@@ -14,19 +14,35 @@ file) and tunable per call.
 
 from __future__ import annotations
 
-import contextlib
 import ctypes
 import io
 import os
 import shutil
-import stat
-import tarfile
 import tempfile
 import zipfile
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Iterator
+
+# --- compatibility re-exports (PKG-10-PROJECTS) ------------------------------
+# Imports written with a redundant `X as X` alias in this file are NOT used by
+# this module — they are pure re-exports of top-level names it exposed before
+# the archive_parts split, kept so the module surface is unchanged for anything
+# that reaches them through the module object. isort interleaves them with the
+# real imports; the alias is what marks them. PKG-13-FACADES owns their
+# eventual deletion.
+#
+# Three parent-era names are deliberately NOT restored, as a recorded root
+# override of the facade-surface differential (Epic 10-A): `contextlib`, `stat`
+# and `tarfile` were bare `import <stdlib>` bindings whose only uses moved into
+# `archive_parts/`. Root re-ran the consumer analysis and `archive.contextlib`,
+# `archive.stat` and `archive.tarfile` have zero call sites anywhere in the
+# tree, and re-adding an unused plain `import` would require a per-line lint
+# suppression the engineering rules forbid.
+from collections.abc import Awaitable as Awaitable
+from collections.abc import Callable as Callable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Protocol, cast
+from typing import Protocol
+from typing import cast as cast
 
 # The runtime-secret path classifier now lives in `disco.core` (the leaf package)
 # so the release validation plane can share the exact same predicate. Re-exported
@@ -34,6 +50,28 @@ from typing import Protocol, cast
 # / `from .archive import is_runtime_secret_path` import keeps resolving unchanged.
 # `tools` -> `core` is a legal downward import.
 from disco.core.secret_paths import is_runtime_secret_path
+
+from .archive_parts.bulk_archive import _write_bulk_archive as _write_bulk_archive
+
+# `_copy_preserved_snapshot_paths` (fd-anchored, no-follow copy of unreadable /
+# host-owned prior paths into staging) is the interior of `snapshot_workspace`
+# that carried nearly all of this module's cyclomatic complexity. Its
+# decomposition lives in `archive_parts.preserve_copy`; imported here (not
+# inlined) so this module stays within the logical-line budget.
+from .archive_parts.preserve_copy import _copy_preserved_snapshot_paths
+from .archive_parts.preserve_copy import (
+    _prepare_authoritative_snapshot_paths as _prepare_authoritative_snapshot_paths,
+)
+from .archive_parts.preserve_copy import _same_fs_object as _same_fs_object
+
+# The portable sandbox-tree walk (used when a backend has no bulk archive
+# exporter), the host-owned-path scrub, and the final staged-tree accounting —
+# the rest of `snapshot_workspace`'s interior. See `archive_parts.snapshot_walk`.
+from .archive_parts.snapshot_walk import (
+    _collect_snapshot_paths,
+    _discard_sandbox_copies_of_host_owned_paths,
+    _finalize_staged_tree,
+)
 
 # Sensible defaults: deep enough for realistic project trees, large enough for the
 # kinds of artifacts a build agent produces (bundled JS, small images). Raised
@@ -104,249 +142,6 @@ class SnapshotResult:
     skipped: list[str] = field(default_factory=list)  # unreadable entries we tolerated
 
 
-def _prepare_authoritative_snapshot_paths(
-    staging: Path,
-    authoritative_paths: set[str],
-    *,
-    max_depth: int,
-) -> None:
-    """Remove fresh file-shaped conflicts above server-owned snapshot roots."""
-
-    def remove_entry(path: Path) -> None:
-        try:
-            info = path.lstat()
-        except FileNotFoundError:
-            return
-        if stat.S_ISDIR(info.st_mode):
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-
-    for raw in authoritative_paths:
-        rel = _archive_relpath(raw, max_depth=max_depth)
-        parts = PurePosixPath(rel).parts
-        current = staging
-        for part in parts[:-1]:
-            current /= part
-            try:
-                info = current.lstat()
-            except FileNotFoundError:
-                current.mkdir()
-                continue
-            if stat.S_ISDIR(info.st_mode):
-                continue
-            remove_entry(current)
-            current.mkdir()
-        remove_entry(staging.joinpath(*parts))
-
-
-def _same_fs_object(before: os.stat_result, after: os.stat_result) -> bool:
-    return (
-        before.st_dev,
-        before.st_ino,
-        stat.S_IFMT(before.st_mode),
-    ) == (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode))
-
-
-def _copy_preserved_snapshot_paths(
-    dest: Path,
-    staging: Path,
-    preserve_paths: set[str],
-    *,
-    authoritative_paths: set[str],
-    max_depth: int,
-    max_file_bytes: int,
-) -> None:
-    """Copy unreadable prior paths through no-follow directory descriptors.
-
-    The fresh snapshot wins ordinary unreadable-path conflicts. Server-owned
-    ``authoritative_paths`` instead win at their exact root and at every
-    file-shaped ancestor, while compatible fresh siblings remain. Anchoring
-    traversal at an open destination directory prevents a host-side link swap
-    from redirecting a preservation read outside the last authoritative tree.
-    """
-
-    if not preserve_paths:
-        return
-
-    # Reserve server-owned namespaces even on the first snapshot, when no
-    # prior destination exists to copy. Sandbox bytes must never occupy an
-    # ancestor that would make the host-owned subtree unreachable.
-    _prepare_authoritative_snapshot_paths(
-        staging,
-        authoritative_paths,
-        max_depth=max_depth,
-    )
-
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | os.O_NOFOLLOW
-    file_flags = os.O_RDONLY | os.O_NOFOLLOW
-    try:
-        root_listed = os.stat(dest, follow_symlinks=False)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise WorkspaceArchiveError(f"cannot inspect prior snapshot safely: {exc}") from exc
-    try:
-        root_fd = os.open(dest, directory_flags)
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise WorkspaceArchiveError(f"cannot open prior snapshot safely: {exc}") from exc
-
-    root_opened = os.fstat(root_fd)
-    if not stat.S_ISDIR(root_opened.st_mode) or not _same_fs_object(root_listed, root_opened):
-        os.close(root_fd)
-        raise WorkspaceArchiveError("prior snapshot changed before it could be preserved")
-
-    def _excluded(rel: str) -> bool:
-        parts = PurePosixPath(rel).parts
-        return is_runtime_secret_path(rel) or any(part in _SNAPSHOT_EXCLUDED_DIRS for part in parts)
-
-    def _copy_entry(parent_fd: int, name: str, rel: str, target: Path, depth: int) -> None:
-        if _excluded(rel):
-            return
-        if depth > max_depth:
-            raise WorkspaceArchiveError(
-                f"preserved workspace depth exceeded the {max_depth}-level cap at {rel!r}"
-            )
-        try:
-            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            raise WorkspaceArchiveError(f"cannot inspect preserved path {rel!r}: {exc}") from exc
-
-        if stat.S_ISDIR(info.st_mode):
-            if target.exists() and not target.is_dir():
-                return
-            try:
-                child_fd = os.open(name, directory_flags, dir_fd=parent_fd)
-            except FileNotFoundError:
-                return
-            except OSError as exc:
-                raise WorkspaceArchiveError(
-                    f"cannot open preserved directory {rel!r} safely: {exc}"
-                ) from exc
-            opened = os.fstat(child_fd)
-            if not stat.S_ISDIR(opened.st_mode) or not _same_fs_object(info, opened):
-                os.close(child_fd)
-                raise WorkspaceArchiveError(
-                    f"preserved directory {rel!r} changed before it could be copied"
-                )
-            try:
-                target.mkdir(parents=True, exist_ok=True)
-                for child in sorted(os.listdir(child_fd)):
-                    child_rel = f"{rel}/{child}"
-                    _copy_entry(child_fd, child, child_rel, target / child, depth + 1)
-            finally:
-                os.close(child_fd)
-            return
-
-        if not stat.S_ISREG(info.st_mode) or target.exists():
-            return
-        if info.st_nlink != 1:
-            raise WorkspaceArchiveError(f"preserved file {rel!r} is hardlinked")
-        try:
-            source_fd = os.open(name, file_flags, dir_fd=parent_fd)
-        except FileNotFoundError:
-            return
-        except OSError as exc:
-            raise WorkspaceArchiveError(
-                f"cannot open preserved file {rel!r} safely: {exc}"
-            ) from exc
-        try:
-            opened = os.fstat(source_fd)
-            if not stat.S_ISREG(opened.st_mode) or not _same_fs_object(info, opened):
-                raise WorkspaceArchiveError(
-                    f"preserved file {rel!r} changed before it could be copied"
-                )
-            if opened.st_nlink != 1:
-                raise WorkspaceArchiveError(f"preserved file {rel!r} is hardlinked")
-            if opened.st_size > max_file_bytes:
-                raise WorkspaceArchiveError(
-                    f"preserved file {rel!r} exceeds the {max_file_bytes}-byte cap"
-                )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            copied = 0
-            with os.fdopen(os.dup(source_fd), "rb") as source, target.open("xb") as output:
-                while block := source.read(1024 * 1024):
-                    copied += len(block)
-                    if copied > max_file_bytes:
-                        raise WorkspaceArchiveError(
-                            f"preserved file {rel!r} grew beyond the {max_file_bytes}-byte cap"
-                        )
-                    output.write(block)
-            after = os.fstat(source_fd)
-            before_version = (
-                opened.st_dev,
-                opened.st_ino,
-                opened.st_size,
-                opened.st_mtime_ns,
-            )
-            after_version = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-            if copied != opened.st_size or after_version != before_version:
-                target.unlink(missing_ok=True)
-                raise WorkspaceArchiveError(f"preserved file {rel!r} changed while copied")
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
-        finally:
-            os.close(source_fd)
-
-    try:
-        for raw in sorted(preserve_paths):
-            rel = _archive_relpath(raw, max_depth=max_depth)
-            if _excluded(rel):
-                continue
-            parts = PurePosixPath(rel).parts
-            # A successfully captured file at an ancestor wins over an older
-            # ordinary preserved subtree. Server-owned roots were prepared
-            # above and therefore win this conflict instead.
-            current_target = staging
-            blocked_by_fresh_file = False
-            for part in parts[:-1]:
-                current_target /= part
-                if current_target.exists() and not current_target.is_dir():
-                    blocked_by_fresh_file = True
-                    break
-            if blocked_by_fresh_file:
-                continue
-            parent_fd = root_fd
-            opened_dirs: list[int] = []
-            try:
-                missing = False
-                for part in parts[:-1]:
-                    try:
-                        listed = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
-                        parent_fd = os.open(part, directory_flags, dir_fd=parent_fd)
-                    except FileNotFoundError:
-                        missing = True
-                        break
-                    except OSError as exc:
-                        raise WorkspaceArchiveError(
-                            f"cannot traverse preserved path {rel!r} safely: {exc}"
-                        ) from exc
-                    opened_dirs.append(parent_fd)
-                    opened = os.fstat(parent_fd)
-                    if not stat.S_ISDIR(opened.st_mode) or not _same_fs_object(listed, opened):
-                        raise WorkspaceArchiveError(
-                            f"preserved path {rel!r} changed during traversal"
-                        )
-                if not missing:
-                    _copy_entry(
-                        parent_fd,
-                        parts[-1],
-                        rel,
-                        staging.joinpath(*parts),
-                        len(parts) - 1,
-                    )
-            finally:
-                for opened_fd in reversed(opened_dirs):
-                    os.close(opened_fd)
-    finally:
-        os.close(root_fd)
-
-
 def _archive_relpath(name: str, *, max_depth: int) -> str:
     if "\\" in name:
         raise WorkspaceArchiveError(f"workspace archive member has invalid separator: {name!r}")
@@ -358,80 +153,6 @@ def _archive_relpath(name: str, *, max_depth: int) -> str:
             f"workspace depth exceeded the {max_depth}-level cap at {path.as_posix()!r}"
         )
     return path.as_posix()
-
-
-def _write_bulk_archive(
-    archive_path: Path,
-    staging: Path,
-    *,
-    max_depth: int,
-    max_file_bytes: int,
-) -> tuple[list[str], int, list[str]]:
-    """Validate and materialize a backend archive without trusting tar paths/types."""
-
-    paths: list[str] = []
-    skipped: list[str] = []
-    total_bytes = 0
-    consecutive_failures = 0
-    seen: set[str] = set()
-    try:
-        archive = tarfile.open(archive_path, mode="r:")
-    except (tarfile.TarError, EOFError) as exc:
-        raise WorkspaceArchiveError(f"workspace archive is invalid: {exc}") from exc
-    with archive:
-        for member in archive:
-            rel = _archive_relpath(member.name, max_depth=max_depth)
-            if rel in seen:
-                raise WorkspaceArchiveError(f"workspace archive contains duplicate path {rel!r}")
-            rel_parts = PurePosixPath(rel).parts
-            ancestors = [PurePosixPath(*rel_parts[:i]).as_posix() for i in range(1, len(rel_parts))]
-            if any(ancestor in seen for ancestor in ancestors) or any(
-                prior.startswith(rel + "/") for prior in seen
-            ):
-                raise WorkspaceArchiveError(
-                    f"workspace archive contains conflicting path prefix {rel!r}"
-                )
-            seen.add(rel)
-            if not member.isreg():
-                raise WorkspaceArchiveError(f"workspace archive contains non-regular entry {rel!r}")
-            if any(part in _SNAPSHOT_EXCLUDED_DIRS for part in PurePosixPath(rel).parts):
-                skipped.append(f"{rel}: dependency/cache path excluded")
-                continue
-            if is_runtime_secret_path(rel):
-                skipped.append(f"{rel}: runtime secret path excluded")
-                continue
-            if member.size > max_file_bytes:
-                skipped.append(f"{rel}: {member.size} bytes exceeds the {max_file_bytes}-byte cap")
-                consecutive_failures += 1
-                if consecutive_failures >= _SNAPSHOT_MAX_CONSECUTIVE_FAILURES:
-                    raise WorkspaceArchiveError(
-                        f"{consecutive_failures} consecutive failures (last: {rel!r}: "
-                        "oversized) — transport presumed dead, aborting snapshot"
-                    )
-                continue
-            source = archive.extractfile(member)
-            if source is None:
-                raise WorkspaceArchiveError(f"workspace archive cannot read {rel!r}")
-            data = source.read(max_file_bytes + 1)
-            if len(data) != member.size:
-                raise WorkspaceArchiveError(
-                    f"workspace archive truncated {rel!r}: expected {member.size}, got {len(data)}"
-                )
-            target = staging / rel
-            current = staging
-            for part in PurePosixPath(rel).parts[:-1]:
-                current /= part
-                if current.exists() and not current.is_dir():
-                    current.unlink()
-                current.mkdir(exist_ok=True)
-            if target.is_dir():
-                shutil.rmtree(target)
-            target.write_bytes(data)
-            paths.append(rel)
-            total_bytes += len(data)
-            consecutive_failures = 0
-    paths.sort()
-    return paths, total_bytes, skipped
 
 
 def _publish_snapshot(staging: Path, dest: Path) -> None:
@@ -510,135 +231,18 @@ async def snapshot_workspace(
     normalized_host_owned = {
         _archive_relpath(path, max_depth=max_depth) for path in host_owned_paths
     }
-    paths: list[str] = []
-    skipped: list[str] = []
-    preserve_paths: set[str] = set()
-    total_bytes = 0
-    consecutive_failures = 0
-
-    def _skip(child: str, reason: str) -> None:
-        nonlocal consecutive_failures
-        skipped.append(f"{child}: {reason}")
-        consecutive_failures += 1
-        if consecutive_failures >= _SNAPSHOT_MAX_CONSECUTIVE_FAILURES:
-            raise WorkspaceArchiveError(
-                f"{consecutive_failures} consecutive failures (last: {child!r}: "
-                f"{reason}) — transport presumed dead, aborting snapshot"
-            )
-
-    def _host_owned(child: str) -> str | None:
-        return next(
-            (
-                root
-                for root in normalized_host_owned
-                if child == root or child.startswith(f"{root}/")
-            ),
-            None,
-        )
-
-    async def _walk(rel: str, depth: int) -> None:
-        nonlocal total_bytes, consecutive_failures
-        if depth > max_depth:
-            raise WorkspaceArchiveError(
-                f"workspace depth exceeded the {max_depth}-level cap at {rel!r}"
-            )
-        try:
-            entries = await sandbox.list_dir(rel or ".")
-        except Exception as exc:  # noqa: BLE001 — tolerated per-entry, fatal at root
-            if not rel:
-                raise WorkspaceArchiveError(f"list_dir {rel!r} failed: {exc}") from exc
-            preserve_paths.add(rel)
-            _skip(rel, f"list_dir failed: {exc}")
-            return
-        for name in entries:
-            if name in _SNAPSHOT_EXCLUDED_DIRS:
-                continue  # reproducible dependency/cache tree — never snapshot
-            child = f"{rel}/{name}" if rel else name
-            if owner_root := _host_owned(child):
-                preserve_paths.add(owner_root)
-                continue
-            if is_runtime_secret_path(child):
-                skipped.append(f"{child}: runtime secret path excluded")
-                continue
-            # Distinguish files from directories with a probe: list_dir on a file
-            # raises SandboxError. We try read_file first (the common case is a
-            # file) and fall back to recursing if reads fail with a recognizable
-            # "is a directory" shape. Simpler than a separate stat call.
-            data: bytes | None = None
-            try:
-                data = await sandbox.read_file(child)
-            except Exception as read_exc:  # noqa: BLE001 — could be a directory; try walking
-                try:
-                    await sandbox.list_dir(child)
-                except Exception as exc:  # noqa: BLE001
-                    preserve_paths.add(child)
-                    # Report why the READ failed, not why the directory fallback
-                    # failed. For any ordinary file the fallback always fails with
-                    # ENOTDIR — "Not a directory" is true, useless, and was the only
-                    # thing this message used to say. It masked a 32MB transfer-cap
-                    # EFBIG on a 118MB toolchain binary and a still-unidentified
-                    # failure on a small built CSS file behind one identical
-                    # sentence, and an unreadable entry fails the final seal, so the
-                    # discarded exception was the whole diagnosis.
-                    _skip(
-                        child,
-                        f"could not read ({type(read_exc).__name__}: {read_exc}) "
-                        f"and could not descend ({type(exc).__name__}: {exc})",
-                    )
-                    continue
-                await _walk(child, depth + 1)
-                continue
-            if len(data) > max_file_bytes:
-                _skip(child, f"{len(data)} bytes exceeds the {max_file_bytes}-byte cap")
-                continue
-            target = staging / child
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-            paths.append(child)
-            total_bytes += len(data)
-            consecutive_failures = 0  # a success proves the transport is alive
 
     try:
-        exporter = getattr(sandbox, "export_workspace_archive", None)
-        export_fn = cast(Callable[..., Awaitable[tuple[list[str], list[str]] | None]], exporter)
-        exported = (
-            await export_fn(
-                archive_path,
-                max_depth=max_depth,
-                max_file_bytes=max_file_bytes,
-            )
-            if callable(exporter)
-            else None
+        paths, total_bytes, skipped, preserve_paths = await _collect_snapshot_paths(
+            sandbox,
+            staging,
+            archive_path,
+            max_depth=max_depth,
+            max_file_bytes=max_file_bytes,
+            normalized_host_owned=normalized_host_owned,
         )
-        if exported is None:
-            await _walk("", 0)
-            paths.sort()
-        else:
-            reported_skipped, reported_preserve = exported
-            if not archive_path.is_file() or archive_path.is_symlink():
-                raise WorkspaceArchiveError("workspace archive exporter returned no archive")
-            paths, total_bytes, archive_skipped = _write_bulk_archive(
-                archive_path,
-                staging,
-                max_depth=max_depth,
-                max_file_bytes=max_file_bytes,
-            )
-            skipped.extend(str(item) for item in reported_skipped)
-            skipped.extend(archive_skipped)
-            for raw in reported_preserve:
-                preserve_paths.add(_archive_relpath(str(raw), max_depth=max_depth))
-            archive_path.unlink()
 
-        # Bulk exporters cannot omit host-owned subtrees on demand. Remove any
-        # sandbox copy from the private staging tree before the no-follow host
-        # preservation step restores the authoritative host bytes.
-        for rel in normalized_host_owned:
-            target = staging.joinpath(*PurePosixPath(rel).parts)
-            if target.is_symlink() or target.is_file():
-                target.unlink()
-            elif target.is_dir():
-                shutil.rmtree(target)
-            preserve_paths.add(rel)
+        _discard_sandbox_copies_of_host_owned_paths(staging, normalized_host_owned, preserve_paths)
 
         _copy_preserved_snapshot_paths(
             dest,
@@ -650,14 +254,7 @@ async def snapshot_workspace(
         )
         # Report the tree that will actually be published, including preserved
         # host-owned files and excluding any discarded sandbox copies.
-        published_files = sorted(
-            path for path in staging.rglob("*") if path.is_file() and not path.is_symlink()
-        )
-        paths = [path.relative_to(staging).as_posix() for path in published_files]
-        total_bytes = sum(path.stat().st_size for path in published_files)
-        for directory in sorted((p for p in staging.rglob("*") if p.is_dir()), reverse=True):
-            with contextlib.suppress(OSError):
-                directory.rmdir()
+        paths, total_bytes = _finalize_staged_tree(staging)
         _publish_snapshot(staging, dest)
         return SnapshotResult(
             file_count=len(paths), total_bytes=total_bytes, paths=paths, skipped=skipped
