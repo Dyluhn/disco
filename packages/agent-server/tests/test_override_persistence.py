@@ -42,7 +42,7 @@ def test_no_db_path_stays_in_memory_only(tmp_path, monkeypatch):
     )
     rt.set_model_override("conv_x", "some-model")
     assert rt._settings._get_model_override("conv_x") == "some-model"
-    assert rt._settings._override_path == ""
+    assert rt._settings.model_binding._override_path == ""
 
 
 class _FakeExecutor:

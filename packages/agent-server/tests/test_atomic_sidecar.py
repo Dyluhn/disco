@@ -77,7 +77,7 @@ def test_save_preserves_existing_file_on_failure(
     rt = _new_runtime(tmp_path, monkeypatch)
     owner_attr = {
         "_autonomous_path": "_settings._autonomous_path",
-        "_override_path": "_settings._override_path",
+        "_override_path": "_settings.model_binding._override_path",
         "_surface_path": "_settings._surface_settings._path",
     }[sidecar_attr]
     path = attrgetter(owner_attr)(rt)
@@ -154,7 +154,7 @@ def test_save_surfaces_succeeds_on_happy_path(tmp_path, monkeypatch):
 def test_save_overrides_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
     rt.set_model_override("conv-X", "anthropic/claude-3-haiku")
-    with open(rt._settings._override_path) as f:
+    with open(rt._settings.model_binding._override_path) as f:
         data = json.load(f)
     assert data == {"conv-X": "anthropic/claude-3-haiku"}
 

@@ -212,7 +212,7 @@ async def test_apply_settings_change_model_override_on_pristine(tmp_path, monkey
         model_override="or-gpt-oss-120b",
     )
     assert ok is True
-    assert rt._settings._model_overrides.get("c1") == "or-gpt-oss-120b"
+    assert rt._settings.model_binding._model_overrides.get("c1") == "or-gpt-oss-120b"
 
 
 async def test_apply_settings_change_returns_false_when_loop_active(tmp_path, monkeypatch):
@@ -232,10 +232,10 @@ async def test_apply_settings_change_returns_false_after_running_event(tmp_path,
     rt = _rt(tmp_path, monkeypatch)
     rt._store.create_conversation("c1")
     await rt._store.append("c1", StatusEvent(status=ConversationStatus.RUNNING))
-    rt._settings._model_overrides["c1"] = "old-model"
+    rt._settings.model_binding._model_overrides["c1"] = "old-model"
     ok = await rt._settings.apply_settings_change("c1", model_override="new-model")
     assert ok is False
-    assert rt._settings._model_overrides.get("c1") == "old-model"  # unmutated
+    assert rt._settings.model_binding._model_overrides.get("c1") == "old-model"  # unmutated
 
 
 async def test_apply_settings_change_pristine_after_uploads(tmp_path, monkeypatch):
@@ -294,7 +294,7 @@ async def test_patch_blocked_by_loop_composed_during_pristine_await(tmp_path, mo
         model_override="driver-local",
     )
     assert ok is False  # the final guard caught the loop composed during the await
-    assert "c1" not in rt._settings._model_overrides  # settings left UNMUTATED
+    assert "c1" not in rt._settings.model_binding._model_overrides  # settings left UNMUTATED
 
 
 async def test_patch_and_kick_no_deadlock(tmp_path, monkeypatch):
@@ -431,12 +431,12 @@ async def test_patch_route_409_after_running_event(tmp_path, monkeypatch):
     client = TestClient(app)
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
-    rt._settings._model_overrides[cid] = "old-model"
+    rt._settings.model_binding._model_overrides[cid] = "old-model"
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
     r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "new-model"})
     assert r.status_code == 409
-    assert rt._settings._model_overrides.get(cid) == "old-model"  # unmutated
+    assert rt._settings.model_binding._model_overrides.get(cid) == "old-model"  # unmutated
 
 
 # ── STATE-AWARE gate: terminal-state model swap (errored/finished/stuck/paused) ──
@@ -529,7 +529,7 @@ async def test_apply_change_on_errored_persists_and_evicts(tmp_path, monkeypatch
     re-resolves. The live sandbox is re-parked (preserved), not destroyed."""
     rt = _rt(tmp_path, monkeypatch)
     await _seed_terminal(rt, "c1", ConversationStatus.ERROR)
-    rt._settings._model_overrides["c1"] = "old-model"
+    rt._settings.model_binding._model_overrides["c1"] = "old-model"
     # Cached loop + executor from the failed run; the executor holds a live sandbox.
     sentinel_sandbox = object()
     fake_executor = MagicMock()
@@ -543,7 +543,7 @@ async def test_apply_change_on_errored_persists_and_evicts(tmp_path, monkeypatch
         model_override="new-model",
     )
     assert ok is True
-    assert rt._settings._model_overrides.get("c1") == "new-model"  # persisted
+    assert rt._settings.model_binding._model_overrides.get("c1") == "new-model"  # persisted
     assert rt._loop_registry.loop("c1") is None  # old loop evicted
     assert not rt._run_resources.has_executor("c1")  # old executor evicted
     # Sandbox preserved (re-parked) so the rebuilt loop adopts the SAME workspace.
@@ -561,14 +561,14 @@ async def test_apply_change_on_finished_reresolves_driver(tmp_path, monkeypatch)
     cfg = rt._config_store.load()
     old = cfg.assignments.get(ModelRole.AGENT_DRIVER)
     new = next(k for k in cfg.models if k != old)
-    rt._settings._model_overrides["c1"] = old
+    rt._settings.model_binding._model_overrides["c1"] = old
     rt._loop_registry.bind("c1", MagicMock())
 
     ok = await rt._settings.apply_settings_change("c1", model_override=new)
     assert ok is True
     assert rt._loop_registry.loop("c1") is None
     # The next compose resolves AGENT_DRIVER to the NEW model (not the old one).
-    router = rt._drivers.router(pick=rt._settings._model_overrides["c1"])
+    router = rt._drivers.router(pick=rt._settings.model_binding._model_overrides["c1"])
     assert router._config.assignments[ModelRole.AGENT_DRIVER] == new
 
 
@@ -618,7 +618,7 @@ async def test_explicit_null_on_terminal_clears_override_to_default(tmp_path, mo
     # default_model fallback) — not necessarily an explicit assignments entry.
     default = cfg.model_for(ModelRole.AGENT_DRIVER)
     model_a = next(k for k in cfg.models if k != default)
-    rt._settings._model_overrides["c1"] = model_a
+    rt._settings.model_binding._model_overrides["c1"] = model_a
     rt._loop_registry.bind("c1", MagicMock())
 
     # The PATCH route passes model_provided=True for an explicit null (reset to default).
@@ -628,11 +628,11 @@ async def test_explicit_null_on_terminal_clears_override_to_default(tmp_path, mo
         model_provided=True,
     )
     assert ok is True
-    assert "c1" not in rt._settings._model_overrides  # CLEARED (not left at model_a)
+    assert "c1" not in rt._settings.model_binding._model_overrides  # CLEARED (not left at model_a)
     assert rt._loop_registry.loop("c1") is None  # evicted → next kick re-resolves
     # The next compose resolves AGENT_DRIVER to the DEFAULT, not the prior explicit A.
     resolved = rt._drivers.router(
-        pick=rt._settings._model_overrides.get("c1")
+        pick=rt._settings.model_binding._model_overrides.get("c1")
     )._config.model_for(ModelRole.AGENT_DRIVER)
     assert resolved == default
     assert resolved != model_a
@@ -643,7 +643,7 @@ async def test_untouched_terminal_leaves_override(tmp_path, monkeypatch):
     False) must LEAVE the conversation's model A unchanged — no clear, no evict."""
     rt = _rt(tmp_path, monkeypatch)
     await _seed_terminal(rt, "c1", ConversationStatus.FINISHED)
-    rt._settings._model_overrides["c1"] = "model-a"
+    rt._settings.model_binding._model_overrides["c1"] = "model-a"
     sentinel_loop = MagicMock()
     rt._loop_registry.bind("c1", sentinel_loop)
 
@@ -651,7 +651,7 @@ async def test_untouched_terminal_leaves_override(tmp_path, monkeypatch):
     # NOT evicted.
     ok = await rt._settings.apply_settings_change("c1", model_provided=False)
     assert ok is True
-    assert rt._settings._model_overrides.get("c1") == "model-a"  # left as-is
+    assert rt._settings.model_binding._model_overrides.get("c1") == "model-a"  # left as-is
     assert rt._loop_registry.loop("c1") is sentinel_loop  # not evicted
 
 
@@ -662,7 +662,7 @@ async def test_explicit_null_pre_kick_seeds_sticky_not_clear(tmp_path, monkeypat
     rt._store.create_conversation("c1")
     cfg = rt._config_store.load()
     sticky = next(iter(cfg.models))  # any valid catalogue key
-    rt._settings.set_last_selected_model(sticky)
+    rt._settings.model_binding.set_last_selected_model(sticky)
 
     ok = await rt._settings.apply_settings_change(
         "c1",
@@ -670,7 +670,7 @@ async def test_explicit_null_pre_kick_seeds_sticky_not_clear(tmp_path, monkeypat
         model_provided=True,
     )
     assert ok is True
-    assert rt._settings._model_overrides.get("c1") == sticky
+    assert rt._settings.model_binding._model_overrides.get("c1") == sticky
 
 
 async def test_patch_route_explicit_null_resets_terminal_to_default(tmp_path, monkeypatch):
@@ -687,12 +687,12 @@ async def test_patch_route_explicit_null_resets_terminal_to_default(tmp_path, mo
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
     await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
-    rt._settings._model_overrides[cid] = "explicit-model-a"
+    rt._settings.model_binding._model_overrides[cid] = "explicit-model-a"
 
     r = client.patch(f"/conversations/{cid}/settings", json={"model_override": None})
     assert r.status_code == 200
     assert r.json()["model_override"] is None  # cleared
-    assert cid not in rt._settings._model_overrides
+    assert cid not in rt._settings.model_binding._model_overrides
     sr = client.get(f"/conversations/{cid}/state")
     assert sr.json()["model_override"] is None
 
@@ -711,11 +711,11 @@ async def test_patch_route_assist_only_leaves_terminal_model(tmp_path, monkeypat
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
     await _seed_terminal(rt, cid, ConversationStatus.FINISHED)
-    rt._settings._model_overrides[cid] = "model-a"
+    rt._settings.model_binding._model_overrides[cid] = "model-a"
 
     r = client.patch(f"/conversations/{cid}/settings", json={"assist": True})
     assert r.status_code == 200
-    assert rt._settings._model_overrides.get(cid) == "model-a"
+    assert rt._settings.model_binding._model_overrides.get(cid) == "model-a"
     assert rt._settings.is_assist(cid) is True
 
 
@@ -782,12 +782,12 @@ async def test_patch_route_ok_on_errored_conversation(tmp_path, monkeypatch):
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
     await _seed_terminal(rt, cid, ConversationStatus.ERROR)
-    rt._settings._model_overrides[cid] = "old-model"
+    rt._settings.model_binding._model_overrides[cid] = "old-model"
 
     r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "new-model"})
     assert r.status_code == 200
     assert r.json()["model_override"] == "new-model"
-    assert rt._settings._model_overrides.get(cid) == "new-model"
+    assert rt._settings.model_binding._model_overrides.get(cid) == "new-model"
     # /state overlays the pinned model so the picker can reflect it on resume.
     sr = client.get(f"/conversations/{cid}/state")
     assert sr.json()["model_override"] == "new-model"
@@ -805,12 +805,12 @@ async def test_patch_route_409_while_running_still_blocks(tmp_path, monkeypatch)
     client = TestClient(app)
 
     cid = client.post("/conversations", json={"surface": "build"}).json()["conversation_id"]
-    rt._settings._model_overrides[cid] = "old-model"
+    rt._settings.model_binding._model_overrides[cid] = "old-model"
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
     r = client.patch(f"/conversations/{cid}/settings", json={"model_override": "new-model"})
     assert r.status_code == 409
-    assert rt._settings._model_overrides.get(cid) == "old-model"  # unmutated
+    assert rt._settings.model_binding._model_overrides.get(cid) == "old-model"  # unmutated
 
 
 async def test_patch_route_ok_after_uploads_before_kick(tmp_path, monkeypatch):

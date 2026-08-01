@@ -26,6 +26,7 @@ from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectStore, StorageStatus
 
+from .model_binding_settings import ModelBindingSettings
 from .run_registry import LoopRegistry, RunRegistry, RunResourceRegistry
 
 # Terminal / parked statuses where a deliberate model (or assist) swap is COHERENT:
@@ -320,13 +321,15 @@ class RuntimeSettings:
         )
         self._mode_settings = _RuntimeModeSettings(store, appkit_ejections)
 
-        self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._autonomous_path = f"{db_path}.autonomous.json" if db_path else ""
         self._assist_path = f"{db_path}.assist.json" if db_path else ""
         self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
-        self._last_model_path = f"{db_path}.last_model.json" if db_path else ""
 
-        self._model_overrides = self._load_overrides()
+        self.model_binding = ModelBindingSettings(
+            db_path=db_path,
+            config_store=config_store,
+            model_bindings=model_bindings,
+        )
         self._autonomous = self._load_autonomous()
         self._assist = self._load_assist()
         self._quiet = self._load_quiet()
@@ -337,10 +340,14 @@ class RuntimeSettings:
         self._settings_locks: dict[str, asyncio.Lock] = {}
 
     def _get_model_override(self, conversation_id: str) -> str | None:
-        return self._model_overrides.get(conversation_id)
+        # Thin delegator — the model-binding authority (its own sidecar, its own
+        # lock discipline) lives on ModelBindingSettings. Kept here (private, zero
+        # metric cost) because deep-research reaches it via a TYPE_CHECKING-only
+        # import that no lane-side gate can see break.
+        return self.model_binding._get_model_override(conversation_id)
 
     def _forget(self, conversation_id: str) -> None:
-        self._model_overrides.pop(conversation_id, None)
+        self.model_binding.forget(conversation_id)
         self._autonomous.pop(conversation_id, None)
         self._assist.pop(conversation_id, None)
         self._quiet.pop(conversation_id, None)
@@ -349,103 +356,17 @@ class RuntimeSettings:
         self._mode_settings.forget(conversation_id)
 
     def _evict_model_binding(self, conversation_id: str) -> None:
-        self._model_bindings.evict_for_model_change(conversation_id)
+        self.model_binding._evict_model_binding(conversation_id)
 
-    # ---- driver model override ---------------------------------------------
-
-    def _load_overrides(self) -> dict[str, str]:
-        if self._override_path and os.path.exists(self._override_path):
-            try:
-                with open(self._override_path) as f:
-                    data = json.load(f)
-                return {str(k): str(v) for k, v in data.items() if v}
-            except Exception:  # noqa: BLE001 — corrupt/missing → start empty, never crash
-                return {}
-        return {}
-
-    def _save_overrides(self) -> None:
-        if not self._override_path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(self._override_path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump(self._model_overrides, f)
-                tmp_name = f.name
-            os.replace(tmp_name, self._override_path)
-        except Exception:  # noqa: BLE001 — persistence is best-effort, never fatal
-            pass
-
-    def _set_model_override_unlocked(self, conversation_id: str, model_id: str | None) -> None:
-        """Inner setter — does NOT acquire the per-cid lock; call ONLY from
-        apply_settings_change (which holds the lock) or from set_model_override
-        (non-route, non-concurrent callers that don't need the atomic gate)."""
-        if model_id:
-            self._model_overrides[conversation_id] = model_id
-            self._save_overrides()
-            # P3: also persist as the last-selected model so new conversations
-            # seed from it by default (server-side, no localStorage).
-            self.set_last_selected_model(model_id)
-
-    def _clear_model_override_unlocked(self, conversation_id: str) -> None:
-        """Explicit RESET — drop the per-conversation override so the next kick composes
-        the SERVER-DEFAULT driver. Does NOT touch last-selected (the global P3 sticky is a
-        convenience for NEW conversations, not this one's pin). Inner (non-locking) form;
-        call ONLY from apply_settings_change (which holds the per-cid lock)."""
-        if self._model_overrides.pop(conversation_id, None) is not None:
-            self._save_overrides()
-
-    def _resolve_sticky_model(self) -> str | None:
-        """The validated last-selected model (P3 sticky), or None. Mirrors the cfg guard in
-        conversations._resolve_model so a stale/deleted sticky key never composes — used to
-        seed an explicit-null model_override on the PRISTINE pre-kick path (NOT terminal)."""
-        last = self.get_last_selected_model()
-        if last:
-            cfg = self._config_store.load()
-            if last in cfg.models:
-                return last
-        return None
+    # ---- driver model override (ModelBindingSettings owns persistence) -----
 
     def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
-        """Pin the driver model for a conversation (the Build chat model picker). The id
-        is a catalogue KEY; RouterAgent reassigns AGENT_DRIVER to it. Must be set before
-        the loop is built (at create time). PERSISTED (B0) so a restart keeps the pick.
-
-        Non-route callers (create-conversation, tests) use this directly; the PATCH route
-        uses apply_settings_change so the atomic pristine check covers the change."""
-        self._set_model_override_unlocked(conversation_id, model_id)
-
-    # ---- last-selected model (P3) ------------------------------------------
-
-    def get_last_selected_model(self) -> str | None:
-        """Return the last globally-picked driver model, or None if no pick has
-        ever been made. Server-side, per-owner sidecar (B0 pattern)."""
-        path = self._last_model_path
-        if not path or not os.path.exists(path):
-            return None
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            return data.get("model") or None
-        except Exception:  # noqa: BLE001 — corrupt/missing → None, never crash
-            return None
-
-    def set_last_selected_model(self, model_id: str | None) -> None:
-        """Persist the last-picked driver model (atomic temp-file replace, B0 pattern)."""
-        path = self._last_model_path
-        if not path:
-            return
-        import tempfile
-
-        try:
-            dir_name = os.path.dirname(path)
-            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
-                json.dump({"model": model_id}, f)
-                tmp_name = f.name
-            os.replace(tmp_name, path)
-        except Exception:  # noqa: BLE001 — best-effort, never fatal
-            pass
+        """Pin the driver model for a conversation. Thin public delegator — kept on
+        the class (still counts toward the width cap) because
+        RecurringScheduleControlAdapter (workflow_runtime_ports.py) calls it on a
+        RuntimeSettings-typed reference. See ModelBindingSettings.set_model_override
+        for the real authority and full contract."""
+        self.model_binding.set_model_override(conversation_id, model_id)
 
     # ---- surface map -------------------------------------------------------
 
@@ -614,7 +535,7 @@ class RuntimeSettings:
         override = (
             compose_model_key
             if compose_model_key is not None
-            else self._model_overrides.get(conversation_id)
+            else self._get_model_override(conversation_id)
         )
         # This is a metadata read used by every /state response (the Assist badge).
         # Building a live router here needlessly resolves/decrypts every provider and
@@ -649,7 +570,7 @@ class RuntimeSettings:
         override = (
             compose_model_key
             if compose_model_key is not None
-            else self._model_overrides.get(conversation_id)
+            else self._get_model_override(conversation_id)
         )
         # Tool-context metadata resolution needs the selected endpoint, not a live
         # provider object.  Avoid provider construction on read-only setup paths.
@@ -803,15 +724,15 @@ class RuntimeSettings:
             if model_provided:
                 if model_override:
                     # Pin a concrete catalogue key.
-                    self._set_model_override_unlocked(conversation_id, model_override)
+                    self.model_binding._set_model_override_unlocked(conversation_id, model_override)
                 elif terminal:
                     # Explicit DEFAULT (null) on a terminal conversation = reset-to-default.
-                    self._clear_model_override_unlocked(conversation_id)
+                    self.model_binding._clear_model_override_unlocked(conversation_id)
                 else:
                     # Explicit null pre-kick = P3 sticky-seed convenience (NOT a clear).
-                    sticky = self._resolve_sticky_model()
+                    sticky = self.model_binding._resolve_sticky_model()
                     if sticky:
-                        self._set_model_override_unlocked(conversation_id, sticky)
+                        self.model_binding._set_model_override_unlocked(conversation_id, sticky)
             if assist is not None:
                 self._set_assist_unlocked(conversation_id, assist)
             # Terminal swap: drop the loop/executor bound to the OLD model so the next

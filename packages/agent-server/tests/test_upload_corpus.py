@@ -241,7 +241,9 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime = mock.MagicMock()
     runtime._dr = SimpleNamespace(research_stream=research_stream)
     runtime.research_stream = research_stream
-    runtime._settings = SimpleNamespace(get_last_selected_model=mock.MagicMock(return_value=None))
+    runtime._settings = SimpleNamespace(
+        model_binding=SimpleNamespace(get_last_selected_model=mock.MagicMock(return_value=None))
+    )
     runtime._mcp = SimpleNamespace(
         _start_mcp_pool=mock.AsyncMock(),
         _close_mcp_pool=mock.AsyncMock(),

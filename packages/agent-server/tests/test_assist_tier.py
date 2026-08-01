@@ -207,7 +207,7 @@ def test_root5_effective_driver_endpoint_honors_override():
     config = MagicMock()
     rt._config_store.load = MagicMock(return_value=config)
     rt._router_now = MagicMock(side_effect=AssertionError("metadata read wired providers"))
-    rt._settings._model_overrides = {"c1": "or-deepseek"}
+    rt._settings.model_binding._model_overrides = {"c1": "or-deepseek"}
     entry = ModelEntry(
         model_id="deepseek/deepseek-v4-pro",
         provider="openrouter",

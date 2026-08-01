@@ -150,12 +150,12 @@ def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> Non
 
 def get_last_selected_model(self) -> str | None:
 
-    return self._settings.get_last_selected_model()
+    return self._settings.model_binding.get_last_selected_model()
 
 
 def set_last_selected_model(self, model_id: str | None) -> None:
 
-    self._settings.set_last_selected_model(model_id)
+    self._settings.model_binding.set_last_selected_model(model_id)
 
 
 def driver_models(self) -> dict[str, Any]:
