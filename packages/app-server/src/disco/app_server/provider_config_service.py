@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from disco.core.llm import ConfigStore, SecretStore
-from disco.core.llm.config import ProviderSettings
+from disco.core.llm.config import ProviderSettings, RouterConfig
 
 from . import origin_approval_wiring as _origin_wiring
 from .config.dtos import (
@@ -24,6 +24,70 @@ from .config.dtos import (
     ProviderPatch,
 )
 from .config.mappers import _models_from
+
+
+def _provider_already_has_model(
+    cfg: RouterConfig, provider: ProviderSettings, model_id: str
+) -> bool:
+    return any(
+        entry.api_key_env == provider.secret_name and entry.model_id == model_id
+        for entry in cfg.models.values()
+    )
+
+
+def _resolved_label(
+    body: ProviderEnableBody, catalogue_model: ProviderCatalogueModelDTO | None
+) -> str | None:
+    return body.label or (catalogue_model.label if catalogue_model else None)
+
+
+def _resolved_context_window(
+    body: ProviderEnableBody, catalogue_model: ProviderCatalogueModelDTO | None
+) -> int | None:
+    if body.context_window is not None:
+        return body.context_window
+    return catalogue_model.context_window if catalogue_model else None
+
+
+def _resolved_max_output_tokens(
+    body: ProviderEnableBody, catalogue_model: ProviderCatalogueModelDTO | None
+) -> int | None:
+    if body.max_output_tokens is not None:
+        return body.max_output_tokens
+    return catalogue_model.max_output_tokens if catalogue_model else None
+
+
+def _resolved_capabilities(
+    catalogue_model: ProviderCatalogueModelDTO | None, context_window: int
+) -> list[str]:
+    # Capabilities: provider catalogues rarely report them (Go reports none),
+    # and an EMPTY set silently disqualifies the model from the Build/agent
+    # driver pickers (tool-calling gate) — the enable "works" but the model
+    # only surfaces in capability-agnostic roles, which reads as broken.
+    # Default modern-serving table stakes (tool_calling + json_mode; +
+    # long_context per its >~64k semantics); a genuinely tool-less model
+    # fails loudly at run time, which is diagnosable — invisibility is not.
+    # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
+    capabilities = catalogue_model.capabilities if catalogue_model else []
+    if capabilities:
+        return capabilities
+    long_context = ["long_context"] if context_window >= 65536 else []
+    return ["tool_calling", "json_mode"] + long_context
+
+
+def _resolved_prices(
+    catalogue_model: ProviderCatalogueModelDTO | None,
+) -> tuple[float, float, bool]:
+    # Pricing: only claim a pay model the catalogue actually reported.
+    # Absent pricing → "unknown" (rendered as such), never a fake Free.
+    price_in = catalogue_model.price_in_per_m if catalogue_model is not None else None
+    price_out = catalogue_model.price_out_per_m if catalogue_model is not None else None
+    prices_known = price_in is not None or price_out is not None
+    return (
+        price_in if price_in is not None else 0.0,
+        price_out if price_out is not None else 0.0,
+        prices_known,
+    )
 
 
 class ProviderInUseError(Exception):
@@ -213,69 +277,32 @@ class ProviderConfigService:
         if not model_id:
             raise ValueError("model_id is empty")
         cfg = self._store.load()
-        for entry in cfg.models.values():
-            if entry.api_key_env == provider.secret_name and entry.model_id == model_id:
-                return _models_from(cfg)
+        if _provider_already_has_model(cfg, provider, model_id):
+            return _models_from(cfg)
         catalogue_id = self._unique_provider_catalogue_id(
-            provider.id,
-            model_id,
-            body.label or (catalogue_model.label if catalogue_model else None),
+            provider.id, model_id, _resolved_label(body, catalogue_model)
         )
         # Context: NEVER silently default — context_window drives the engine's
         # context budgeting, so a wrong-low guess (the old 8192) over-snips every
         # build on a big model. The caller must supply it when the provider's
         # catalogue doesn't report one.
-        context_window = (
-            body.context_window
-            if body.context_window is not None
-            else (catalogue_model.context_window if catalogue_model else None)
-        )
+        context_window = _resolved_context_window(body, catalogue_model)
         if context_window is None:
             raise ValueError(
                 f"context window required: {provider.label} does not report context "
                 "windows — pass context_window with the model's real limit"
             )
-        # Pricing: only claim a pay model the catalogue actually reported.
-        # Absent pricing → "unknown" (rendered as such), never a fake Free.
-        prices_known = catalogue_model is not None and (
-            catalogue_model.price_in_per_m is not None
-            or catalogue_model.price_out_per_m is not None
-        )
-        # Capabilities: provider catalogues rarely report them (Go reports none),
-        # and an EMPTY set silently disqualifies the model from the Build/agent
-        # driver pickers (tool-calling gate) — the enable "works" but the model
-        # only surfaces in capability-agnostic roles, which reads as broken.
-        # Default modern-serving table stakes (tool_calling + json_mode; +
-        # long_context per its >~64k semantics); a genuinely tool-less model
-        # fails loudly at run time, which is diagnosable — invisibility is not.
-        # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
-        capabilities = catalogue_model.capabilities if catalogue_model else []
-        if not capabilities:
-            capabilities = ["tool_calling", "json_mode"] + (
-                ["long_context"] if context_window >= 65536 else []
-            )
+        price_in, price_out, prices_known = _resolved_prices(catalogue_model)
         upsert = ModelUpsert(
             id=catalogue_id,
             model_id=model_id,
             base_url=provider.base_url,
             api_key_env=provider.secret_name,
             context_window=context_window,
-            max_output_tokens=(
-                body.max_output_tokens
-                if body.max_output_tokens is not None
-                else (catalogue_model.max_output_tokens if catalogue_model else None)
-            ),
-            capabilities=capabilities,
-            price_in_per_m=(
-                catalogue_model.price_in_per_m
-                if catalogue_model is not None and catalogue_model.price_in_per_m is not None
-                else 0.0
-            ),
-            price_out_per_m=(
-                catalogue_model.price_out_per_m
-                if catalogue_model is not None and catalogue_model.price_out_per_m is not None
-                else 0.0
-            ),
+            max_output_tokens=_resolved_max_output_tokens(body, catalogue_model),
+            capabilities=_resolved_capabilities(catalogue_model, context_window),
+            price_in_per_m=price_in,
+            price_out_per_m=price_out,
             pricing_mode="metered" if prices_known else "unknown",
         )
         return self._add_model(upsert)

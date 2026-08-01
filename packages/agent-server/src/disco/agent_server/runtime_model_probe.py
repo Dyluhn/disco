@@ -27,6 +27,57 @@ def _model_label(model_id: str) -> str:
     return base
 
 
+def _fetch_props(base_url: str, api_key: str | None) -> dict[str, Any] | None:
+    """BLOCKING GET {base_url}/props. Returns the parsed JSON body on a 200
+    response, else None (any network error or non-200 status). Never raises."""
+    try:
+        import httpx
+
+        root = base_url.rstrip("/")
+        if root.endswith("/v1"):
+            root = root[:-3]
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        r = httpx.get(
+            f"{root}/props",
+            headers=headers,
+            timeout=2.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
+        pass
+    return None
+
+
+def _parse_props_payload(d: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Extract (n_ctx, model_id) from a parsed `/props` JSON body."""
+    gen = d.get("default_generation_settings") or {}
+    n = gen.get("n_ctx")
+    # bool is a subclass of int — exclude it so a stray {"n_ctx": true} can't
+    # masquerade as a context window of 1.
+    n_ctx = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else None
+    mp = d.get("model_path") or d.get("model")
+    model_id = mp if isinstance(mp, str) and mp.strip() else None
+    return n_ctx, model_id
+
+
+def _cache_props_result(base_url: str, model_id: str | None, n_ctx: int | None) -> None:
+    """Cache only a SUCCESSFUL /props probe — so a server that was down at first
+    call is picked up once it comes online (self-healing), instead of being pinned
+    to the static fallback for the agent-server's whole lifetime. Store the
+    monotonic ts alongside the value so `_probe_live_model` can apply a TTL and
+    re-probe on a model hot-swap (T6/E2). Caches the SERVER-WIDE props fields
+    only — a model-specific /models n_ctx must never leak into this
+    base_url-keyed cache."""
+    if model_id is not None or n_ctx is not None:
+        _LIVE_MODEL_PROBE_CACHE[base_url] = (
+            {"model_id": model_id, "n_ctx": n_ctx},
+            time.monotonic(),
+        )
+
+
 def _do_live_model_probe(
     base_url: str, api_key: str | None, model_id: str | None = None
 ) -> dict[str, Any]:
@@ -43,51 +94,76 @@ def _do_live_model_probe(
         It is NEVER folded into the base_url-keyed props cache: that would pin one
         model's window onto every model at the same base_url (the codex P1 bug)."""
     out: dict[str, Any] = {"model_id": None, "n_ctx": None}
+    payload = _fetch_props(base_url, api_key)
+    if payload is not None:
+        out["n_ctx"], out["model_id"] = _parse_props_payload(payload)
+    props_n_ctx = out["n_ctx"]
+    _cache_props_result(base_url, out["model_id"], props_n_ctx)
+    # No server-wide n_ctx from /props → fall back to the model-specific /models
+    # context_length (fills _MODELS_CTX_CACHE; the lookup is by model_id).
+    if props_n_ctx is None and model_id:
+        out["n_ctx"] = _models_context_length(base_url, api_key, model_id)
+    return out
+
+
+def _cached_context_map(base_url: str) -> dict[str, int] | None:
+    """The `{id: context_length}` map for base_url, if cached and still fresh
+    (within `_PROBE_TTL_S`); else None."""
+    cached = _MODELS_CTX_CACHE.get(base_url)
+    if not (isinstance(cached, tuple) and len(cached) == 2):
+        return None
+    cmap, ts = cached
+    if (time.monotonic() - ts) <= _PROBE_TTL_S:
+        return cmap
+    return None
+
+
+def _fetch_models_response(base_url: str, api_key: str | None) -> tuple[bool, Any]:
+    """BLOCKING GET {base_url}/models — the OpenAI-compatible listing under the
+    same base (NOT root — unlike /props, do NOT strip a trailing /v1): OpenRouter
+    serves it at /api/v1/models, llama.cpp + MiniMax at /v1/models.
+
+    Returns (fetched, body): `fetched` is True as soon as an HTTP 200 comes back
+    — even if the body then fails to decode as JSON — matching the original
+    probe's "answered but empty" semantics so a malformed body is negative-cached
+    rather than retried every call. `body` is the parsed JSON, or None when
+    unavailable. Never raises."""
+    fetched = False
     try:
         import httpx
 
         root = base_url.rstrip("/")
-        if root.endswith("/v1"):
-            root = root[:-3]
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         r = httpx.get(
-            f"{root}/props",
+            f"{root}/models",
             headers=headers,
             timeout=2.0,
             follow_redirects=False,
             trust_env=False,
         )
         if r.status_code == 200:
-            d = r.json()
-            gen = d.get("default_generation_settings") or {}
-            n = gen.get("n_ctx")
-            # bool is a subclass of int — exclude it so a stray {"n_ctx": true}
-            # can't masquerade as a context window of 1.
-            if isinstance(n, int) and not isinstance(n, bool) and n > 0:
-                out["n_ctx"] = n
-            mp = d.get("model_path") or d.get("model")
-            if isinstance(mp, str) and mp.strip():
-                out["model_id"] = mp
+            fetched = True
+            return fetched, r.json()
     except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
         pass
-    # Cache only a SUCCESSFUL /props probe — so a server that was down at first call
-    # is picked up once it comes online (self-healing), instead of being pinned to
-    # the static fallback for the agent-server's whole lifetime. Store the monotonic
-    # ts alongside the value so _probe_live_model can apply a TTL and re-probe on a
-    # model hot-swap (T6/E2). Cache a COPY of the SERVER-WIDE props fields only: `out`
-    # may be augmented with a model-specific /models n_ctx below, which must not leak
-    # into this base_url-keyed cache.
-    props_n_ctx = out["n_ctx"]
-    if out["model_id"] is not None or props_n_ctx is not None:
-        _LIVE_MODEL_PROBE_CACHE[base_url] = (
-            {"model_id": out["model_id"], "n_ctx": props_n_ctx},
-            time.monotonic(),
-        )
-    # No server-wide n_ctx from /props → fall back to the model-specific /models
-    # context_length (fills _MODELS_CTX_CACHE; the lookup is by model_id).
-    if props_n_ctx is None and model_id:
-        out["n_ctx"] = _models_context_length(base_url, api_key, model_id)
-    return out
+    return fetched, None
+
+
+def _parse_models_context_map(d: Any) -> dict[str, int]:
+    """Build the `{id: context_length}` map from a parsed `/models` listing body."""
+    cmap: dict[str, int] = {}
+    entries = d.get("data") if isinstance(d, dict) else d
+    if not isinstance(entries, list):
+        return cmap
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        mid = e.get("id")
+        cl = e.get("context_length")
+        # bool is an int subclass — exclude it (see /props above).
+        if isinstance(mid, str) and isinstance(cl, int) and not isinstance(cl, bool) and cl > 0:
+            cmap[mid] = cl
+    return cmap
 
 
 def _models_context_length(base_url: str, api_key: str | None, model_id: str | None) -> int | None:
@@ -104,48 +180,11 @@ def _models_context_length(base_url: str, api_key: str | None, model_id: str | N
     uncached so it self-heals. Never raises."""
     if not base_url or not model_id:
         return None
-    cached = _MODELS_CTX_CACHE.get(base_url)
-    if isinstance(cached, tuple) and len(cached) == 2:
-        cmap, ts = cached
-        if (time.monotonic() - ts) <= _PROBE_TTL_S:
-            return cmap.get(model_id)
-    cmap: dict[str, int] = {}
-    fetched = False
-    try:
-        import httpx
-
-        # /models is the OpenAI-compatible listing under the same base (NOT root —
-        # unlike /props, do NOT strip a trailing /v1): OpenRouter serves it at
-        # /api/v1/models, llama.cpp + MiniMax at /v1/models.
-        root = base_url.rstrip("/")
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        r = httpx.get(
-            f"{root}/models",
-            headers=headers,
-            timeout=2.0,
-            follow_redirects=False,
-            trust_env=False,
-        )
-        if r.status_code == 200:
-            fetched = True
-            d = r.json()
-            entries = d.get("data") if isinstance(d, dict) else d
-            if isinstance(entries, list):
-                for e in entries:
-                    if not isinstance(e, dict):
-                        continue
-                    mid = e.get("id")
-                    cl = e.get("context_length")
-                    # bool is an int subclass — exclude it (see /props above).
-                    if (
-                        isinstance(mid, str)
-                        and isinstance(cl, int)
-                        and not isinstance(cl, bool)
-                        and cl > 0
-                    ):
-                        cmap[mid] = cl
-    except Exception:  # noqa: BLE001 — best effort; the static ModelEntry is the fallback
-        pass
+    cached_map = _cached_context_map(base_url)
+    if cached_map is not None:
+        return cached_map.get(model_id)
+    fetched, payload = _fetch_models_response(base_url, api_key)
+    cmap = _parse_models_context_map(payload)
     if fetched:
         _MODELS_CTX_CACHE[base_url] = (cmap, time.monotonic())
     return cmap.get(model_id)

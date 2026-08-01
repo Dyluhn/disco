@@ -542,151 +542,199 @@ class RouterConfig(BaseModel):
         return self.models[key]
 
 
-def default_config() -> RouterConfig:
-    """The starting catalogue + assignments, wired to the real LAN endpoints
-    ([VERIFY] — discovered at build: see api-endpoints.md / the live-wiring build).
+# [VERIFY] live-wiring endpoints for the two on-LAN llama.cpp backends the
+# default catalogue points at (see api-endpoints.md / the live-wiring build).
+_QWEN_BASE_URL = "http://192.168.1.231:18080/v1"
+_GEMMA_BASE_URL = "http://192.168.1.81:8087/v1"
 
-    Each `provider` is the endpoint KEY (one OpenAIProvider per distinct backend);
-    `base_url` is its OpenAI-compatible URL. Roles: AGENT_DRIVER + RAG_ANSWERER →
-    Qwen 27B (.231); QUERY_REWRITER + SUMMARIZER → Gemma E2B (.81, needs a key in
-    $PMX_GEMMA_API_KEY); NLI_VERIFIER → the cross-encoder sidecar (not a chat model,
-    handled by the grounding NLIVerifier, no base_url). "driver-overflow" stays as a
-    dormant, assignable OpenRouter slot (no key → fails loud if assigned).
-    """
-    _QWEN = "http://192.168.1.231:18080/v1"
-    _GEMMA = "http://192.168.1.81:8087/v1"
-    # [BP-00] Vision gate: the driver is vision-capable ONLY if enabled via env.
-    driver_caps = {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
+
+def _driver_capabilities() -> frozenset[Requirement]:
+    """[BP-00] Vision gate: the driver is vision-capable ONLY if enabled via env."""
+    caps = {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
     if disco_env("DRIVER_VISION") == "1":
-        driver_caps.add(Requirement.VISION)
+        caps.add(Requirement.VISION)
+    return frozenset(caps)
 
-    models = {
-        # AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (reasoning, 128K ctx).
-        "driver-local": ModelEntry(
-            model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
-            provider="qwen",
-            base_url=_QWEN,
-            context_window=131_072,
-            capabilities=frozenset(driver_caps),
-            quantization="Q5_K_XL",
-            family="qwen",
+
+def _driver_local_entry(driver_caps: frozenset[Requirement]) -> ModelEntry:
+    """AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (reasoning, 128K ctx)."""
+    return ModelEntry(
+        model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
+        provider="qwen",
+        base_url=_QWEN_BASE_URL,
+        context_window=131_072,
+        capabilities=driver_caps,
+        quantization="Q5_K_XL",
+        family="qwen",
+    )
+
+
+def _rag_local_entry() -> ModelEntry:
+    return ModelEntry(
+        model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
+        provider="qwen",
+        base_url=_QWEN_BASE_URL,
+        context_window=131_072,
+        capabilities=frozenset(
+            {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
         ),
-        "rag-local": ModelEntry(
-            model_id="Qwen3.6-27B-UD-Q5_K_XL.gguf",
-            provider="qwen",
-            base_url=_QWEN,
-            context_window=131_072,
-            capabilities=frozenset(
-                {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
-            ),
-            quantization="Q5_K_XL",
-            family="qwen",
+        quantization="Q5_K_XL",
+        family="qwen",
+    )
+
+
+def _rewriter_local_entry() -> ModelEntry:
+    """QUERY_REWRITER + SUMMARIZER → Gemma E2B (cheap, fast, not a reasoning
+    model). The server needs a key in $PMX_GEMMA_API_KEY (read at wiring time
+    via api_key_env — never hardcoded)."""
+    return ModelEntry(
+        model_id="gemma-4-e2b-mtp",
+        provider="gemma",
+        base_url=_GEMMA_BASE_URL,
+        api_key_env="gemma",
+        context_window=32_768,
+        capabilities=frozenset({Requirement.JSON_MODE}),
+        family="gemma",
+    )
+
+
+def _summarizer_local_entry() -> ModelEntry:
+    return ModelEntry(
+        model_id="gemma-4-e2b-mtp",
+        provider="gemma",
+        base_url=_GEMMA_BASE_URL,
+        api_key_env="gemma",
+        context_window=32_768,
+        family="gemma",
+    )
+
+
+def _nli_local_entry() -> ModelEntry:
+    """NLI verifier — the cross-encoder sidecar, NOT a chat model (no base_url;
+    the grounding NLIVerifier calls it directly, §9.2)."""
+    return ModelEntry(
+        model_id="bge-reranker-v2-m3",
+        provider="local",
+        context_window=512,
+        family="deberta",
+    )
+
+
+def _driver_overflow_entry() -> ModelEntry:
+    """Dormant, assignable OpenRouter overflow (no key → fails loud if assigned).
+    W4 (§10.8): claude-3.5-sonnet benchmarks well on anchored diff edits →
+    ANCHORED_EDIT enabled; local/unknown models default to whole-file writes."""
+    return ModelEntry(
+        model_id="anthropic/claude-3.5-sonnet",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="openrouter",
+        context_window=200_000,
+        capabilities=frozenset(
+            {
+                Requirement.TOOL_CALLING,
+                Requirement.JSON_MODE,
+                Requirement.LONG_CONTEXT,
+                Requirement.VISION,
+                Requirement.ANCHORED_EDIT,
+            }
         ),
-        # QUERY_REWRITER + SUMMARIZER → Gemma E2B (cheap, fast, not a reasoning
-        # model). The server needs a key in $PMX_GEMMA_API_KEY (read at wiring time
-        # via api_key_env — never hardcoded).
-        "rewriter-local": ModelEntry(
-            model_id="gemma-4-e2b-mtp",
-            provider="gemma",
-            base_url=_GEMMA,
-            api_key_env="gemma",
-            context_window=32_768,
-            capabilities=frozenset({Requirement.JSON_MODE}),
-            family="gemma",
+        family="anthropic",
+        price_in_per_m=3.0,
+        price_out_per_m=15.0,
+    )
+
+
+def _driver_minimax_entry() -> ModelEntry:
+    """W-05: a SUBSCRIPTION-tier driver — MiniMax accessed through a local,
+    flat-rate proxy (e.g. the Pi relay). pricing_mode="subscription" so the cost
+    surfaces show "Subscription" (NOT "Free" — it costs a flat plan fee — and NOT
+    a per-token price, which doesn't apply). Dormant/assignable; the local relay
+    must be running for it to actually answer."""
+    return ModelEntry(
+        model_id="minimax/minimax-m2",
+        provider="minimax",
+        base_url="http://localhost:8080/v1",
+        context_window=200_000,
+        capabilities=frozenset(
+            {
+                Requirement.TOOL_CALLING,
+                Requirement.JSON_MODE,
+                Requirement.LONG_CONTEXT,
+            }
         ),
-        "summarizer-local": ModelEntry(
-            model_id="gemma-4-e2b-mtp",
-            provider="gemma",
-            base_url=_GEMMA,
-            api_key_env="gemma",
-            context_window=32_768,
-            family="gemma",
+        family="minimax",
+        pricing_mode="subscription",
+    )
+
+
+def _gemini_vision_entry() -> ModelEntry:
+    """DF-08: Vision escalation target — Gemini 3 Flash via OpenRouter. Proven
+    4/4 in the vision bake-off. Slug google/gemini-3-flash-preview is the real
+    GA-track id; bare google/gemini-3-flash does NOT exist. Documented fallback
+    (one-line disco-config.json swap, no code change): google/gemini-3.5-flash
+    (newer, non-preview)."""
+    return ModelEntry(
+        model_id="google/gemini-3-flash-preview",
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="openrouter",
+        context_window=1_048_576,
+        capabilities=frozenset(
+            {
+                Requirement.TOOL_CALLING,
+                Requirement.LONG_CONTEXT,
+                Requirement.VISION,
+                Requirement.JSON_MODE,
+            }
         ),
-        # NLI verifier — the cross-encoder sidecar, NOT a chat model (no base_url;
-        # the grounding NLIVerifier calls it directly, §9.2).
-        "nli-local": ModelEntry(
-            model_id="bge-reranker-v2-m3",
-            provider="local",
-            context_window=512,
-            family="deberta",
-        ),
-        # Dormant, assignable OpenRouter overflow (no key → fails loud if assigned).
-        # W4 (§10.8): claude-3.5-sonnet benchmarks well on anchored diff edits
-        # → ANCHORED_EDIT enabled; local/unknown models default to whole-file writes.
-        "driver-overflow": ModelEntry(
-            model_id="anthropic/claude-3.5-sonnet",
-            provider="openrouter",
-            base_url="https://openrouter.ai/api/v1",
-            api_key_env="openrouter",
-            context_window=200_000,
-            capabilities=frozenset(
-                {
-                    Requirement.TOOL_CALLING,
-                    Requirement.JSON_MODE,
-                    Requirement.LONG_CONTEXT,
-                    Requirement.VISION,
-                    Requirement.ANCHORED_EDIT,
-                }
-            ),
-            family="anthropic",
-            price_in_per_m=3.0,
-            price_out_per_m=15.0,
-        ),
-        # W-05: a SUBSCRIPTION-tier driver — MiniMax accessed through a local,
-        # flat-rate proxy (e.g. the Pi relay). pricing_mode="subscription" so the
-        # cost surfaces show "Subscription" (NOT "Free" — it costs a flat plan fee —
-        # and NOT a per-token price, which doesn't apply). Dormant/assignable; the
-        # local relay must be running for it to actually answer.
-        "driver-minimax": ModelEntry(
-            model_id="minimax/minimax-m2",
-            provider="minimax",
-            base_url="http://localhost:8080/v1",
-            context_window=200_000,
-            capabilities=frozenset(
-                {
-                    Requirement.TOOL_CALLING,
-                    Requirement.JSON_MODE,
-                    Requirement.LONG_CONTEXT,
-                }
-            ),
-            family="minimax",
-            pricing_mode="subscription",
-        ),
-        # DF-08: Vision escalation target — Gemini 3 Flash via OpenRouter.
-        # Proven 4/4 in the vision bake-off. Slug google/gemini-3-flash-preview
-        # is the real GA-track id; bare google/gemini-3-flash does NOT exist.
-        # Documented fallback (one-line disco-config.json swap, no code
-        # change): google/gemini-3.5-flash (newer, non-preview).
-        "or-gemini-3-flash": ModelEntry(
-            model_id="google/gemini-3-flash-preview",
-            provider="openrouter",
-            base_url="https://openrouter.ai/api/v1",
-            api_key_env="openrouter",
-            context_window=1_048_576,
-            capabilities=frozenset(
-                {
-                    Requirement.TOOL_CALLING,
-                    Requirement.LONG_CONTEXT,
-                    Requirement.VISION,
-                    Requirement.JSON_MODE,
-                }
-            ),
-            price_in_per_m=0.075,
-            price_out_per_m=0.30,
-        ),
+        price_in_per_m=0.075,
+        price_out_per_m=0.30,
+    )
+
+
+def _default_models() -> dict[str, ModelEntry]:
+    """The default catalogue keyed by assignable model id. Each `provider` is
+    the endpoint KEY (one OpenAIProvider per distinct backend); `base_url` is
+    its OpenAI-compatible URL."""
+    driver_caps = _driver_capabilities()
+    return {
+        "driver-local": _driver_local_entry(driver_caps),
+        "rag-local": _rag_local_entry(),
+        "rewriter-local": _rewriter_local_entry(),
+        "summarizer-local": _summarizer_local_entry(),
+        "nli-local": _nli_local_entry(),
+        "driver-overflow": _driver_overflow_entry(),
+        "driver-minimax": _driver_minimax_entry(),
+        "or-gemini-3-flash": _gemini_vision_entry(),
     }
-    assignments = {
-        # AGENT_DRIVER intentionally omitted: it resolves to `default_model`.
+
+
+def _default_assignments() -> dict[ModelRole, str]:
+    # AGENT_DRIVER intentionally omitted: it resolves to `default_model`.
+    return {
         ModelRole.RAG_ANSWERER: "rag-local",
         ModelRole.QUERY_REWRITER: "rewriter-local",
         ModelRole.SUMMARIZER: "summarizer-local",
         ModelRole.NLI_VERIFIER: "nli-local",
         ModelRole.VERIFIER: "rewriter-local",
     }
+
+
+def default_config() -> RouterConfig:
+    """The starting catalogue + assignments, wired to the real LAN endpoints
+    ([VERIFY] — discovered at build: see api-endpoints.md / the live-wiring build).
+
+    Roles: AGENT_DRIVER + RAG_ANSWERER → Qwen 27B (.231); QUERY_REWRITER +
+    SUMMARIZER → Gemma E2B (.81, needs a key in $PMX_GEMMA_API_KEY);
+    NLI_VERIFIER → the cross-encoder sidecar (not a chat model, handled by the
+    grounding NLIVerifier, no base_url). "driver-overflow" stays as a dormant,
+    assignable OpenRouter slot (no key → fails loud if assigned).
+    """
     return RouterConfig(
-        models=models,
+        models=_default_models(),
         default_model="driver-local",
-        assignments=assignments,
+        assignments=_default_assignments(),
         vision_escalation_model="or-gemini-3-flash",
     )
 
