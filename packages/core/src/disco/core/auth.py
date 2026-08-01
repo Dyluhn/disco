@@ -354,22 +354,30 @@ def _check_immutable_preview_version(value: int | None) -> None:
         raise ValueError("invalid immutable preview version")
 
 
-def _cap_scalar_fields_valid(
+def _cap_scalar_fields(
     owner: object,
     cid: object,
     prefix: object,
     port: object,
     exp: object,
     allow_websocket: object,
-) -> bool:
-    return (
+) -> tuple[str, str, str, int, int, bool] | None:
+    """The capability's scalar payload fields, or None if any is the wrong type.
+
+    Returns the values rather than a bool so the caller keeps the narrowing the
+    inline isinstance chain used to give it. A bool-returning predicate erases
+    it, and PreviewCapability's constructor then receives ``Any | None``.
+    """
+    if (
         isinstance(owner, str)
         and isinstance(cid, str)
         and isinstance(prefix, str)
         and isinstance(port, int)
         and isinstance(exp, int)
         and isinstance(allow_websocket, bool)
-    )
+    ):
+        return owner, cid, prefix, port, exp, allow_websocket
+    return None
 
 
 def _cap_authority_invalid(authority_id: object) -> bool:
@@ -546,6 +554,13 @@ class PreviewCapabilitySigner:
             return None
         cap = self._cap_from_payload(intent_payload, kind="preview_intent")
         target = intent_payload.get("target")
+        if not isinstance(target, str):
+            # The pre-split chain rejected a non-str target inside the big
+            # boolean guard below; that check moved into
+            # _redeem_intent_matching_capability, which returns None but cannot
+            # narrow `target` for _mint_cookie. Same outcome, stated where the
+            # type is established.
+            return None
         expected_prefix = _preview_expected_prefix(path_scope, cap)
         target_path = _safe_url_path(target)
         static_host_matches = _static_scope_host_matches(cap, path_scope, request_host_label)
@@ -727,8 +742,10 @@ class PreviewCapabilitySigner:
         allow_websocket = payload.get("ws", False)
         authority_id = payload.get("authority")
         immutable_version = payload.get("version")
-        if not _cap_scalar_fields_valid(owner, cid, prefix, port, exp, allow_websocket):
+        scalars = _cap_scalar_fields(owner, cid, prefix, port, exp, allow_websocket)
+        if scalars is None:
             return None
+        owner, cid, prefix, port, exp, allow_websocket = scalars
         if _cap_authority_invalid(authority_id):
             return None
         if _immutable_preview_version_invalid(immutable_version):

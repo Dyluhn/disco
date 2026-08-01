@@ -44,7 +44,7 @@ from fastapi.responses import JSONResponse
 from .. import workflows
 
 if TYPE_CHECKING:
-    from ..runtime import ConversationRuntime
+    from ...runtime import ConversationRuntime
     from ..workflows import DraftWorkflowFromDescriptionBody, _SurfaceEnvironment
 
 

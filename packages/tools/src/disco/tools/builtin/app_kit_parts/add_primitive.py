@@ -138,8 +138,15 @@ async def _resolve_webhook_specs(
 def _apply_primitive_to_app(
     app: AppSpec, host: PrimitiveDefinition, prim: PrimitiveDefinition, validated: Any
 ) -> AppSpec:
+    # AppAddPrimitiveTool.run only reaches here for an addable primitive, which
+    # by definition has an apply_spec. Now that the fold lives behind a module
+    # boundary, state the requirement here instead of inheriting it from the
+    # caller — an unguarded call would be a bare TypeError on None.
+    apply_spec = prim.apply_spec
+    if apply_spec is None:
+        raise _AppKitError(f"primitive {prim.id!r} does not support adding a spec")
     try:
-        new_app = prim.apply_spec(app, validated)
+        new_app = apply_spec(app, validated)
     except Exception as exc:  # noqa: BLE001
         raise _AppKitError(f"applying the {prim.id!r} spec failed: {exc}") from exc
 
