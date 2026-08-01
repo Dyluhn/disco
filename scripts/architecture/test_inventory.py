@@ -624,9 +624,10 @@ def regenerate_inventory(
                 "before_count": len(previous_roots[name]),
                 "after_count": len(current_roots[name]),
                 "added_ids": added_by_root[name],
+                "relocated_count": len(authorized.get(f"collected.{name}", ())),
             }
             for name in PYTHON_ROOTS
-            if added_by_root[name]
+            if added_by_root[name] or authorized.get(f"collected.{name}")
         },
         "mapping_static_additions": static_added,
     }

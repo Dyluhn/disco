@@ -12,9 +12,10 @@ import hashlib
 import json
 import re
 import subprocess
-from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from .test_inventory_parts import _transitions
 
 _TS_FILE = re.compile(r"\.(?:test|spec)\.[cm]?[jt]sx?$")
 _TS_MARKER = re.compile(r"\b(?:describe|it|test)\.(skip|todo|only)\s*\(")
@@ -29,15 +30,6 @@ _TRANSITION_KEYS = {
     "collected_roots",
     "mapping_static_additions",
 }
-_COLLECTED_TRANSITION_KEYS = {"before_count", "after_count", "added_ids"}
-_MAPPING_ADDITION_KEYS = {
-    "python_test_files",
-    "python_static_test_ids",
-    "typescript_test_files",
-    "typescript_static_test_ids",
-    "fixtures",
-}
-_PYTHON_ROOTS = {"packages", "harness", "integrations", "tests"}
 _PKG02 = "PKG-02-GATE"
 _PKG02_BEFORE = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"
 _SCHEMA = "disclaude-architecture-test-inventory-v1"
@@ -224,163 +216,6 @@ def _commit_identity(
     return value
 
 
-def _string_additions(
-    value: Any,
-    label: str,
-    *,
-    unique: bool,
-    problems: list[str],
-) -> list[str]:
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
-        problems.append(f"{label} must be an exact string list")
-        return []
-    if value != sorted(value):
-        problems.append(f"{label} must be sorted")
-    if unique and len(value) != len(set(value)):
-        problems.append(f"{label} must be unique")
-    return value
-
-
-def _row_additions(
-    value: Any,
-    label: str,
-    problems: list[str],
-) -> list[dict[str, Any]]:
-    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
-        problems.append(f"{label} must be an exact object list")
-        return []
-    keys = [_row_key(item) for item in value]
-    if keys != sorted(keys):
-        problems.append(f"{label} must be canonically sorted")
-    if len(keys) != len(set(keys)):
-        problems.append(f"{label} must be unique")
-    return value
-
-
-def _claim_disjoint(
-    label: str,
-    values: list[str],
-    claims: dict[str, set[str]],
-    problems: list[str],
-) -> None:
-    owned = claims.setdefault(label, set())
-    overlap = sorted(owned.intersection(values))
-    if overlap:
-        problems.append(f"{label} additions overlap across packages: {overlap}")
-    owned.update(values)
-
-
-def _check_subset(
-    label: str,
-    additions: list[str],
-    current: list[str],
-    problems: list[str],
-) -> None:
-    excess = Counter(additions) - Counter(current)
-    if excess:
-        problems.append(
-            f"{label} additions are absent from the current inventory: {sorted(excess.elements())}"
-        )
-
-
-def _check_collected_row(
-    transition: dict[str, Any],
-    baseline: dict[str, Any],
-    name: str,
-    row: Any,
-    claims: dict[str, set[str]],
-    problems: list[str],
-) -> int:
-    owner = transition.get("package", "<invalid>")
-    label = f"{owner}.collected_roots.{name}"
-    if not isinstance(row, dict) or set(row) != _COLLECTED_TRANSITION_KEYS:
-        problems.append(f"{label} schema mismatch")
-        return 0
-    added = _string_additions(
-        row["added_ids"], f"{label}.added_ids", unique=True, problems=problems
-    )
-    before = row["before_count"]
-    after = row["after_count"]
-    valid_counts = all(
-        isinstance(count, int) and not isinstance(count, bool) and count >= 0
-        for count in (before, after)
-    )
-    if not valid_counts:
-        problems.append(f"{label} counts must be non-negative integers")
-    elif before + len(added) != after:
-        problems.append(f"{label} count/addition mismatch: {before} + {len(added)} != {after}")
-    current = baseline.get("collected", {}).get("roots", {}).get(name)
-    if not isinstance(current, list):
-        problems.append(f"{label} has no current root authority")
-        current = []
-    _check_subset(f"{label}.added_ids", added, current, problems)
-    if valid_counts and after > len(current):
-        problems.append(f"{label}.after_count exceeds current count {len(current)}")
-    is_current = transition.get("source_identity_after") == baseline.get("source_identity")
-    if valid_counts and is_current and after != len(current):
-        problems.append(f"{label}.after_count must equal current count {len(current)}")
-    _claim_disjoint(f"collected_roots.{name}", added, claims, problems)
-    return len(added)
-
-
-def _check_collected_additions(
-    transition: dict[str, Any],
-    baseline: dict[str, Any],
-    claims: dict[str, set[str]],
-    problems: list[str],
-) -> int:
-    owner = transition.get("package", "<invalid>")
-    rows = transition.get("collected_roots")
-    if not isinstance(rows, dict) or not all(isinstance(name, str) for name in rows):
-        problems.append(f"{owner} collected_roots must be an exact object")
-        return 0
-    unknown = sorted(set(rows) - _PYTHON_ROOTS)
-    if unknown:
-        problems.append(f"{owner} collected_roots has unknown roots: {unknown}")
-    expected_root = next(iter(rows)) if len(rows) == 1 else "multiple"
-    if transition.get("root") != expected_root:
-        problems.append(
-            f"{owner} root summary must be {expected_root!r}, got {transition.get('root')!r}"
-        )
-    return sum(
-        _check_collected_row(transition, baseline, name, row, claims, problems)
-        for name, row in rows.items()
-    )
-
-
-def _check_mapping_additions(
-    transition: dict[str, Any],
-    baseline: dict[str, Any],
-    claims: dict[str, set[str]],
-    problems: list[str],
-) -> int:
-    owner = transition.get("package", "<invalid>")
-    additions = transition.get("mapping_static_additions")
-    if not isinstance(additions, dict) or set(additions) != _MAPPING_ADDITION_KEYS:
-        problems.append(f"{owner} mapping_static_additions schema mismatch")
-        return 0
-    current = baseline.get("mapping_static")
-    if not isinstance(current, dict):
-        current = {}
-    total = 0
-    for key in sorted(_MAPPING_ADDITION_KEYS):
-        label = f"{owner}.mapping_static_additions.{key}"
-        if key == "fixtures":
-            rows = _row_additions(additions[key], label, problems)
-            values = [_row_key(row) for row in rows]
-            authority = [_row_key(row) for row in current.get(key, []) if isinstance(row, dict)]
-        else:
-            unique = key.endswith("_files")
-            values = _string_additions(additions[key], label, unique=unique, problems=problems)
-            authority = current.get(key, [])
-            if not isinstance(authority, list):
-                authority = []
-        _check_subset(label, values, authority, problems)
-        _claim_disjoint(f"mapping_static.{key}", values, claims, problems)
-        total += len(values)
-    return total
-
-
 def _ids_owned_by_paths(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -550,8 +385,8 @@ def _check_transition_row(
         problems.append(f"duplicate additive-transition after identity: {after}")
     if after is not None:
         after_identities.add(after)
-    collected_count = _check_collected_additions(row, baseline, claims, problems)
-    mapping_count = _check_mapping_additions(row, baseline, claims, problems)
+    collected_count = _transitions.check_collected_additions(row, baseline, claims, problems)
+    mapping_count = _transitions.check_mapping_additions(row, baseline, claims, problems)
     if collected_count + mapping_count == 0:
         problems.append(f"{label} must own at least one exact addition")
     return row

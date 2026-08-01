@@ -83,6 +83,7 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/test_inventory_parts/__init__.py",
     "scripts/architecture/test_inventory_parts/_rows.py",
     "scripts/architecture/test_inventory_parts/_splits.py",
+    "scripts/architecture/test_inventory_parts/_transitions.py",
     "docs/governance/SEAL-INVOCATION.json",
 )
 
