@@ -53,8 +53,13 @@ core  ←  retrieval  ←  tools  ←  { agent_server | app_server }
 other — there's an import-linter contract proving it). Dependencies point
 **downward only**. The live, auto-derived map is
 [`docs/architecture.generated.md`](./docs/architecture.generated.md) (never hand-edit
-it — regenerate). One tracked upward-debt edge exists (`tools → agent_server` for
-audio config) and is whitelisted in `.importlinter`; don't add more.
+it — regenerate). **Three** tracked upward-debt edges exist, all `tools →
+agent_server` and all whitelisted in `.importlinter`'s `ignore_imports`; don't
+add more:
+
+- `disco.tools.builtin.audio_overview → disco.agent_server.audio_config`
+- `disco.tools.builtin.audio_overview → disco.agent_server.tts_local`
+- `disco.tools.builtin.preview → disco.agent_server.preview_manager`
 
 - `core` — events, the loop engine (`AgentLoop`), LLM router, store.
 - `retrieval` — deep research (search/extract/synthesis).
