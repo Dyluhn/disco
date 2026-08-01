@@ -885,7 +885,9 @@ class TestFrontendPublicApi:
         baseline = public_api.load_public_api(REPO_ROOT)
         initializers = baseline["python_initializers"]
 
-        assert len(initializers) == 34
+        # 34 at PKG-02 bootstrap; 74 after Epics 7-10 published 40 typed
+        # *_parts packages. Update at each accepted regeneration.
+        assert len(initializers) == 74
         assert [row["path"] for row in initializers] == sorted(row["path"] for row in initializers)
         for row in initializers:
             assert set(row) == {
@@ -921,10 +923,26 @@ class TestFrontendPublicApi:
             "Any deleted or renamed public name, origin, signature, frontend "
             "export/type/schema, or contract byte fails. Additions require an "
             "owning-package baseline transition; moved implementations retain "
-            "the old public name through an explicit bridge until PKG-13."
+            "the old public name through an explicit bridge until PKG-13. A "
+            "member-level change at an unchanged origin requires an explicit "
+            "member transition pinning both signature digests and the exact "
+            "member delta."
         )
-        assert baseline["additive_transitions"] == []
+        # No longer empty as of Epic 10-D: every added public target carries an
+        # owning-package transition, and the two accepted member-level changes
+        # carry member transitions. Bridges remain unused — no public name has
+        # changed origin.
+        assert baseline["additive_transitions"]
         assert baseline["compatibility_bridges"] == []
+        assert len(baseline["member_transitions"]) == 2
+        assert {row["public_name"] for row in baseline["member_transitions"]} == {
+            "HttpVerifyClient",
+            "DefaultToolExecutor",
+        }
+        for row in baseline["member_transitions"]:
+            # A member transition never changes origin — that is a bridge's job.
+            assert row["removed_members"] or row["added_members"]
+            assert row["old_signature_sha256"] != row["new_signature_sha256"]
         assert public_api._valid_bridge(valid) is True
         missing_reason = dict(valid)
         del missing_reason["reason"]

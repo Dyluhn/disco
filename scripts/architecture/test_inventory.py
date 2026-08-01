@@ -462,6 +462,25 @@ def _assert_no_deletions(
     return [item for item in current if _canonical_row(item) not in previous_rows]
 
 
+def _collected_row(
+    previous: list[str], current: list[str], added: list[str], relocated: int,
+) -> dict[str, Any]:
+    """Build one collected_roots transition row.
+
+    ``relocated_count`` is emitted only when a relocation actually happened,
+    so a root that merely gained tests keeps the exact shape every accepted
+    row already has.
+    """
+    row: dict[str, Any] = {
+        "before_count": len(previous),
+        "after_count": len(current),
+        "added_ids": added,
+    }
+    if relocated:
+        row["relocated_count"] = relocated
+    return row
+
+
 def _split_authorizations(
     root: Path,
     split_rows: list[dict[str, Any]],
@@ -620,12 +639,12 @@ def regenerate_inventory(
         "source_identity_before": previous_identity,
         "source_identity_after": source_identity,
         "collected_roots": {
-            name: {
-                "before_count": len(previous_roots[name]),
-                "after_count": len(current_roots[name]),
-                "added_ids": added_by_root[name],
-                "relocated_count": len(authorized.get(f"collected.{name}", ())),
-            }
+            name: _collected_row(
+                previous_roots[name],
+                current_roots[name],
+                added_by_root[name],
+                len(authorized.get(f"collected.{name}", ())),
+            )
             for name in PYTHON_ROOTS
             if added_by_root[name] or authorized.get(f"collected.{name}")
         },

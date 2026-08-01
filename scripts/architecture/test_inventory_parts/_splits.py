@@ -43,7 +43,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -73,15 +72,16 @@ _MARKER_IDENTITY = ("framework", "marker", "source")
 
 
 def _commit_resolves(root: Path, value: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"{value}^{{commit}}"],
-            capture_output=True,
-            check=False,
-        )
-    except OSError:
-        return False
-    return result.returncode == 0
+    """Resolve through ``inventory_static`` so there is one commit seam.
+
+    Imported at call time and read off the module object: the adversarial
+    suite stubs ``inventory_static.commit_identity_resolves`` when it
+    regenerates into a temporary root, and a patch only takes effect on the
+    module whose globals the reader consults.
+    """
+    from .. import inventory_static
+
+    return inventory_static.commit_identity_resolves(root, value)
 
 
 def _valid_scalars(row: dict[str, Any]) -> bool:
