@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
+  "source_identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
   "collected": {
     "counts": {
       "packages": 9870,
@@ -11469,8 +11469,8 @@
     }
   },
   "mapping_static": {
-    "identity": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
-    "python_test_file_count": 786,
+    "identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+    "python_test_file_count": 787,
     "python_static_test_id_count": 9341,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
@@ -12088,6 +12088,7 @@
       "packages/retrieval/tests/test_upload_ingest.py",
       "packages/retrieval/tests/test_wiring.py",
       "packages/retrieval/tests/test_wiring_extract_error.py",
+      "packages/tools/tests/_appkit_verify_doubles.py",
       "packages/tools/tests/_project_version_support.py",
       "packages/tools/tests/export_track1_closeout/conftest.py",
       "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py",
@@ -23985,14 +23986,14 @@
         "scope": "pytest.fixture"
       },
       {
-        "path": "packages/tools/tests/test_verify_appkit_app.py",
-        "line": 269,
+        "path": "packages/tools/tests/test_appkit_directory_tools.py",
+        "line": 285,
         "fixture": "stub_browser",
         "scope": "pytest.fixture"
       },
       {
-        "path": "packages/tools/tests/test_appkit_directory_tools.py",
-        "line": 285,
+        "path": "packages/tools/tests/test_verify_appkit_app.py",
+        "line": 53,
         "fixture": "stub_browser",
         "scope": "pytest.fixture"
       },
@@ -28606,6 +28607,29 @@
             "path": "packages/agent-server/tests/test_wo_a4_bus_quota_integration.py",
             "line": 57,
             "fixture": "a4",
+            "scope": "pytest.fixture"
+          }
+        ]
+      }
+    },
+    {
+      "package": "PKG-11-BUILD-ADAPTERS",
+      "root": "multiple",
+      "source_identity_before": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
+      "source_identity_after": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/tools/tests/_appkit_verify_doubles.py"
+        ],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/tools/tests/test_verify_appkit_app.py",
+            "line": 53,
+            "fixture": "stub_browser",
             "scope": "pytest.fixture"
           }
         ]

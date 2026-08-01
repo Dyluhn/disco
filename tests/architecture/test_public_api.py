@@ -886,10 +886,10 @@ class TestFrontendPublicApi:
         initializers = baseline["python_initializers"]
 
         # 34 at PKG-02 bootstrap; 74 after Epics 7-10 published 40 typed
-        # *_parts packages; 85 after Epic 11-A's AppKit decomposition published
-        # 11 more; 87 after Epic 11-B published _deep_research_service_parts and
-        # deep_research/_engine_parts. Update at each accepted regeneration.
-        assert len(initializers) == 87
+        # *_parts packages; 85 after Epic 11-A; 87 after Epic 11-B; 93 after
+        # Epic 11-C published six interior parts packages (0 added public
+        # targets). Update at each accepted regeneration.
+        assert len(initializers) == 93
         assert [row["path"] for row in initializers] == sorted(row["path"] for row in initializers)
         for row in initializers:
             assert set(row) == {

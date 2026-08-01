@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
+  "source_identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -848,6 +848,14 @@
           "signature": "def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter"
         }
       }
+    },
+    {
+      "path": "packages/agent-server/src/disco/agent_server/routes/workflows_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/agent-server/src/disco/agent_server/stripe_verification/__init__.py",
@@ -5911,6 +5919,14 @@
     },
     {
       "path": "packages/core/src/disco/core/appkit/worker_inspect_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/core/src/disco/core/auth_parts/__init__.py",
       "has_all": false,
       "explicit_all": null,
       "public_names": [],
@@ -12160,6 +12176,14 @@
       "public_signatures": {}
     },
     {
+      "path": "packages/core/src/disco/core/quota_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/core/src/disco/core/release/__init__.py",
       "has_all": true,
       "explicit_all": [
@@ -13621,6 +13645,14 @@
           "signature": "def workflow_finish_tool_schema(defn: WorkflowDefinition) -> dict[str, object]"
         }
       }
+    },
+    {
+      "path": "packages/core/src/disco/core/workflow/models_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
     },
     {
       "path": "packages/core/src/disco/core/workflows/__init__.py",
@@ -16454,6 +16486,14 @@
       "public_signatures": {}
     },
     {
+      "path": "packages/tools/src/disco/tools/builtin/app_kit_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
       "path": "packages/tools/src/disco/tools/builtin/browser_parts/__init__.py",
       "has_all": false,
       "explicit_all": null,
@@ -16511,6 +16551,14 @@
     },
     {
       "path": "packages/tools/src/disco/tools/builtin/verify_app_parts/__init__.py",
+      "has_all": false,
+      "explicit_all": null,
+      "public_names": [],
+      "import_origins": [],
+      "public_signatures": {}
+    },
+    {
+      "path": "packages/tools/src/disco/tools/builtin/verify_appkit_parts/__init__.py",
       "has_all": false,
       "explicit_all": null,
       "public_names": [],
