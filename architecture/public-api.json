@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "b4d1fc416dcdb4cef3b6f80e7880c05c5c9310de",
+  "source_identity": "b6a6a116d098afbbf22b30649ad5f12456621ec8",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -18422,6 +18422,11 @@
       "public_declarations": [
         {
           "kind": "function",
+          "name": "absoluteAudioUrl",
+          "signature": "export function absoluteAudioUrl(mp3Url: string): string"
+        },
+        {
+          "kind": "function",
           "name": "createDeepResearchConversation",
           "signature": "export async function createDeepResearchConversation( opts: DeepResearchSubmit, ): Promise<string>"
         },
@@ -18437,13 +18442,33 @@
         },
         {
           "kind": "function",
+          "name": "fetchReportExportBlob",
+          "signature": "export async function fetchReportExportBlob( cid: string, fmt: \"md\" | \"pdf\", body: string | undefined, ): Promise<Blob>"
+        },
+        {
+          "kind": "function",
           "name": "requestReportAudio",
           "signature": "export async function requestReportAudio( cid: string, mode: \"podcast\" | \"single\" = \"podcast\", followUpSeqs?: number[], ): Promise<{ mp3_url: string; transcript_url: string }>"
         },
         {
           "kind": "function",
+          "name": "requestReportAudioBlocking",
+          "signature": "export async function requestReportAudioBlocking( cid: string, mode: string, body: string | undefined, ): Promise<{ mp3_url: string }>"
+        },
+        {
+          "kind": "function",
           "name": "serializeReportToMarkdown",
           "signature": "export function serializeReportToMarkdown( report: ReportEvent, followUps?: Array<[string, string]>, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "streamReportAudio",
+          "signature": "export async function streamReportAudio( cid: string, mode: string, body: string | undefined, onEvent: (ev: AudioStreamEvent) => boolean, ): Promise<boolean>"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AudioStreamEvent",
+          "signature": "export interface AudioStreamEvent { stage?: string; current?: number; total?: number; mp3_url?: string; reason?: string; // W-08: real voice-model download byte counters. downloaded?: number; pct?: number; file_index?: number; file_total?: number; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -18699,6 +18724,36 @@
           "kind": "function",
           "name": "updateTtsConfig",
           "signature": "export async function updateTtsConfig(cfg: TtsConfig): Promise<TtsConfig>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/preview.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "artifactInlineUrl",
+          "signature": "export function artifactInlineUrl(cid: string, path: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "previewBootstrapUrl",
+          "signature": "export async function previewBootstrapUrl( cid: string, target: string, versionSeq?: number | null, ): Promise<PreviewLaunch | null>"
+        },
+        {
+          "kind": "function",
+          "name": "previewErrorReason",
+          "signature": "export function previewErrorReason(message: string): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "restoreFailureCopy",
+          "signature": "export function restoreFailureCopy(error: unknown): string"
+        },
+        {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export type { PreviewLaunch };"
         }
       ]
     },
@@ -19853,6 +19908,266 @@
       ]
     },
     {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PointButton.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PointButton",
+          "signature": "export function PointButton({ armed, onArm, onDisarm, }: { armed: boolean; onArm: () => void; onDisarm: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewStage",
+          "signature": "export function PreviewStage({ frameRef, launch, onFrameLoad, visibleFailure, dataReason, minting, runtimeUnavailable, frameReady, editMode, untrusted, selection, onSteer, onDisarmEdit, onApplyEdit, }: { frameRef: MutableRefObject<HTMLIFrameElement | null>; launch: PreviewLaunch | null; onFrameLoad: () => void; visibleFailure: string | null; dataReason: string | undefined; minting: boolean; runtimeUnavailable: boolean; frameReady: boolean; editMode: boolean; untrusted: boolean; selection: ElementSelectState; onSteer?: (text: string) => void; onDisarmEdit: () => void; onApplyEdit: (instruction: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewToolbar",
+          "signature": "export function PreviewToolbar({ versions, selectedVersionSeq, onSelectVersion, onRefresh, restarting, cid, showPointButton, mentionArmed, onArmMention, onDisarmMention, canEdit, editMode, onToggleEdit, onOpenPreview, }: { versions: WorkspaceVersion[]; selectedVersionSeq: number | null; onSelectVersion: (seq: number | null) => void; onRefresh: () => void; restarting: boolean; cid: string | null; showPointButton: boolean; mentionArmed: boolean; onArmMention: () => void; onDisarmMention: () => void; canEdit: boolean; editMode: boolean; onToggleEdit: () => void; onOpenPreview: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewUnavailable.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PreviewUnavailable",
+          "signature": "export function PreviewUnavailable({ reason }: { reason: string | undefined })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/StaticArtifactViewer.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "StaticArtifactViewer",
+          "signature": "export function StaticArtifactViewer({ cid, artifactSrcDoc, inlineHtmlArtifact, }: { cid: string | null; artifactSrcDoc: string | null; inlineHtmlArtifact: WorkspaceFile | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionBanner.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "VersionBanner",
+          "signature": "export function VersionBanner({ displayedVersionSeq, restoringSeq, onBackToCurrent, onRollback, }: { displayedVersionSeq: number | null; restoringSeq: number | null; onBackToCurrent: () => void; onRollback: (seq: number) => Promise<void>; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionPicker.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "VersionPicker",
+          "signature": "export function VersionPicker({ versions, selectedSeq, onSelect, }: { versions: WorkspaceVersion[]; selectedSeq: number | null; onSelect: (seq: number | null) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computeCanEdit",
+          "signature": "export function computeCanEdit( hasOnSelectionEdit: boolean, launch: PreviewLaunch | null, untrusted: boolean, displayedVersionSeq: number | null, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "computeMentionEnabled",
+          "signature": "export function computeMentionEnabled( hasOnElementMention: boolean, launch: PreviewLaunch | null, untrusted: boolean, displayedVersionSeq: number | null, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "computeRequestedLaunchKey",
+          "signature": "export function computeRequestedLaunchKey( cid: string | null, generation: string, selectedVersionSeq: number | null, refreshNonce: number, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "computeRuntimeUnavailable",
+          "signature": "export function computeRuntimeUnavailable( selectedVersionSeq: number | null, committedStatic: boolean, data: PreviewInfo | undefined, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "computeSelectedTarget",
+          "signature": "export function computeSelectedTarget( selectedVersionSeq: number | null, currentRoute: string, refreshNonce: number, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "computeShowPointButton",
+          "signature": "export function computeShowPointButton( hasOnElementMention: boolean, displayedVersionSeq: number | null, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "computeVisibleFailure",
+          "signature": "export function computeVisibleFailure( launchFailure: string | null, launchKey: string, requestedLaunchKey: string, ): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "formatRelativeTime",
+          "signature": "export function formatRelativeTime(ts: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "latestAppDeliverable",
+          "signature": "export function latestAppDeliverable(events: AgentEvent[])"
+        },
+        {
+          "kind": "function",
+          "name": "mintOnceForNavigation",
+          "signature": "export function mintOnceForNavigation( ref: MutableRefObject<OwnedPreviewMint | null>, key: string, mint: () => Promise<PreviewLaunch | null>, ): Promise<PreviewLaunch | null>"
+        },
+        {
+          "kind": "function",
+          "name": "originOf",
+          "signature": "export function originOf(url: string | null): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "previewActiveStatus",
+          "signature": "export function previewActiveStatus(status: ConversationStatus): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "previewGeneration",
+          "signature": "export function previewGeneration(data: PreviewInfo | undefined): string"
+        },
+        {
+          "kind": "function",
+          "name": "previewHasFinishedCommittedApp",
+          "signature": "export function previewHasFinishedCommittedApp( status: ConversationStatus, appDeliverable: AgentEvent | null, hasWorkspaceVersion: boolean, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "previewOrigin",
+          "signature": "export function previewOrigin(launch: PreviewLaunch | null): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "previewOwnsCanonicalPreview",
+          "signature": "export function previewOwnsCanonicalPreview( cid: string | null, untrusted: boolean, webSignal: boolean, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "previewStagePlaceholderMessage",
+          "signature": "export function previewStagePlaceholderMessage( visibleFailure: string | null, dataReason: string | undefined, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "previewWebSignal",
+          "signature": "export function previewWebSignal( appDeliverable: AgentEvent | null, artifactSrcDoc: string | null, dataAvailable: boolean | undefined, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "refreshTarget",
+          "signature": "export function refreshTarget(path: string, nonce: number): string"
+        },
+        {
+          "kind": "function",
+          "name": "shouldShowStaticArtifactViewer",
+          "signature": "export function shouldShowStaticArtifactViewer( ownsPreview: boolean, artifactSrcDoc: string | null, inlineHtmlArtifact: WorkspaceFile | null, cid: string | null, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "shouldShowStatusOverlay",
+          "signature": "export function shouldShowStatusOverlay( launch: PreviewLaunch | null, minting: boolean, runtimeUnavailable: boolean, visibleFailure: string | null, frameReady: boolean, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "shouldShowUpdateErrorBanner",
+          "signature": "export function shouldShowUpdateErrorBanner( selectedVersionSeq: number | null, updateError: string | null | undefined, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "statusOverlayMessage",
+          "signature": "export function statusOverlayMessage( visibleFailure: string | null, runtimeUnavailable: boolean, dataReason: string | undefined, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "statusOverlayRole",
+          "signature": "export function statusOverlayRole( visibleFailure: string | null, runtimeUnavailable: boolean, ): \"alert\" | \"status\""
+        },
+        {
+          "kind": "function",
+          "name": "triggerBadgeClass",
+          "signature": "export function triggerBadgeClass(trigger: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "versionLabel",
+          "signature": "export function versionLabel(version: WorkspaceVersion): string"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "OwnedPreviewMint",
+          "signature": "export type OwnedPreviewMint = { key: string; promise: Promise<PreviewLaunch | null> };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewAutoRefresh.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewAutoRefresh",
+          "signature": "export function usePreviewAutoRefresh( files: WorkspaceFile[], status: ConversationStatus, reloadStrategy: \"hmr\" | \"reload\" | undefined, setRefreshNonce: Dispatch<SetStateAction<number>>, ): void"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewLaunch",
+          "signature": "export function usePreviewLaunch( cid: string | null, ownsCanonicalPreview: boolean, requestedLaunchKey: string, selectedTarget: string, selectedVersionSeq: number | null, ): PreviewLaunchState"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "PreviewLaunchState",
+          "signature": "export interface PreviewLaunchState { launch: PreviewLaunch | null; launchKey: string; launchVersionSeq: number | null; minting: boolean; launchFailure: string | null; frameReady: boolean; setFrameReady: (ready: boolean) => void; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewRouteBridge.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "usePreviewRouteBridge",
+          "signature": "export function usePreviewRouteBridge( launch: PreviewLaunch | null, frameRef: MutableRefObject<HTMLIFrameElement | null>, currentRouteRef: MutableRefObject<string>, ): void"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/canvas/previewPaneParts/useWorkspaceRollback.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useWorkspaceRollback",
+          "signature": "export function useWorkspaceRollback( cid: string | null, refetchVersions: () => Promise<unknown>, setSelectedVersionSeq: Dispatch<SetStateAction<number | null>>, currentRouteRef: MutableRefObject<string>, setRefreshNonce: Dispatch<SetStateAction<number>>, ): WorkspaceRollbackState"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "WorkspaceRollbackState",
+          "signature": "export interface WorkspaceRollbackState { restoreNotice: { tone: \"success\" | \"error\"; text: string } | null; restoringSeq: number | null; selectVersion: (seq: number | null) => void; rollBackToVersion: (seq: number) => Promise<void>; }"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/build/editor/DeckEditor.tsx",
       "public_declarations": [
         {
@@ -20318,12 +20633,342 @@
       ]
     },
     {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchComposer.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DeepResearchComposer",
+          "signature": "export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChange }: Props)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DeepResearchReportView",
+          "signature": "export function DeepResearchReportView({ r }: Props)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DeepResearchRunView",
+          "signature": "export function DeepResearchRunView({ r }: Props)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DeepResearchTopBar",
+          "signature": "export function DeepResearchTopBar({ r, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "CTRL_BTN_BASE",
+          "signature": "export const CTRL_BTN_BASE = \"flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors\";"
+        },
+        {
+          "kind": "variable",
+          "name": "CTRL_BTN",
+          "signature": "export const CTRL_BTN = `${CTRL_BTN_BASE} border-hairline text-text-muted hover:text-text`;"
+        },
+        {
+          "kind": "variable",
+          "name": "KILL_BTN",
+          "signature": "export const KILL_BTN = \"flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10\";"
+        },
+        {
+          "kind": "variable",
+          "name": "NOTIFY_ARMED_BTN",
+          "signature": "export const NOTIFY_ARMED_BTN = `${CTRL_BTN_BASE} border-accent/50 bg-accent/10 text-accent`;"
+        },
+        {
+          "kind": "variable",
+          "name": "PENDING_BTN",
+          "signature": "export const PENDING_BTN = \"flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/useDeepResearchSurfaceState.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDeepResearchSurfaceState",
+          "signature": "export function useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftChange }: Params)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/research/groundedAnswer.ts",
       "public_declarations": [
         {
           "kind": "function",
           "name": "asGroundedAnswer",
           "signature": "export function asGroundedAnswer( report: ReportEvent | null, query: string, ): GroundedAnswer | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AudioModeDialog",
+          "signature": "export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialogProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AudioModeDialogProps",
+          "signature": "export interface AudioModeDialogProps { open: boolean; onOpenChange: (open: boolean) => void; onChoose: (mode: AudioMode) => void; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/AudioProgressRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AudioProgressRow",
+          "signature": "export function AudioProgressRow({ progress }: AudioProgressRowProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AudioProgressRowProps",
+          "signature": "export interface AudioProgressRowProps { progress: AudioProgress | undefined; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AudioSection",
+          "signature": "export function AudioSection({ cid, followUpSeqs, modeOpen, onModeOpenChange, reportQuery, }: AudioSectionProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AudioSectionProps",
+          "signature": "export interface AudioSectionProps { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Controlled: whether the mode-pick dialog is open (parent drives this * when it needs to insert the include-follow-ups step first). */ modeOpen: boolean; onModeOpenChange: (open: boolean) => void; /** B4: report title/query for a meaningful download filename. */ reportQuery: string; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/ExportMdButton.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ExportMdButton",
+          "signature": "export function ExportMdButton({ exporting, onClick }: ExportMdButtonProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ExportMdButtonProps",
+          "signature": "export interface ExportMdButtonProps { exporting: \"md\" | \"pdf\" | null; onClick: () => void; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ExportModal",
+          "signature": "export function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportModalProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ExportModalProps",
+          "signature": "export interface ExportModalProps { open: boolean; onOpenChange: (open: boolean) => void; report: ReportEvent; cid: string; /** Selected follow-up user-message seqs to include (WALK-20). */ followUpSeqs?: number[]; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/ExportPdfButton.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ExportPdfButton",
+          "signature": "export function ExportPdfButton({ exporting, exportCaps, onClick }: ExportPdfButtonProps)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ExportPdfButtonProps",
+          "signature": "export interface ExportPdfButtonProps { exporting: \"md\" | \"pdf\" | null; exportCaps: ExportCapabilities; onClick: () => void; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "audioProgressPct",
+          "signature": "export function audioProgressPct(progress: AudioProgress | undefined): number | null"
+        },
+        {
+          "kind": "function",
+          "name": "audioReasonMessage",
+          "signature": "export function audioReasonMessage(reason: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "audioStageLabel",
+          "signature": "export function audioStageLabel(progress: AudioProgress | undefined): string"
+        },
+        {
+          "kind": "function",
+          "name": "fmtMB",
+          "signature": "export function fmtMB(bytes: number | undefined): string"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "AudioProgress",
+          "signature": "export interface AudioProgress { stage: AudioStage; current?: number; total?: number; // W-08: REAL voice-model download byte counters (only on `downloading_model`). downloaded?: number; bytesTotal?: number; pct?: number; fileIndex?: number; fileTotal?: number; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AudioMode",
+          "signature": "export type AudioMode = \"podcast\" | \"single\";"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AudioStage",
+          "signature": "export type AudioStage = | \"preparing\" | \"downloading_model\" | \"synthesizing\" | \"mixing\" | \"cache_hit\";"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AudioState",
+          "signature": "export type AudioState = | { status: \"idle\" } | { status: \"generating\"; progress?: AudioProgress } | { status: \"done\"; audioUrl: string } | { status: \"unavailable\"; reason: string };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/fileSave.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "downloadBlob",
+          "signature": "export function downloadBlob(blob: Blob, filename: string): void"
+        },
+        {
+          "kind": "function",
+          "name": "hasFSA",
+          "signature": "export function hasFSA(): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "saveViaPicker",
+          "signature": "export async function saveViaPicker( blob: Blob, opts: SaveFilePickerOptions, ): Promise<void>"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "SaveFilePickerOptions",
+          "signature": "export interface SaveFilePickerOptions { suggestedName?: string; types?: Array<{ description?: string; accept: Record<string, string[]> }>; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/filename.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "sanitizeFilename",
+          "signature": "export function sanitizeFilename(name: string): string"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "ACTIVE_BTN",
+          "signature": "export const ACTIVE_BTN = \"flex items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent\";"
+        },
+        {
+          "kind": "variable",
+          "name": "CTRL_BTN",
+          "signature": "export const CTRL_BTN = \"flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAudioOverview",
+          "signature": "export function useAudioOverview({ cid, followUpSeqs, onModeOpenChange, }: UseAudioOverviewOptions): UseAudioOverviewResult"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "UseAudioOverviewOptions",
+          "signature": "export interface UseAudioOverviewOptions { cid: string; /** Selected follow-up seqs to include in the audio (WALK-20). */ followUpSeqs?: number[]; /** Called with `false` right when generation starts, so the caller can * close the mode-pick dialog (mirrors the former inline `generate`). */ onModeOpenChange: (open: boolean) => void; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "UseAudioOverviewResult",
+          "signature": "export interface UseAudioOverviewResult { audio: AudioState; generate: (mode: AudioMode) => Promise<void>; reset: () => void; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/research/needMoreCardParts/useReportExport.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useReportExport",
+          "signature": "export function useReportExport({ cid, reportQuery, followUpSeqs, themeName, themeMode, }: UseReportExportOptions): UseReportExportResult"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "UseReportExportOptions",
+          "signature": "export interface UseReportExportOptions { cid: string; /** The report's title/query \u2014 the filename is derived from it (B4). */ reportQuery: string; /** Selected follow-up seqs to include in the export (WALK-20). */ followUpSeqs?: number[]; /** PDF template selection, threaded into the export POST body. Ignored by * the server for `md`. */ themeName: string; themeMode: string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "UseReportExportResult",
+          "signature": "export interface UseReportExportResult { exporting: \"md\" | \"pdf\" | null; exportError: string | null; /** Whether the File System Access save-picker is available (drives the * dialog's descriptive copy). */ fsa: boolean; handleMd: () => Promise<void>; handleFmt: (fmt: \"pdf\") => Promise<void>; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/researchSurfaceParts/derive.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveEffectiveLeaderId",
+          "signature": "export function deriveEffectiveLeaderId( leaderId: string | null | undefined, lastSelected: string | null | undefined, ): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "deriveNoBlocksYet",
+          "signature": "export function deriveNoBlocksYet(blocksLength: number, streamingBlockId: string | null): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveResearchPhase",
+          "signature": "export function deriveResearchPhase(started: boolean, phase: Phase): \"idle\" | \"running\" | \"done\""
+        },
+        {
+          "kind": "function",
+          "name": "deriveStreamState",
+          "signature": "export function deriveStreamState( answer: GroundedAnswer | null, streamingBlockId: string | null, blocksLength: number, ): \"final\" | \"token\" | \"block\" | \"idle\""
         }
       ]
     },
@@ -21368,6 +22013,66 @@
       ]
     },
     {
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchDerived.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDeepResearchDerived",
+          "signature": "export function useDeepResearchDerived( session: DeepResearchSession | null, stream: DeepResearchStream, ): DeepResearchDerivedApi"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DeepResearchDerivedApi",
+          "signature": "export interface DeepResearchDerivedApi { recoveredQuery: string | null; followUps: MessageEvent[]; effectiveQuery: string | null; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDeepResearchExports",
+          "signature": "export function useDeepResearchExports( session: DeepResearchSession | null, stream: DeepResearchStream, )"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDeepResearchLifecycle",
+          "signature": "export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams)"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DeepResearchLifecycleParams",
+          "signature": "export interface DeepResearchLifecycleParams { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; recencyWindow: \"month\" | \"week\" | null; sources: string[]; preCid: string | null; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; setPreCid: (cid: string | null) => void; stream: DeepResearchStream; /** The recovered real query (resume path), computed by * `useDeepResearchDerived` \u2014 retry() falls back to it when * `session.query` is still the \"(resumed)\" sentinel. */ recoveredQuery: string | null; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useDeepResearchSession",
+          "signature": "export function useDeepResearchSession( resumeCid: string | null | undefined, initialLeaderId: string | null | undefined, initialSources: string[], ): DeepResearchSessionApi"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DeepResearchSessionApi",
+          "signature": "export interface DeepResearchSessionApi { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; setLeaderId: (id: string | null) => void; sources: string[]; setSources: (sources: string[]) => void; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; setIterative: (iterative: boolean) => void; recencyWindow: \"month\" | \"week\" | null; setRecencyWindow: (window: \"month\" | \"week\" | null) => void; /** G1/DR-4: the pre-created cid for the empty state (before first submit). */ preCid: string | null; setPreCid: (cid: string | null) => void; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; /** W-07: lazily obtain the pre-created cid for the Attach affordance so * uploads work BEFORE the user submits. Returns the existing preCid, or * creates one NOW carrying the CURRENT depth/recency/iterative/leader * settings (so the upload lands in the conversation that will actually * run) and stores it so submit() reuses the SAME cid. null offline. */ ensurePreCid: () => Promise<string | null>; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "Tier",
+          "signature": "export type Tier = \"quick\" | \"standard_deep\" | \"exhaustive\";"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/hooks/useDeepResearchStream.ts",
       "public_declarations": [
         {
@@ -22319,6 +23024,36 @@
           "kind": "TypeAliasDeclaration",
           "name": "StepState",
           "signature": "export type StepState = \"pending\" | \"active\" | \"done\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/deepResearchTraceParts/liveTrace.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computeLiveTrace",
+          "signature": "export function computeLiveTrace( events: AgentEvent[], status: ConversationStatus, ): ActivityItem[]"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/deepResearchTraceParts/planProgress.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computePlanProgress",
+          "signature": "export function computePlanProgress( events: AgentEvent[], plan: DeepPlanView | null, ): Map<number, StepState>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/deepResearchTraceParts/stats.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computeStats",
+          "signature": "export function computeStats( events: AgentEvent[], plan: DeepPlanView | null, ): DeepStats"
         }
       ]
     },
@@ -25533,6 +26268,870 @@
       "target_sha256": "b0fbab1f5f0ec1e8bfb0e990e020afa1cafa068c4b8142a8bdc5b2c535b6688c",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "artifactInlineUrl",
+      "target_sha256": "6d3bafd58c7c21791b30c1eb27d300adedbb1ebbeeb22f526dcbf4f8589212b6",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "export",
+      "target_sha256": "c3e88c42bd22ee7cba774af3e07ba9db3d73dadfaecc2b69e65dce9c41a89592",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "previewBootstrapUrl",
+      "target_sha256": "d45e674acb306215fb34e48f9db9dded4edeacc0ad350ecc86c440048771fb1e",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "previewErrorReason",
+      "target_sha256": "e6fa069224dd5dcf2958a0b86eacd67637c340f873450df7a8b2fc2d3130e97e",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "restoreFailureCopy",
+      "target_sha256": "6fc876d41b30f328fae96f8e5137a00323791893a59c7649a297a86b760518d5",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PointButton.tsx",
+      "public_name": "PointButton",
+      "target_sha256": "86d67057b2b8478c52584455cfa09eee245b357137e284b709d90e249f399490",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewStage.tsx",
+      "public_name": "PreviewStage",
+      "target_sha256": "ad8e177962ce9585fb085ae26484373b35a9396e8e3793dd0f42859ac5792d74",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx",
+      "public_name": "PreviewToolbar",
+      "target_sha256": "be44c2df0d1bf97b854fd4a25f5a5519be6389e596a9b7f372434b34a3185c0e",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/PreviewUnavailable.tsx",
+      "public_name": "PreviewUnavailable",
+      "target_sha256": "7ed28778f5b89f2249b6e72cdf6603b459e3eb9a3a49481c64edf016ac39d7b0",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/StaticArtifactViewer.tsx",
+      "public_name": "StaticArtifactViewer",
+      "target_sha256": "43aa495840ef5a03053c7c289b4a849ed8c7713e15c329f83641f5cce9693400",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionBanner.tsx",
+      "public_name": "VersionBanner",
+      "target_sha256": "26560038a72d6f7b786a70b4ba6ffbc76590bd496c840ef830c78ab9d7a187fd",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/VersionPicker.tsx",
+      "public_name": "VersionPicker",
+      "target_sha256": "691353dc573760a77d26a60cc83585b9a3adab819f3f16eaabe676f07cb542f6",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "OwnedPreviewMint",
+      "target_sha256": "3dc183b5157bcfc92d57c3cc46d709a7ff4a48a60c2fc9e7c6de1a8e7fff8866",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeCanEdit",
+      "target_sha256": "a9cfee50e64fd95601181b4f39b7023cc82b58c7905dc1ae50cda00170fc2daf",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeMentionEnabled",
+      "target_sha256": "4932e502d5fb857101d50df507f0a74f67d886e768aae47130af282e27878b7c",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeRequestedLaunchKey",
+      "target_sha256": "7418f78f8ba27f68e1d0d223db7b84189254c46c22cff644be71a5efb4ca82be",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeRuntimeUnavailable",
+      "target_sha256": "8e2a9aaf45abd6557105de5f70827c802e255b4953de4295bacefc370af81db4",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeSelectedTarget",
+      "target_sha256": "b39375258a499990301bb1dce6f2e6a321ab1f8f17531af46429d3b53a3e2fdc",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeShowPointButton",
+      "target_sha256": "3dfa194d9eb860f61f99fb4f738bf7417816bd344d311a4be98efe20cb445cfe",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "computeVisibleFailure",
+      "target_sha256": "c22e08dd16fd2ab9d04de4c158f377eae905e6d6eff4d0bf616d4ff637becc19",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "formatRelativeTime",
+      "target_sha256": "83940bf1d0432484b0022f14ca8b3b5744bc9efe2acb5da8d878e69f407cdd5c",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "latestAppDeliverable",
+      "target_sha256": "8e587c960399255982efeee8d9d3f30c2fa71a156a06dd209dae0cc7661856ad",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "mintOnceForNavigation",
+      "target_sha256": "afa8b8c54a69ea481e9778477be1e7ca499b21fe1b38f703732f9ec945acd6a8",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "originOf",
+      "target_sha256": "8073aa4c4e55165c524db740848b9fa062a1fab36af3cc3cd4cb00d4db8824cd",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewActiveStatus",
+      "target_sha256": "aac8e8b0223957775506f273735e2ce77ee8c4cd0495c906271c3b6cfe5963b6",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewGeneration",
+      "target_sha256": "d0145c64a779fd96c303d41a14c99b0109fbaad7d49bc3f5e86ec3f2c49db9da",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewHasFinishedCommittedApp",
+      "target_sha256": "e763637453c22aec5eeb7b14fff1ae121d248633979510b3d5784a67dfe9f1a1",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewOrigin",
+      "target_sha256": "cbe4b569be7f0214be1207e0bf41f62b22a96b4386e45b223f9fcf536484949b",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewOwnsCanonicalPreview",
+      "target_sha256": "881ea85faf14c90f24e0519ceed71635c0c6ee91cf0d89a93cada57be2b269b9",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewStagePlaceholderMessage",
+      "target_sha256": "7b807e9fc697cdf4d8bf0c2ed3b8117c2523df893473dfccfdedd10711415071",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "previewWebSignal",
+      "target_sha256": "e94eac54574d35d5108aa98de0673f1feb655bcb6d4a3e8234d5870f9274c1bb",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "refreshTarget",
+      "target_sha256": "5c0aaa5b43e4ca1b768ab6db8f40d418e9229c7ae1f019cbfddafe3ad96f877b",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "shouldShowStaticArtifactViewer",
+      "target_sha256": "c35edb653bec15502e2c5d8da9c6e16943e600de0d4f6f8e5efc70e4a7774c06",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "shouldShowStatusOverlay",
+      "target_sha256": "7c4e78db7a2dd8ee5334c6614da0f252ada0a5576eef53a990114135ad392a70",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "shouldShowUpdateErrorBanner",
+      "target_sha256": "d953f08e705b3beb227b3149fa1691e2355fd51592cc82d70aeb065aac2cdf00",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "statusOverlayMessage",
+      "target_sha256": "7caa315f4a5a75cce6d170ff87bd32e38525375baa686dbdc318b540d2d29dc3",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "statusOverlayRole",
+      "target_sha256": "32e0b0b630062c35b444f972caacd0664e806fbcf9f251ec2b5b5b0ceba11021",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "triggerBadgeClass",
+      "target_sha256": "3e1b156bc9c198e22a77341f222523776ad3c44b126f1fb301a98011f7e43f5c",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/helpers.ts",
+      "public_name": "versionLabel",
+      "target_sha256": "e959350793646b5bbb381bad90e2bdd7c33693c62d597f66545940d872f10b62",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewAutoRefresh.ts",
+      "public_name": "usePreviewAutoRefresh",
+      "target_sha256": "be61fb9ffa108ac80224800e1a5809707f154f55f606c6cc562225d784c3abff",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "PreviewLaunchState",
+      "target_sha256": "f0976f67ac781244d28645b3c084999da024d7bd992713130eea56c77b0d778b",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewLaunch.ts",
+      "public_name": "usePreviewLaunch",
+      "target_sha256": "c826eba95d4d4bac4dc3a18ba0b66a7dccfab539684e8e824c4a27d0dec17b5a",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/usePreviewRouteBridge.ts",
+      "public_name": "usePreviewRouteBridge",
+      "target_sha256": "fa296d829644a7a3bf99b3600962b80c24225823b242a3ec726da5db7d91fb21",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/useWorkspaceRollback.ts",
+      "public_name": "WorkspaceRollbackState",
+      "target_sha256": "ab4bef9add0585b93c4a17e30348c395ca8887cd79dc310c1341348e112e6817",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/canvas/previewPaneParts/useWorkspaceRollback.ts",
+      "public_name": "useWorkspaceRollback",
+      "target_sha256": "5fad3d3a334f78a882f200d78ca8a2939a3ebc37ebdbb339e357cfe0ae2b589a",
+      "owner_package": "PKG-12-FE-PREVIEW",
+      "reason": "Epic 12-C (PKG-12-FE-PREVIEW): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "AudioStreamEvent",
+      "target_sha256": "a031ffd618b75651852fd78314648600d91e4412c8aa7c6945909aaccb487038",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "absoluteAudioUrl",
+      "target_sha256": "5824a42301098014878811b30e56c5216ba122dbad2ff3363e0348763d6057ce",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "fetchReportExportBlob",
+      "target_sha256": "e19f5c8906b04de45b7fba5ab83770e6b284f02d5e9d138c2210775b412d8ca7",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "requestReportAudioBlocking",
+      "target_sha256": "5dbdaa7db68d5dd333b63b44da09f5ba2d9981837727b2903e822607689e553a",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "streamReportAudio",
+      "target_sha256": "6f937524db7838286cdd6a9050ab1a3d9feeb0804170ca8c5dfd94b3156a9949",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchComposer.tsx",
+      "public_name": "DeepResearchComposer",
+      "target_sha256": "676696a285310e7b23882a9ba47a3dd3711c248b7972a51d36e1ae3b4d5f32d9",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx",
+      "public_name": "DeepResearchReportView",
+      "target_sha256": "a81dce1ecf626b8c849cf64de3e0a5eecc901ee04943123ba87ebf9f32fbb570",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.tsx",
+      "public_name": "DeepResearchRunView",
+      "target_sha256": "6b666d7a2ee1a6966b84c92744e6b108b216b61dad6e1fc0078b88faf6a05fd5",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_name": "DeepResearchTopBar",
+      "target_sha256": "dd9c1b0a2224bf4300a80aea3ea8941ea63f956d8641b4b461d8622ea57b7e88",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "CTRL_BTN",
+      "target_sha256": "4cdfa901c95ec93122dd121bb2c4669fdbaa13a18fa8bd7765a5620f53ac6225",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "CTRL_BTN_BASE",
+      "target_sha256": "5b5646c51b1239a0b40de9d95be91df1ec35477f52746f801ec26c758cea2e6c",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "KILL_BTN",
+      "target_sha256": "b6c0d2b2a978b484359d592f9c0592558e2980fdaaa99cf76f160e3403395a1b",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "NOTIFY_ARMED_BTN",
+      "target_sha256": "1c916bdf3f44e81f1ec5525dde59302e3d959f5a2adeb6bf210221dc29a29d09",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "PENDING_BTN",
+      "target_sha256": "78f2cf03481ea689fa45173a95b8f78cbd1b0ddfc1bd200a2d1454b93ceaac55",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/useDeepResearchSurfaceState.ts",
+      "public_name": "useDeepResearchSurfaceState",
+      "target_sha256": "78112dcb37b1f32a1575ccfddba5ec8ee296f135cf2301f80879279b3ae34f55",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialog",
+      "target_sha256": "051a59af3bf01ee6501114dd14915f83fca7f82b0724358e6d3007beb1d32199",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioModeDialog.tsx",
+      "public_name": "AudioModeDialogProps",
+      "target_sha256": "76a8f5e6451427bc3a73676315fc1959597401b337fa1a5ed290e6d09c795ba6",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioProgressRow.tsx",
+      "public_name": "AudioProgressRow",
+      "target_sha256": "96d05964f5ebcfb415879e0eb96d7bc182247532b349848cb0e23d543e04d908",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioProgressRow.tsx",
+      "public_name": "AudioProgressRowProps",
+      "target_sha256": "bdab64d208ac0c941faef5f206296430a0d11230ba437fec16aa31faa73fd8e6",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSection",
+      "target_sha256": "0edc177e48130978eccca7958aeeac5a8cb568f3ce155d8a42fb85652465428f",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/AudioSection.tsx",
+      "public_name": "AudioSectionProps",
+      "target_sha256": "c5dfb76da036500c831f5b33c0db99a0283b278db3dd8d2c7d8de01e56b4c8f4",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportMdButton.tsx",
+      "public_name": "ExportMdButton",
+      "target_sha256": "0685a2562acb64bd2e7ee0db19907529b54298fe02ad1fa6c0238c24ef99480b",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportMdButton.tsx",
+      "public_name": "ExportMdButtonProps",
+      "target_sha256": "7a63e6ecd22c68f3b2705ab6b3ff3550136320f2ec28abce2d8bfb3d90bcfdd0",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModal",
+      "target_sha256": "f8ca78f2c138dc63ef2ec43e17c3085cc0c74662225ff7acd0811a159947930c",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportModal.tsx",
+      "public_name": "ExportModalProps",
+      "target_sha256": "51219e1d03924af62ad552dc892f59df03c16db75ef75b9dda7e8180f02a27b0",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportPdfButton.tsx",
+      "public_name": "ExportPdfButton",
+      "target_sha256": "f50d1b7c5bb935c79ee73ecf8835f806d67b963aaca385203a742a079151b731",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/ExportPdfButton.tsx",
+      "public_name": "ExportPdfButtonProps",
+      "target_sha256": "0172d2e14b9cee301af4919d63cc767677de50f67922ff000a8d1635ef051d3f",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioMode",
+      "target_sha256": "6c169ac804fc688f9a39b2de09680eb85c543b2065194e50769ffcb5a4aa3174",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioProgress",
+      "target_sha256": "18f77ae48ebad2a75c8970f480f68259a4a2f45f98e33bf21e628e2e83083613",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioStage",
+      "target_sha256": "8b9d99ec38f568686cbe5a326b813d8e734a2af70260300b3f5a0aca80563f3a",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "AudioState",
+      "target_sha256": "5a8200abc375d29efdee350c3ae8900409c685764e06a4248dbe693712427b37",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioProgressPct",
+      "target_sha256": "63a77f8bb89e17ace9e7b704b0460466f6d4150c36cd9efd651d1cc263015a46",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioReasonMessage",
+      "target_sha256": "ee862ba1a4c6bc007f21a02bd06652ca1d71c579d4c167fcac266a0da2b242a6",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "audioStageLabel",
+      "target_sha256": "52f2a0c9f99b4d598647acbd91bfec31316b93381e50f37c4dce78b955524b82",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/audioProgress.ts",
+      "public_name": "fmtMB",
+      "target_sha256": "d38afe4a0bebd663561056461312de3430cdb4ee03ca836862ff2d68b8d68cac",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/fileSave.ts",
+      "public_name": "SaveFilePickerOptions",
+      "target_sha256": "03e7f16f2ff4c4c4345d4207998f0c656bea270ee3e6d816f52126be46412808",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/fileSave.ts",
+      "public_name": "downloadBlob",
+      "target_sha256": "f96a7862756453081b0f9b24d4cd0403cbe925767ba902dc50aa8a42774affe4",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/fileSave.ts",
+      "public_name": "hasFSA",
+      "target_sha256": "2215f6fccac1b34bd7fb22f54fe056d05154f8d3cf50910501f88a495517acb3",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/fileSave.ts",
+      "public_name": "saveViaPicker",
+      "target_sha256": "d5fcccd496f852c748c6b992354f4b944295fe6ab84556c787cf0502c28f65cd",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/filename.ts",
+      "public_name": "sanitizeFilename",
+      "target_sha256": "6b4da3a80f538627e98e8fe068552ad80875e070a570b9c4020fb29f95eb638b",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
+      "public_name": "ACTIVE_BTN",
+      "target_sha256": "3a220e76b2107082d0835c309dbd1a87419a2bdf3ae6706787f153816681c03d",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
+      "public_name": "CTRL_BTN",
+      "target_sha256": "1735254dff480dabbaa826de12603d6f2ce4c619e9cdd1d243c9412c8f094e86",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_name": "UseAudioOverviewOptions",
+      "target_sha256": "41334b10e7dabebe1088111ac0133633bcdf3363d9a8d5fe24777539b7d20e6e",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_name": "UseAudioOverviewResult",
+      "target_sha256": "9694a90ebc31b9c80cc2613994ebf88908e7346d8a55f4d64e46a886090c5bd6",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useAudioOverview.ts",
+      "public_name": "useAudioOverview",
+      "target_sha256": "42da8f2619a2c58f1562fb608a80712dc56af97875a080b38ca242e0ef5cf4eb",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useReportExport.ts",
+      "public_name": "UseReportExportOptions",
+      "target_sha256": "344acb1e9b842e7684fe07760bef242fc668a3ae4e6d75fd5028a0094d983e59",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useReportExport.ts",
+      "public_name": "UseReportExportResult",
+      "target_sha256": "253557dbedf309b2dc2f70e52ec60abb78f404df71b9b7db5029a75df911c2b1",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/useReportExport.ts",
+      "public_name": "useReportExport",
+      "target_sha256": "96dbdcf7d994518b891d5451090c5d8e098fbdce08f54af7e25d563149c79850",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/researchSurfaceParts/derive.ts",
+      "public_name": "deriveEffectiveLeaderId",
+      "target_sha256": "f334d86c6d50388fb9961e1e67d9e1514d13044c738f2c24f819a725415393e8",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/researchSurfaceParts/derive.ts",
+      "public_name": "deriveNoBlocksYet",
+      "target_sha256": "11c0ec360491f55b297912497ad9c0aa0c5033c2811c9f802f5dcb8c3d0eaf83",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/researchSurfaceParts/derive.ts",
+      "public_name": "deriveResearchPhase",
+      "target_sha256": "2599557c501ad2de3ef4b90aa7d7c51b9c2541a8512b20b7236a927f9574525c",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/researchSurfaceParts/derive.ts",
+      "public_name": "deriveStreamState",
+      "target_sha256": "0c0c70a39958b825f3a06ebba4bf8745b7444b18794b69a2dc822bc6b19756f4",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchDerived.ts",
+      "public_name": "DeepResearchDerivedApi",
+      "target_sha256": "ef75b92b9be8932e8648e4b82913812292bd659bf530392cb5da4d2a6913aeb0",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchDerived.ts",
+      "public_name": "useDeepResearchDerived",
+      "target_sha256": "7dfdd220967d9099717f948016a2c18448fb6157febbf0069f8b178ec0bb7dff",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
+      "public_name": "useDeepResearchExports",
+      "target_sha256": "11bf18b7e51c86c55f80a65bd9b9924f2a27ffe99d1bf7a16d39fd5b059f0ae3",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
+      "public_name": "DeepResearchLifecycleParams",
+      "target_sha256": "a16af191b5110b46cd1c0917ad9b7d2714d9c26abe74c33098a87032277731f2",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
+      "public_name": "useDeepResearchLifecycle",
+      "target_sha256": "9f8651407d824fcf2002d67ee4f2e235828bb299d825eda9abacb8553349aa93",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_name": "DeepResearchSessionApi",
+      "target_sha256": "39ee33ffa668ffa4e4fe4ac79c9094291dd5e22750e355872271a053633d4034",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_name": "Tier",
+      "target_sha256": "92d77906057df9feb17f571f9c93fe49fc5d88fa708b8a5e3f8a1bccb1518591",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_name": "useDeepResearchSession",
+      "target_sha256": "65ee978dcf0f7b29c2001c0e9c11ec4845a966adb63738d8fd6484e6001204e8",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTraceParts/liveTrace.ts",
+      "public_name": "computeLiveTrace",
+      "target_sha256": "4c0dac2ce026c4a1931d8e57139fd513de82330a925eb74b01056a668cf44411",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTraceParts/planProgress.ts",
+      "public_name": "computePlanProgress",
+      "target_sha256": "7cc5d9b0202ad41ddeab4ed0264cfa1e6dc00ef2cce4175558f44038329aa876",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/deepResearchTraceParts/stats.ts",
+      "public_name": "computeStats",
+      "target_sha256": "fc89f1559aef4133e039f8b7a84d36be482e8de7ae38aca64481121d141ad80c",
+      "owner_package": "PKG-12-FE-RESEARCH",
+      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
     {
       "surface": "frontend",

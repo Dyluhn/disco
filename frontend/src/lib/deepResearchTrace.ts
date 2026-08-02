@@ -12,15 +12,30 @@
  *   "observation"         — result of a search round (added, total_for_subq, …)
  *   "gap_reason"          — the gap-reasoner's verdict + follow-up
  * The final ReportEvent is the assembled report.
+ *
+ * Module-size and complexity decomposition (PKG-12-C/TS-0051..TS-0053): the
+ * three highest-mccabe derivers' implementations moved to
+ * `./deepResearchTraceParts/*` so each callable stays under the architecture
+ * caps — `deriveStats` alone went from 37 branches to a dispatcher plus one
+ * small handler per tool_name.
+ *
+ * The PUBLIC DECLARATIONS deliberately stay HERE rather than becoming a
+ * barrel of `export … from` re-exports — see `buildTrace.ts`'s header for why
+ * (a re-export reads to the scanner as deleting the original declaration).
+ * Frontend function signatures are digested WITHOUT the body, so a thin
+ * delegator keeps each digest byte-identical. The types are declared here and
+ * imported back by the parts (parent↔parts imports are campaign-normal);
+ * type imports are erased at compile time, so that cycle never exists at
+ * runtime.
  */
 
 import type { ActivityItem } from "@/lib/buildTrace";
-import { splitThink } from "@/lib/think";
+import { computeLiveTrace } from "./deepResearchTraceParts/liveTrace";
+import { computePlanProgress } from "./deepResearchTraceParts/planProgress";
+import { computeStats } from "./deepResearchTraceParts/stats";
 import type {
-  ActionEvent,
   AgentEvent,
   ConversationStatus,
-  ObservationEvent,
   PlanStep,
   ReportEvent,
   ReportSection,
@@ -63,35 +78,7 @@ export function derivePlanProgress(
   events: AgentEvent[],
   plan: DeepPlanView | null,
 ): Map<number, StepState> {
-  const map = new Map<number, StepState>();
-  if (!plan) return map;
-  const titleIndex = new Map<string, number>();
-  plan.steps.forEach((s, i) => titleIndex.set(s.title, i + 1)); // 1-based
-
-  for (const e of events) {
-    if (e.kind !== "action" || !e.tool_call) continue;
-    const name = e.tool_call.tool_name;
-    const args = e.tool_call.arguments;
-    if (name === "search") {
-      const subq = String(args.subquestion ?? "");
-      const idx = titleIndex.get(subq);
-      if (idx !== undefined && map.get(idx) !== "done") {
-        map.set(idx, "active");
-      }
-    } else if (name === "synthesize_section") {
-      // Writing STARTED — the step is being worked, not finished. Marking it
-      // done here (the old behavior) checked steps off ~30-60s early on local
-      // models and left the strip lying about progress.
-      const section = String(args.section ?? "");
-      const idx = titleIndex.get(section);
-      if (idx !== undefined && map.get(idx) !== "done") map.set(idx, "active");
-    } else if (name === "section_done") {
-      const title = String(args.title ?? "");
-      const idx = titleIndex.get(title);
-      if (idx !== undefined) map.set(idx, "done");
-    }
-  }
-  return map;
+  return computePlanProgress(events, plan);
 }
 
 export interface DeepStats {
@@ -125,89 +112,7 @@ export function deriveStats(
   events: AgentEvent[],
   plan: DeepPlanView | null,
 ): DeepStats {
-  let activeSubq: { title: string; index: number } | null = null;
-  let activeRound: { current: number; max: number } | null = null;
-  let sourcesDiscovered = 0;
-  let phase: string | null = null;
-  let activeSection: { title: string; index: number } | null = null;
-  let lastThought: string | null = null;
-  let firstSeq = Number.POSITIVE_INFINITY;
-  let lastSeq = 0;
-  const titleIndex = new Map<string, number>();
-  plan?.steps.forEach((s, i) => titleIndex.set(s.title, i + 1));
-
-  for (const e of events) {
-    if (e.seq != null) {
-      firstSeq = Math.min(firstSeq, e.seq);
-      lastSeq = Math.max(lastSeq, e.seq);
-    }
-    if (e.kind === "action" && e.tool_call) {
-      const name = e.tool_call.tool_name;
-      const args = e.tool_call.arguments;
-      if (name === "search") {
-        const subq = String(args.subquestion ?? "");
-        const idx = titleIndex.get(subq);
-        if (idx !== undefined) {
-          activeSubq = { title: subq, index: idx };
-          const cur = Number(args.round);
-          const max = Number(args.rounds_max);
-          if (Number.isFinite(cur) && Number.isFinite(max)) {
-            activeRound = { current: cur, max };
-          }
-        }
-      } else if (name === "synthesize_section") {
-        // Writing this section now — the heartbeat for the quiet stretch.
-        const section = String(args.section ?? "");
-        const idx = titleIndex.get(section);
-        activeSection = { title: section, index: idx ?? 0 };
-        if (activeSubq && activeSubq.title === section) activeSubq = null;
-        activeRound = null; // rounds are a gather concept
-      } else if (name === "section_done") {
-        const title = String(args.title ?? "");
-        if (activeSection && activeSection.title === title) activeSection = null;
-        lastThought = `Finished “${title}”`;
-      } else if (name === "phase") {
-        phase = String(args.phase ?? "") || null;
-      }
-    } else if (e.kind === "observation" && (e as ObservationEvent).tool_result) {
-      const r = (e as ObservationEvent).tool_result;
-      if (r.tool_name === "observation" && r.structured) {
-        const added = Number(r.structured.added);
-        if (Number.isFinite(added)) sourcesDiscovered += added;
-      } else if (r.tool_name === "gap_reason" && r.structured) {
-        // The engine's between-rounds reasoning: what it found, whether it's
-        // sufficient, what's still missing — the Google-style "thought" line.
-        const rationale = String(r.structured.rationale ?? "").trim();
-        if (rationale) lastThought = rationale;
-      }
-    }
-  }
-
-  const subquestionsTotal = plan?.steps.length ?? 0;
-  let subquestionsDone = 0;
-  if (plan) {
-    const progress = derivePlanProgress(events, plan);
-    for (const v of progress.values()) if (v === "done") subquestionsDone += 1;
-  }
-  // event seqs are monotonic per-conversation; we use them as a coarse "ticks"
-  // proxy when no timestamps are available. The surface renders this as
-  // "9 min elapsed" only if it's plausible — null otherwise.
-  const elapsedSeconds =
-    Number.isFinite(firstSeq) && lastSeq > firstSeq
-      ? null // we don't have wall-clock timestamps on events; surface omits
-      : null;
-
-  return {
-    subquestionsTotal,
-    subquestionsDone,
-    activeSubquestion: activeSubq,
-    activeRound,
-    sourcesDiscovered,
-    elapsedSeconds,
-    phase,
-    activeSection,
-    lastThought,
-  };
+  return computeStats(events, plan);
 }
 
 /** The final, assembled ReportEvent — null until the engine emits it. */
@@ -265,52 +170,6 @@ export function deriveAssemblingSections(
 
 // ---- live activity (trace) -------------------------------------------------
 
-/** Same verb-map pattern as buildTrace, specialized for the engine's tools. */
-const VERB: Record<string, (a: Record<string, unknown>) => string> = {
-  phase: (a) => {
-    const p = String(a.phase ?? "");
-    if (p === "gather") return `Gathering sources`;
-    if (p === "synthesize") return `Writing the report`;
-    if (p === "coherence") return `Drafting the executive summary`;
-    return `Phase: ${p}`;
-  },
-  search: (a) =>
-    a.label != null
-      ? `Iterating on section "${a.label}"`
-      : `Searching: "${a.query ?? ""}"`,
-  synthesize_section: (a) =>
-    a.label != null
-      ? `Rewriting section: ${a.label}`
-      : `Writing section: ${a.section ?? ""}`,
-};
-
-function plainLabel(toolName: string, args: Record<string, unknown>): string {
-  return (VERB[toolName] ?? (() => `${toolName}`))(args);
-}
-
-function truncateWithEllipsis(text: string, maxChars: number): string {
-  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
-}
-
-function plainObservation(toolName: string, structured: Record<string, unknown>): string {
-  if (toolName === "observation") {
-    const added = structured.added;
-    const total = structured.total_for_subq;
-    const round = structured.round;
-    if (typeof added === "number" && typeof total === "number") {
-      return `Round ${round}: +${added} sources (${total} total for this sub-question)`;
-    }
-  }
-  if (toolName === "gap_reason") {
-    const sufficient = Boolean(structured.sufficient);
-    const rationale = String(structured.rationale ?? "");
-    return sufficient
-      ? `Coverage sufficient`
-      : `Gap noted: ${truncateWithEllipsis(splitThink(rationale).answer || rationale, 100)}`;
-  }
-  return "";
-}
-
 /** Translate the event stream into ActivityFeed items — the live progress
  *  trace's body. Reuses ActivityFeed verbatim (same prop shape). Engine
  *  internals (phase markers) are filtered to the user-visible operations. */
@@ -318,58 +177,7 @@ export function deriveLiveTrace(
   events: AgentEvent[],
   status: ConversationStatus,
 ): ActivityItem[] {
-  const items: ActivityItem[] = [];
-  const observed = new Map<string, ObservationEvent>();
-  for (const e of events) {
-    if (e.kind === "observation") {
-      observed.set(e.action_id, e as ObservationEvent);
-    }
-  }
-  // "Writing section: X" items keyed by section title, so the engine's
-  // section_done checkpoint marks ITS row done instead of rendering as a raw
-  // internal name (the "section_done" leak).
-  const synthByTitle = new Map<string, ActivityItem>();
-  for (const e of events) {
-    if (e.kind !== "action" || !e.tool_call) continue;
-    const tc = e.tool_call;
-    if (tc.tool_name === "phase") continue; // engine internals — skip
-    if (tc.tool_name === "section_done") {
-      const item = synthByTitle.get(String(tc.arguments.title ?? ""));
-      if (item) item.status = "done";
-      continue; // a checkpoint, not a user-visible operation of its own
-    }
-    if (!(tc.tool_name in VERB)) continue; // NEVER render internals raw
-    const action = e as ActionEvent;
-    const obs = observed.get(action.id);
-    const label = plainLabel(tc.tool_name, tc.arguments);
-    let detail: string | undefined;
-    if (obs && obs.tool_result.structured) {
-      detail = plainObservation(
-        obs.tool_result.tool_name,
-        obs.tool_result.structured,
-      );
-    }
-    let st: ActivityItem["status"];
-    if (obs) st = "done";
-    else if (status === "RUNNING") st = "running";
-    else st = "done";
-    const item: ActivityItem = {
-      id: e.id,
-      kind: "action",
-      label,
-      detail,
-      status: st,
-      attention: false,
-    };
-    if (tc.tool_name === "synthesize_section") {
-      // No observation pairs with a section write — section_done (above) is its
-      // completion signal. Until then it runs; on terminal status it settles.
-      item.status = status === "RUNNING" ? "running" : "done";
-      synthByTitle.set(String(tc.arguments.section ?? ""), item);
-    }
-    items.push(item);
-  }
-  return items;
+  return computeLiveTrace(events, status);
 }
 
 // ---- source tiers ----------------------------------------------------------

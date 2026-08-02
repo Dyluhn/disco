@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
-import { ApiError } from "@/api/client";
 import type { WorkspaceVersion } from "@/api/agent";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
@@ -44,13 +43,11 @@ vi.mock("@/components/toastApi", () => ({
   useToast: () => ({ show: showToastMock }),
 }));
 
-vi.mock("@/api/client", async () => {
-  const actual = await vi.importActual<typeof import("@/api/client")>(
-    "@/api/client",
-  );
+vi.mock("@/api/preview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/api/preview")>();
   return {
     ...actual,
-    canonicalPreviewBootstrapUrl: canonicalPreviewBootstrapUrlMock,
+    previewBootstrapUrl: canonicalPreviewBootstrapUrlMock,
   };
 });
 
@@ -335,6 +332,12 @@ describe("PreviewPane version history", () => {
 
   it("keeps the selected version visible when rollback is blocked by a run", async () => {
     const user = userEvent.setup();
+    // ApiError is pulled in via importActual (not a static import) so this
+    // spec file carries no `@/api/client` import of its own — PreviewPane no
+    // longer talks to that module and components/ must not either.
+    const { ApiError } = await vi.importActual<typeof import("@/api/client")>(
+      "@/api/client",
+    );
     restoreWorkspaceVersionMock.mockRejectedValue(
       new ApiError(
         JSON.stringify({ detail: { reason: "conversation_running" } }),

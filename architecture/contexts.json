@@ -54,7 +54,7 @@
         },
         "research": {
           "description": "Research UI controller/projection",
-          "modules": ["hooks/useDeepResearch", "browseprovider"]
+          "modules": ["hooks/useDeepResearch", "hooks/useDeepResearchParts", "browseprovider"]
         },
         "preview": {
           "description": "Preview/browser UI controller",
@@ -81,7 +81,6 @@
           ["frontend/src/components/build/DeckEditorPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/build/canvas/PreviewPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/research/NeedMoreCard.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
-          ["frontend/src/hooks/useDeepResearch.ts", "research", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/settings/AudioSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
           ["frontend/src/components/settings/DataSourcesSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
           ["frontend/src/components/settings/ImageGenSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
@@ -95,6 +94,16 @@
           ["frontend/src/components/build/ExecutionCanvas.tsx", "shell", "@/hooks/useBuildStream", "frontend/src/hooks/useBuildStream.ts", "build"],
           ["frontend/src/components/build/canvas/FilesPane.tsx", "shell", "@/hooks/useBuildStream", "frontend/src/hooks/useBuildStream.ts", "build"],
           ["frontend/src/components/research/DeepResearchSurface.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/components/build/canvas/previewPaneParts/PreviewToolbar.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/build/canvas/previewPaneParts/VersionPicker.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/build/canvas/previewPaneParts/helpers.ts", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/build/canvas/previewPaneParts/useWorkspaceRollback.ts", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
+          ["frontend/src/components/research/deepResearchSurfaceParts/DeepResearchComposer.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/components/research/deepResearchSurfaceParts/DeepResearchRunView.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/components/research/deepResearchSurfaceParts/useDeepResearchSurfaceState.ts", "shell", "@/hooks/useDeepResearch", "frontend/src/hooks/useDeepResearch.ts", "research"],
+          ["frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts", "research", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/buildSurface/BuildActivityFeed.tsx", "build", "@/components/build/ReplayScrubber", "frontend/src/components/build/ReplayScrubber.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildActivityFeedContent.tsx", "build", "@/components/build/ActivityFeed", "frontend/src/components/build/ActivityFeed.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildActivityFeedContent.tsx", "build", "@/components/build/BuildModelPicker", "frontend/src/components/build/BuildModelPicker.tsx", "shell"],

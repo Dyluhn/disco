@@ -854,7 +854,14 @@ class TestFrontendPublicApi:
         # into 65 new modules and folded `buildTrace/activityTypes.ts` back into
         # its parent (net +64). Every one of them is additive surface — the 12-B
         # regeneration proves 0 deleted and 0 changed declarations.
-        assert len(live["frontend_modules"]) == 298
+        # 337 after Epic 12-C decomposed PKG-12-FE-RESEARCH + PKG-12-FE-PREVIEW
+        # into 39 new modules (`previewPaneParts`, `needMoreCardParts`,
+        # `deepResearchSurfaceParts`, `researchSurfaceParts`, `useDeepResearchParts`,
+        # `deepResearchTraceParts`, plus `api/preview.ts`). Same shape and same
+        # proof: the 12-C regeneration asserts 0 deleted and 0 changed identities,
+        # because every decomposed module keeps DECLARING its own surface and the
+        # frontend digest is computed withoutBody.
+        assert len(live["frontend_modules"]) == 337
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

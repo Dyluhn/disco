@@ -13,11 +13,17 @@ import { SuggestionChips } from "./SuggestionChips";
 import { TtftIndicator } from "./TtftIndicator";
 import { DeepResearchSurface } from "./research/DeepResearchSurface";
 import { EmptyState, ErrorState } from "./states";
+import {
+  deriveEffectiveLeaderId,
+  deriveNoBlocksYet,
+  deriveResearchPhase,
+  deriveStreamState,
+} from "./researchSurfaceParts/derive";
 
 export function ResearchSurface() {
   const r = useResearch();
   const started = r.scope !== null;
-  const noBlocksYet = r.blocks.length === 0 && r.streamingBlockId === null;
+  const noBlocksYet = deriveNoBlocksYet(r.blocks.length, r.streamingBlockId);
 
   // Per-conversation controls (Prompt 3C): the lead-model override (null = use
   // the Settings default) and the Think flag. Session-local; ride along on submit.
@@ -42,7 +48,7 @@ export function ResearchSurface() {
   const [draft, setDraft] = useState("");
 
   const { data: lastSelected } = useLastSelectedModel();
-  const effectiveLeaderId = leaderId === undefined ? (lastSelected ?? null) : leaderId;
+  const effectiveLeaderId = deriveEffectiveLeaderId(leaderId, lastSelected);
 
   const submit = useCallback(
     (query: string) =>
@@ -85,21 +91,12 @@ export function ResearchSurface() {
     onThinkChange: setThink,
   };
 
-  // Gap #29 — a stable, assertable phase attribute on the surface. The submit
-  // answer itself is model+live-search+streaming (non-deterministic), but the
-  // PHASE TRANSITIONS (idle → running → done) are deterministic and can be
-  // asserted by the harness without depending on the answer content.
-  const researchPhase = !started ? "idle" : r.phase === "running" ? "running" : "done";
-  // Gap #38 — expose the token/block/final stream reconciliation as a stable
-  // attribute so a fixture-driven test can assert the standard-search stream
-  // state machine (idle → token → block → final) without scraping the DOM.
-  const streamState = r.answer
-    ? "final"
-    : r.streamingBlockId
-      ? "token"
-      : r.blocks.length > 0
-        ? "block"
-        : "idle";
+  // Gap #29 — a stable, assertable phase attribute on the surface (see
+  // deriveResearchPhase in researchSurfaceParts/derive.ts for the rationale).
+  const researchPhase = deriveResearchPhase(started, r.phase);
+  // Gap #38 — the token/block/final stream reconciliation attribute (see
+  // deriveStreamState in researchSurfaceParts/derive.ts for the rationale).
+  const streamState = deriveStreamState(r.answer, r.streamingBlockId, r.blocks.length);
 
   // The shell (Prompt 2) owns the chrome — wordmark in the rail, theme toggle +
   // mode indicator in the top bar — so this surface no longer renders a header;
