@@ -248,8 +248,13 @@ class TestMappingStatic:
             # test ids — one case is parametrized over the three discovered
             # trusted-component probes — so the same two-count split applies
             # again, in different proportions.
-            "python_test_file_count": 790,
-            "python_static_test_id_count": 9365,
+            # 791 from the Epic 12-A boundary: tests/architecture/
+            # test_frontend_declarations.py, the mutation battery for the fourth
+            # public-API authority. Its 27 static test ids are 37 collected node
+            # ids — one case is parametrized over eleven invalid-row mutations —
+            # so the split runs the other way here than it did for A6.
+            "python_test_file_count": 791,
+            "python_static_test_id_count": 9392,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -538,11 +543,11 @@ class TestCollectedCounts:
             "packages": 9876,
             "harness": 1253,
             "integrations": 9,
-            "tests": 339,
+            "tests": 376,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11477 == sum(expected.values())
+        assert collected["total"] == 11514 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -558,7 +563,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11477}
+        assert result == {"collected_total": 11514}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -577,9 +582,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9365,
+            "python_static_ids": 9392,
             "typescript_static_ids": 1203,
-            "collected_total": 11477,
+            "collected_total": 11514,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

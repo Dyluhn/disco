@@ -36,6 +36,19 @@ MEMBER_FIELDS = {
     "accepting_commit",
     "accepting_receipt",
 }
+DECLARATION_FIELDS = {
+    "surface",
+    "path",
+    "public_name",
+    "declaration_kind",
+    "old_signature",
+    "new_signature",
+    "old_target_sha256",
+    "new_target_sha256",
+    "owner_package",
+    "accepting_commit",
+    "accepting_receipt",
+}
 ACCEPTED_DIAGRAM_SHA256 = (
     "759993f1a3104700efe8f48395923117546bd0fd1ca371681bc2a09fc95b9f26"
 )
