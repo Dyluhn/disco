@@ -5,10 +5,9 @@ import { useDeleteProvider, useModels, useProviders } from "@/hooks/useModels";
 import type { ModelInfo, ProviderMutationResult } from "@/types/models";
 import { AddProviderForm } from "./AddProviderForm";
 import { BrowseProvider } from "./BrowseProvider";
-import type { ApiErrorPredicate } from "./helpers";
 import { errorText, hostLabel } from "./helpers";
 
-export function GenericProviders({ isApiError }: { isApiError: ApiErrorPredicate }) {
+export function GenericProviders() {
   const { data: providers } = useProviders();
   const { data: models } = useModels();
   const remove = useDeleteProvider();
@@ -32,7 +31,6 @@ export function GenericProviders({ isApiError }: { isApiError: ApiErrorPredicate
   return (
     <div className="flex flex-col gap-inline">
       <AddProviderForm
-        isApiError={isApiError}
         onCreated={(result) => {
           setCreateNotice(result);
           setActiveId(result.provider.id);
@@ -103,7 +101,7 @@ export function GenericProviders({ isApiError }: { isApiError: ApiErrorPredicate
                       onClick={() => {
                         setDeleteError(null);
                         remove.mutate(provider.id, {
-                          onError: (err) => setDeleteError(errorText(err, isApiError)),
+                          onError: (err) => setDeleteError(errorText(err)),
                           onSuccess: () =>
                             setActiveId((current) =>
                               current === provider.id ? null : current,
@@ -120,7 +118,6 @@ export function GenericProviders({ isApiError }: { isApiError: ApiErrorPredicate
                   <BrowseProvider
                     provider={provider}
                     enabledModels={enabledModels}
-                    isApiError={isApiError}
                   />
                 )}
               </li>

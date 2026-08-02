@@ -1,7 +1,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, KeyRound, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ApiError, isLive } from "@/api/client";
+import { isApiFailure } from "@/api/errors";
+import { apiIsLive } from "@/api/liveness";
 import { openRouterUpsert } from "@/api/models";
 import { testSecret } from "@/api/secrets";
 import { cn } from "@/lib/cn";
@@ -61,7 +62,7 @@ function KeyManager() {
       </div>
       {setKey.error && (
         <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-          {setKey.error instanceof ApiError
+          {isApiFailure(setKey.error)
             ? setKey.error.message
             : "Couldn't save the key."}
         </p>
@@ -112,7 +113,7 @@ function KeyManager() {
           control="settings.openrouter-key-test"
           idleLabel="Test key"
           run={() => testSecret("DISCO_OPENROUTER_API_KEY")}
-          disabled={!isLive()}
+          disabled={!apiIsLive()}
           disabledHint="connect a backend to test"
         />
       </div>

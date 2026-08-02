@@ -25,7 +25,8 @@
 import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentFetch, agentHttpBase, agentLive } from "@/api/client";
+import { agentIsLive } from "@/api/liveness";
+import { deckExportUrl, fetchConversationState, fetchDeckExport } from "@/api/deck";
 import { useTemplates } from "@/hooks/useTemplates";
 import { deckPdfCapableBackend } from "@/lib/isolation";
 import { TemplatePicker } from "@/components/research/TemplatePicker";
@@ -88,8 +89,8 @@ export function DeckExportBar({
   // PDF affordance — PDF deck export needs a container backend (LibreOffice in the image).
   const [sandboxBackend, setSandboxBackend] = useState<string | null>(null);
   useEffect(() => {
-    if (!conversationId || !agentLive()) return;
-    void agentFetch(`/conversations/${conversationId}/state`)
+    if (!conversationId || !agentIsLive()) return;
+    void fetchConversationState(conversationId)
       .then((r) => r.json())
       .then((s: { sandbox_backend?: string }) => setSandboxBackend(s.sandbox_backend ?? null))
       .catch(() => {});
@@ -98,10 +99,7 @@ export function DeckExportBar({
   const formats = deckPdfCapableBackend(sandboxBackend) ? [...FORMATS, PDF_FORMAT] : FORMATS;
 
   // The jailed deck base path the /deck/export route expects (a plain name, no "/").
-  const exportHref = (fmt: ExportFmt) =>
-    `${agentHttpBase()}/conversations/${conversationId}/deck/export` +
-    `?path=${encodeURIComponent(base)}` +
-    `&template=${encodeURIComponent(templateId)}&fmt=${fmt}`;
+  const exportHref = (fmt: ExportFmt) => deckExportUrl(conversationId, base, templateId, fmt);
 
   // BW-11: download via fetch() so a failure surfaces IN-APP instead of navigating the
   // tab to the route's raw JSON error. On success we synthesize a Blob object-URL
@@ -111,7 +109,7 @@ export function DeckExportBar({
     setExportNotice(null);
     let res: Response;
     try {
-      res = await agentFetch(exportHref(fmt), { headers: { accept: "*/*" } });
+      res = await fetchDeckExport(exportHref(fmt));
     } catch {
       setExportNotice("Couldn't reach the server to export the deck. Please retry.");
       return;

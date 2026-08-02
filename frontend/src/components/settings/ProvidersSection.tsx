@@ -1,15 +1,8 @@
-import { ApiError } from "@/api/client";
 import { GenericProviders } from "./providersSectionParts/GenericProviders";
 import { OpenRouterSection } from "./OpenRouterSection";
 import { ProviderKeysSection } from "./ProviderKeysSection";
 
 export function ProvidersSection() {
-  // The api/client transport seam (Amendment A3) stays owned by this parent file;
-  // parts under providersSectionParts/ never import it. They format errors via
-  // this type-guard closure instead of the `ApiError` class itself.
-  const isApiError = (error: unknown): error is { message: string } =>
-    error instanceof ApiError;
-
   return (
     <section
       id="providers"
@@ -29,7 +22,7 @@ export function ProvidersSection() {
         </p>
       </header>
 
-      <GenericProviders isApiError={isApiError} />
+      <GenericProviders />
 
       <OpenRouterSection />
 

@@ -1,14 +1,8 @@
+import { isApiFailure } from "@/api/errors";
 import type { ProviderCatalogueModel } from "@/types/models";
 
-/** Minimal shape `errorText` needs from a caught error — deliberately NOT the
- * `ApiError` class itself: parts must never import `@/api/client` (that seam
- * stays owned by the parent), so the parent hands down a type-guard closing
- * over the real `ApiError` check instead of the class. */
-export type ErrorLike = { message: string };
-export type ApiErrorPredicate = (error: unknown) => error is ErrorLike;
-
-export function errorText(error: unknown, isApiError: ApiErrorPredicate): string {
-  if (isApiError(error)) {
+export function errorText(error: unknown): string {
+  if (isApiFailure(error)) {
     try {
       const parsed = JSON.parse(error.message) as { detail?: string };
       return parsed.detail || error.message;

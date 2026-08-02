@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { ApiError } from "@/api/client";
+import { isApiFailure } from "@/api/errors";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
@@ -82,7 +82,7 @@ function ModelForm({
   const create = useCreateModel();
   const update = useUpdateModel();
   const busy = create.isPending || update.isPending;
-  const err = (create.error ?? update.error) as ApiError | Error | null;
+  const err = (create.error ?? update.error) as Error | null;
   const set = <K extends keyof ModelUpsert>(k: K, v: ModelUpsert[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
 
@@ -268,7 +268,7 @@ function ModelForm({
 
       {err && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {err instanceof ApiError ? err.message : "Couldn't save the model."}
+          {isApiFailure(err) ? err.message : "Couldn't save the model."}
         </p>
       )}
 
@@ -423,7 +423,7 @@ export function ModelCatalogue() {
       </ul>
       {del.error && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {del.error instanceof ApiError
+          {isApiFailure(del.error)
             ? del.error.message
             : "Couldn't remove the model."}
         </p>

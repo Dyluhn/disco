@@ -13,7 +13,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { AgentCanvas } from "./AgentCanvas";
-import { agentGet, agentSend } from "@/api/client";
 import type { AgentEvent } from "@/types/agent";
 
 // Mock the live-browser config hook (per-test overridden).
@@ -115,6 +114,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     expect(screen.queryByTestId("live-badge")).not.toBeInTheDocument();
     expect(screen.getByText(/frame-by-frame reel, not a live video/i)).toBeInTheDocument();
     // never probes live-ready when disabled.
+    const { agentGet } = await import("@/api/client");
     expect(agentGet).not.toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready"));
   });
 
@@ -122,6 +122,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     await enable(true);
     live.ready = { ready: false, reason: "unsupported_backend" };
     wrap(<AgentCanvas {...baseProps} />);
+    const { agentGet } = await import("@/api/client");
     // it polls live-ready…
     await waitFor(() =>
       expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-ready")),
@@ -136,6 +137,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
 
   it("(c) enabled + streamable → AUTO-starts (no click) and shows the green-blink Live badge on iframe load", async () => {
     await enable(true);
+    const { agentSend, previewBootstrapUrl } = await import("@/api/client");
     wrap(<AgentCanvas {...baseProps} />);
     // auto-start: live-url is called WITHOUT any user click.
     await waitFor(() =>
@@ -147,7 +149,6 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
     expect(iframe).not.toHaveAttribute("src");
     expect(iframe.getAttribute("sandbox")).toContain("allow-same-origin");
-    const { previewBootstrapUrl } = await import("@/api/client");
     expect(previewBootstrapUrl).toHaveBeenCalledWith(
       baseProps.cid,
       6080,
@@ -163,6 +164,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
 
   it("(d) session ends (live-ready flips false) → live-stop called, reverts to screenshots", async () => {
     await enable(true);
+    const { agentSend } = await import("@/api/client");
     wrap(<AgentCanvas {...baseProps} />);
     const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
     await act(async () => {}); // install the signed-navigation message gate
@@ -188,6 +190,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
   it("(e) auto-start FAILS → visible screenshot fallback while bounded retry continues", async () => {
     await enable(true);
     live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
+    const { agentSend } = await import("@/api/client");
     wrap(<AgentCanvas {...baseProps} />);
     await waitFor(() =>
       expect(agentSend).toHaveBeenCalledWith(
@@ -273,6 +276,7 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
 
   it("(f) tears down the OWNING conversation's stack when switching conversations while live", async () => {
     await enable(true);
+    const { agentSend } = await import("@/api/client");
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const ui = (cid: string) => (
       <QueryClientProvider client={qc}>

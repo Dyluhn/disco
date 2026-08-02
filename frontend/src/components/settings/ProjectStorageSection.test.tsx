@@ -15,15 +15,24 @@
  * NO vi.mock("@/api/projects") — module-mocking the data layer would let the
  * test pass even if the fetch wiring or the /api/projects/storage/config
  * contract were broken (the vacuous-test REJECT the test brief calls out).
+ *
+ * Amendment A3: components/ and views/ may not import `@/api/client`. `vi.mock`
+ * intercepts by specifier and needs no static import, so this controls exactly
+ * the same `isLive` the previous `vi.spyOn(clientModule, …)` did.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
 import { ProjectStorageSection } from "./ProjectStorageSection";
 import type { ProjectStorageConfig } from "@/types/project";
+
+const { isLiveMock } = vi.hoisted(() => ({ isLiveMock: vi.fn(() => true) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  isLive: () => isLiveMock(),
+}));
 
 // ---- the contract the server emits (proven by test_app.py) ------------------
 
@@ -102,9 +111,9 @@ let fetchStub: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   serverState = defaultServerConfig();
   // Force the live branch in @/api/client (BASE is captured at module load, so
-  // spying the isLive() function is the only reliable seam — same approach as
-  // McpSection.live.test.tsx and agent.upload.test.ts).
-  vi.spyOn(clientModule, "isLive").mockReturnValue(true);
+  // intercepting the isLive() function via vi.mock is the only reliable seam —
+  // same approach as McpSection.live.test.tsx and agent.upload.test.ts).
+  isLiveMock.mockReturnValue(true);
   fetchStub = installFetch();
 });
 

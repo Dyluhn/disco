@@ -6,7 +6,7 @@ import {
   type SyntheticEvent,
   type ComponentPropsWithoutRef,
 } from "react";
-import type { PreviewLaunch } from "@/api/client";
+import type { PreviewLaunch } from "@/api/preview";
 import { postPreviewLaunch } from "@/lib/previewLaunch";
 
 let frameLaunchCounter = 0;

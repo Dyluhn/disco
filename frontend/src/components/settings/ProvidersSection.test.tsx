@@ -2,8 +2,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
 import { ProvidersSection } from "./ProvidersSection";
+
+// Amendment A3: components/ and views/ may not import `@/api/client`. `vi.mock`
+// intercepts by specifier and needs no static import, so this controls exactly
+// the same `isLive` the previous `vi.spyOn(clientModule, …)` did.
+const { isLiveMock } = vi.hoisted(() => ({ isLiveMock: vi.fn(() => true) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  isLive: () => isLiveMock(),
+}));
 
 vi.mock("./OpenRouterSection", () => ({
   OpenRouterSection: () => null,
@@ -164,7 +172,7 @@ beforeEach(() => {
   catalogueFails = false;
   createCatalogueOk = true;
   lastEnableBody = null;
-  vi.spyOn(clientModule, "isLive").mockReturnValue(true);
+  isLiveMock.mockReturnValue(true);
   installFetch();
 });
 

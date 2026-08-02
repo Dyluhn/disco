@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { importProject } from "@/api/projects";
-import { agentLive } from "@/api/client";
+import { agentIsLive } from "@/api/liveness";
 import { PROJECTS_KEY } from "@/hooks/useProjects";
 import { cn } from "@/lib/cn";
 import type { ProjectImportInput } from "@/types/project";
@@ -19,7 +19,7 @@ const TABS: { id: ImportTab; label: string; icon: LucideIcon }[] = [
 ];
 
 export function ImportProjectDialog() {
-  const live = agentLive();
+  const live = agentIsLive();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);

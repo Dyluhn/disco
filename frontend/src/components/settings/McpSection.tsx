@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentLive, ApiError } from "@/api/client";
+import { agentIsLive } from "@/api/liveness";
+import { isApiFailure } from "@/api/errors";
 import { testMcpConnection } from "@/api/config";
 import {
   useApproveMcpServer,
@@ -80,7 +81,7 @@ const EMPTY_DRAFT: DraftState = {
 };
 
 function mcpErrorText(error: unknown): string {
-  if (!(error instanceof ApiError)) return "Request failed.";
+  if (!isApiFailure(error)) return "Request failed.";
   try {
     const parsed = JSON.parse(error.message) as { detail?: unknown };
     return typeof parsed.detail === "string" ? parsed.detail : error.message;
@@ -428,7 +429,7 @@ export function McpSection() {
                   control="settings.mcp-test"
                   idleLabel="Test connection"
                   run={() => testMcpConnection(c.id)}
-                  disabled={!agentLive()}
+                  disabled={!agentIsLive()}
                   disabledHint="connect the agent server to test"
                 />
               </div>

@@ -19,7 +19,7 @@
  * one line that records progress against A3.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -35,9 +35,20 @@ const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * 36 at Epic 12-A open (the measured drift when the rule landed); 33 at the
  * Epic 12-B seal, which migrated the three files it decomposed —
  * `BuildSurface.tsx`, `build/AgentCanvas.tsx` and `build/DeliverablePanel.tsx`
- * — onto `api/` modules and deleted their entries.
+ * — onto `api/` modules and deleted their entries; 28 at the Epic 12-C seal
+ * (`canvas/PreviewPane.tsx` + its versions spec, `research/NeedMoreCard.tsx`
+ * and two research specs, behind `api/preview.ts` and `api/deepResearch.ts`);
+ * **0 at the Epic 12-D seal, which closes A3's last clause.**
+ *
+ * 12-D migrated all 28: the 18 in its FE-SETTINGS/FE-SHELL family behind
+ * `api/errors.ts`, `api/liveness.ts` and `api/schedules.ts`, and the 10 that no
+ * decomposition boundary would ever have touched (`DemoDataBadge`,
+ * `PairingGate`, `PreviewLaunchFrame` and seven under `components/build/`)
+ * behind `api/session.ts`, `api/artifacts.ts`, `api/deck.ts` and
+ * `api/preview.ts`. The "migrate the files you touch" rule could not reach
+ * those ten, so they were done as deliberate, separately-committed work.
  */
-const CEILING = 28;
+const CEILING = 0;
 
 type FlatConfigBlock = {
   files?: string[];
@@ -79,22 +90,52 @@ describe("api/client import boundary (Amendment A3)", () => {
     expect([...allowlist].sort()).toEqual(allowlist);
   });
 
-  it("carries no entry that has already been migrated", () => {
-    const allowlist = boundaryBlock().ignores ?? [];
-    // Denominator control: an empty allowlist would pass this vacuously, and
-    // that is a legitimate end state — but only once A3 is actually closed.
-    // Until then, assert we are still measuring something.
-    expect(allowlist.length, "allowlist is empty — close A3 and delete this test")
-      .toBeGreaterThan(0);
-
-    const stale = allowlist.filter((rel) => {
-      const source = readFileSync(path.join(FRONTEND, rel), "utf8");
-      return !/from\s+["']@\/api\/client["']/.test(source);
-    });
+  it("permits no exemption, and holds the invariant against a real denominator", () => {
+    // A3 is closed: the ratchet reached zero at the Epic 12-D seal. The old
+    // prong here asserted "no allowlisted file has already been migrated",
+    // which was the right invariant while the list was shrinking. With the
+    // list empty that question is vacuous, so it is replaced by the strictly
+    // stronger one: there may be no exemption, and re-adding one is a
+    // regression rather than a migration step.
     expect(
-      stale,
-      "these files no longer import @/api/client — delete their allowlist " +
-        "entries and lower CEILING, or the ratchet never turns",
+      boundaryBlock().ignores ?? [],
+      "the api/client funnel admits no exemptions — an entry here is a " +
+        "regression; route the import through an api/ module or a hook",
+    ).toEqual([]);
+
+    // Both assertions live in ONE test id deliberately: the campaign's test
+    // inventory is pinned by id, and a decomposition boundary should not spend
+    // an inventory transition on reporting granularity. Coverage is identical
+    // — both prongs still run and still fail closed.
+    //
+    // The rule and its (now empty) allowlist are ESLint configuration; this
+    // asserts the property they exist to produce, so the guard cannot pass by
+    // the rule silently ceasing to apply. Counting the files scanned is the
+    // denominator control — a diff of two empty sets passes cheerfully.
+    const roots = ["src/components", "src/views"];
+    const offenders: string[] = [];
+    let scanned = 0;
+
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (/\.tsx?$/.test(entry.name)) {
+          scanned += 1;
+          const source = readFileSync(full, "utf8");
+          if (/from\s+["']@\/api\/client["']/.test(source)) {
+            offenders.push(path.relative(FRONTEND, full));
+          }
+        }
+      }
+    };
+    for (const root of roots) walk(path.join(FRONTEND, root));
+
+    expect(scanned, "scanned no files — the denominator is empty").toBeGreaterThan(100);
+    expect(
+      offenders.sort(),
+      "these files under components/ or views/ statically import @/api/client",
     ).toEqual([]);
   });
 });

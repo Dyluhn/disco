@@ -4,16 +4,27 @@
  *
  * Drives the REAL data path: DataSourcesSection → useDataSourcesConfig →
  * @/api/... → fetch(...). Only the network boundary is stubbed (vi.stubGlobal
- * "fetch") and isLive is spied on, matching the ProviderKeysSection.test.tsx /
+ * "fetch") and isLive is intercepted, matching the ProviderKeysSection.test.tsx /
  * ProjectStorageSection.test.tsx pattern. NO vi.mock of the data layer.
+ *
+ * Amendment A3: components/ and views/ may not import `@/api/client`.
+ * `vi.mock` intercepts by specifier and needs no static import, so this
+ * controls exactly the same `isLive` the previous `vi.spyOn(clientModule, …)`
+ * did (DataSourcesSection now calls `apiIsLive` from `@/api/liveness`, which
+ * itself wraps this same `isLive`).
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
 import { DataSourcesSection } from "./DataSourcesSection";
+
+const { isLiveMock } = vi.hoisted(() => ({ isLiveMock: vi.fn(() => true) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  isLive: () => isLiveMock(),
+}));
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -51,7 +62,7 @@ function makeWrapper() {
 }
 
 beforeEach(() => {
-  vi.spyOn(clientModule, "isLive").mockReturnValue(true);
+  isLiveMock.mockReturnValue(true);
   installFetch();
 });
 

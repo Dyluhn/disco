@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 import { Container, Globe, KeyRound, Package } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { isLive } from "@/api/client";
+import { apiIsLive } from "@/api/liveness";
 import { testDataSource } from "@/api/models";
 import {
   useDataSourcesConfig,
@@ -307,7 +307,7 @@ export function DataSourcesSection() {
               control="settings.datasource-test-search"
               idleLabel="Test search"
               run={() => testDataSource("search")}
-              disabled={!isLive() || dirty}
+              disabled={!apiIsLive() || dirty}
               disabledHint={
                 dirty ? "save changes to test" : "connect a backend to test"
               }
@@ -316,7 +316,7 @@ export function DataSourcesSection() {
               control="settings.datasource-test-extraction"
               idleLabel="Test extraction"
               run={() => testDataSource("extraction")}
-              disabled={!isLive() || dirty}
+              disabled={!apiIsLive() || dirty}
               disabledHint={
                 dirty ? "save changes to test" : "connect a backend to test"
               }

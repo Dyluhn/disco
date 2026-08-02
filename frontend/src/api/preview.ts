@@ -10,6 +10,7 @@ import {
   agentHttpBase,
   canonicalPreviewBootstrapUrl,
   ApiError,
+  previewHostUrl as clientPreviewHostUrl,
   type PreviewLaunch,
 } from "@/api/client";
 
@@ -63,3 +64,17 @@ export function restoreFailureCopy(error: unknown): string {
 }
 
 export type { PreviewLaunch };
+
+/** The legacy host-transport URL builder (`api/client.ts`'s `previewHostUrl`) —
+ * still live production code (the offline fallback inside `previewBootstrapUrl`
+ * above), and directly contract-tested by
+ * `ExecutionCanvas.preview.test.tsx`'s "previewHostUrl legacy helper" suite.
+ * Declared (not re-exported) so that spec can drop its `@/api/client` import
+ * per Amendment A3 while still exercising the real implementation — `base`
+ * forwards only when explicitly supplied so the default-base call shape stays
+ * intact for any caller that omits it. */
+export function previewHostUrl(cid: string, port: number, base?: string): string | null {
+  return base === undefined
+    ? clientPreviewHostUrl(cid, port)
+    : clientPreviewHostUrl(cid, port, base);
+}

@@ -1,6 +1,5 @@
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { ApiErrorPredicate } from "./helpers";
 import { errorText } from "./helpers";
 import { FIELD } from "./styles";
 
@@ -10,7 +9,6 @@ import { FIELD } from "./styles";
 export function CatalogueErrorBanner({
   providerLabel,
   error,
-  isApiError,
   manualId,
   setManualId,
   manualCtx,
@@ -20,7 +18,6 @@ export function CatalogueErrorBanner({
 }: {
   providerLabel: string;
   error: unknown;
-  isApiError: ApiErrorPredicate;
   manualId: string;
   setManualId: (value: string) => void;
   manualCtx: string;
@@ -37,7 +34,7 @@ export function CatalogueErrorBanner({
         <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden />
         <p className="font-ui text-[0.8rem] text-text">
           {providerLabel} did not return a usable /models catalogue:{" "}
-          <span className="text-text-muted">{errorText(error, isApiError)}</span>
+          <span className="text-text-muted">{errorText(error)}</span>
         </p>
       </div>
       <form onSubmit={onManualAdd} className="flex gap-inline">

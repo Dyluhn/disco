@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { agentLive } from "@/api/client";
+import { agentIsLive } from "@/api/liveness";
 import { useTtsConfig, useUpdateTtsConfig } from "@/hooks/useModels";
 import { ContextualFieldsPanel } from "./audioSectionParts/ContextualFieldsPanel";
 import { computeAudioFieldsDirty } from "./audioSectionParts/fieldsDirty";
@@ -132,7 +132,7 @@ export function AudioSection() {
             fieldsDirty={fieldsDirty}
             savePending={save.isPending}
             onSave={saveFields}
-            agentIsLive={agentLive()}
+            agentIsLive={agentIsLive()}
           />
           {save.error && (
             <p className="font-ui text-[0.8rem] text-warn">

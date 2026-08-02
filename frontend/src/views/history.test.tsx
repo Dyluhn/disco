@@ -4,10 +4,22 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
 import type { ConversationSummary } from "@/types/conversation";
 import type { SpacesList } from "@/types/spaces";
 import { HistoryView } from "./HistoryView";
+
+// Amendment A3: components/ and views/ may not import `@/api/client`. `vi.mock`
+// intercepts by specifier and needs no static import, so this controls exactly
+// the same `agentLive` / `agentSend` the previous `vi.spyOn(clientModule, …)` did.
+const { agentLiveMock, agentSendMock } = vi.hoisted(() => ({
+  agentLiveMock: vi.fn(() => false),
+  agentSendMock: vi.fn(),
+}));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  agentLive: () => agentLiveMock(),
+  agentSend: (...args: unknown[]) => agentSendMock(...args),
+}));
 
 function withProviders(
   ui: ReactElement,
@@ -133,10 +145,8 @@ describe("History — conversation library", () => {
 
   it("moves a conversation to a Space from the row menu", async () => {
     const user = userEvent.setup();
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    const send = vi
-      .spyOn(clientModule, "agentSend")
-      .mockResolvedValue({ ok: true } as never);
+    agentLiveMock.mockReturnValue(true);
+    const send = agentSendMock.mockResolvedValue({ ok: true });
     const row: ConversationSummary = {
       id: "c-loose",
       owner_id: "owner-me",

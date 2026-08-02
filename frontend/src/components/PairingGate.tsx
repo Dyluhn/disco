@@ -16,11 +16,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Loader2 } from "lucide-react";
 import {
-  PairingRequiredError,
-  bootstrapSessions,
-  isDemoMode,
-  pairWithToken,
-} from "@/api/client";
+  bootstrapSession,
+  isDemoSession,
+  isPairingRequired,
+  pairSessionWithToken,
+} from "@/api/session";
 
 type Phase = "checking" | "ready" | "pairing" | "error";
 
@@ -38,7 +38,7 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
   // Fixture/demo mode (no backend configured — tests, offline) has no auth to do:
   // start READY so children render on the first synchronous tick, no flash, no
   // network. Only a live deployment enters the async "checking" bootstrap.
-  const demo = isDemoMode();
+  const demo = isDemoSession();
   const [phase, setPhase] = useState<Phase>(demo ? "ready" : "checking");
   const [token, setToken] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -48,10 +48,10 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
     setPhase("checking");
     setError(null);
     try {
-      await bootstrapSessions();
+      await bootstrapSession();
       setPhase("ready");
     } catch (e) {
-      if (e instanceof PairingRequiredError) {
+      if (isPairingRequired(e)) {
         setPhase("pairing");
       } else {
         setError(e instanceof Error ? e.message : String(e));
@@ -71,13 +71,13 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
     setSubmitting(true);
     setError(null);
     try {
-      await pairWithToken(t);
+      await pairSessionWithToken(t);
       await boot();
     } catch (err) {
       // A wrong/expired token comes back as PairingRequiredError; anything else
       // is a real failure. Either way, keep the user on the form with a reason.
       setError(
-        err instanceof PairingRequiredError
+        isPairingRequired(err)
           ? "That token was not accepted. Copy the current token from your server logs and try again."
           : err instanceof Error
             ? err.message

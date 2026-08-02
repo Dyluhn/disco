@@ -3,16 +3,13 @@ import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { useCreateProvider, useProviderPresets } from "@/hooks/useModels";
 import type { ProviderMutationResult, ProviderPreset } from "@/types/models";
-import type { ApiErrorPredicate } from "./helpers";
 import { errorText, hostLabel } from "./helpers";
 import { FIELD } from "./styles";
 
 export function AddProviderForm({
   onCreated,
-  isApiError,
 }: {
   onCreated: (result: ProviderMutationResult) => void;
-  isApiError: ApiErrorPredicate;
 }) {
   const { data: presets } = useProviderPresets();
   const create = useCreateProvider();
@@ -95,7 +92,7 @@ export function AddProviderForm({
       )}
       {create.error && (
         <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-          {errorText(create.error, isApiError)}
+          {errorText(create.error)}
         </p>
       )}
     </form>

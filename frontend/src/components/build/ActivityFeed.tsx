@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { splitThink } from "@/lib/think";
-import { agentHttpBase } from "@/api/client";
+import { artifactUrl, workspaceFileUrl } from "@/api/artifacts";
 import { DeckExportBar } from "@/components/build/DeckExportBar";
 import { rendererLabel } from "@/lib/slidesRenderer";
 import type { ActivityItem } from "@/lib/buildTrace";
@@ -43,7 +43,7 @@ function ScreenshotThumbnail({
   conversationId: string;
 }) {
   const [failed, setFailed] = useState(false);
-  const src = `${agentHttpBase()}/conversations/${conversationId}/workspace/${path}`;
+  const src = workspaceFileUrl(conversationId, path);
   if (failed) {
     return (
       <span className="font-ui text-[0.74rem] text-text-faint italic">
@@ -77,7 +77,7 @@ export function SheetDownload({
   conversationId: string;
 }) {
   if (!sheet) return null;
-  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(sheet.filename)}`;
+  const href = artifactUrl(conversationId, sheet.filename);
   const n = sheet.sheet_names?.length ?? 0;
   return (
     <a
@@ -154,7 +154,7 @@ export function SlidesDownload({
   }
 
   // Non-editable deck (Marp/fallback) → the baked artifact link (no template re-render).
-  const staticHref = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(slides.filename)}`;
+  const staticHref = artifactUrl(conversationId, slides.filename);
   const fmt = (slides.format || "html").toUpperCase();
   return (
     <div className="mt-hair flex flex-col gap-hair">
@@ -198,7 +198,7 @@ export function FileDownload({
   conversationId: string;
 }) {
   if (!file) return null;
-  const href = `${agentHttpBase()}/conversations/${conversationId}/artifacts/${encodeURI(file.filename)}`;
+  const href = artifactUrl(conversationId, file.filename);
   return (
     <a
       href={href}

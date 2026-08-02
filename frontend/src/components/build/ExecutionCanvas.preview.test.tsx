@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 import { FilesPane } from "@/components/build/canvas/FilesPane";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
-import { previewHostUrl } from "@/api/client";
+import { previewHostUrl } from "@/api/preview";
 import type { AgentEvent, PreviewInfo } from "@/types/agent";
 
 const {

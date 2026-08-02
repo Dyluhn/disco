@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError } from "@/api/client";
+import { isApiFailure } from "@/api/errors";
 import { getDeckForEditor, getDeckRenderHtml, patchDeck } from "@/api/agent";
 import { DeckEditor } from "./editor/DeckEditor";
 import { DeckExportBar } from "./DeckExportBar";
@@ -121,11 +121,11 @@ export function DeckEditorPane({ cid, base }: DeckEditorPaneProps) {
           );
         })
         .catch((e: unknown) => {
-          if (e instanceof ApiError && e.status === 409) {
+          if (isApiFailure(e) && e.status === 409) {
             setPatchNotice(
               "Re-open this build to edit slides (its workspace is suspended).",
             );
-          } else if (e instanceof ApiError && e.status === 422) {
+          } else if (isApiFailure(e) && e.status === 422) {
             setPatchNotice("That edit was rejected (it produced an invalid deck).");
           } else {
             setPatchNotice(

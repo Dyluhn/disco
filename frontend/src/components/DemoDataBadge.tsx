@@ -1,4 +1,4 @@
-import { isDemoMode } from "@/api/client";
+import { isDemoSession } from "@/api/session";
 
 /**
  * Persistent, non-dismissable banner shown whenever neither backend is
@@ -10,7 +10,7 @@ import { isDemoMode } from "@/api/client";
  * It is invisible when a backend is successfully wired (isDemoMode() === false).
  */
 export function DemoDataBadge() {
-  if (!isDemoMode()) return null;
+  if (!isDemoSession()) return null;
   return (
     <div
       role="status"

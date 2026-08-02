@@ -7,7 +7,6 @@ import {
 } from "@/hooks/useModels";
 import type { ModelInfo, ProviderCatalogueModel, ProviderInfo } from "@/types/models";
 import { CatalogueErrorBanner } from "./CatalogueErrorBanner";
-import type { ApiErrorPredicate } from "./helpers";
 import { errorText } from "./helpers";
 import { ModelRow } from "./ModelRow";
 import { FIELD } from "./styles";
@@ -15,11 +14,9 @@ import { FIELD } from "./styles";
 export function BrowseProvider({
   provider,
   enabledModels,
-  isApiError,
 }: {
   provider: ProviderInfo;
   enabledModels: ModelInfo[];
-  isApiError: ApiErrorPredicate;
 }) {
   const { data, isLoading, isError, error } = useProviderModels(provider.id, true);
   const enable = useEnableProviderModel(provider.id);
@@ -73,7 +70,7 @@ export function BrowseProvider({
       });
     if (catalogueEntry) {
       disable.mutate(catalogueEntry.id, {
-        onError: (err) => setToggleError(errorText(err, isApiError)),
+        onError: (err) => setToggleError(errorText(err)),
         onSettled: cleanup,
       });
     } else {
@@ -84,7 +81,7 @@ export function BrowseProvider({
           context_window: m.context_window,
           max_output_tokens: m.max_output_tokens,
         },
-        { onError: (err) => setToggleError(errorText(err, isApiError)), onSettled: cleanup },
+        { onError: (err) => setToggleError(errorText(err)), onSettled: cleanup },
       );
     }
   };
@@ -95,7 +92,7 @@ export function BrowseProvider({
     enable.mutate(
       { model_id: m.model_id, label: m.label, context_window: ctx },
       {
-        onError: (err) => setToggleError(errorText(err, isApiError)),
+        onError: (err) => setToggleError(errorText(err)),
         onSettled: () =>
           setOptimistic((current) => {
             const next = { ...current };
@@ -118,7 +115,7 @@ export function BrowseProvider({
           setManualId("");
           setManualCtx("");
         },
-        onError: (err) => setToggleError(errorText(err, isApiError)),
+        onError: (err) => setToggleError(errorText(err)),
       },
     );
   };
@@ -142,7 +139,6 @@ export function BrowseProvider({
         <CatalogueErrorBanner
           providerLabel={provider.label}
           error={error}
-          isApiError={isApiError}
           manualId={manualId}
           setManualId={setManualId}
           manualCtx={manualCtx}

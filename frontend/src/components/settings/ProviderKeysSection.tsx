@@ -1,6 +1,7 @@
 import { AlertTriangle, Check, KeyRound, Lock, Pencil, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { ApiError, isLive } from "@/api/client";
+import { isApiFailure } from "@/api/errors";
+import { apiIsLive } from "@/api/liveness";
 import { testSecret } from "@/api/secrets";
 import {
   useClearSecret,
@@ -139,7 +140,7 @@ function StoredKeyRow({
           control="settings.provider-key-test"
           idleLabel="Test key"
           run={() => testSecret(name)}
-          disabled={!isLive()}
+          disabled={!apiIsLive()}
           disabledHint="connect a backend to test"
         />
       )}
@@ -357,7 +358,7 @@ export function ProviderKeysSection() {
         )}
         {setSecret.error && (
           <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-            {setSecret.error instanceof ApiError
+            {isApiFailure(setSecret.error)
               ? setSecret.error.message
               : "Couldn't save the key."}
           </p>

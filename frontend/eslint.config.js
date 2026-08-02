@@ -54,36 +54,12 @@ export default tseslint.config(
   // client — so a migration is only complete once its entry is gone.
   {
     files: ["src/components/**/*.{ts,tsx}", "src/views/**/*.{ts,tsx}"],
-    ignores: [
-      "src/components/DemoDataBadge.tsx",
-      "src/components/PairingGate.tsx",
-      "src/components/PreviewLaunchFrame.tsx",
-      "src/components/build/ActivityFeed.tsx",
-      "src/components/build/AgentCanvas.live.test.tsx",
-      "src/components/build/DeckEditorPane.test.tsx",
-      "src/components/build/DeckEditorPane.tsx",
-      "src/components/build/DeckExportBar.tsx",
-      "src/components/build/ExecutionCanvas.preview.test.tsx",
-      "src/components/build/ImportProjectDialog.tsx",
-      "src/components/settings/AudioSection.tsx",
-      "src/components/settings/DataSourcesSection.test.tsx",
-      "src/components/settings/DataSourcesSection.tsx",
-      "src/components/settings/ImageGenSection.test.tsx",
-      "src/components/settings/ImageGenSection.tsx",
-      "src/components/settings/McpSection.approval.test.tsx",
-      "src/components/settings/McpSection.live.test.tsx",
-      "src/components/settings/McpSection.tsx",
-      "src/components/settings/ModelCatalogue.tsx",
-      "src/components/settings/OpenRouterSection.tsx",
-      "src/components/settings/ProjectStorageSection.test.tsx",
-      "src/components/settings/ProviderKeysSection.test.tsx",
-      "src/components/settings/ProviderKeysSection.tsx",
-      "src/components/settings/ProvidersSection.test.tsx",
-      "src/components/settings/ProvidersSection.tsx",
-      "src/components/settings/ScheduleSection.timezone.test.tsx",
-      "src/components/settings/ScheduleSection.tsx",
-      "src/views/history.test.tsx",
-    ],
+    // EMPTY — A3's ratchet reached zero at the Epic 12-D seal. The invariant
+    // `client.ts` states about itself is now enforced without exception: no
+    // file under components/ or views/ imports the transport module. Adding an
+    // entry here is not a migration step, it is a regression;
+    // `src/test/apiClientBoundary.test.ts` fails if this list is ever non-empty.
+    ignores: [],
     rules: {
       "no-restricted-imports": [
         "error",

@@ -11,68 +11,18 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { agentFetch } from "@/api/client";
+import {
+  createSchedule,
+  deleteSchedule,
+  listSchedules,
+  previewSchedule,
+} from "@/api/schedules";
 import { browserScheduleTimezone } from "@/lib/scheduleLocal";
 import { parseScheduleNL } from "@/lib/scheduleNL";
 import { EMPTY_DRAFT, type DraftState } from "./scheduleSectionParts/draftState";
 import type { PreviewResult, ScheduleRow } from "./scheduleSectionParts/types";
 import { ScheduleComposer } from "./scheduleSectionParts/ScheduleComposer";
 import { ScheduleList } from "./scheduleSectionParts/ScheduleList";
-
-// ---- API functions ----------------------------------------------------------
-
-async function fetchSchedules(cid: string): Promise<ScheduleRow[]> {
-  const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`);
-  if (!r.ok) throw new Error(`Failed to load schedules: ${r.status}`);
-  const body = await r.json();
-  return body.schedules ?? [];
-}
-
-async function createSchedule(
-  cid: string,
-  payload: {
-    rrule: string;
-    description: string;
-    timezone: string;
-    depth?: string;
-    model_override?: string;
-  },
-): Promise<ScheduleRow> {
-  const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    throw new Error(err?.detail?.reason ?? `Error ${r.status}`);
-  }
-  return r.json();
-}
-
-async function deleteSchedule(scheduleId: string): Promise<void> {
-  const r = await agentFetch(`/api/schedules/${encodeURIComponent(scheduleId)}`, {
-    method: "DELETE",
-  });
-  if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
-}
-
-async function previewSchedule(
-  rrule: string,
-  timezone: string,
-  n = 3,
-): Promise<PreviewResult> {
-  const r = await agentFetch(`/api/schedules/preview`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rrule, timezone, n }),
-  });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    throw new Error(err?.detail?.reason ?? `Error ${r.status}`);
-  }
-  return r.json();
-}
 
 // ---- schedule presets -------------------------------------------------------
 
@@ -94,7 +44,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
 
   const { data: schedules, isLoading } = useQuery<ScheduleRow[]>({
     queryKey: key,
-    queryFn: () => fetchSchedules(conversationId),
+    queryFn: () => listSchedules(conversationId),
   });
 
   const removeMutation = useMutation({

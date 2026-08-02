@@ -11,7 +11,6 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { ApiError } from "@/api/client";
 import type { LoweredDeck } from "@/components/build/editor/types";
 import { DeckEditorPane } from "./DeckEditorPane";
 
@@ -131,6 +130,10 @@ describe("DeckEditorPane", () => {
 
   it("surfaces the re-open notice on a 409 (suspended sandbox)", async () => {
     getMock.mockResolvedValue(makeDeck("Original Title"));
+    // Dynamically reached (not a static import) so this spec drops its own
+    // `@/api/client` import per Amendment A3, while still constructing the
+    // REAL `ApiError` the component's `isApiFailure` (`@/api/errors`) narrows to.
+    const { ApiError } = await import("@/api/client");
     putMock.mockRejectedValue(new ApiError("no_live_sandbox", 409));
     const { container } = render(<DeckEditorPane cid="conv_1" base="deck" />);
     await screen.findAllByText("Original Title");
@@ -191,6 +194,7 @@ describe("DeckEditorPane", () => {
   });
 
   it("surfaces a load error rather than a blank pane", async () => {
+    const { ApiError } = await import("@/api/client");
     getMock.mockRejectedValue(new ApiError("not found", 404));
     render(<DeckEditorPane cid="conv_1" base="deck" />);
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();

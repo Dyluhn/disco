@@ -13,6 +13,10 @@
  * MUST display the two distinct hashes, and the confirm POST MUST carry
  * `new_description_hash` in the body — the operator is accepting the
  * new tool set, so the body is the new hash, not the old one.
+ *
+ * Amendment A3: components/ and views/ may not import `@/api/client`. `vi.mock`
+ * intercepts by specifier and needs no static import, so this controls exactly
+ * the same `isLive` the previous `vi.spyOn(clientModule, …)` did.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -20,9 +24,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
 import { McpSection } from "./McpSection";
 import type { McpConnection } from "@/types/config";
+
+const { isLiveMock } = vi.hoisted(() => ({ isLiveMock: vi.fn(() => true) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  isLive: () => isLiveMock(),
+}));
 
 const OLD_HASH =
   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -138,7 +147,7 @@ let fetchStub: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   serverState = seedConnections();
   rejectApproval = false;
-  vi.spyOn(clientModule, "isLive").mockReturnValue(true);
+  isLiveMock.mockReturnValue(true);
   fetchStub = installFetch();
 });
 

@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { agentLive } from "@/api/client";
+import { agentIsLive } from "@/api/liveness";
 import { testImageGen } from "@/api/models";
 import {
   useImageGenConfig,
@@ -135,7 +135,7 @@ export function ImageGenSection() {
             control="settings.imagegen-test"
             idleLabel="Test image"
             run={testImageGen}
-            disabled={!agentLive() || fieldsDirty}
+            disabled={!agentIsLive() || fieldsDirty}
             disabledHint={
               fieldsDirty
                 ? "unsaved changes — click Save first, then Test"
