@@ -22,53 +22,70 @@ export interface NLParseResult {
 // Matches a 5-field cron expression like "*/5 * * * *" or "0 9 * * 1-5"
 const CRON_RE = /^[\d/*,\-? ]+$/;
 
+/** `*` or `?` — the unconstrained wildcard forms. */
+function isCronWildcard(field: string): boolean {
+  return field === "*" || field === "?";
+}
+
+/** `*\/N` — a step on the wildcard. */
+function isSteppedWildcard(field: string): boolean {
+  return /^\*\/\d+$/.test(field);
+}
+
+function validateSteppedWildcard(field: string): boolean {
+  const n = parseInt(field.slice(2), 10);
+  return !isNaN(n) && n >= 1;
+}
+
+/** `N,M,...` — each element must be in [min, max]. */
+function validateCronList(field: string, min: number, max: number): boolean {
+  return field.split(",").every((p) => {
+    const n = parseInt(p.trim(), 10);
+    return !isNaN(n) && n >= min && n <= max;
+  });
+}
+
+/** `N-M` or `N-M/S` — a range with an optional step. */
+function validateCronRange(field: string, min: number, max: number): boolean {
+  const [rangePart, stepPart] = field.split("/");
+  const [rawA, rawB] = (rangePart ?? "").split("-");
+  const a = parseInt(rawA, 10);
+  const b = parseInt(rawB, 10);
+  if (isNaN(a) || isNaN(b) || a < min || b > max || a > b) return false;
+  if (stepPart !== undefined) {
+    const s = parseInt(stepPart, 10);
+    if (isNaN(s) || s < 1) return false;
+  }
+  return true;
+}
+
+/** `N/S` — a single value with a step. */
+function validateSteppedValue(field: string, min: number, max: number): boolean {
+  const [basePart, stepPart] = field.split("/");
+  const n = parseInt(basePart, 10);
+  const s = parseInt(stepPart, 10);
+  return !isNaN(n) && n >= min && n <= max && !isNaN(s) && s >= 1;
+}
+
+/** `N` — a single numeric value. */
+function validateSingleValue(field: string, min: number, max: number): boolean {
+  const n = parseInt(field, 10);
+  return !isNaN(n) && n >= min && n <= max;
+}
+
 /**
  * Validate a single cron field against [min, max] inclusive.
  * Handles: *, ?, *\/N (step), N-M (range), N,M,... (list), N (single value).
- * Returns false if any numeric part falls outside [min, max].
+ * Returns false if any numeric part falls outside [min, max]. Dispatches to a
+ * per-syntactic-form validator so each form's branching is measured on its own.
  */
 function validateCronField(field: string, min: number, max: number): boolean {
-  if (field === "*" || field === "?") return true;
-
-  // Step on wildcard: */N
-  if (/^\*\/\d+$/.test(field)) {
-    const n = parseInt(field.slice(2), 10);
-    return !isNaN(n) && n >= 1;
-  }
-
-  // List: N,M,... — each element must be in range
-  if (field.includes(",")) {
-    return field.split(",").every((p) => {
-      const n = parseInt(p.trim(), 10);
-      return !isNaN(n) && n >= min && n <= max;
-    });
-  }
-
-  // Range with optional step: N-M or N-M/S
-  if (field.includes("-")) {
-    const [rangePart, stepPart] = field.split("/");
-    const [rawA, rawB] = (rangePart ?? "").split("-");
-    const a = parseInt(rawA, 10);
-    const b = parseInt(rawB, 10);
-    if (isNaN(a) || isNaN(b) || a < min || b > max || a > b) return false;
-    if (stepPart !== undefined) {
-      const s = parseInt(stepPart, 10);
-      if (isNaN(s) || s < 1) return false;
-    }
-    return true;
-  }
-
-  // Value with step: N/S
-  if (field.includes("/")) {
-    const [basePart, stepPart] = field.split("/");
-    const n = parseInt(basePart, 10);
-    const s = parseInt(stepPart, 10);
-    return !isNaN(n) && n >= min && n <= max && !isNaN(s) && s >= 1;
-  }
-
-  // Single numeric value
-  const n = parseInt(field, 10);
-  return !isNaN(n) && n >= min && n <= max;
+  if (isCronWildcard(field)) return true;
+  if (isSteppedWildcard(field)) return validateSteppedWildcard(field);
+  if (field.includes(",")) return validateCronList(field, min, max);
+  if (field.includes("-")) return validateCronRange(field, min, max);
+  if (field.includes("/")) return validateSteppedValue(field, min, max);
+  return validateSingleValue(field, min, max);
 }
 
 function looksLikeCron(s: string): boolean {
@@ -115,35 +132,57 @@ const BYDAY_TO_DOW: Record<string, number> = {
   SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6,
 };
 
+function minutelyToCron(interval: number): { cron: string; desc: string } {
+  const step = interval === 1 ? "*" : `*/${interval}`;
+  return { cron: `${step} * * * *`, desc: interval === 1 ? "every minute" : `every ${interval} minutes` };
+}
+
+function hourlyToCron(min: number, interval: number): { cron: string; desc: string } {
+  const step = interval === 1 ? "*" : `*/${interval}`;
+  return { cron: `${min} ${step} * * *`, desc: interval === 1 ? "every hour" : `every ${interval} hours` };
+}
+
+function dailyToCron(min: number, hour: number, interval: number): { cron: string; desc: string } {
+  const step = interval === 1 ? "*" : `*/${interval}`;
+  return {
+    cron: `${min} ${hour} ${step === "*" ? "*" : `1/${interval}`} * *`,
+    desc: interval === 1 ? `daily at ${fmtHour(hour)}` : `every ${interval} days at ${fmtHour(hour)}`,
+  };
+}
+
+function weeklyToCron(
+  min: number,
+  hour: number,
+  byday: string | undefined,
+): { cron: string; desc: string } | null {
+  if (byday) {
+    const dow = BYDAY_TO_DOW[byday];
+    if (dow === undefined) return null;
+    return { cron: `${min} ${hour} * * ${dow}`, desc: `every ${byday} at ${fmtHour(hour)}` };
+  }
+  return { cron: `${min} ${hour} * * 1`, desc: `weekly on Monday at ${fmtHour(hour)}` };
+}
+
+function monthlyToCron(min: number, hour: number): { cron: string; desc: string } {
+  return { cron: `${min} ${hour} 1 * *`, desc: `monthly on the 1st at ${fmtHour(hour)}` };
+}
+
 function rrulePartsToCron(r: RruleParts): { cron: string; desc: string } | null {
   const min = r.byminute ?? 0;
   const hour = r.byhour ?? 9;
   const interval = r.interval ?? 1;
 
   switch (r.freq) {
-    case "MINUTELY": {
-      const step = interval === 1 ? "*" : `*/${interval}`;
-      return { cron: `${step} * * * *`, desc: interval === 1 ? "every minute" : `every ${interval} minutes` };
-    }
-    case "HOURLY": {
-      const step = interval === 1 ? "*" : `*/${interval}`;
-      return { cron: `${min} ${step} * * *`, desc: interval === 1 ? "every hour" : `every ${interval} hours` };
-    }
-    case "DAILY": {
-      const step = interval === 1 ? "*" : `*/${interval}`;
-      return { cron: `${min} ${hour} ${step === "*" ? "*" : `1/${interval}`} * *`, desc: interval === 1 ? `daily at ${fmtHour(hour)}` : `every ${interval} days at ${fmtHour(hour)}` };
-    }
-    case "WEEKLY": {
-      if (r.byday) {
-        const dow = BYDAY_TO_DOW[r.byday];
-        if (dow === undefined) return null;
-        return { cron: `${min} ${hour} * * ${dow}`, desc: `every ${r.byday} at ${fmtHour(hour)}` };
-      }
-      return { cron: `${min} ${hour} * * 1`, desc: `weekly on Monday at ${fmtHour(hour)}` };
-    }
-    case "MONTHLY": {
-      return { cron: `${min} ${hour} 1 * *`, desc: `monthly on the 1st at ${fmtHour(hour)}` };
-    }
+    case "MINUTELY":
+      return minutelyToCron(interval);
+    case "HOURLY":
+      return hourlyToCron(min, interval);
+    case "DAILY":
+      return dailyToCron(min, hour, interval);
+    case "WEEKLY":
+      return weeklyToCron(min, hour, r.byday);
+    case "MONTHLY":
+      return monthlyToCron(min, hour);
     default:
       return null;
   }

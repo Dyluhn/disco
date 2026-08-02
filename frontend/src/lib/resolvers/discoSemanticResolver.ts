@@ -64,6 +64,51 @@ function sourceFallback(start: Element): SourceRef | null {
   return null;
 }
 
+/** An `indexed` target — a non-negative integer index only, otherwise semantic
+ * resolution fails closed (null) so the caller falls back to the data-oid source. */
+function resolveIndexedTarget(el: Element): DiscoSemanticTarget | null {
+  const collection = el.getAttribute(DISCO_ATTR.COLLECTION) ?? "";
+  const idxRaw = el.getAttribute(DISCO_ATTR.INDEX) ?? "";
+  if (!/^\d+$/.test(idxRaw)) return null;
+  const index = Number(idxRaw);
+  const itemKind = el.getAttribute(DISCO_ATTR.ITEM_KIND);
+  return itemKind
+    ? { kind: "indexed", collection, index, itemKind }
+    : { kind: "indexed", collection, index };
+}
+
+/** A `field` target — fails closed (null) when it has no enclosing section. */
+function resolveFieldTarget(el: Element): DiscoSemanticTarget | null {
+  const field = el.getAttribute(DISCO_ATTR.FIELD) ?? "";
+  const section = nearestSection(el);
+  if (!section) return null;
+  return { kind: "field", section, field };
+}
+
+function resolveCommentAnchorTarget(el: Element): DiscoSemanticTarget {
+  return { kind: "comment_anchor", anchor: el.getAttribute(DISCO_ATTR.COMMENT_ANCHOR) ?? "" };
+}
+
+function resolveSectionTarget(el: Element): DiscoSemanticTarget {
+  return { kind: "section", section: el.getAttribute(DISCO_ATTR.SECTION) ?? "" };
+}
+
+function resolveFileTarget(el: Element): DiscoSemanticTarget {
+  return { kind: "file", file: el.getAttribute(DISCO_ATTR.FILE) ?? "" };
+}
+
+/** Resolve the target at an element whose local kind is already known. A `null`
+ * result means "fail closed at this element" — the caller stops climbing and
+ * falls back to the data-oid source (never guesses a section-less field or an
+ * invalid index). */
+function resolveAtElement(el: Element, kind: DiscoSemanticTarget["kind"]): DiscoSemanticTarget | null {
+  if (kind === "indexed") return resolveIndexedTarget(el);
+  if (kind === "field") return resolveFieldTarget(el);
+  if (kind === "comment_anchor") return resolveCommentAnchorTarget(el);
+  if (kind === "section") return resolveSectionTarget(el);
+  return resolveFileTarget(el);
+}
+
 /**
  * Resolve a clicked element to a semantic target (or the data-oid source fallback, or null).
  * Closest-first; never guesses a section-less field or an invalid index.
@@ -72,28 +117,9 @@ export function resolveSemanticTarget(start: Element): DiscoResolvedTarget | nul
   for (let el: Element | null = start; el; el = el.parentElement) {
     const k = localKind(el);
     if (!k) continue;
-    if (k === "indexed") {
-      const collection = el.getAttribute(DISCO_ATTR.COLLECTION) ?? "";
-      const idxRaw = el.getAttribute(DISCO_ATTR.INDEX) ?? "";
-      // a non-negative integer only — otherwise semantic resolution fails → source fallback
-      if (!/^\d+$/.test(idxRaw)) break;
-      const index = Number(idxRaw);
-      const itemKind = el.getAttribute(DISCO_ATTR.ITEM_KIND);
-      return itemKind
-        ? { kind: "indexed", collection, index, itemKind }
-        : { kind: "indexed", collection, index };
-    }
-    if (k === "field") {
-      const field = el.getAttribute(DISCO_ATTR.FIELD) ?? "";
-      const section = nearestSection(el);
-      if (!section) break; // field without a section → fail closed → source fallback
-      return { kind: "field", section, field };
-    }
-    if (k === "comment_anchor") {
-      return { kind: "comment_anchor", anchor: el.getAttribute(DISCO_ATTR.COMMENT_ANCHOR) ?? "" };
-    }
-    if (k === "section") return { kind: "section", section: el.getAttribute(DISCO_ATTR.SECTION) ?? "" };
-    if (k === "file") return { kind: "file", file: el.getAttribute(DISCO_ATTR.FILE) ?? "" };
+    const resolved = resolveAtElement(el, k);
+    if (!resolved) return sourceFallback(start);
+    return resolved;
   }
   return sourceFallback(start);
 }

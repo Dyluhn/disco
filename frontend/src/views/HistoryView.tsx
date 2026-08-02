@@ -20,6 +20,13 @@ import {
 } from "@/hooks/useConversations";
 import { useSpaces } from "@/hooks/useSpaces";
 import type { ConversationSummary } from "@/types/conversation";
+import {
+  deriveQuerySpaceId,
+  deriveShowEmptyForSpace,
+  deriveShowEmptyHistory,
+  deriveShowFilterBar,
+  deriveShowList,
+} from "@/views/historyViewParts/deriveVisibility";
 
 /**
  * History (Prompt 5): the owner-scoped conversation library. Data flows through
@@ -173,7 +180,7 @@ function MoveToSpaceMenu({
 
 export function HistoryView() {
   const [spaceFilter, setSpaceFilter] = useState<"all" | "unfiled" | string>("all");
-  const querySpaceId = spaceFilter === "all" ? undefined : spaceFilter === "unfiled" ? null : spaceFilter;
+  const querySpaceId = deriveQuerySpaceId(spaceFilter);
   const { data, isLoading, isError, refetch } = useConversations(querySpaceId);
   const { data: spacesData } = useSpaces();
   const spaces = useMemo(() => spacesData?.spaces ?? [], [spacesData]);
@@ -227,6 +234,10 @@ export function HistoryView() {
   const filtered = all.filter((c) =>
     c.title.toLowerCase().includes(deferredQ.trim().toLowerCase()),
   );
+  const showFilterBar = deriveShowFilterBar(isLoading, isError, all.length, spaceFilter);
+  const showEmptyHistory = deriveShowEmptyHistory(isLoading, isError, all.length, spaceFilter);
+  const showEmptyForSpace = deriveShowEmptyForSpace(isLoading, isError, all.length, spaceFilter);
+  const showList = deriveShowList(isLoading, isError, all.length);
 
   return (
     <div className="mx-auto w-full max-w-doc px-body py-section">
@@ -265,7 +276,7 @@ export function HistoryView() {
           </p>
         )}
 
-        {!isLoading && !isError && (all.length > 0 || spaceFilter !== "all") && (
+        {showFilterBar && (
           <div className="grid gap-inline sm:grid-cols-[minmax(0,1fr)_12rem]">
             <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
               <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
@@ -318,15 +329,15 @@ export function HistoryView() {
           </div>
         )}
 
-        {!isLoading && !isError && all.length === 0 && spaceFilter === "all" && <EmptyHistory />}
+        {showEmptyHistory && <EmptyHistory />}
 
-        {!isLoading && !isError && all.length === 0 && spaceFilter !== "all" && (
+        {showEmptyForSpace && (
           <p className="py-body font-ui text-[0.85rem] text-text-muted">
             No conversations in this Space.
           </p>
         )}
 
-        {!isLoading && !isError && all.length > 0 && (
+        {showList && (
           <>
             {filtered.length === 0 ? (
               <p className="py-body font-ui text-[0.85rem] text-text-muted">

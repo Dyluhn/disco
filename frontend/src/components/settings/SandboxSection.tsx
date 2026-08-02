@@ -19,40 +19,12 @@ import type { ProbeResult } from "@/types/probe";
 import {
   BACKEND_META,
   backendMeta,
-  fieldLabel,
   type SandboxConfig,
   type SandboxField as SandboxFieldId,
 } from "@/types/sandbox";
-
-/** W-49: one labelled connection input — reused for the primary field and each
- * Advanced field so the markup (and the disabled-while-stub behaviour) stays in sync. */
-function SandboxField({
-  field,
-  label,
-  value,
-  disabled,
-  onChange,
-}: {
-  field: SandboxFieldId;
-  label: string;
-  value: string;
-  disabled: boolean;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label className="flex flex-col gap-hair">
-      <span className="font-ui text-[0.78rem] text-text-muted">{label}</span>
-      <input
-        data-sandbox-field={field}
-        value={value}
-        spellCheck={false}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong disabled:opacity-50"
-      />
-    </label>
-  );
-}
+import { SandboxConfirmNote } from "./sandboxSectionParts/SandboxConfirmNote";
+import { SandboxConnectionFields } from "./sandboxSectionParts/SandboxConnectionFields";
+import { SandboxSaveRow } from "./sandboxSectionParts/SandboxSaveRow";
 
 function BackendCard({
   id,
@@ -193,6 +165,9 @@ export function SandboxSection() {
     setDraft(next);
   };
 
+  const onFieldChange = (field: SandboxFieldId, value: string) =>
+    setDraft({ ...draft, [field]: value });
+
   // W-48: preflight on SAVE — persist, then run the real connectivity probe and surface
   // a typed, host-naming reachability verdict (so a misconfigured/unreachable backend is
   // visible up-front, not as a silent failure on the first build).
@@ -235,149 +210,29 @@ export function SandboxSection() {
       </div>
 
       {/* the isolation → confirmation coupling, surfaced for the selected backend */}
-      {meta && (
-        <p
-          className={cn(
-            "flex items-start gap-hair rounded-control border px-body py-inline font-ui text-[0.8rem] leading-snug",
-            meta.adversarialSafe
-              ? "border-hairline text-text-muted"
-              : "border-weak/50 text-text-muted",
-          )}
-        >
-          <ShieldHalf
-            className="mt-px size-3.5 shrink-0 text-text-faint"
-            aria-hidden
-          />
-          {meta.confirmNote}
-        </p>
-      )}
+      <SandboxConfirmNote meta={meta} />
 
       {/* connection — W-49 progressive disclosure: ONE varying field up front, the rest
           (runtime is dropped from the form; image/workspace_root + any non-primary
           connection field) folded under Advanced with their saved defaults. Payload shape
           is unchanged — selectBackend seeds runtime, and the hidden fields keep their
           values, so Local + Save is zero typing. */}
-      {meta && (
-        <div className="flex flex-col gap-inline">
-          {/* the "what you provide" subline — sets expectations before any input */}
-          <p className="font-ui text-[0.78rem] text-text-faint">
-            {meta.provides}
-          </p>
+      <SandboxConnectionFields
+        meta={meta}
+        draft={draft}
+        onFieldChange={onFieldChange}
+      />
 
-          {/* the ONE connection field that varies per backend (null → none shown) */}
-          {meta.primaryField && (
-            <div className="flex flex-col gap-hair">
-              <SandboxField
-                field={meta.primaryField}
-                label={meta.primaryLabel ?? fieldLabel(meta.primaryField)}
-                value={draft[meta.primaryField]}
-                disabled={meta.stub}
-                onChange={(v) =>
-                  setDraft({ ...draft, [meta.primaryField!]: v })
-                }
-              />
-              {/* W-48(b): inline "use the tailnet IP, not the LAN IP" guidance */}
-              {meta.primaryHint && (
-                <p
-                  data-sandbox-hint={meta.primaryField}
-                  className="font-ui text-[0.72rem] text-text-faint"
-                >
-                  {meta.primaryHint}
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Advanced — everything else, collapsed by default. runtime is NOT in the form
-              (it rides along in the saved payload via the per-backend default). */}
-          {(() => {
-            const advanced = meta.fields.filter(
-              (f) => f !== "runtime" && f !== meta.primaryField,
-            );
-            if (advanced.length === 0) return null;
-            return (
-              <details className="rounded-control border border-hairline px-body py-inline">
-                <summary
-                  data-disco-control="settings.sandbox-advanced"
-                  className="cursor-pointer font-ui text-[0.78rem] text-text-muted"
-                >
-                  Advanced
-                </summary>
-                <div className="mt-inline flex flex-col gap-inline">
-                  {advanced.map((f) => (
-                    <SandboxField
-                      key={f}
-                      field={f}
-                      label={fieldLabel(f)}
-                      value={draft[f]}
-                      disabled={meta.stub}
-                      onChange={(v) => setDraft({ ...draft, [f]: v })}
-                    />
-                  ))}
-                </div>
-              </details>
-            );
-          })()}
-
-          {meta.stub && (
-            <p
-              data-disco-flag="sandbox-stub"
-              className="font-ui text-[0.76rem] text-weak"
-            >
-              Podman is a stub in this environment — it configures but doesn’t
-              run here; completed at deployment.
-            </p>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-inline">
-        <div className="flex items-center gap-inline">
-          <button
-            type="button"
-            data-disco-control="settings.sandbox-save"
-            onClick={onSave}
-            disabled={!dirty || save.isPending || test.isPending}
-            className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {save.isPending ? "Saving…" : dirty ? "Save sandbox" : "Saved"}
-          </button>
-          {/* W-48: explicit connectivity preflight — a real probe of the configured
-              endpoint, returning a typed host-naming verdict. Hidden for the Podman stub. */}
-          {!meta?.stub && (
-            <button
-              type="button"
-              data-disco-control="settings.sandbox-test"
-              onClick={onTest}
-              disabled={test.isPending || save.isPending}
-              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-50"
-            >
-              {test.isPending ? "Testing…" : "Test connection"}
-            </button>
-          )}
-          {save.error && (
-            <span
-              role="alert"
-              className="font-ui text-[0.78rem] text-unsupported"
-            >
-              {(save.error as Error).message}
-            </span>
-          )}
-        </div>
-        {/* the typed reachability verdict from the preflight probe (W-48) */}
-        {probe && (
-          <span
-            role="status"
-            data-sandbox-probe={probe.ok ? "ok" : probe.status}
-            className={cn(
-              "font-ui text-[0.78rem]",
-              probe.ok ? "text-supported" : "text-unsupported",
-            )}
-          >
-            {probe.detail}
-          </span>
-        )}
-      </div>
+      <SandboxSaveRow
+        dirty={dirty}
+        savePending={save.isPending}
+        testPending={test.isPending}
+        stub={meta?.stub}
+        onSave={onSave}
+        onTest={onTest}
+        saveError={save.error}
+        probe={probe}
+      />
     </section>
   );
 }

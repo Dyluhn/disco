@@ -9,32 +9,17 @@
  */
 
 import { useState } from "react";
-import { CalendarClock, Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentFetch } from "@/api/client";
 import { browserScheduleTimezone } from "@/lib/scheduleLocal";
 import { parseScheduleNL } from "@/lib/scheduleNL";
+import { EMPTY_DRAFT, type DraftState } from "./scheduleSectionParts/draftState";
+import type { PreviewResult, ScheduleRow } from "./scheduleSectionParts/types";
+import { ScheduleComposer } from "./scheduleSectionParts/ScheduleComposer";
+import { ScheduleList } from "./scheduleSectionParts/ScheduleList";
 
 // ---- API functions ----------------------------------------------------------
-
-interface ScheduleRow {
-  schedule_id: string;
-  conversation_id: string;
-  rrule: string;
-  description: string;
-  timezone: string;
-  depth: string | null;
-  model_override: string | null;
-  created_at: string;
-  enabled: boolean;
-  next_run: string | null;
-}
-
-interface PreviewResult {
-  next_runs: string[];
-  rrule: string;
-  timezone: string;
-}
 
 async function fetchSchedules(cid: string): Promise<ScheduleRow[]> {
   const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`);
@@ -100,91 +85,7 @@ export const SCHEDULE_PRESETS = [
   { label: "Every 6 hours", cron: "0 */6 * * *", description: "every 6 hours" },
 ] as const;
 
-// ---- sub-components ---------------------------------------------------------
-
-function fmtDatetime(iso: string, timezone: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      weekday: "short", month: "short", day: "numeric",
-      hour: "2-digit", minute: "2-digit", timeZoneName: "short",
-      timeZone: timezone,
-    });
-  } catch {
-    return iso;
-  }
-}
-
-/** Card shown BEFORE saving, displaying next 3 run times for user confirmation. */
-function ConfirmCard({
-  preview,
-  description,
-  onConfirm,
-  onCancel,
-  busy,
-}: {
-  preview: PreviewResult;
-  description: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  busy: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
-      <div className="flex items-center gap-hair">
-        <CalendarClock className="size-4 text-accent" aria-hidden />
-        <span className="font-ui text-[0.9rem] font-semibold text-text">Confirm schedule</span>
-      </div>
-      <p className="font-ui text-[0.84rem] text-text-muted">
-        <span className="font-medium text-text">{description}</span>
-        {" — "}cron: <code className="rounded bg-surface-2 px-1 font-mono text-[0.78rem]">{preview.rrule}</code>
-      </p>
-      <div className="flex flex-col gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-inline">
-        <p className="font-ui text-[0.78rem] font-medium text-text-muted uppercase tracking-wide">
-          Next 3 runs
-        </p>
-        {/* `data-next-run` carries the raw ISO so a frozen-clock test can assert the
-            previewed times deterministically (the visible text is locale-formatted). */}
-        <ol className="list-decimal list-inside space-y-px">
-          {preview.next_runs.map((t) => (
-            <li key={t} data-next-run={t} className="font-ui text-[0.82rem] text-text">
-              {fmtDatetime(t, preview.timezone)}
-            </li>
-          ))}
-        </ol>
-      </div>
-      <p className="font-ui text-[0.78rem] text-text-muted">
-        Time zone: <span className="font-medium text-text">{preview.timezone}</span>
-      </p>
-      <div className="flex items-center justify-end gap-inline">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          data-disco-control="settings.schedule-save"
-          disabled={busy}
-          onClick={onConfirm}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
-        >
-          {busy ? "Saving…" : "Save schedule"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ---- main component ---------------------------------------------------------
-
-interface DraftState {
-  input: string;  // raw NL input from the user
-  description: string | null;
-}
-
-const EMPTY_DRAFT: DraftState = { input: "", description: null };
 
 export function ScheduleSection({ conversationId }: { conversationId: string }) {
   const timezone = browserScheduleTimezone();
@@ -224,6 +125,12 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
     setDraft(EMPTY_DRAFT);
     setParseError(null);
     setPreview(null);
+    setPreviewError(null);
+  };
+
+  const handleInputChange = (value: string) => {
+    setDraft({ input: value, description: null });
+    setParseError(null);
     setPreviewError(null);
   };
 
@@ -309,123 +216,28 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
         </p>
       )}
 
-      {creating && preview && (
-        <ConfirmCard
-          preview={preview}
-          description={draft.description || parseScheduleNL(draft.input).description || draft.input}
-          onConfirm={handleConfirm}
-          onCancel={closeForm}
-          busy={createMutation.isPending}
-        />
-      )}
+      <ScheduleComposer
+        creating={creating}
+        preview={preview}
+        draft={draft}
+        parseError={parseError}
+        previewError={previewError}
+        previewLoading={previewLoading}
+        busy={createMutation.isPending}
+        presets={SCHEDULE_PRESETS}
+        onPreview={handlePreview}
+        onSelectPreset={handleSelectPreset}
+        onConfirm={handleConfirm}
+        onCancel={closeForm}
+        onInputChange={handleInputChange}
+      />
 
-      {creating && !preview && (
-        <div className="flex flex-col gap-inline rounded-card border border-accent/40 bg-surface-1 p-body">
-          {/* Quick-pick presets — emit known-good cron directly */}
-          <div className="flex flex-wrap gap-hair">
-            {SCHEDULE_PRESETS.map(({ label, cron, description }) => (
-              <button
-                key={cron}
-                type="button"
-                data-disco-control="settings.schedule-preset"
-                data-cron={cron}
-                disabled={previewLoading}
-                onClick={() => handleSelectPreset(cron, description)}
-                className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40"
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="font-ui text-[0.74rem] text-text-faint">
-            Or type your own:
-          </p>
-          <input
-            data-disco-control="settings.schedule-input"
-            value={draft.input}
-            onChange={(e) => {
-              setDraft({ input: e.target.value, description: null });
-              setParseError(null);
-              setPreviewError(null);
-            }}
-            placeholder='e.g. "every day at 9am" or "*/5 * * * *"'
-            aria-label="Schedule expression"
-            className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent"
-          />
-          {parseError && (
-            <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-              {parseError}
-            </p>
-          )}
-          {previewError && (
-            <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-              {previewError}
-            </p>
-          )}
-          <div className="flex items-center justify-end gap-inline">
-            <button
-              type="button"
-              onClick={closeForm}
-              className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              data-disco-control="settings.schedule-preview"
-              disabled={!draft.input.trim() || previewLoading}
-              onClick={handlePreview}
-              className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
-            >
-              {previewLoading ? "Checking…" : "Preview schedule"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      <ul className="flex flex-col gap-inline">
-        {isLoading && (
-          <li className="rounded-card border border-hairline bg-surface-1 px-body py-body font-ui text-[0.84rem] text-text-muted">
-            Loading schedules…
-          </li>
-        )}
-        {!isLoading && (schedules ?? []).length === 0 && !creating && (
-          <li className="rounded-card border border-dashed border-hairline bg-surface-1 px-body py-body text-center font-ui text-[0.84rem] text-text-faint">
-            No schedules yet. Create one to automate recurring runs.
-          </li>
-        )}
-        {(schedules ?? []).map((s) => (
-          <li
-            key={s.schedule_id}
-            className="flex items-start justify-between gap-section rounded-card border border-hairline bg-surface-1 px-body py-inline"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-hair">
-                <CalendarClock className="size-3.5 shrink-0 text-accent" aria-hidden />
-                <span className="font-ui text-[0.88rem] font-medium text-text">
-                  {s.description}
-                </span>
-              </div>
-              <p className="font-mono text-[0.74rem] text-text-faint">{s.rrule}</p>
-              <p className="font-ui text-[0.74rem] text-text-faint">{s.timezone}</p>
-              {s.next_run && (
-                <p className="font-ui text-[0.78rem] text-text-muted">
-                  Next: {fmtDatetime(s.next_run, s.timezone)}
-                </p>
-              )}
-            </div>
-            <button
-              type="button"
-              data-disco-control="settings.schedule-delete"
-              onClick={() => removeMutation.mutate(s.schedule_id)}
-              aria-label={`Delete schedule ${s.description}`}
-              className="text-text-faint transition-colors hover:text-unsupported"
-            >
-              <Trash2 className="size-3.5" aria-hidden />
-            </button>
-          </li>
-        ))}
-      </ul>
+      <ScheduleList
+        isLoading={isLoading}
+        schedules={schedules}
+        creating={creating}
+        onDelete={(scheduleId) => removeMutation.mutate(scheduleId)}
+      />
     </section>
   );
 }

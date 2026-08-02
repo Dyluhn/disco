@@ -28,6 +28,11 @@ import {
   useProjects,
 } from "@/hooks/useProjects";
 import type { Project, ProjectStorageStatus } from "@/types/project";
+import {
+  deriveShowConfigureStorage,
+  deriveShowEmptyProjects,
+  deriveShowProjectsContent,
+} from "@/views/projectsViewParts/deriveVisibility";
 
 function SkeletonRows() {
   return (
@@ -203,6 +208,9 @@ export function ProjectsView() {
   const status = data?.status ?? "unset";
   const all = data?.projects ?? [];
   const filtered = all.filter((p) => p.title.toLowerCase().includes(q.trim().toLowerCase()));
+  const showConfigureStorage = deriveShowConfigureStorage(isLoading, isError, status);
+  const showProjectsContent = deriveShowProjectsContent(isLoading, isError, status, all.length);
+  const showEmptyProjects = deriveShowEmptyProjects(isLoading, isError, status, all.length);
 
   return (
     <div
@@ -218,11 +226,11 @@ export function ProjectsView() {
           </p>
         </header>
 
-        {!isLoading && !isError && status !== "ok" && (
+        {showConfigureStorage && (
           <ConfigureStorage reason={status} path={data?.root} />
         )}
 
-        {!isLoading && !isError && status === "ok" && all.length > 0 && (
+        {showProjectsContent && (
           <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
             <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
             <input
@@ -256,9 +264,9 @@ export function ProjectsView() {
           </div>
         )}
 
-        {!isLoading && !isError && status === "ok" && all.length === 0 && <EmptyProjects />}
+        {showEmptyProjects && <EmptyProjects />}
 
-        {!isLoading && !isError && status === "ok" && all.length > 0 && (
+        {showProjectsContent && (
           <>
             {filtered.length === 0 ? (
               <p className="py-body font-ui text-[0.85rem] text-text-muted">

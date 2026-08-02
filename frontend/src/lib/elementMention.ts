@@ -74,28 +74,73 @@ export function parseElementMentionMessage(
   return parsePayload(frame.payload);
 }
 
+/** A per-field validation result: `valid: true` carries the parsed `value` (when the
+ * field produces one); `valid: false` means the payload must be rejected. */
+interface FieldResult<T> {
+  valid: boolean;
+  value?: T;
+}
+
+function extractReactPath(o: Record<string, unknown>): FieldResult<string[]> {
+  if (o.reactPath === undefined) return { valid: true };
+  const reactPath = parsePath(o.reactPath);
+  if (!reactPath) return { valid: false };
+  return { valid: true, value: reactPath };
+}
+
+function extractScreenLabel(o: Record<string, unknown>): FieldResult<string | null> {
+  const screenLabel = o.screenLabel;
+  if (!(screenLabel === null || typeof screenLabel === "string")) return { valid: false };
+  return { valid: true, value: screenLabel };
+}
+
+function isValidHrefSrc(o: Record<string, unknown>): boolean {
+  if (o.href !== undefined && typeof o.href !== "string") return false;
+  if (o.src !== undefined && typeof o.src !== "string") return false;
+  return true;
+}
+
+function buildElementMentionPayload(
+  domPath: string[],
+  reactPath: string[] | undefined,
+  screenLabel: string | null,
+  text: string,
+  rect: ElementMentionRect,
+  href: string | undefined,
+  src: string | undefined,
+): ElementMentionPayload {
+  return {
+    domPath,
+    ...(reactPath ? { reactPath } : {}),
+    screenLabel: screenLabel === null ? null : cleanLine(screenLabel, 120),
+    text: cleanLine(text, 120),
+    rect,
+    ...(href !== undefined ? { href: cleanLine(href, 500) } : {}),
+    ...(src !== undefined ? { src: cleanLine(src, 500) } : {}),
+  };
+}
+
 function parsePayload(raw: unknown): ElementMentionPayload | null {
   if (!raw || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
   const domPath = parsePath(o.domPath);
   if (!domPath) return null;
-  const reactPath = o.reactPath === undefined ? undefined : parsePath(o.reactPath);
-  if (o.reactPath !== undefined && !reactPath) return null;
-  const screenLabel = o.screenLabel;
-  if (!(screenLabel === null || typeof screenLabel === "string")) return null;
+  const reactPathResult = extractReactPath(o);
+  if (!reactPathResult.valid) return null;
+  const screenLabelResult = extractScreenLabel(o);
+  if (!screenLabelResult.valid) return null;
   if (typeof o.text !== "string") return null;
   if (!isRect(o.rect)) return null;
-  if (o.href !== undefined && typeof o.href !== "string") return null;
-  if (o.src !== undefined && typeof o.src !== "string") return null;
-  return {
+  if (!isValidHrefSrc(o)) return null;
+  return buildElementMentionPayload(
     domPath,
-    ...(reactPath ? { reactPath } : {}),
-    screenLabel: screenLabel === null ? null : cleanLine(screenLabel, 120),
-    text: cleanLine(o.text, 120),
-    rect: o.rect,
-    ...(typeof o.href === "string" ? { href: cleanLine(o.href, 500) } : {}),
-    ...(typeof o.src === "string" ? { src: cleanLine(o.src, 500) } : {}),
-  };
+    reactPathResult.value,
+    screenLabelResult.value ?? null,
+    o.text,
+    o.rect,
+    typeof o.href === "string" ? o.href : undefined,
+    typeof o.src === "string" ? o.src : undefined,
+  );
 }
 
 function parsePath(raw: unknown): string[] | null {

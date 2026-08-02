@@ -62,11 +62,11 @@
         },
         "settings": {
           "description": "settings/provider UI",
-          "modules": ["setting", "provider", "api/models"]
+          "modules": ["setting", "provider", "api/models", "api/modelsParts"]
         },
         "shell": {
           "description": "frontend composition/shared UI",
-          "modules": ["App", "components (shared)"]
+          "modules": ["App", "appParts", "components (shared)"]
         }
       },
       "dm007_legacy": {
@@ -81,7 +81,7 @@
           ["frontend/src/components/build/DeckEditorPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/build/canvas/PreviewPane.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
           ["frontend/src/components/research/NeedMoreCard.tsx", "shell", "@/api/agent", "frontend/src/api/agent.ts", "build"],
-          ["frontend/src/components/settings/AudioSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
+          ["frontend/src/components/settings/audioSectionParts/ContextualFieldsPanel.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
           ["frontend/src/components/settings/DataSourcesSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
           ["frontend/src/components/settings/ImageGenSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],
           ["frontend/src/components/settings/OpenRouterSection.tsx", "shell", "@/api/models", "frontend/src/api/models.ts", "settings"],

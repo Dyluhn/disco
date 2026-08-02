@@ -11,14 +11,7 @@
  */
 
 import { useEffect, useState } from "react";
-import {
-  Check,
-  Container,
-  Globe,
-  KeyRound,
-  Loader2,
-  Package,
-} from "lucide-react";
+import { Container, Globe, KeyRound, Package } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { isLive } from "@/api/client";
 import { testDataSource } from "@/api/models";
@@ -32,6 +25,7 @@ import type {
   SearchProvider,
 } from "@/types/models";
 import { ProbeButton } from "./ProbeButton";
+import { DataSourcesSaveRow } from "./dataSourcesSectionParts/DataSourcesSaveRow";
 
 type Tier = "bundled" | "selfhost" | "paid";
 
@@ -329,37 +323,12 @@ export function DataSourcesSection() {
             />
           </div>
 
-          <div className="flex items-center gap-inline">
-            <button
-              type="button"
-              data-disco-control="settings.datasource-save"
-              disabled={!dirty || save.isPending}
-              onClick={() => draft && save.mutate(draft)}
-              className={cn(
-                "flex items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.82rem] transition-colors",
-                dirty && !save.isPending
-                  ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
-                  : "border-hairline text-text-faint",
-              )}
-            >
-              {save.isPending ? (
-                <Loader2 className="size-3.5 animate-spin" aria-hidden />
-              ) : (
-                <Check className="size-3.5" aria-hidden />
-              )}
-              Save data sources
-            </button>
-            {!dirty && !save.isPending && (
-              <span className="font-ui text-[0.76rem] text-text-faint">
-                Saved
-              </span>
-            )}
-            {save.error && (
-              <span className="font-ui text-[0.78rem] text-warn">
-                Couldn't save: {(save.error as Error).message}
-              </span>
-            )}
-          </div>
+          <DataSourcesSaveRow
+            dirty={dirty}
+            pending={save.isPending}
+            error={save.error}
+            onSave={() => draft && save.mutate(draft)}
+          />
         </div>
       )}
     </section>

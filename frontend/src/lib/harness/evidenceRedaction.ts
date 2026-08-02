@@ -9,6 +9,38 @@ function redactText(value: string, identifiers: readonly string[]): string {
   return redacted;
 }
 
+/**
+ * Redact an Error's own message/name/stack/cause in place, falling back to a
+ * fresh Error carrying the same redacted content when the original (or one of
+ * its properties) turns out to be immutable. `cause` has already been visited
+ * (redacted) by the caller before this runs. Returns the fallback Error when
+ * one was needed, or `null` when the in-place mutation succeeded.
+ */
+function redactErrorInPlace(
+  value: Error,
+  cause: unknown,
+  immutable: boolean,
+  redact: (value: string) => string,
+): Error | null {
+  const message = redact(value.message);
+  const stack = value.stack ? redact(value.stack) : undefined;
+  try {
+    value.name = redact(value.name);
+    value.message = message;
+    if (stack) value.stack = stack;
+    if ("cause" in value) (value as Error & { cause?: unknown }).cause = cause;
+  } catch {
+    immutable = true;
+  }
+  if (immutable) {
+    const fallback = new Error(message, cause === undefined ? undefined : { cause });
+    fallback.name = redact(value.name);
+    if (stack) fallback.stack = stack;
+    return fallback;
+  }
+  return null;
+}
+
 /** Redact every retained failure string while preserving Error identity when mutable. */
 export function redactFailureStringsInPlace(
   failure: unknown,
@@ -31,24 +63,11 @@ export function redactFailureStringsInPlace(
       }
     }
     if (value instanceof Error) {
-      const message = redact(value.message);
-      const stack = value.stack ? redact(value.stack) : undefined;
       const cause = visit((value as Error & { cause?: unknown }).cause, depth + 1);
-      try {
-        value.name = redact(value.name);
-        value.message = message;
-        if (stack) value.stack = stack;
-        if ("cause" in value) (value as Error & { cause?: unknown }).cause = cause;
-      } catch {
-        immutable = true;
-      }
-      if (immutable) {
-        const fallback = new Error(message, cause === undefined ? undefined : { cause });
-        fallback.name = redact(value.name);
-        if (stack) fallback.stack = stack;
-        return fallback;
-      }
-    } else if (immutable) {
+      const fallback = redactErrorInPlace(value, cause, immutable, redact);
+      return fallback ?? value;
+    }
+    if (immutable) {
       return new Error("immutable non-Error failure evidence was redacted");
     }
     return value;

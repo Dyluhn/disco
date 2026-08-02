@@ -14,19 +14,11 @@
  */
 
 import { useEffect, useState } from "react";
-import { Check, Cpu, Loader2, Server } from "lucide-react";
+import { Cpu, Loader2, Server } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useEncodersConfig, useUpdateEncodersConfig } from "@/hooks/useModels";
-
-const ENDPOINTS = [
-  {
-    key: "embedder_url",
-    label: "Embeddings endpoint",
-    hint: "OpenAI-shape /v1",
-  },
-  { key: "reranker_url", label: "Reranker endpoint", hint: "TEI rerank" },
-  { key: "nli_url", label: "NLI endpoint", hint: "entailment sidecar" },
-] as const;
+import { isEncoderUrlsDirty } from "./encoderSectionParts/deriveEncoderState";
+import { EncoderEndpointsPanel } from "./encoderSectionParts/EncoderEndpointsPanel";
 
 const OPTIONS = [
   {
@@ -63,11 +55,7 @@ export function EncoderSection() {
       });
   }, [data]);
 
-  const dirty =
-    !!data &&
-    (urls.embedder_url !== (data.embedder_url ?? "") ||
-      urls.reranker_url !== (data.reranker_url ?? "") ||
-      urls.nli_url !== (data.nli_url ?? ""));
+  const dirty = isEncoderUrlsDirty(urls, data);
 
   return (
     <section className="flex flex-col gap-inline">
@@ -136,80 +124,17 @@ export function EncoderSection() {
               inputs are honestly DISABLED + flagged when Bundled is active — the
               agent-server ignores these URLs unless Remote is the selected mode, so
               an editable-looking-but-ignored field would be a false affordance. */}
-          <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
-            <p className="font-ui text-[0.78rem] text-text-muted">
-              Remote endpoints — leave blank to use the agent-server's
-              configured default.
-            </p>
-            {!data.remote && (
-              <p
-                role="note"
-                data-disco-flag="encoder-endpoints-inactive"
-                className="font-ui text-[0.76rem] text-text-faint"
-              >
-                Inactive while Bundled is selected — these endpoints apply only
-                when Remote is the active mode. Switch to Remote endpoints above
-                to edit them.
-              </p>
-            )}
-            {ENDPOINTS.map((ep) => (
-              <label key={ep.key} className="flex flex-col gap-hair">
-                <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                  {ep.label}
-                  <span className="font-ui text-[0.72rem] text-text-faint">
-                    · {ep.hint}
-                  </span>
-                </span>
-                <input
-                  type="url"
-                  inputMode="url"
-                  spellCheck={false}
-                  data-disco-control="settings.encoder-endpoint"
-                  data-endpoint={ep.key}
-                  disabled={!data.remote || save.isPending}
-                  value={urls[ep.key]}
-                  onChange={(e) =>
-                    setUrls((u) => ({ ...u, [ep.key]: e.target.value }))
-                  }
-                  placeholder="http://host:port  (empty = server default)"
-                  className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 disabled:opacity-50"
-                />
-              </label>
-            ))}
-            {data.remote && (
-              <div className="flex items-center gap-inline">
-                <button
-                  type="button"
-                  data-disco-control="settings.encoder-save"
-                  disabled={!dirty || save.isPending}
-                  onClick={() => save.mutate({ remote: true, ...urls })}
-                  className={cn(
-                    "flex items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors",
-                    dirty && !save.isPending
-                      ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
-                      : "border-hairline text-text-faint",
-                  )}
-                >
-                  {save.isPending ? (
-                    <Loader2 className="size-3 animate-spin" aria-hidden />
-                  ) : (
-                    <Check className="size-3" aria-hidden />
-                  )}
-                  Save endpoints
-                </button>
-                {!dirty && !save.isPending && (
-                  <span className="font-ui text-[0.76rem] text-text-faint">
-                    Saved
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          {save.error && (
-            <p className="font-ui text-[0.8rem] text-warn">
-              Couldn't save: {(save.error as Error).message}
-            </p>
-          )}
+          <EncoderEndpointsPanel
+            remote={data.remote}
+            urls={urls}
+            onUrlChange={(key, value) =>
+              setUrls((u) => ({ ...u, [key]: value }))
+            }
+            dirty={dirty}
+            pending={save.isPending}
+            onSaveEndpoints={() => save.mutate({ remote: true, ...urls })}
+            error={save.error}
+          />
         </div>
       )}
     </section>

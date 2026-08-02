@@ -9,7 +9,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { installE2EBridge, type DiscoE2EState, type Surface } from "@/lib/e2eBridge";
+import { installE2EBridge, type DiscoE2EState } from "@/lib/e2eBridge";
 import { getPublishedRunStatus } from "@/lib/runStatusBridge";
 import { clearFreshMode } from "@/lib/sessionResume";
 import { ModeProvider } from "@/shell/ModeProvider";
@@ -17,6 +17,7 @@ import { PairingGate } from "@/components/PairingGate";
 import { ToastProvider } from "@/components/Toast";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
+import { deriveRouteMatch, deriveSurface } from "@/appParts/e2eBridgeRouting";
 
 const BuildSurface = lazy(() =>
   import("@/components/BuildSurface").then((module) => ({ default: module.BuildSurface })),
@@ -93,34 +94,8 @@ function E2EBridgeMounter() {
   const { mode } = useMode();
   const pathname = location.pathname;
 
-  // Parse `/build|agent|deep|imported|share/<cid>` from the pathname.
-  const cidMatch = pathname.match(
-    /^\/(build|agent|deep|imported|share)\/([^/]+)/,
-  );
-  const routePrefix = cidMatch?.[1] ?? null;
-  const conversationId =
-    routePrefix === "build" ||
-    routePrefix === "agent" ||
-    routePrefix === "deep" ||
-    routePrefix === "imported"
-      ? (cidMatch?.[2] ?? null)
-      : null;
-
-  let surface: Surface = null;
-  if (routePrefix === "build") surface = "build";
-  else if (routePrefix === "agent") surface = "agent";
-  else if (routePrefix === "deep") surface = "deep_research";
-  else if (routePrefix === "imported") surface = "imported";
-  else if (routePrefix === "share") surface = "share";
-  else if (pathname === "/activity") surface = "activity";
-  else if (pathname === "/history") surface = "history";
-  else if (pathname === "/projects") surface = "projects";
-  else if (pathname === "/workflows") surface = "workflows";
-  else if (pathname === "/spaces") surface = "spaces";
-  else if (pathname === "/settings") surface = "settings";
-  else if (pathname === "/" || pathname === "")
-    surface =
-      mode === "build" ? "build" : mode === "agent" ? "agent" : "search";
+  const { routePrefix, conversationId } = deriveRouteMatch(pathname);
+  const surface = deriveSurface(pathname, routePrefix, mode);
 
   // Keep a ref so the getter always returns the latest values without re-installing.
   // `runStatus` is filled in LIVE by the getter (below) from the publish seam, so
