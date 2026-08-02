@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ..effects import ActionProfile
 from ..events import (
@@ -33,14 +33,17 @@ from .observation_dedup import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ConversationModePort, LoopEventPort, ToolExecutionPort
+
+    class _LoopFacet(ConversationModePort, LoopEventPort, ToolExecutionPort, Protocol):
+        """The loop capability this module uses: mode, the event log, tools."""
 
 _LOG = logging.getLogger("disco.loop")
 _ERROR_DETAIL_CAP = 600
 _DELIVERED_DETAIL_CAP = 80_000
 
 
-async def _persist_runtime_constraints(loop: AgentLoop, result: ToolResult) -> None:
+async def _persist_runtime_constraints(loop: _LoopFacet, result: ToolResult) -> None:
     """Persist non-transient host constraints beside the primary observation."""
     for declaration in result.runtime_constraints:
         if declaration.transient:
@@ -67,7 +70,7 @@ def _error_detail(
     return value[:cap] if value and value != err else None
 
 
-def _ground_read(loop: AgentLoop, path: str) -> None:
+def _ground_read(loop: _LoopFacet, path: str) -> None:
     """Tell a compatible executor that current bytes were already grounded."""
     note = getattr(getattr(loop, "executor", None), "note_grounding_read", None)
     if not callable(note) or not isinstance(path, str) or not path:
@@ -79,7 +82,7 @@ def _ground_read(loop: AgentLoop, path: str) -> None:
 
 
 def _action_profile_for_call(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
 ) -> ActionProfile | None:
     classify = getattr(loop.executor, "action_profile_for_call", None)
@@ -127,7 +130,7 @@ def _recover_elided_file_write_content(
 
 
 async def _emit_dedup_observation(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     prior_id: str | None,
     pointer: str,
@@ -181,7 +184,7 @@ def _shell_reminder(
 
 
 async def _prepare_observation(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
 ) -> tuple[bool, str | None]:
     """Return whether F9 handled the call and any deferred W-39 reminder."""
@@ -211,7 +214,7 @@ def _marker_only_call(action: ActionEvent, tool_name: str) -> bool:
 
 
 async def _recover_marker_write(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
 ) -> bool:
     if not _marker_only_call(action, "file_write"):
@@ -240,7 +243,7 @@ async def _recover_marker_write(
 
 
 async def _redirect_marker_append(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
 ) -> bool:
     if not _marker_only_call(action, "file_append"):
@@ -284,7 +287,7 @@ async def _redirect_marker_append(
 
 
 async def _emit_marker_error(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     bad_arguments: list[str],
 ) -> None:
@@ -321,7 +324,7 @@ async def _emit_marker_error(
 
 
 async def _handle_elision_marker(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
 ) -> bool:
     """Return True when K1 redirected or rejected without executor entry."""
@@ -345,7 +348,7 @@ async def _handle_elision_marker(
 
 
 async def _persist_primary_result(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     result: ToolResult,
 ) -> None:
@@ -378,7 +381,7 @@ async def _persist_primary_result(
 
 
 async def _emit_execution_error(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     error: Exception,
 ) -> None:
@@ -392,7 +395,7 @@ async def _emit_execution_error(
 
 
 async def maybe_emit_sandbox_restart(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     sandbox: object | None,
     generation_before: int,
 ) -> None:
@@ -420,7 +423,7 @@ async def maybe_emit_sandbox_restart(
 
 
 async def _emit_success_followups(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     reminder: str | None,
 ) -> None:
@@ -435,7 +438,7 @@ async def _emit_success_followups(
 
 
 async def execute_and_observe(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     action: ActionEvent,
     *,
     restart_emitter: Callable[[object | None, int], Awaitable[None]] | None = None,
