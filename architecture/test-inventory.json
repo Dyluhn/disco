@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
+  "source_identity": "efdd187bc7522de5dd27a2916cb3349d6e3da2c7",
   "collected": {
     "counts": {
-      "packages": 9870,
+      "packages": 9876,
       "harness": 1252,
       "integrations": 9,
       "tests": 333
     },
-    "total": 11464,
+    "total": 11470,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9439,6 +9439,12 @@
         "packages/tools/tests/test_shell_spill.py::test_shell_caps_large_output_and_spills_full_evidence",
         "packages/tools/tests/test_shell_spill.py::test_shell_exec_caps_large_session_output_with_same_hint",
         "packages/tools/tests/test_shell_spill.py::test_successful_shell_binary_output_is_replaced_before_spill_or_outcome_fields",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifact_discovery_is_not_empty",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[auth-kit-1.0.0]",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[database-kit-1.0.0]",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[rbac-kit-1.0.0]",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_shipped_browser_daemon_executes_standalone",
+        "packages/tools/tests/test_shipped_standalone_artifacts.py::test_standalone_runner_rejects_a_package_relative_import",
         "packages/tools/tests/test_slides.py::test_all_invalid_filename_rejected",
         "packages/tools/tests/test_slides.py::test_executor_rejects_slides_in_research_scope",
         "packages/tools/tests/test_slides.py::test_file_lands_in_workspace_not_host_cwd",
@@ -11485,9 +11491,9 @@
     }
   },
   "mapping_static": {
-    "identity": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
-    "python_test_file_count": 788,
-    "python_static_test_id_count": 9354,
+    "identity": "efdd187bc7522de5dd27a2916cb3349d6e3da2c7",
+    "python_test_file_count": 789,
+    "python_static_test_id_count": 9358,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12233,6 +12239,7 @@
       "packages/tools/tests/test_sheets.py",
       "packages/tools/tests/test_shell_sessions.py",
       "packages/tools/tests/test_shell_spill.py",
+      "packages/tools/tests/test_shipped_standalone_artifacts.py",
       "packages/tools/tests/test_slides.py",
       "packages/tools/tests/test_slides_pipeline.py",
       "packages/tools/tests/test_slides_procedural_contract.py",
@@ -20919,6 +20926,10 @@
       "packages/tools/tests/test_shell_spill.py::test_shell_caps_large_output_and_spills_full_evidence",
       "packages/tools/tests/test_shell_spill.py::test_shell_exec_caps_large_session_output_with_same_hint",
       "packages/tools/tests/test_shell_spill.py::test_successful_shell_binary_output_is_replaced_before_spill_or_outcome_fields",
+      "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifact_discovery_is_not_empty",
+      "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone",
+      "packages/tools/tests/test_shipped_standalone_artifacts.py::test_shipped_browser_daemon_executes_standalone",
+      "packages/tools/tests/test_shipped_standalone_artifacts.py::test_standalone_runner_rejects_a_package_relative_import",
       "packages/tools/tests/test_slides.py::test_all_invalid_filename_rejected",
       "packages/tools/tests/test_slides.py::test_executor_rejects_slides_in_research_scope",
       "packages/tools/tests/test_slides.py::test_file_lands_in_workspace_not_host_cwd",
@@ -28018,6 +28029,40 @@
           "packages/core/tests/test_store_schema_contract.py::test_tools_ensure_mcp_approval_tables_functional",
           "packages/core/tests/test_store_schema_contract.py::test_tools_mcp_migrations_imports_core_schema",
           "tests/architecture/test_public_api.py::test_type_checking_class_declarations_preserve_static_surface"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-02-GATE-HARN1B",
+      "root": "packages",
+      "source_identity_before": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
+      "source_identity_after": "efdd187bc7522de5dd27a2916cb3349d6e3da2c7",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9870,
+          "after_count": 9876,
+          "added_ids": [
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifact_discovery_is_not_empty",
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[auth-kit-1.0.0]",
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[database-kit-1.0.0]",
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone[rbac-kit-1.0.0]",
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_shipped_browser_daemon_executes_standalone",
+            "packages/tools/tests/test_shipped_standalone_artifacts.py::test_standalone_runner_rejects_a_package_relative_import"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/tools/tests/test_shipped_standalone_artifacts.py"
+        ],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifact_discovery_is_not_empty",
+          "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone",
+          "packages/tools/tests/test_shipped_standalone_artifacts.py::test_shipped_browser_daemon_executes_standalone",
+          "packages/tools/tests/test_shipped_standalone_artifacts.py::test_standalone_runner_rejects_a_package_relative_import"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

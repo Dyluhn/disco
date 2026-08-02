@@ -123,21 +123,55 @@ def _bounded_startup_diagnostic(output: object, exit_code: object = None) -> str
     return (prefix + text).strip()[:1280]
 
 
-def _installed_chromium_executable() -> str | None:
-    """Resolve the trusted runtime's installed Chromium without leaking HOME.
+_BROWSER_ENGINES: tuple[str, ...] = ("chromium", "firefox", "webkit")
 
-    Merely asking Playwright for its executable path does not launch a browser.
-    The returned path is a narrow process-backend capability; the daemon keeps
+
+def _installed_browser_executables() -> dict[str, str]:
+    """Resolve EVERY installed engine's executable without leaking HOME.
+
+    The sandbox sets ``HOME`` to its own jailed workspace, so Playwright's
+    default browsers path resolves to an empty directory inside it and no engine
+    can be launched by name alone. The daemon selects its engine by measured
+    renderer readiness (HARN-1b/B2), so it needs a path for every engine it may
+    try — shipping only Chromium's is what made a Chromium that cannot paint
+    text terminal rather than recoverable.
+
+    Merely asking Playwright for an executable path does not launch a browser.
+    The returned paths are a narrow process-backend capability; the daemon keeps
     its scrubbed HOME/PATH and receives no arbitrary host environment.
     """
+    resolved: dict[str, str] = {}
     try:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
-            executable = str(playwright.chromium.executable_path)
-    except Exception:  # noqa: BLE001 — absence is handled as browser unavailable
-        return None
-    return executable if Path(executable).is_file() else None
+            for name in _BROWSER_ENGINES:
+                engine = getattr(playwright, name, None)
+                if engine is None:
+                    continue
+                try:
+                    executable = str(engine.executable_path)
+                except Exception:
+                    # An engine this build cannot even name is not a candidate;
+                    # the others still stand.
+                    continue
+                if Path(executable).is_file():
+                    resolved[name] = executable
+    except Exception:
+        # Playwright absent or unusable — handled downstream as browser
+        # unavailable, exactly as the single-engine resolver did.
+        return {}
+    return resolved
+
+
+def _installed_chromium_executable() -> str | None:
+    """Chromium's installed executable specifically, or None.
+
+    Retained for the callers that genuinely need Chromium rather than whichever
+    engine the daemon measures ready — the real-Chromium integration tests and
+    ``scripts/verify_visible_text_corpus.py``.
+    """
+    return _installed_browser_executables().get("chromium")
 
 
 def _installed_playwright_runtime() -> tuple[str, str] | None:
@@ -476,7 +510,7 @@ class BrowserTool:
             daemon_target_path=_DAEMON_PATH,
             daemon_port_path=_DAEMON_PORT_PATH,
             daemon_url_default=_DAEMON_URL,
-            chromium_executable=_installed_chromium_executable,
+            browser_executables=_installed_browser_executables,
             playwright_runtime=_installed_playwright_runtime,
             bounded_startup_diagnostic=_bounded_startup_diagnostic,
             unavailable_message=BROWSER_UNAVAILABLE_MSG,
