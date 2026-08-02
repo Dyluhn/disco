@@ -8372,7 +8372,7 @@
   {
     "id": "TS-0002",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/api/agent.ts:<module>:1-811",
@@ -8390,7 +8390,7 @@
   {
     "id": "TS-0004",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/BuildSurface.tsx:BuildSurface:106-793",
@@ -8399,7 +8399,7 @@
   {
     "id": "TS-0005",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/BuildSurface.tsx:BuildSurface:106-793",
@@ -8408,7 +8408,7 @@
   {
     "id": "TS-0006",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/BuildSurface.tsx:<module>:1-793",
@@ -8426,7 +8426,7 @@
   {
     "id": "TS-0008",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/AgentCanvas.tsx:BrowserPane:127-471",
@@ -8435,7 +8435,7 @@
   {
     "id": "TS-0009",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/AgentCanvas.tsx:BrowserPane:127-471",
@@ -8444,7 +8444,7 @@
   {
     "id": "TS-0010",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/AgentCanvas.tsx:probe:214-294",
@@ -8453,7 +8453,7 @@
   {
     "id": "TS-0011",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/AgentCanvas.tsx:<module>:1-834",
@@ -8462,7 +8462,7 @@
   {
     "id": "TS-0012",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/AgentStatusBar.tsx:AgentStatusBar:51-298",
@@ -8471,7 +8471,7 @@
   {
     "id": "TS-0013",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/DeliverablePanel.tsx:DeliverablePanel:22-133",
@@ -8480,7 +8480,7 @@
   {
     "id": "TS-0014",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/PlanPanel.tsx:PlanPanel:86-319",
@@ -8489,7 +8489,7 @@
   {
     "id": "TS-0015",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/build/agentStage.ts:deriveStage:13-47",
@@ -8687,7 +8687,7 @@
   {
     "id": "TS-0037",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/workflows/WorkflowAuthorForm.tsx:WorkflowAuthorForm:277-1061",
@@ -8696,7 +8696,7 @@
   {
     "id": "TS-0038",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/workflows/WorkflowAuthorForm.tsx:WorkflowAuthorForm:277-1061",
@@ -8705,7 +8705,7 @@
   {
     "id": "TS-0039",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/components/workflows/WorkflowAuthorForm.tsx:<module>:1-1061",
@@ -8714,7 +8714,7 @@
   {
     "id": "TS-0040",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/hooks/useBuild.ts:useBuild:28-318",
@@ -8723,7 +8723,7 @@
   {
     "id": "TS-0041",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/hooks/useBuildStream.ts:reducerInner:164-375",
@@ -8732,7 +8732,7 @@
   {
     "id": "TS-0042",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/hooks/useBuildStream.ts:<module>:1-646",
@@ -8759,7 +8759,7 @@
   {
     "id": "TS-0045",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:deriveActivity:232-507",
@@ -8768,7 +8768,7 @@
   {
     "id": "TS-0046",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:deriveFiles:537-588",
@@ -8777,7 +8777,7 @@
   {
     "id": "TS-0047",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:deriveTerminal:693-721",
@@ -8786,7 +8786,7 @@
   {
     "id": "TS-0048",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:deriveBuildProgress:875-936",
@@ -8795,7 +8795,7 @@
   {
     "id": "TS-0049",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:deriveLiveSignal:951-1007",
@@ -8804,7 +8804,7 @@
   {
     "id": "TS-0050",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/lib/buildTrace.ts:<module>:1-1019",
@@ -8912,7 +8912,7 @@
   {
     "id": "TS-0062",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-BUILD",
     "location": "frontend/src/views/WorkflowReviewPanel.tsx:WorkflowCard:63-237",

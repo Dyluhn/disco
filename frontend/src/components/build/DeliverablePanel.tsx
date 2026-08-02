@@ -16,7 +16,7 @@
  */
 
 import { Download, ExternalLink, FileJson, Globe, PackageCheck } from "lucide-react";
-import { agentHttpBase } from "@/api/client";
+import { deliverableArtifactUrl, projectSourceDownloadUrl } from "@/api/deliverables";
 import type { DeliverableView } from "@/lib/buildTrace";
 
 export function DeliverablePanel({
@@ -43,6 +43,14 @@ export function DeliverablePanel({
   // Files get the per-file artifact route; directories fall back to onDownload (zip).
   const hasExtension = deliverable.path.includes(".");
   const canDirectDownload = cid && hasExtension && !isApp;
+
+  // The fallback button's affordance is one of two states throughout — hoisted
+  // once instead of re-deriving `isApp ? … : …` per attribute (same values,
+  // fewer branches to evaluate and fewer lines to keep in sync).
+  const primaryActionLabel = isApp ? "Open" : "Download";
+  const primaryActionHandler = isApp ? onOpen : onDownload;
+  const primaryActionControlId = isApp ? "build.open-app" : "build.download-artifact";
+  const PrimaryActionIcon = isApp ? ExternalLink : Download;
 
   return (
     <div className="flex items-center gap-inline rounded-control border border-accent/30 bg-accent/5 px-inline py-hair">
@@ -75,7 +83,7 @@ export function DeliverablePanel({
           the whole workspace). Secondary styling — "Open" stays the primary action. */}
       {isApp && cid && (
         <a
-          href={`${agentHttpBase()}/api/projects/${cid}/download`}
+          href={projectSourceDownloadUrl(cid)}
           download
           aria-label="Download source"
           title="Download the project source (.zip)"
@@ -104,7 +112,7 @@ export function DeliverablePanel({
           and it's a file (not a directory). Otherwise fall back to onDownload (zip). */}
       {canDirectDownload ? (
         <a
-          href={`${agentHttpBase()}/conversations/${cid}/artifacts/${encodeURI(deliverable.path)}`}
+          href={deliverableArtifactUrl(cid, deliverable.path)}
           download
           aria-label={`Download the deliverable: ${deliverable.title}`}
           title={`Download ${deliverable.title}`}
@@ -117,15 +125,15 @@ export function DeliverablePanel({
       ) : (
         <button
           type="button"
-          onClick={isApp ? onOpen : onDownload}
-          disabled={isApp ? !onOpen : !onDownload}
-          aria-label={`${isApp ? "Open" : "Download"} the deliverable: ${deliverable.title}`}
-          title={`${isApp ? "Open" : "Download"} ${deliverable.title}`}
-          data-disco-control={isApp ? "build.open-app" : "build.download-artifact"}
+          onClick={primaryActionHandler}
+          disabled={!primaryActionHandler}
+          aria-label={`${primaryActionLabel} the deliverable: ${deliverable.title}`}
+          title={`${primaryActionLabel} ${deliverable.title}`}
+          data-disco-control={primaryActionControlId}
           className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {isApp ? <ExternalLink className="size-3.5" aria-hidden /> : <Download className="size-3.5" aria-hidden />}
-          {isApp ? "Open" : "Download"}
+          <PrimaryActionIcon className="size-3.5" aria-hidden />
+          {primaryActionLabel}
         </button>
       )}
     </div>

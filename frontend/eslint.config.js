@@ -34,27 +34,31 @@ export default tseslint.config(
   // views/ now import it directly, spreading transport concerns through the view
   // layer and making the data-access seam unfindable.
   //
-  // The rule restores the invariant. The list below is the drift measured at
-  // Epic 12-A open (compiler-derived from the pinned tsc, not grep) and is a
-  // RATCHET: it may only shrink. Each PKG-12 sub-epic migrates the files it
-  // touches onto `api/`/`hooks/` and deletes those entries; A3 requires it to
-  // reach zero by Epic 12 close. Do not add an entry — if new code needs the
-  // backend, it needs an api module.
+  // The rule restores the invariant. The list below started as the drift
+  // measured at Epic 12-A open (compiler-derived from the pinned tsc, not grep)
+  // and is a RATCHET: it may only shrink. Each PKG-12 sub-epic migrates the
+  // files it touches onto `api/`/`hooks/` and deletes those entries; A3
+  // requires it to reach zero by Epic 12 close. Do not add an entry — if new
+  // code needs the backend, it needs an api module.
+  //
+  // 36 at Epic 12-A open; 33 after Epic 12-B migrated the three files it
+  // decomposed (`BuildSurface.tsx`, `build/AgentCanvas.tsx`,
+  // `build/DeliverablePanel.tsx`) behind `api/agent.ts`, `api/canvas.ts` and
+  // `api/deliverables.ts`. `src/test/apiClientBoundary.test.ts` holds both
+  // prongs: the ceiling, and that every remaining entry still imports the
+  // client — so a migration is only complete once its entry is gone.
   {
     files: ["src/components/**/*.{ts,tsx}", "src/views/**/*.{ts,tsx}"],
     ignores: [
-      "src/components/BuildSurface.tsx",
       "src/components/DemoDataBadge.tsx",
       "src/components/PairingGate.tsx",
       "src/components/PreviewLaunchFrame.tsx",
       "src/components/ResearchSurface.draft.test.tsx",
       "src/components/build/ActivityFeed.tsx",
       "src/components/build/AgentCanvas.live.test.tsx",
-      "src/components/build/AgentCanvas.tsx",
       "src/components/build/DeckEditorPane.test.tsx",
       "src/components/build/DeckEditorPane.tsx",
       "src/components/build/DeckExportBar.tsx",
-      "src/components/build/DeliverablePanel.tsx",
       "src/components/build/ExecutionCanvas.preview.test.tsx",
       "src/components/build/ImportProjectDialog.tsx",
       "src/components/build/canvas/PreviewPane.tsx",

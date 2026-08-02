@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
+  "source_identity": "b4d1fc416dcdb4cef3b6f80e7880c05c5c9310de",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -17912,6 +17912,11 @@
         },
         {
           "kind": "function",
+          "name": "fetchConversationSummary",
+          "signature": "export async function fetchConversationSummary( cid: string, ): Promise<{ sandboxBackend: string | null; title: string | null } | null>"
+        },
+        {
+          "kind": "function",
           "name": "fetchShareBundle",
           "signature": "export async function fetchShareBundle(token: string): Promise<ShareBundle | null>"
         },
@@ -18051,9 +18056,149 @@
           "signature": "export interface WorkspaceVersion { seq: number; ts: string; label?: string | null; trigger: \"turn\" | \"finish\" | \"restore\" | string; file_count: number; total_bytes: number; tree_digest: string; pinned: boolean; }"
         },
         {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export { canonicalPreviewBootstrapUrl };"
+        },
+        {
           "kind": "TypeAliasDeclaration",
           "name": "ConversationWsUrlFactory",
           "signature": "export type ConversationWsUrlFactory = ( conversationId: string, lastSeq: number, ) => string;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/agentParts/deckEditor.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getDeckForEditor",
+          "signature": "export async function getDeckForEditor(cid: string, base: string): Promise<LoweredDeck>"
+        },
+        {
+          "kind": "function",
+          "name": "getDeckRenderHtml",
+          "signature": "export async function getDeckRenderHtml( cid: string, base: string, template?: string, ): Promise<string>"
+        },
+        {
+          "kind": "function",
+          "name": "patchDeck",
+          "signature": "export async function patchDeck( cid: string, base: string, patch: JsonPatchOp[], ): Promise<DeckPatchResult>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/agentParts/fixtures.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "subscribeDeepFixture",
+          "signature": "export function subscribeDeepFixture(onFrame: (f: WSServerFrame) => void): AgentHandle"
+        },
+        {
+          "kind": "function",
+          "name": "subscribeFixture",
+          "signature": "export function subscribeFixture(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/agentParts/liveSocket.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "subscribeLive",
+          "signature": "export function subscribeLive( cid: string, onFrame: (f: WSServerFrame) => void, wsUrlForCursor: ConversationWsUrlFactory = defaultConversationWsUrl, ): AgentHandle"
+        },
+        {
+          "kind": "variable",
+          "name": "defaultConversationWsUrl",
+          "signature": "export const defaultConversationWsUrl: ConversationWsUrlFactory = ( conversationId, lastSeq, ) => agentWsUrl( `/ws/conversations/${encodeURIComponent(conversationId)}?last_seq=${lastSeq}`, )!;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "createShare",
+          "signature": "export async function createShare(conversationId: string): Promise<ShareLink>"
+        },
+        {
+          "kind": "function",
+          "name": "fetchConversationRun",
+          "signature": "export async function fetchConversationRun( cid: string, ): Promise<{ events: Array<Record<string, unknown>>; status: string }>"
+        },
+        {
+          "kind": "function",
+          "name": "fetchShareBundle",
+          "signature": "export async function fetchShareBundle(token: string): Promise<ShareBundle | null>"
+        },
+        {
+          "kind": "function",
+          "name": "importShareBundle",
+          "signature": "export async function importShareBundle(bundle: unknown): Promise<{ conversation_id: string }>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/canvas.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "artifactDownloadUrl",
+          "signature": "export function artifactDownloadUrl(cid: string, path: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "getLiveBrowserReadiness",
+          "signature": "export async function getLiveBrowserReadiness(cid: string): Promise<LiveBrowserReadiness>"
+        },
+        {
+          "kind": "function",
+          "name": "mintLiveBrowserLaunch",
+          "signature": "export async function mintLiveBrowserLaunch( cid: string, port: number, novncPath: string, ): Promise<PreviewLaunch | null>"
+        },
+        {
+          "kind": "function",
+          "name": "mintPathPreviewLaunch",
+          "signature": "export async function mintPathPreviewLaunch( cid: string, targetPath: string, ): Promise<PreviewLaunch | null>"
+        },
+        {
+          "kind": "function",
+          "name": "startLiveBrowserSession",
+          "signature": "export async function startLiveBrowserSession(cid: string): Promise<LiveBrowserStartResult>"
+        },
+        {
+          "kind": "function",
+          "name": "stopLiveBrowserSession",
+          "signature": "export function stopLiveBrowserSession(cid: string): void"
+        },
+        {
+          "kind": "function",
+          "name": "touchLiveBrowserSession",
+          "signature": "export function touchLiveBrowserSession(cid: string): void"
+        },
+        {
+          "kind": "function",
+          "name": "workspaceFileUrl",
+          "signature": "export function workspaceFileUrl(cid: string, path: string): string"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "LiveBrowserReadiness",
+          "signature": "export interface LiveBrowserReadiness { ready: boolean; reason: string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "LiveBrowserStartResult",
+          "signature": "export interface LiveBrowserStartResult { ready: boolean; novnc_path: string; port: number; reason?: string; }"
+        },
+        {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export type { PreviewLaunch };"
         }
       ]
     },
@@ -18319,6 +18464,21 @@
           "kind": "variable",
           "name": "FIXTURE_DEEP_CID",
           "signature": "export const FIXTURE_DEEP_CID = \"conv_deep_fixture\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/deliverables.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deliverableArtifactUrl",
+          "signature": "export function deliverableArtifactUrl(cid: string | null | undefined, path: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "projectSourceDownloadUrl",
+          "signature": "export function projectSourceDownloadUrl(cid: string): string"
         }
       ]
     },
@@ -19448,6 +19608,161 @@
       ]
     },
     {
+      "path": "frontend/src/components/build/agentCanvas/ArtifactsPane.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ArtifactsPane",
+          "signature": "export function ArtifactsPane({ events, status, cid, untrusted, onSteer, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; untrusted: boolean; /** W-26 \u2014 steer the agent from the artifact-preview selection (\"Discuss with * agent\"). Undefined when steering isn't available (no false affordance). */ onSteer?: (text: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/BrowserPane.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BrowserPane",
+          "signature": "export function BrowserPane({ events, status, cid, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/BrowserPaneHeader.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BrowserPaneHeader",
+          "signature": "export function BrowserPaneHeader({ url, driving, streaming, liveViewActive, }: { url: string | null; driving: boolean; streaming: boolean; liveViewActive: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/ConsolePane.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ConsolePane",
+          "signature": "export function ConsolePane({ events }: { events: AgentEvent[] })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/Empty.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "Empty",
+          "signature": "export function Empty({ children }: { children: React.ReactNode })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/FileRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FileRow",
+          "signature": "export function FileRow({ file, cid }: { file: WorkspaceFile; cid: string | null })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/HistoryPane.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "HistoryPane",
+          "signature": "export function HistoryPane({ events, status, cid, }: { events: AgentEvent[]; status: ConversationStatus; cid: string | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/LiveFailureBanner.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "LiveFailureBanner",
+          "signature": "export function LiveFailureBanner({ failure }: { failure: LiveStartFailure })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/ScreenshotStrip.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ScreenshotStrip",
+          "signature": "export function ScreenshotStrip({ shots, hero, cid, onPick, }: { shots: string[]; hero: string | null; cid: string; onPick: (path: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/WorkspaceImage.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "WorkspaceImage",
+          "signature": "export function WorkspaceImage({ src, className }: { src: string; className: string })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/browserEvents.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "collectScreenshots",
+          "signature": "export function collectScreenshots(events: AgentEvent[]): string[]"
+        },
+        {
+          "kind": "function",
+          "name": "isDrivingBrowser",
+          "signature": "export function isDrivingBrowser(live: LiveSignal): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "latestBrowserUrl",
+          "signature": "export function latestBrowserUrl(events: AgentEvent[]): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "pickHeroScreenshot",
+          "signature": "export function pickHeroScreenshot(picked: string | null, shots: string[]): string | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/format.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "fmtBytes",
+          "signature": "export function fmtBytes(n: number): string"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useLiveBrowserSession",
+          "signature": "export function useLiveBrowserSession(cid: string | null): LiveBrowserSession"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "LiveBrowserSession",
+          "signature": "export interface LiveBrowserSession { liveView: { launch: PreviewLaunch; ownerCid: string } | null; liveReady: boolean; iframeConnected: boolean; setIframeConnected: (connected: boolean) => void; liveStartFailure: LiveStartFailure; /** The HONEST \"actually streaming\" signal: the stack started, the noVNC iframe * has loaded, AND the backend still confirms the stack is running. */ streaming: boolean; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "LiveStartFailure",
+          "signature": "export type LiveStartFailure = \"retrying\" | \"unavailable\" | null;"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/build/agentStage.ts",
       "public_declarations": [
         {
@@ -19654,6 +19969,156 @@
           "kind": "function",
           "name": "defaultPlanPanelExpanded",
           "signature": "export function defaultPlanPanelExpanded({ gate, status, }: { gate: boolean; status?: ConversationStatus; }): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildActivityFeed.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildActivityFeed",
+          "signature": "export function BuildActivityFeed({ isReplaying, replay, eventsLength, feedScrollRef, onFeedScroll, showScrollDown, scrollFeedToBottom, children, }: { isReplaying: boolean; replay: ReplayState; eventsLength: number; feedScrollRef: React.RefObject<HTMLDivElement | null>; onFeedScroll: () => void; showScrollDown: boolean; scrollFeedToBottom: () => void; children: ReactNode; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildActivityFeedContent.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildActivityFeedContent",
+          "signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildAskGate.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildAskGate",
+          "signature": "export function BuildAskGate({ b, finalMessage, }: { b: BuildController; finalMessage: string | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildComposerSection",
+          "signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildDecisionGates.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildDecisionGates",
+          "signature": "export function BuildDecisionGates({ b }: { b: BuildController })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildDeliverableSection",
+          "signature": "export function BuildDeliverableSection({ b, deliverable, download, exportManifest, release, }: { b: BuildController; deliverable: DeliverableView | null; download: ReturnType<typeof useDownloadProject>; exportManifest: ReturnType<typeof useExportManifest>; release: ReturnType<typeof useProjectRelease>; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildEmptyState.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildEmptyState",
+          "signature": "export function BuildEmptyState({ framing, copy, b, draft, setDraft, }: { framing: BuildFraming; copy: FramingCopy; b: BuildController; draft: string; setDraft: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildRunningActivity.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildRunningActivity",
+          "signature": "export function BuildRunningActivity({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/BuildSurfaceHeader.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BuildSurfaceHeader",
+          "signature": "export function BuildSurfaceHeader({ b, isolation, taskLabel, download, onDownloadClick, }: { b: BuildController; isolation: ReturnType<typeof isolationForBackend>; taskLabel: string | null; download: ReturnType<typeof useDownloadProject>; onDownloadClick: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/types.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "FramingCopy",
+          "signature": "export interface FramingCopy { placeholder: string; replanPlaceholder: string; startError: string; heroTitle: string; heroSubtitle: string; }"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "BuildController",
+          "signature": "export type BuildController = ReturnType<typeof useBuild>;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/useBuildSurfaceFlags.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useBuildSurfaceFlags",
+          "signature": "export function useBuildSurfaceFlags(b: BuildController, verboseChat: boolean): BuildSurfaceFlags"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "BuildSurfaceFlags",
+          "signature": "export interface BuildSurfaceFlags { isReplaying: boolean; steerable: boolean; settled: boolean; collapseFeed: boolean; draftingPlan: boolean; terminalIncomplete: boolean; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/useConversationSummary.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useConversationSummary",
+          "signature": "export function useConversationSummary(cid: string | null)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/useElementMentionRelay.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useElementMentionRelay",
+          "signature": "export function useElementMentionRelay(b: BuildController)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/buildSurface/useFeedAutoScroll.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useFeedAutoScroll",
+          "signature": "export function useFeedAutoScroll( status: ConversationStatus, deliverableId: string | null, activityLength: number, streamingContent: string | undefined, )"
         }
       ]
     },
@@ -20128,6 +20593,311 @@
       ]
     },
     {
+      "path": "frontend/src/components/workflows/authorForm/AdvancedAuthorForm.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AdvancedAuthorForm",
+          "signature": "export function AdvancedAuthorForm({ hasResult, onClose, contextIsLoading, contextIsError, authoring, draftFields, paramsField, mcpField, verification, writableMcpNeedsPolicy, authorIsError, authorError, authorIsPending, canSubmit, onSubmit, }: AdvancedAuthorFormProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/DescribeStep.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DescribeStep",
+          "signature": "export function DescribeStep({ description, onDescriptionChange, onSubmit, canDraft, isDrafting, draftIsError, draftError, advancedOpen, hasResult, onOpenAdvanced, }: DescribeStepProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/DraftReviewPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DraftReviewPanel",
+          "signature": "export function DraftReviewPanel({ result, approveIsPending, approveIsError, approveError, onApprove, onEditDetails, onStartOver, }: DraftReviewPanelProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/FindingRows.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FindingRows",
+          "signature": "export function FindingRows({ findings }: { findings: WorkflowValidationFinding[] })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/McpMountsField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "McpMountsField",
+          "signature": "export function McpMountsField({ mcpServers, mcpMounts, emptyMcpMount, writableMcpNeedsPolicy, onAdd, onUpdateServer, onUpdateReadOnly, onToggleTool, onRemove, }: McpMountsFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/OutputField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "OutputField",
+          "signature": "export function OutputField({ outputPathTemplate, onOutputPathTemplateChange, outputFormat, onOutputFormatChange, outputFormats, }: OutputFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/ParamsField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ParamsField",
+          "signature": "export function ParamsField({ params, paramTypes, duplicateParams, invalidParam, onAdd, onUpdate, onRemove, }: ParamsFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/PolicyCheckboxes.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PolicyCheckboxes",
+          "signature": "export function PolicyCheckboxes({ allowsWrites, onAllowsWritesChange, untrustedContent, onUntrustedContentChange, }: PolicyCheckboxesProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/SkillsField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SkillsField",
+          "signature": "export function SkillsField({ skills, selectedSkills, onChange }: SkillsFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/ToolsField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ToolsField",
+          "signature": "export function ToolsField({ builtinTools, selectedTools, onChange }: ToolsFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/VerificationField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "VerificationField",
+          "signature": "export function VerificationField({ verifyChecks, verifyDraft, onVerifyDraftChange, onVerifyKeyDown, onAddVerifyChecks, onRemoveVerifyCheck, finalizer, onFinalizerChange, }: VerificationFieldProps)"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_declarations": [
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "OutputFormat",
+          "signature": "export type OutputFormat = WorkflowAuthoringContext[\"output_formats\"][number];"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "ParamType",
+          "signature": "export type ParamType = WorkflowAuthoringContext[\"param_types\"][number];"
+        },
+        {
+          "kind": "variable",
+          "name": "DEFAULT_OUTPUT_FORMAT",
+          "signature": "export const DEFAULT_OUTPUT_FORMAT: OutputFormat = \"markdown\";"
+        },
+        {
+          "kind": "variable",
+          "name": "DEFAULT_PARAM_TYPE",
+          "signature": "export const DEFAULT_PARAM_TYPE: ParamType = \"string\";"
+        },
+        {
+          "kind": "variable",
+          "name": "OUTPUT_FORMATS",
+          "signature": "export const OUTPUT_FORMATS: readonly OutputFormat[] = [ \"markdown\", \"html\", \"json\", \"csv\", \"pptx\", \"pdf\", \"text\", ];"
+        },
+        {
+          "kind": "variable",
+          "name": "PARAM_TYPES",
+          "signature": "export const PARAM_TYPES: readonly ParamType[] = [ \"string\", \"integer\", \"number\", \"boolean\", \"string_array\", \"integer_array\", \"number_array\", ];"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "asOutputFormat",
+          "signature": "export function asOutputFormat(value: unknown): OutputFormat"
+        },
+        {
+          "kind": "function",
+          "name": "asRecord",
+          "signature": "export function asRecord(value: unknown): Record<string, unknown>"
+        },
+        {
+          "kind": "function",
+          "name": "asStringArray",
+          "signature": "export function asStringArray(value: unknown): string[]"
+        },
+        {
+          "kind": "function",
+          "name": "authorInputFromReview",
+          "signature": "export function authorInputFromReview(review: WorkflowReview): WorkflowAuthorInput"
+        },
+        {
+          "kind": "function",
+          "name": "compactTags",
+          "signature": "export function compactTags(value: string): string[]"
+        },
+        {
+          "kind": "function",
+          "name": "errorMessage",
+          "signature": "export function errorMessage(error: unknown, fallback: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "mcpMountsFromDefinition",
+          "signature": "export function mcpMountsFromDefinition(value: unknown): WorkflowMcpMountInput[]"
+        },
+        {
+          "kind": "function",
+          "name": "outputLabel",
+          "signature": "export function outputLabel(result: WorkflowDraftFromDescriptionResult): string"
+        },
+        {
+          "kind": "function",
+          "name": "paramsFromFriendly",
+          "signature": "export function paramsFromFriendly(value: unknown): WorkflowDraftParam[]"
+        },
+        {
+          "kind": "function",
+          "name": "paramsFromSchema",
+          "signature": "export function paramsFromSchema(value: unknown): WorkflowDraftParam[]"
+        },
+        {
+          "kind": "function",
+          "name": "paramTypeFromSchema",
+          "signature": "export function paramTypeFromSchema(value: unknown): ParamType"
+        },
+        {
+          "kind": "function",
+          "name": "resultFromAuthorDraft",
+          "signature": "export function resultFromAuthorDraft( response: { workflow: WorkflowReview; simulation: WorkflowDraftFromDescriptionResult[\"simulation\"] }, description: string, ): WorkflowDraftFromDescriptionResult"
+        },
+        {
+          "kind": "function",
+          "name": "toggleValue",
+          "signature": "export function toggleValue(values: string[], value: string, checked: boolean): string[]"
+        },
+        {
+          "kind": "function",
+          "name": "workflowUses",
+          "signature": "export function workflowUses(review: WorkflowReview): string[]"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/formValidation.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "canDraftAuthorForm",
+          "signature": "export function canDraftAuthorForm(description: string, isDrafting: boolean): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "canSubmitAuthorForm",
+          "signature": "export function canSubmitAuthorForm(input: CanSubmitAuthorFormInput): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "mcpWritesNeedPolicy",
+          "signature": "export function mcpWritesNeedPolicy(hasWritableMount: boolean, allowsWrites: boolean): boolean"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "CanSubmitAuthorFormInput",
+          "signature": "export interface CanSubmitAuthorFormInput { hasAuthoringContext: boolean; name: string; card: string; outputPathTemplate: string; cardHasBlankLine: boolean; duplicateParams: boolean; invalidParam: boolean; writableMcpNeedsPolicy: boolean; emptyMcpMount: boolean; isSubmitting: boolean; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/useAuthorDraftFields.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAuthorDraftFields",
+          "signature": "export function useAuthorDraftFields()"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AuthorDraftFieldsState",
+          "signature": "export type AuthorDraftFieldsState = ReturnType<typeof useAuthorDraftFields>;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/useAuthorMcpMounts.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAuthorMcpMounts",
+          "signature": "export function useAuthorMcpMounts()"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AuthorMcpMountsState",
+          "signature": "export type AuthorMcpMountsState = ReturnType<typeof useAuthorMcpMounts>;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/useAuthorParams.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAuthorParams",
+          "signature": "export function useAuthorParams()"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AuthorParamsState",
+          "signature": "export type AuthorParamsState = ReturnType<typeof useAuthorParams>;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/workflows/authorForm/useAuthorVerification.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useAuthorVerification",
+          "signature": "export function useAuthorVerification()"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "AuthorVerificationState",
+          "signature": "export type AuthorVerificationState = ReturnType<typeof useAuthorVerification>;"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/data/suggestions.ts",
       "public_declarations": [
         {
@@ -20364,6 +21134,36 @@
           "kind": "variable",
           "name": "MODEL_CATALOGUE",
           "signature": "export const MODEL_CATALOGUE: ModelInfo[] = [ { id: \"driver-local\", label: \"Driver Local \u2014 Qwen3.6-27B-UD-Q5_K_XL\", provider: \"local\", price_in_per_m: 0, price_out_per_m: 0, capabilities: [\"tool_calling\", \"json_mode\", \"long_context\"], note: \"131K ctx \u00b7 Q5_K_XL \u00b7 localhost:18080\", model_id: \"Qwen3.6-27B-UD-Q5_K_XL.gguf\", base_url: QWEN, context_window: 131072, quantization: \"Q5_K_XL\", }, { id: \"rag-local\", label: \"Rag Local \u2014 Qwen3.6-27B-UD-Q5_K_XL\", provider: \"local\", price_in_per_m: 0, price_out_per_m: 0, capabilities: [\"json_mode\", \"long_context\"], note: \"131K ctx \u00b7 Q5_K_XL \u00b7 localhost:18080\", model_id: \"Qwen3.6-27B-UD-Q5_K_XL.gguf\", base_url: QWEN, context_window: 131072, quantization: \"Q5_K_XL\", }, { id: \"rewriter-local\", label: \"Rewriter Local \u2014 gemma-4-e2b-mtp\", provider: \"local\", price_in_per_m: 0, price_out_per_m: 0, capabilities: [\"json_mode\"], note: \"32K ctx \u00b7 localhost:8087\", model_id: \"gemma-4-e2b-mtp\", base_url: GEMMA, api_key_env: \"PMX_GEMMA_API_KEY\", context_window: 32768, }, { id: \"summarizer-local\", label: \"Summarizer Local \u2014 gemma-4-e2b-mtp\", provider: \"local\", price_in_per_m: 0, price_out_per_m: 0, capabilities: [], note: \"32K ctx \u00b7 localhost:8087\", model_id: \"gemma-4-e2b-mtp\", base_url: GEMMA, api_key_env: \"PMX_GEMMA_API_KEY\", context_window: 32768, }, { id: \"nli-local\", label: \"Nli Local \u2014 bge-reranker-v2-m3\", provider: \"local\", price_in_per_m: 0, price_out_per_m: 0, capabilities: [], note: \"512 ctx \u00b7 off the LLM path\", model_id: \"bge-reranker-v2-m3\", context_window: 512, }, { id: \"driver-minimax\", label: \"Driver Minimax \u2014 minimax-m2\", provider: \"openrouter\", price_in_per_m: 0, price_out_per_m: 0, // W-05: a SUBSCRIPTION model \u2014 flat plan fee, no per-token price. Renders // \"Subscription\" (never \"Free\", never a $ rate) across every cost surface. pricing_mode: \"subscription\", capabilities: [\"tool_calling\", \"json_mode\", \"long_context\"], note: \"200K ctx \u00b7 localhost:8080 \u00b7 subscription\", model_id: \"minimax/minimax-m2\", base_url: \"http://localhost:8080/v1\", context_window: 200000, }, { id: \"driver-overflow\", label: \"Driver Overflow \u2014 claude-3.5-sonnet\", provider: \"openrouter\", price_in_per_m: 3, price_out_per_m: 15, capabilities: [\"tool_calling\", \"json_mode\", \"long_context\", \"vision\"], note: \"200K ctx \u00b7 openrouter.ai \u00b7 paid, assign deliberately\", model_id: \"anthropic/claude-3.5-sonnet\", base_url: \"https://openrouter.ai/api/v1\", api_key_env: \"PMX_OPENROUTER_API_KEY\", context_window: 200000, }, ];"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "localUserMessage",
+          "signature": "export function localUserMessage( content: string, makeId: OptimisticIdFactory = defaultOptimisticIdFactory, ): MessageEvent"
+        },
+        {
+          "kind": "function",
+          "name": "reducer",
+          "signature": "export function reducer(state: BuildStreamState, action: Action): BuildStreamState"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "Action",
+          "signature": "export type Action = | { type: \"reset\" } | { type: \"frame\"; frame: WSServerFrame } | { type: \"local_message\"; event: AgentEvent };"
+        },
+        {
+          "kind": "variable",
+          "name": "defaultOptimisticIdFactory",
+          "signature": "export const defaultOptimisticIdFactory: OptimisticIdFactory = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;"
+        },
+        {
+          "kind": "variable",
+          "name": "initial",
+          "signature": "export const initial: BuildStreamState = { status: \"IDLE\", connectionState: \"connected\", events: [], streamingFile: null, activeAgentViewId: null, activeAgentViewSeq: null, agentViewPending: false, pendingActionId: null, pendingPlanId: null, pendingAlternativesId: null, pendingQuestionId: null, pendingClarifyId: null, pendingQuestionsV2Id: null, sandboxState: null, autonomous: false, assist: false, frameSeq: 0, maxSeq: 0, error: null, };"
         }
       ]
     },
@@ -21204,6 +22004,206 @@
           "kind": "TypeAliasDeclaration",
           "name": "StepState",
           "signature": "export type StepState = \"pending\" | \"active\" | \"done\" | \"stalled\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/activity.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveActivity",
+          "signature": "export function deriveActivity( events: AgentEvent[], pendingActionId: string | null, status: ConversationStatus, ): ActivityItem[]"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "activityItemForAction",
+          "signature": "export function activityItemForAction( e: ActionEvent, ctx: ActivityBuildContext, ): ActivityItem | null"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForAgentMessage",
+          "signature": "export function activityItemForAgentMessage( e: MessageEvent, idx: number, lastAgentMessageIdx: number, ): ActivityItem | null"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForAppkitEjection",
+          "signature": "export function activityItemForAppkitEjection(e: AppKitEjectionEvent): ActivityItem"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForDeliverable",
+          "signature": "export function activityItemForDeliverable(e: DeliverableEvent): ActivityItem | null"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForEnvironmentMessage",
+          "signature": "export function activityItemForEnvironmentMessage(e: MessageEvent): ActivityItem | null"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForUserMessage",
+          "signature": "export function activityItemForUserMessage(e: MessageEvent): ActivityItem | null"
+        },
+        {
+          "kind": "function",
+          "name": "activityItemForWorkspaceRestored",
+          "signature": "export function activityItemForWorkspaceRestored(e: WorkspaceRestoredEvent): ActivityItem"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ActivityBuildContext",
+          "signature": "export interface ActivityBuildContext { pendingActionId: string | null; status: ConversationStatus; observed: Set<string>; failed: Set<string>; observationByActionId: Map<string, ObservationEntry>; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/activityLabels.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "_isWorkspaceRoot",
+          "signature": "export function _isWorkspaceRoot(path: unknown): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "detailFor",
+          "signature": "export function detailFor(toolName: string, args: Record<string, unknown>): string | undefined"
+        },
+        {
+          "kind": "function",
+          "name": "plainError",
+          "signature": "export function plainError(code: string): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "plainLabel",
+          "signature": "export function plainLabel(toolName: string, args: Record<string, unknown>): string"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "buildObservationIndex",
+          "signature": "export function buildObservationIndex( events: AgentEvent[], latestEditableByBase: Map<string, boolean>, ): Map<string, ObservationEntry>"
+        },
+        {
+          "kind": "function",
+          "name": "collectLatestEditableByBase",
+          "signature": "export function collectLatestEditableByBase(events: AgentEvent[]): Map<string, boolean>"
+        },
+        {
+          "kind": "function",
+          "name": "collectObservedAndFailed",
+          "signature": "export function collectObservedAndFailed(events: AgentEvent[]): { observed: Set<string>; failed: Set<string>; }"
+        },
+        {
+          "kind": "function",
+          "name": "findLastAgentMessageIndex",
+          "signature": "export function findLastAgentMessageIndex(events: AgentEvent[]): number"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ObservationEntry",
+          "signature": "export interface ObservationEntry { output?: string; error?: string; plainError?: string; screenshotPath?: string; sheet?: { filename: string; title?: string; sheet_names?: string[] }; slides?: { filename: string; title?: string; format?: \"html\" | \"pdf\" | \"pptx\"; slide_count?: number; slides?: { title?: string; content?: string }[]; base?: string; editable?: boolean; }; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/buildProgress.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveBuildProgress",
+          "signature": "export function deriveBuildProgress( events: AgentEvent[], status?: ConversationStatus, ): Map<number, StepState>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/deliverable.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveDeliverable",
+          "signature": "export function deriveDeliverable(events: AgentEvent[]): DeliverableView | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/files.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveFiles",
+          "signature": "export function deriveFiles( events: AgentEvent[], manifestFiles: ManifestFile[] = [], ): WorkspaceFile[]"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/liveSignal.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveLiveSignal",
+          "signature": "export function deriveLiveSignal(events: AgentEvent[], status: ConversationStatus): LiveSignal"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/plan.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "derivePlan",
+          "signature": "export function derivePlan(events: AgentEvent[]): PlanView | null"
+        },
+        {
+          "kind": "function",
+          "name": "derivePlanProgress",
+          "signature": "export function derivePlanProgress( events: AgentEvent[], status?: ConversationStatus, ): Map<number, StepState>"
+        },
+        {
+          "kind": "function",
+          "name": "planProgressSummary",
+          "signature": "export function planProgressSummary( totalSteps: number, progress: Map<number, StepState>, ): { done: number; total: number; fraction: number }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/srcdoc.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveSrcDoc",
+          "signature": "export function deriveSrcDoc( files: WorkspaceFile[], injectionScript?: string, baseUrl?: string, selectedEntryPath?: string, ): string | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/buildTrace/terminal.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveTerminal",
+          "signature": "export function deriveTerminal(events: AgentEvent[]): TerminalEntry[]"
+        },
+        {
+          "kind": "function",
+          "name": "firstUserTask",
+          "signature": "export function firstUserTask(events: AgentEvent[]): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "latestAgentMessage",
+          "signature": "export function latestAgentMessage(events: AgentEvent[]): string | null"
         }
       ]
     },
@@ -23192,6 +24192,16 @@
       ]
     },
     {
+      "path": "frontend/src/views/workflowReview/WorkflowRunSchedule.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "WorkflowRunSchedule",
+          "signature": "export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/vite-env.d.ts",
       "public_declarations": []
     }
@@ -23419,6 +24429,1110 @@
       "target_sha256": "5f20985984bfd973055cacbd33344965697ac487c8a42b9ef9cb5315a49af8fa",
       "owner_package": "PKG-11-SETTINGS",
       "reason": "Epic 11-B: authority moved off this class onto collaborators exposed as plain __init__ attributes; origin unchanged, members removed (see the paired member_transitions record)"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "export",
+      "target_sha256": "d01d6b00c3c635504100e6fb5607eb644b32257a98674a272aa147d6702b7523",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "fetchConversationSummary",
+      "target_sha256": "5699cad76dfb0f6d6a1d7f8099f5bc1a64780578e5b6374028ff2336a05cc636",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/deckEditor.ts",
+      "public_name": "getDeckForEditor",
+      "target_sha256": "2aff5f8d2d3f7b02d3eda72181bd8786bc7a4bb643ffb9752c1a78cd39c0a204",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/deckEditor.ts",
+      "public_name": "getDeckRenderHtml",
+      "target_sha256": "3c7c4f0667360fc1b592d026a5782cf06239605ae243dcac85bac29ea6453c8c",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/deckEditor.ts",
+      "public_name": "patchDeck",
+      "target_sha256": "e669a39cbd6c5d70613414dd56a46ad6376d7389fb1a981ac3f9714be32eea63",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/fixtures.ts",
+      "public_name": "subscribeDeepFixture",
+      "target_sha256": "7d062026412ccad9b9578133c6e89db6dc981cb388b27faff2b24d889a0a6bfa",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/fixtures.ts",
+      "public_name": "subscribeFixture",
+      "target_sha256": "87e7137c4e44943ad5572aa20a4422a176e87b15b8015677f32e13b92deb5360",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/liveSocket.ts",
+      "public_name": "defaultConversationWsUrl",
+      "target_sha256": "3d653d8bdbbfb445c50067b435b327317a59b0a7dc1756c6d4fd4efe53b10077",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/liveSocket.ts",
+      "public_name": "subscribeLive",
+      "target_sha256": "f92b9a81396eb828765987d1c36f1d7d4194b6b9d9afdb3a64d0c280644376a5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_name": "createShare",
+      "target_sha256": "83d7db32b178f929079822b3b875f3b2f79527541bae4490925b5ee09b0a55f7",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_name": "fetchConversationRun",
+      "target_sha256": "cf63be4d2e3029892cad579b9cf99b7eac5fe700f70965e88efeb5cc21d8881c",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_name": "fetchShareBundle",
+      "target_sha256": "6b9283b47c0fe82c183050d32c79357f4abe59c9179cb9f98b27cf26fd10efb9",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agentParts/share.ts",
+      "public_name": "importShareBundle",
+      "target_sha256": "55d5d95e2db65717625625009a59d047c4ff28509c443eb8321561373e3d45b9",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "LiveBrowserReadiness",
+      "target_sha256": "4de02dfab6fa47f4c418a276936d3ff250d3d5ab846030ad66fa13bbc0f5ac9b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "LiveBrowserStartResult",
+      "target_sha256": "669f068be34cc6da33f5033d32c1c985ffe2e89bf1e0f618d80a0ac0e8238cd1",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "artifactDownloadUrl",
+      "target_sha256": "9a035ad661a1835e5ad1451687b968d03c2ee92c202f6c92369fc6c55fb74d9b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "export",
+      "target_sha256": "270d3e55e51ffb769a3a2e6c88db2d992e97707b0a81cc458cc7b9b867c4bfed",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "getLiveBrowserReadiness",
+      "target_sha256": "413420a6de4bdf2697c60a401f11444c782dde70d3414803f2733972d05b3f1f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "mintLiveBrowserLaunch",
+      "target_sha256": "a152b57b70aea044844078b50751754a4168b4b98515fe1f26fc7e6ece3c3f60",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "mintPathPreviewLaunch",
+      "target_sha256": "8dd59a2528ef14d1cb75085b8a2b8581b2dbff174be63ed4f2ae3cfee3e49c54",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "startLiveBrowserSession",
+      "target_sha256": "5a3370d507e4ff7d63f6115bc4cb9c74b528944d8d9cb77d441e0012f78225e5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "stopLiveBrowserSession",
+      "target_sha256": "a694630f6d7168cdb60e13afd3ccdd0943ada9374b8f8eb8c94d814b8021aea8",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "touchLiveBrowserSession",
+      "target_sha256": "c5353e3f3cf1bf228788c2d68ae38642dba643c705258ed99355e7ed133921ba",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/canvas.ts",
+      "public_name": "workspaceFileUrl",
+      "target_sha256": "e448abed7299e92740423ab36730978c7223ba54b0e41f532c127572b222952b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deliverables.ts",
+      "public_name": "deliverableArtifactUrl",
+      "target_sha256": "fc319822ad1d7bd7af0f3483a07dd692c65c929b177e74b2a3dcb79825bb8c1f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deliverables.ts",
+      "public_name": "projectSourceDownloadUrl",
+      "target_sha256": "f930140d3c2605d5924965b3fcd4f01234783b363285ad510104f880bdb108c7",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/ArtifactsPane.tsx",
+      "public_name": "ArtifactsPane",
+      "target_sha256": "b749dcfb9006d321f309ef48bf9b992a5940d776b30cb9a96fcc8556cbb36d96",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/BrowserPane.tsx",
+      "public_name": "BrowserPane",
+      "target_sha256": "0b6a6016e208b2e937af254ee1748307c7e4f946a50dc05f1caffa01ca2088e1",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/BrowserPaneHeader.tsx",
+      "public_name": "BrowserPaneHeader",
+      "target_sha256": "578536c9e5c04b97d2f04c2ef434a5156fffb3d633ac5718fc45a98123c13536",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/ConsolePane.tsx",
+      "public_name": "ConsolePane",
+      "target_sha256": "6e62331a32105abd1b7b96ceef21b0d8fb657a6a2e512caabe2b22a3767228b0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/Empty.tsx",
+      "public_name": "Empty",
+      "target_sha256": "45efd25784a4bf96328a7b2e34d587ad2926e6f375e498b16ed631ba6c462e5c",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/FileRow.tsx",
+      "public_name": "FileRow",
+      "target_sha256": "6941d4646566bac8d29251879dfab3c20299c5895bd62116c6df9705d393fb3b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/HistoryPane.tsx",
+      "public_name": "HistoryPane",
+      "target_sha256": "6e0a6d2005026f5ccd7fa64897b0923356d0bc9efc7bc5246786ea34ffe83c92",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/LiveFailureBanner.tsx",
+      "public_name": "LiveFailureBanner",
+      "target_sha256": "b53513434388b055355fbe148fe76dac4a7bf81c5599369a4e6683ce50fde182",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/ScreenshotStrip.tsx",
+      "public_name": "ScreenshotStrip",
+      "target_sha256": "1be227c8cf8e4f352248bb25c755080195c031447a310384e3d0615f351976ea",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/WorkspaceImage.tsx",
+      "public_name": "WorkspaceImage",
+      "target_sha256": "5cbcfff8028fb3524370adc8e8901b807dc7aeab0d4e0cecf2b1ccafc04f2430",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/browserEvents.ts",
+      "public_name": "collectScreenshots",
+      "target_sha256": "aafb48c340e1e35d3c7fe6c440072075035a4aeef995fdb6852038a79efc1b30",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/browserEvents.ts",
+      "public_name": "isDrivingBrowser",
+      "target_sha256": "2f5f0a935cbf90f19af80626c4d694f1e3e15fb79d5107074f4ed88162242f05",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/browserEvents.ts",
+      "public_name": "latestBrowserUrl",
+      "target_sha256": "ae137324b25c593c7fa1650f9b646b4342f0cd1ec8fde13674f0df00190187e6",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/browserEvents.ts",
+      "public_name": "pickHeroScreenshot",
+      "target_sha256": "521fae6dc79171a228326bbc31a8afcccd385ffa07a89c52e30985ba0c56775c",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/format.ts",
+      "public_name": "fmtBytes",
+      "target_sha256": "eb075d33aa8886a0acf1ebbdf59be1e72fcb2f42c88475958bcd426e61916197",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_name": "LiveBrowserSession",
+      "target_sha256": "3ebcb408341c7e722e582b61d1ac83fb9fff951df264c48e14a929ced8dcd96a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_name": "LiveStartFailure",
+      "target_sha256": "b4604506755d9bcd5a3359509ed1386d98f271810c969b99dc60e58675f6cf04",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/agentCanvas/useLiveBrowserSession.ts",
+      "public_name": "useLiveBrowserSession",
+      "target_sha256": "4853f2aeaea19f41aa306063c526c7fc62c79bb76e443e1cc834ace0d3b33c39",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildActivityFeed.tsx",
+      "public_name": "BuildActivityFeed",
+      "target_sha256": "a47a88d1d2ff44c84705d659a80910ebe4cf7ba966e5908cfb5f3a2f5d498cb0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildActivityFeedContent.tsx",
+      "public_name": "BuildActivityFeedContent",
+      "target_sha256": "fa3459bab5f1b801a988d6158f396001d0dbbd5796b18532314d5f8fd0db7f34",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildAskGate.tsx",
+      "public_name": "BuildAskGate",
+      "target_sha256": "23e87b4cba5303df33b2f6a88519fcbf2915693e2074bb04a789f081c3490054",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
+      "public_name": "BuildComposerSection",
+      "target_sha256": "63ab4ddfa870501a086a9a0f10bb49f971e4170c1c980548cb230d45cfe613bd",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDecisionGates.tsx",
+      "public_name": "BuildDecisionGates",
+      "target_sha256": "96a3240772adfdfd59682a7a876a871e00c423644e185ba46684085430bb2b96",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildDeliverableSection.tsx",
+      "public_name": "BuildDeliverableSection",
+      "target_sha256": "094e59303b81aa87be741defd525b0b4cce4d856aaf1c34511cfacd48f117378",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildEmptyState.tsx",
+      "public_name": "BuildEmptyState",
+      "target_sha256": "d29dd124f243fdcc1ea5acc285d4bf82017c238697b11e9d39219fd0fdf9b836",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildRunningActivity.tsx",
+      "public_name": "BuildRunningActivity",
+      "target_sha256": "cc5a63729c92842d8e435813b6c176efc0aa2ec1cc11611305aff114981a8421",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildSurfaceHeader.tsx",
+      "public_name": "BuildSurfaceHeader",
+      "target_sha256": "d26f8ec6aaa21696a116040005a929584ca254f7c42b20a2f5f14df0727a4e22",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/types.ts",
+      "public_name": "BuildController",
+      "target_sha256": "2eef47edde9df7bf5b550534cd02edfc0cdfad26871e4c97371ac95586b4a353",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/types.ts",
+      "public_name": "FramingCopy",
+      "target_sha256": "7377b4617ed3c980ca2ad1591c96565c4dd50e532ac1d7e670eca9e31e1dc4a0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/useBuildSurfaceFlags.ts",
+      "public_name": "BuildSurfaceFlags",
+      "target_sha256": "787ea1254534d76868aeb54f02d7621e25615ac11eecfd636c1f2a7a1a27d8b9",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/useBuildSurfaceFlags.ts",
+      "public_name": "useBuildSurfaceFlags",
+      "target_sha256": "9dc04a308c12ae7797cbc0ef9bf7efb1bf289b1ff9804fe72b9965629281bb5f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/useConversationSummary.ts",
+      "public_name": "useConversationSummary",
+      "target_sha256": "ce15176e32395877052c2f8d6ed297c9aaa83b765a375433b114dc3d6880a0ca",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/useElementMentionRelay.ts",
+      "public_name": "useElementMentionRelay",
+      "target_sha256": "c4400eca45d04638c3fdbfd45ebb40dad7afd8d655d2b51b64861426628b174a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/useFeedAutoScroll.ts",
+      "public_name": "useFeedAutoScroll",
+      "target_sha256": "fbbda233a3bb5a3a620e47fbeddb44ca38df870cde2862941f82d5e418bdb236",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/AdvancedAuthorForm.tsx",
+      "public_name": "AdvancedAuthorForm",
+      "target_sha256": "3cbe44e19f558e0b28f2dc0bed3a481ae22929cacec90262e08418b774ed7456",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/DescribeStep.tsx",
+      "public_name": "DescribeStep",
+      "target_sha256": "99878a9534176b41f72f056d1db4e39369c426e9e7cd64a195e67c42712282d3",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/DraftReviewPanel.tsx",
+      "public_name": "DraftReviewPanel",
+      "target_sha256": "2951d0dfd78249c1bc4406eed1ed7704b77e1ec9d63e79d2b0c33341535b990a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/FindingRows.tsx",
+      "public_name": "FindingRows",
+      "target_sha256": "79337a1b0d8206ef42d2066eb422d6c7062a473bf48cf1471552c013251a780d",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/McpMountsField.tsx",
+      "public_name": "McpMountsField",
+      "target_sha256": "0d269fa7acec34e3423ecf357d4193e43c71900188980a86b6d30a00f1f56bf5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/OutputField.tsx",
+      "public_name": "OutputField",
+      "target_sha256": "6a0d520994c3c17654b22a83f437ecdfcacc59fa1c57715c427c1bf0b44ec718",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/ParamsField.tsx",
+      "public_name": "ParamsField",
+      "target_sha256": "947beb00bcff194c8d04c542a0beaaf0853bd4af594ab8848f6432c77d71a1be",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/PolicyCheckboxes.tsx",
+      "public_name": "PolicyCheckboxes",
+      "target_sha256": "6c473b2054c996aed57dffc23ca97ae10a084cf5467e7ca72b4862140a287802",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/SkillsField.tsx",
+      "public_name": "SkillsField",
+      "target_sha256": "73f43ea1bed39c6a7c79cd6a1529ce7ceddf2fbb88569006b8b5fc8f18c8c9ec",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/ToolsField.tsx",
+      "public_name": "ToolsField",
+      "target_sha256": "f38d4f7488296de10b7e3568556302d90d1d61abc4a6d0117b78013e561d00f7",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/VerificationField.tsx",
+      "public_name": "VerificationField",
+      "target_sha256": "365221b618845e6e21191c5c84c4da93ab88af85c5dd3e9bceda8b9d6fd28d27",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "DEFAULT_OUTPUT_FORMAT",
+      "target_sha256": "0a93ca19add88027e65eb994e6522fd68ebc1fe2d98bebbd36c483df34c92838",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "DEFAULT_PARAM_TYPE",
+      "target_sha256": "6d8ca4c3069935bf2c65ac13ff61932f0b7dcbc12c85b64018e24ac728ad7e28",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "OUTPUT_FORMATS",
+      "target_sha256": "9cf05359e147bde654c7a08ee4df46c9c3e7c4dff2eab57009ac10fb719f428a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "OutputFormat",
+      "target_sha256": "b99a7cf6625948b965296bacb4c928fdf884475abc3aca703031b8e397c95622",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "PARAM_TYPES",
+      "target_sha256": "845bb55fbdf53079d73151dd9b5c341bebc1cde89651be342126f085a0a4f829",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/constants.ts",
+      "public_name": "ParamType",
+      "target_sha256": "958879339068f174dce24bce5b41b516b234a9888d1ad7eb3b1a5460ea5766d2",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "asOutputFormat",
+      "target_sha256": "cca329fc26fef289b4f18d9611a4d1b513a4cbff8c4862116a0209e0ef74688e",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "asRecord",
+      "target_sha256": "52acd74571e2135ff885dcfb8313feaf84f0469583c7e7303353a5f077f52639",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "asStringArray",
+      "target_sha256": "e72981634fc38ba6da81862593b1ad5267cbec073b94dbb1a24e0ceed3887b6d",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "authorInputFromReview",
+      "target_sha256": "96a5baac995e7ba8c8b85f435d5396a9cbdb2c6634e3b027d03811bf8fbf6dc0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "compactTags",
+      "target_sha256": "8b1d92a8ddb4c3402195ae2e6723598a22cb763c98715f957b44c27c0d509cc4",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "errorMessage",
+      "target_sha256": "bd6f4661f4a4dbe5576a777fe419854ab1719b437046e1c1e06f9de27a10173f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "mcpMountsFromDefinition",
+      "target_sha256": "779f9526e5614c890653b93d912994cbc15162715c5fd34d471c0d03f05354c5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "outputLabel",
+      "target_sha256": "26dec09554dafdf1f1a92cbaa7aab5b0eb9c561bfcd73e8d79385a56b77a2104",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "paramTypeFromSchema",
+      "target_sha256": "3ce47a9ba3c8b5a77e96d96c2e1d0b5c1c5e836c21dec211cef4e3786a55d105",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "paramsFromFriendly",
+      "target_sha256": "9ba21849db3f38c59eaec1430a0ebfb2172f882727993996e07de5dbd81f8387",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "paramsFromSchema",
+      "target_sha256": "0f9755d821060252b12f3c031e16a1534a9b48ab2f82e530c9de1acbd994159a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "resultFromAuthorDraft",
+      "target_sha256": "d4d2dbe4b14443f6debac44196a323c082f908aeac6418285f0b211dcd42a2c9",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "toggleValue",
+      "target_sha256": "2fef313799c36c091c6bf188351e9484ccd21d191ced113e620025d75cad8257",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/draftMapping.ts",
+      "public_name": "workflowUses",
+      "target_sha256": "67b3eee5e8cba636103cb0c618eede742e2911be1d8f1e0791f7cf213870be43",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/formValidation.ts",
+      "public_name": "CanSubmitAuthorFormInput",
+      "target_sha256": "9bcb39783e20dbb4de2ef3fc22bc7898d5aaa6a4c2cc4cdbdf3f43d48bc084a2",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/formValidation.ts",
+      "public_name": "canDraftAuthorForm",
+      "target_sha256": "2dc2f38540190ce0fc583fc14ebecc19f684e82327d34cb95a30da3e7a289c0b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/formValidation.ts",
+      "public_name": "canSubmitAuthorForm",
+      "target_sha256": "4d3675a5f3d4beb4095962f39feff359ad234b49b286daa6e4d21e1c8589ef97",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/formValidation.ts",
+      "public_name": "mcpWritesNeedPolicy",
+      "target_sha256": "ee5024f2ba26d2f3fa7a1e0b2dafb80880326a95b49fec42d9e071f02e7f5069",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorDraftFields.ts",
+      "public_name": "AuthorDraftFieldsState",
+      "target_sha256": "c4c00b1226fd08984498dbe870a10ecca9dc6143b5d76edf7ccd84cbd088aabf",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorDraftFields.ts",
+      "public_name": "useAuthorDraftFields",
+      "target_sha256": "c9e8d383c3c808cbc887e1aa52bd3d47ebda7d82f2843ded5f4701c165859d05",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorMcpMounts.ts",
+      "public_name": "AuthorMcpMountsState",
+      "target_sha256": "1215501a211e41dbde107aea1af0c4267236e539ef1f73e6bb7a650c46d646c2",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorMcpMounts.ts",
+      "public_name": "useAuthorMcpMounts",
+      "target_sha256": "d9cf2bff00e8f038ea7cd9370b017a674db8a557694b10855aa2b72101343387",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorParams.ts",
+      "public_name": "AuthorParamsState",
+      "target_sha256": "b0f1cccc8519148edee71642bf318e75c07d970d4c45eaea7bd3f823a3e705c0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorParams.ts",
+      "public_name": "useAuthorParams",
+      "target_sha256": "69bfd10fb9966701416cb818642c0bc323c3e062908df1efb219cc442fe79e44",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorVerification.ts",
+      "public_name": "AuthorVerificationState",
+      "target_sha256": "de067133bd87ae80fee44a3f53f86a8d64e936fe424b0518d39b21d69a2f7e4e",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/workflows/authorForm/useAuthorVerification.ts",
+      "public_name": "useAuthorVerification",
+      "target_sha256": "f374e9688fd7efb08e532006239453e9b4921d1dc03298f661bff68b18d57ebd",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_name": "Action",
+      "target_sha256": "6c02cabe4d428148b29882efc173b144caab02e92ab1b082c6b6c0f69cf3e401",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_name": "defaultOptimisticIdFactory",
+      "target_sha256": "1d2db689134191f6194d742ae06c4e7a4b0f9ddeb59de47f13a4ffc1c9acef2e",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_name": "initial",
+      "target_sha256": "cffd6e481ccd268cc2f9ec9f9f40d246e3909b866af6be12f880c6def2b2c004",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_name": "localUserMessage",
+      "target_sha256": "54b7b885924eb487ca967dce5ad7b2594bfcf12f0c559268754b8c4a15a4776f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/buildStream/reducer.ts",
+      "public_name": "reducer",
+      "target_sha256": "2724aa79044172ecd7888f64e12d4d9030b3bae1359ba9f924d6457db71f16f8",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activity.ts",
+      "public_name": "deriveActivity",
+      "target_sha256": "058d1608ef37cde7b6db0b904edaaa39d39ec14f2f9f550ccdf2747fc2585306",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "ActivityBuildContext",
+      "target_sha256": "b8e2aa3df5bcd1d08992961307fa903d98c472e3bd057a4fb5b5f8c4e9f50f82",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForAction",
+      "target_sha256": "c39bb5a50fa2eab1f086344145990f74a2bb78bb4638a4076b81363d0f5e09f2",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForAgentMessage",
+      "target_sha256": "1b9ba0045ed1fab640de7b7c012da1f3a28e9d7e176abd08f6f3e38319566dc0",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForAppkitEjection",
+      "target_sha256": "da348b1b98063a13b3f3f50c0ee8cc8ef507ee4d63df0e191a6f981b09855838",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForDeliverable",
+      "target_sha256": "7b0ba684e96aa31e84299d96b3405d4fca744d3fb1c7a3dc9891cf84f442ebd1",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForEnvironmentMessage",
+      "target_sha256": "6e7bf806c923a824371e37d5e8f8ebda1e5f42b954f0b710bbc1e915a4476710",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForUserMessage",
+      "target_sha256": "19c0adc3fca98fc5aeafd2bc2a18f814569f50037073630a462d89194b3f5d62",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityItems.ts",
+      "public_name": "activityItemForWorkspaceRestored",
+      "target_sha256": "23b6e0b07e5cfb9e758e617593c5953d97523c125ec344f493c0d064f3bfae9b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityLabels.ts",
+      "public_name": "_isWorkspaceRoot",
+      "target_sha256": "42f1926e3f96610f62d812c64438c06668bc2a11319f04f3741062c282c523af",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityLabels.ts",
+      "public_name": "detailFor",
+      "target_sha256": "56c8e832609d9cb6818030200ed51830130378807711431ad7d1b8d91d50e1a9",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityLabels.ts",
+      "public_name": "plainError",
+      "target_sha256": "48aa237cb312244164ff04521f8acef6c828651739738c621134312fdb5b43db",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityLabels.ts",
+      "public_name": "plainLabel",
+      "target_sha256": "9c0e977a30a5ea9730d792025a2f3b7ea27d0e053ed6c9a05e8792c16afd8949",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_name": "ObservationEntry",
+      "target_sha256": "52940225274aa3462495519ab6eb99e091761cd9e31d5ba7399bae993827e180",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_name": "buildObservationIndex",
+      "target_sha256": "e0ddc750deb6bf5957214aa720a5ce872ecbc9af1b88b2256fcc591791a0dc0a",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_name": "collectLatestEditableByBase",
+      "target_sha256": "ee95ca1afbc9cd9e3e3c4239ae3795cd4c50e37fb1807892592baad73adb6ec5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_name": "collectObservedAndFailed",
+      "target_sha256": "6bb3237c1ec8592362aaad627ff788517156b18c616575abfbc0913aeea0bf1d",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/activityObservations.ts",
+      "public_name": "findLastAgentMessageIndex",
+      "target_sha256": "59d108323107231443a4ec130642c4827ab5efebbd24c2db6d6c4d98d2c382fd",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/buildProgress.ts",
+      "public_name": "deriveBuildProgress",
+      "target_sha256": "c3c6962732ea130c1d4abd66002dd760eab3a9c3744118230330c25b6e35dd72",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/deliverable.ts",
+      "public_name": "deriveDeliverable",
+      "target_sha256": "0f50b86cbe524eab0fccd92c5683446ca6a25b565e7da96c787d531794e66791",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/files.ts",
+      "public_name": "deriveFiles",
+      "target_sha256": "0f609822db88f1babcd1822c9d1666b60d8b749c3becff813393944516adfdf7",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/liveSignal.ts",
+      "public_name": "deriveLiveSignal",
+      "target_sha256": "26a5f382a4dddc5e4968d1600539bd9c8be2769b973fddd2fd68e15a0114c7c8",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/plan.ts",
+      "public_name": "derivePlan",
+      "target_sha256": "8db7e1e39ec6751e9ce7fcf2d045dd7bfd1eaeaba09fe32897951af407022660",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/plan.ts",
+      "public_name": "derivePlanProgress",
+      "target_sha256": "c64d2ba49cb54fad489dcb37177cda5c2dea64057596065c234258010411f48b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/plan.ts",
+      "public_name": "planProgressSummary",
+      "target_sha256": "8e730f211f8fb8558c50d31c2c9dfd443054ab2b9b06e3c981ccd22ff147d1d8",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/srcdoc.ts",
+      "public_name": "deriveSrcDoc",
+      "target_sha256": "43078d41218115553792c91ba9df711066d3e7c89f2239705fa9f94964924ff1",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/terminal.ts",
+      "public_name": "deriveTerminal",
+      "target_sha256": "ea13d57703318107f5caf298c4fb1eec6dc816b26c95c80bc1f8e243fd21e7d5",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/terminal.ts",
+      "public_name": "firstUserTask",
+      "target_sha256": "5f19814889fb055e13bbe8835995b9881b91cf91701677e7c8d2351b227d098b",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace/terminal.ts",
+      "public_name": "latestAgentMessage",
+      "target_sha256": "a1f805940215e2f2eae9e3106010b97dd866edc4a235736bd5e6947e3c414e3f",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/workflowReview/WorkflowRunSchedule.tsx",
+      "public_name": "WorkflowRunSchedule",
+      "target_sha256": "b0fbab1f5f0ec1e8bfb0e990e020afa1cafa068c4b8142a8bdc5b2c535b6688c",
+      "owner_package": "PKG-12-FE-BUILD",
+      "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
     {
       "surface": "frontend",
