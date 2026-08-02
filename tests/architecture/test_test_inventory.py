@@ -253,8 +253,13 @@ class TestMappingStatic:
             # public-API authority. Its 27 static test ids are 37 collected node
             # ids — one case is parametrized over eleven invalid-row mutations —
             # so the split runs the other way here than it did for A6.
-            "python_test_file_count": 791,
-            "python_static_test_id_count": 9392,
+            # 792 from the Epic 13-A boundary: packages/core/tests/
+            # test_loop_ports.py, the guard holding the eight loop ports derived
+            # from the coupling inventory. Its 4 static test ids are 4 collected
+            # node ids — nothing is parametrized — so for once the two counts
+            # move by the same amount.
+            "python_test_file_count": 792,
+            "python_static_test_id_count": 9396,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -540,14 +545,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 9876,
+            "packages": 9880,
             "harness": 1253,
             "integrations": 9,
             "tests": 376,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11514 == sum(expected.values())
+        assert collected["total"] == 11518 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -563,7 +568,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11514}
+        assert result == {"collected_total": 11518}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -582,9 +587,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9392,
+            "python_static_ids": 9396,
             "typescript_static_ids": 1203,
-            "collected_total": 11514,
+            "collected_total": 11518,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
