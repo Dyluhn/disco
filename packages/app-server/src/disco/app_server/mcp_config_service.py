@@ -27,6 +27,58 @@ if TYPE_CHECKING:
     from disco.tools.mcp.migrations import _ApprovalConn
 
 
+def _apply_server_patch(existing: dict, name: str, patch: McpServerPatchDTO) -> dict:
+    """Merge a PATCH body onto a server's persisted config dict.
+
+    Handles the transport/url<->command coupling (stdio servers keep a derived
+    `command`; streamable_http servers must drop any stale process-launch
+    fields) plus the plain field overwrites, and enforces that a server's name
+    cannot be changed via PATCH.
+    """
+
+    if patch.name is not None and patch.name != name:
+        raise ValueError("MCP server name cannot be changed; create a new server instead")
+    updated = {**existing}
+    if patch.transport is not None:
+        updated["transport"] = patch.transport
+    if "url" in patch.model_fields_set:
+        updated["url"] = patch.url
+    if updated.get("transport") == "stdio" and (
+        "url" in patch.model_fields_set or patch.transport == "stdio"
+    ):
+        updated["command"] = [patch.url or updated.get("url", "")]
+    elif patch.transport == "streamable_http":
+        # Do not leave an inactive process launch target in the signed
+        # HTTP config. It could otherwise be resurrected by a later edit.
+        for field in ("command", "args", "env"):
+            updated.pop(field, None)
+    if patch.enabled is not None:
+        updated["enabled"] = patch.enabled
+    if "allowed_tools" in patch.model_fields_set:
+        updated["allowed_tools"] = patch.allowed_tools
+    if patch.risk_tier:
+        updated["risk_tier"] = patch.risk_tier
+    return updated
+
+
+def _any_enabled(servers: dict) -> bool:
+    return any(server.get("enabled", True) for server in servers.values())
+
+
+def _is_config_pending(cap: dict | None, current_hash: str) -> bool:
+    return cap is None or cap["config_hash"] != current_hash
+
+
+def _connection_status(
+    enabled: bool, srv_enabled: bool, config_pending: bool, ap: dict | None
+) -> str:
+    if not enabled or not srv_enabled:
+        return "disabled"
+    if config_pending:
+        return "approval_required"
+    return _mcp_live_status(ap)
+
+
 class McpConfigService:
     """MCP server CRUD and approval projection over the shared stores."""
 
@@ -119,7 +171,7 @@ class McpConfigService:
             from disco.tools.mcp.approval import compute_config_hash
 
             current_config_hash = compute_config_hash({"name": name, **srv})
-            config_pending = cap is None or cap["config_hash"] != current_config_hash
+            config_pending = _is_config_pending(cap, current_config_hash)
             out.append(
                 McpConnectionDTO(
                     id=name,
@@ -190,40 +242,9 @@ class McpConfigService:
             new_config_hash=config_hash,
         )
 
-    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
-        cfg = self._mcp_config()
-        if name not in cfg.servers:
-            return None
-        if patch.name is not None and patch.name != name:
-            raise ValueError("MCP server name cannot be changed; create a new server instead")
-        existing = cfg.servers[name]
-        updated = {**existing}
-        if patch.transport is not None:
-            updated["transport"] = patch.transport
-        if "url" in patch.model_fields_set:
-            updated["url"] = patch.url
-        if updated.get("transport") == "stdio" and (
-            "url" in patch.model_fields_set or patch.transport == "stdio"
-        ):
-            updated["command"] = [patch.url or updated.get("url", "")]
-        elif patch.transport == "streamable_http":
-            # Do not leave an inactive process launch target in the signed
-            # HTTP config. It could otherwise be resurrected by a later edit.
-            for field in ("command", "args", "env"):
-                updated.pop(field, None)
-        if patch.enabled is not None:
-            updated["enabled"] = patch.enabled
-        if "allowed_tools" in patch.model_fields_set:
-            updated["allowed_tools"] = patch.allowed_tools
-        if patch.risk_tier:
-            updated["risk_tier"] = patch.risk_tier
-        from disco.tools.mcp.config import McpServerConfig
-
-        McpServerConfig.model_validate({"name": name, **updated})
-        from disco.tools.mcp.approval import compute_config_hash
-
-        current_config_hash = compute_config_hash({"name": name, **updated})
-        cap = self._mcp_config_approvals().get(name)
+    def _invalidate_config_approval_if_changed(
+        self, name: str, cap: dict | None, current_config_hash: str
+    ) -> dict | None:
         if cap is not None and cap["config_hash"] != current_config_hash:
             # A changed endpoint/toggle must immediately lose its former signed
             # egress authorization. Keeping the old config approval would also
@@ -234,22 +255,36 @@ class McpConfigService:
                 from disco.tools.mcp.migrations import delete_mcp_config_approval
 
                 delete_mcp_config_approval(self._db_conn, name)
-            cap = None
+            return None
+        return cap
+
+    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
+        cfg = self._mcp_config()
+        if name not in cfg.servers:
+            return None
+        existing = cfg.servers[name]
+        updated = _apply_server_patch(existing, name, patch)
+        from disco.tools.mcp.config import McpServerConfig
+
+        McpServerConfig.model_validate({"name": name, **updated})
+        from disco.tools.mcp.approval import compute_config_hash
+
+        current_config_hash = compute_config_hash({"name": name, **updated})
+        cap = self._mcp_config_approvals().get(name)
+        cap = self._invalidate_config_approval_if_changed(name, cap, current_config_hash)
         servers = {**cfg.servers, name: updated}
-        any_enabled = any(server.get("enabled", True) for server in servers.values())
+        any_enabled = _any_enabled(servers)
         new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         approvals = self._mcp_approvals()
         ap = approvals.get(name)
-        config_pending = cap is None or cap["config_hash"] != current_config_hash
+        config_pending = _is_config_pending(cap, current_config_hash)
         return McpConnectionDTO(
             id=name,
             name=name,
             url=updated.get("url", ""),
-            status=(
-                "disabled"
-                if not new_cfg.enabled or not updated.get("enabled", True)
-                else ("approval_required" if config_pending else _mcp_live_status(ap))
+            status=_connection_status(
+                new_cfg.enabled, updated.get("enabled", True), config_pending, ap
             ),
             transport=updated.get("transport"),
             risk_tier=updated.get("risk_tier"),

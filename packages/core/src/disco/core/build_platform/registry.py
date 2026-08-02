@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from pydantic import Field
 
@@ -121,34 +122,84 @@ class _DeclaredConnector:
         return self._definition.plan
 
 
-class BuildPlatformRegistry:
-    """One exact-ID catalog. Public registration cannot claim host namespaces."""
+class _ComponentKeyspace:
+    """Sole owner of exact-ID uniqueness across profiles and components.
+
+    Profiles and components share one id namespace: registering a profile at an
+    id already claimed by a component (or vice versa) must fail exactly like a
+    same-catalog collision. Splitting the profile/component catalogs into
+    separate objects must not silently split this uniqueness guarantee too.
+    """
 
     def __init__(self) -> None:
+        self._claimed: set[str] = set()
+
+    def claim(self, component_id: ComponentId) -> str:
+        key = component_id.canonical
+        if key in self._claimed:
+            raise RegistryError(f"duplicate component id: {key}")
+        self._claimed.add(key)
+        return key
+
+
+class ProfileCatalog:
+    """Sole owner of the profile catalog."""
+
+    def __init__(self, keyspace: _ComponentKeyspace) -> None:
+        self._keyspace = keyspace
         self._profiles: dict[str, BuildProfile] = {}
+
+    def get(self, component_id: ComponentId) -> BuildProfile | None:
+        return self._profiles.get(component_id.canonical)
+
+    def choices(self) -> tuple[ProfileChoice, ...]:
+        choices = (
+            ProfileChoice(id=profile.id, label=profile.label) for profile in self._profiles.values()
+        )
+        return tuple(
+            sorted(choices, key=lambda choice: (choice.label.casefold(), choice.id.canonical))
+        )
+
+    # Host-owned built-in modules use this deliberately private mutation path.
+    # User/plugin ingestion reaches it only through BuildPlatformRegistry's
+    # public, namespace-protected register_profile.
+    def _add(self, profile: BuildProfile) -> None:
+        key = self._keyspace.claim(profile.id)
+        self._profiles[key] = profile
+
+
+class ComponentCatalog:
+    """Sole owner of component specs and their kind-specific implementations."""
+
+    def __init__(self, keyspace: _ComponentKeyspace) -> None:
+        self._keyspace = keyspace
         self._specs: dict[str, ComponentSpec] = {}
         self._engines: dict[str, _ComponentEntry[ConstructionEngine]] = {}
         self._targets: dict[str, _ComponentEntry[TargetAdapter]] = {}
         self._exporters: dict[str, _ComponentEntry[PackageExporter]] = {}
         self._connectors: dict[str, _ComponentEntry[DeploymentConnector]] = {}
 
-    @staticmethod
-    def _key(component_id: ComponentId) -> str:
-        return component_id.canonical
+    def spec(self, component_id: ComponentId) -> ComponentSpec | None:
+        return self._specs.get(component_id.canonical)
 
-    @staticmethod
-    def _check_public_namespace(component_id: ComponentId) -> None:
-        if component_id.namespace in _PROTECTED_NAMESPACES:
-            raise RegistryError(
-                f"namespace {component_id.namespace!r} is host-protected; "
-                "external registration cannot claim built-in IDs"
-            )
+    def engine(self, component_id: ComponentId) -> ConstructionEngine | None:
+        entry = self._engines.get(component_id.canonical)
+        return entry.implementation if entry is not None else None
 
-    def _ensure_free(self, component_id: ComponentId) -> str:
-        key = self._key(component_id)
-        if key in self._specs or key in self._profiles:
-            raise RegistryError(f"duplicate component id: {key}")
-        return key
+    def target(self, component_id: ComponentId) -> TargetAdapter | None:
+        entry = self._targets.get(component_id.canonical)
+        return entry.implementation if entry is not None else None
+
+    def exporter(self, component_id: ComponentId) -> PackageExporter | None:
+        entry = self._exporters.get(component_id.canonical)
+        return entry.implementation if entry is not None else None
+
+    def connector(self, component_id: ComponentId) -> DeploymentConnector | None:
+        entry = self._connectors.get(component_id.canonical)
+        return entry.implementation if entry is not None else None
+
+    def specs(self) -> tuple[ComponentSpec, ...]:
+        return tuple(sorted(self._specs.values(), key=lambda spec: spec.id.canonical))
 
     @staticmethod
     def _check_spec(
@@ -161,17 +212,66 @@ class BuildPlatformRegistry:
         if spec.id != implementation_id:
             raise RegistryError("component spec and implementation IDs differ")
 
+    # Host-owned built-in modules use these deliberately private mutation
+    # paths. User/plugin ingestion reaches them only through
+    # BuildPlatformRegistry's public, namespace-protected register_* methods.
+    def _add_spec(self, spec: ComponentSpec) -> None:
+        key = self._keyspace.claim(spec.id)
+        self._specs[key] = spec
+
+    def _add_implementation(
+        self,
+        spec: ComponentSpec,
+        implementation: Any,
+        expected: ComponentKind,
+    ) -> None:
+        """Validate kind/id, THEN claim the key — order is load-bearing.
+
+        A spec that is both the wrong kind and a duplicate id must raise the
+        kind error, not the duplicate error; that requires the identity check
+        to run before the keyspace claim.
+        """
+
+        self._check_spec(spec, expected, implementation.id)
+        key = self._keyspace.claim(spec.id)
+        self._specs[key] = spec
+        if expected is ComponentKind.ENGINE:
+            self._engines[key] = _ComponentEntry(spec, implementation)
+        elif expected is ComponentKind.TARGET:
+            self._targets[key] = _ComponentEntry(spec, implementation)
+        elif expected is ComponentKind.EXPORTER:
+            self._exporters[key] = _ComponentEntry(spec, implementation)
+        elif expected is ComponentKind.CONNECTOR:
+            self._connectors[key] = _ComponentEntry(spec, implementation)
+
+
+class BuildPlatformRegistry:
+    """One exact-ID catalog. Public registration cannot claim host namespaces."""
+
+    def __init__(self) -> None:
+        keyspace = _ComponentKeyspace()
+        self.profiles = ProfileCatalog(keyspace)
+        self.components = ComponentCatalog(keyspace)
+
+    @staticmethod
+    def _check_public_namespace(component_id: ComponentId) -> None:
+        if component_id.namespace in _PROTECTED_NAMESPACES:
+            raise RegistryError(
+                f"namespace {component_id.namespace!r} is host-protected; "
+                "external registration cannot claim built-in IDs"
+            )
+
     def register_profile(self, profile: BuildProfile) -> None:
         if type(profile) is not BuildProfile:
             raise RegistryError("public profile registration requires exact frozen data")
         self._check_public_namespace(profile.id)
-        self._register_profile(profile)
+        self.profiles._add(profile)
 
     def register_component(self, spec: ComponentSpec) -> None:
         if type(spec) is not ComponentSpec:
             raise RegistryError("public component registration requires exact frozen data")
         self._check_public_namespace(spec.id)
-        self._register_component(spec)
+        self.components._add_spec(spec)
 
     def register_engine(
         self, spec: ComponentSpec, definition: ConstructionEngineDefinition
@@ -181,7 +281,7 @@ class BuildPlatformRegistry:
         self._check_public_namespace(spec.id)
         if definition.plan.engine != definition.id:
             raise RegistryError("engine definition plan identity differs from its ID")
-        self._register_engine(spec, _DeclaredEngine(definition))
+        self.components._add_implementation(spec, _DeclaredEngine(definition), ComponentKind.ENGINE)
 
     def register_target(self, spec: ComponentSpec, definition: TargetAdapterDefinition) -> None:
         if type(spec) is not ComponentSpec or type(definition) is not TargetAdapterDefinition:
@@ -189,13 +289,15 @@ class BuildPlatformRegistry:
         self._check_public_namespace(spec.id)
         if definition.plan.target != definition.id:
             raise RegistryError("target definition plan identity differs from its ID")
-        self._register_target(spec, _DeclaredTarget(definition))
+        self.components._add_implementation(spec, _DeclaredTarget(definition), ComponentKind.TARGET)
 
     def register_exporter(self, spec: ComponentSpec, definition: PackageExporterDefinition) -> None:
         if type(spec) is not ComponentSpec or type(definition) is not PackageExporterDefinition:
             raise RegistryError("public exporter registration is data-only")
         self._check_public_namespace(spec.id)
-        self._register_exporter(spec, _DeclaredExporter(definition))
+        self.components._add_implementation(
+            spec, _DeclaredExporter(definition), ComponentKind.EXPORTER
+        )
 
     def register_connector(
         self, spec: ComponentSpec, definition: DeploymentConnectorDefinition
@@ -205,74 +307,9 @@ class BuildPlatformRegistry:
         self._check_public_namespace(spec.id)
         if definition.plan.connector != definition.id:
             raise RegistryError("connector definition plan identity differs from its ID")
-        self._register_connector(spec, _DeclaredConnector(definition))
-
-    # Host-owned built-in modules use these deliberately private registration
-    # paths. User/plugin ingestion receives only the public, protected methods.
-    def _register_profile(self, profile: BuildProfile) -> None:
-        key = self._ensure_free(profile.id)
-        self._profiles[key] = profile
-
-    def _register_component(self, spec: ComponentSpec) -> None:
-        key = self._ensure_free(spec.id)
-        self._specs[key] = spec
-
-    def _register_engine(self, spec: ComponentSpec, engine: ConstructionEngine) -> None:
-        self._check_spec(spec, ComponentKind.ENGINE, engine.id)
-        key = self._ensure_free(spec.id)
-        self._specs[key] = spec
-        self._engines[key] = _ComponentEntry(spec, engine)
-
-    def _register_target(self, spec: ComponentSpec, target: TargetAdapter) -> None:
-        self._check_spec(spec, ComponentKind.TARGET, target.id)
-        key = self._ensure_free(spec.id)
-        self._specs[key] = spec
-        self._targets[key] = _ComponentEntry(spec, target)
-
-    def _register_exporter(self, spec: ComponentSpec, exporter: PackageExporter) -> None:
-        self._check_spec(spec, ComponentKind.EXPORTER, exporter.id)
-        key = self._ensure_free(spec.id)
-        self._specs[key] = spec
-        self._exporters[key] = _ComponentEntry(spec, exporter)
-
-    def _register_connector(self, spec: ComponentSpec, connector: DeploymentConnector) -> None:
-        self._check_spec(spec, ComponentKind.CONNECTOR, connector.id)
-        key = self._ensure_free(spec.id)
-        self._specs[key] = spec
-        self._connectors[key] = _ComponentEntry(spec, connector)
-
-    def profile(self, component_id: ComponentId) -> BuildProfile | None:
-        return self._profiles.get(self._key(component_id))
-
-    def spec(self, component_id: ComponentId) -> ComponentSpec | None:
-        return self._specs.get(self._key(component_id))
-
-    def engine(self, component_id: ComponentId) -> ConstructionEngine | None:
-        entry = self._engines.get(self._key(component_id))
-        return entry.implementation if entry is not None else None
-
-    def target(self, component_id: ComponentId) -> TargetAdapter | None:
-        entry = self._targets.get(self._key(component_id))
-        return entry.implementation if entry is not None else None
-
-    def exporter(self, component_id: ComponentId) -> PackageExporter | None:
-        entry = self._exporters.get(self._key(component_id))
-        return entry.implementation if entry is not None else None
-
-    def connector(self, component_id: ComponentId) -> DeploymentConnector | None:
-        entry = self._connectors.get(self._key(component_id))
-        return entry.implementation if entry is not None else None
-
-    def profile_choices(self) -> tuple[ProfileChoice, ...]:
-        choices = (
-            ProfileChoice(id=profile.id, label=profile.label) for profile in self._profiles.values()
+        self.components._add_implementation(
+            spec, _DeclaredConnector(definition), ComponentKind.CONNECTOR
         )
-        return tuple(
-            sorted(choices, key=lambda choice: (choice.label.casefold(), choice.id.canonical))
-        )
-
-    def component_specs(self) -> tuple[ComponentSpec, ...]:
-        return tuple(sorted(self._specs.values(), key=lambda spec: spec.id.canonical))
 
     def _add_builtins(
         self,
@@ -283,6 +320,6 @@ class BuildPlatformRegistry:
         """Register trusted in-package declarations; not an ingestion API."""
 
         for component in components:
-            self._register_component(component)
+            self.components._add_spec(component)
         for profile in profiles:
-            self._register_profile(profile)
+            self.profiles._add(profile)

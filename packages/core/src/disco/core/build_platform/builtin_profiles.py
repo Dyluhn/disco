@@ -374,29 +374,33 @@ def build_builtin_registry(
     """Build the protected host catalog; this is not user-library ingestion."""
 
     registry = BuildPlatformRegistry()
-    registry._register_engine(
+    registry.components._add_implementation(
         _spec(FREEFORM_ENGINE_ID, ComponentKind.ENGINE, rules=FREEFORM_RULES),
         _FreeformEngine(
             FREEFORM_ENGINE_ID,
             requested_tools=freeform_tools,
             rules=FREEFORM_RULES,
         ),
+        ComponentKind.ENGINE,
     )
-    registry._register_engine(
+    registry.components._add_implementation(
         _spec(APPKIT_ENGINE_ID, ComponentKind.ENGINE, rules=APPKIT_RULES),
         _AppKitEngine(
             APPKIT_ENGINE_ID,
             requested_tools=appkit_tools,
             rules=APPKIT_RULES,
         ),
+        ComponentKind.ENGINE,
     )
-    registry._register_target(
+    registry.components._add_implementation(
         _spec(WEB_TARGET_ID, ComponentKind.TARGET, features=frozenset({"web"})),
         _LegacyWebTarget(),
+        ComponentKind.TARGET,
     )
-    registry._register_exporter(
+    registry.components._add_implementation(
         _spec(LEGACY_EXPORTER_ID, ComponentKind.EXPORTER),
         _LegacyExporter(),
+        ComponentKind.EXPORTER,
     )
     for component in (
         _spec(HOST_VERIFIER_ID, ComponentKind.VERIFIER),
@@ -405,9 +409,9 @@ def build_builtin_registry(
         _spec(FREEFORM_PROMPT_ID, ComponentKind.PROMPT_MODULE),
         _spec(APPKIT_PROMPT_ID, ComponentKind.PROMPT_MODULE),
     ):
-        registry._register_component(component)
-    registry._register_profile(_profile(appkit=False))
-    registry._register_profile(_profile(appkit=True))
+        registry.components._add_spec(component)
+    registry.profiles._add(_profile(appkit=False))
+    registry.profiles._add(_profile(appkit=True))
     return registry
 
 
@@ -443,7 +447,7 @@ def resolve_builtin_composition(
         appkit_tools=(visible_tools if appkit else frozenset()),
     )
     profile_id = APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID
-    profile = registry.profile(profile_id)
+    profile = registry.profiles.get(profile_id)
     if profile is None or not profile.prompt_modules:
         raise ValueError("built-in profile is incomplete")
     prompt_id = profile.prompt_modules[0].component

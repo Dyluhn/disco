@@ -15,7 +15,7 @@ from disco.core.build_platform import (
 def test_freeform_engine_describes_the_existing_flexible_lifecycle() -> None:
     tools = frozenset({"file_read", "file_write", "shell", "verify_web_app"})
     registry = build_builtin_registry(freeform_tools=tools)
-    engine = registry.engine(FREEFORM_ENGINE_ID)
+    engine = registry.components.engine(FREEFORM_ENGINE_ID)
     assert isinstance(engine, ConstructionEngine)
 
     composition = resolve_builtin_composition(

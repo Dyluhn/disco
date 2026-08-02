@@ -69,7 +69,7 @@ except ImportError:
 # against `owner_package` was proven mechanically before the sets were wired;
 # see `debt_resolved_epic11.py`. Reconciliation at the 11-A seal:
 # 104 python tree violations + 62 TypeScript rows = 166.
-EXPECTED_ACTIVE_DEBT_ROWS = 76
+EXPECTED_ACTIVE_DEBT_ROWS = 62
 EXPECTED_OBSERVATIONS = 12
 
 # The source identity the disposition rows were sealed against.

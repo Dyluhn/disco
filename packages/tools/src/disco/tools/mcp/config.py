@@ -26,6 +26,48 @@ _SERVER_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 _VALID_TRANSPORTS: frozenset[str] = frozenset({"stdio", "streamable_http"})
 
 
+def _validate_stdio_command(command: list[str] | None) -> None:
+    if not command or not command[0].strip():
+        raise ValueError("stdio transport requires a non-empty command")
+
+
+def _has_disallowed_raw_chars(raw: str) -> bool:
+    """True if `raw` contains a blank/whitespace or C0 control character."""
+    return any(character.isspace() or ord(character) < 32 for character in raw)
+
+
+def _validate_http_url(url: str | None) -> None:
+    raw = url or ""
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname
+        # Accessing ``port`` makes urllib reject malformed/non-numeric
+        # ports instead of leaving the failure for a later connection.
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            "streamable_http URL must be an absolute HTTP(S) URL without "
+            "userinfo, whitespace, or a fragment"
+        ) from exc
+    if (
+        not raw
+        or raw != raw.strip()
+        or _has_disallowed_raw_chars(raw)
+        or "\\" in raw
+        or "#" in raw
+        or parsed.scheme not in {"http", "https"}
+        or hostname is None
+        or port is not None
+        and not 1 <= port <= 65535
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(
+            "streamable_http URL must be an absolute HTTP(S) URL without "
+            "userinfo, whitespace, or a fragment"
+        )
+
+
 class McpServerConfig(BaseModel):
     """One MCP server — the shape the UI writes and the pool reads."""
 
@@ -80,38 +122,9 @@ class McpServerConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_transport_target(self) -> McpServerConfig:
         if self.transport == "stdio":
-            if not self.command or not self.command[0].strip():
-                raise ValueError("stdio transport requires a non-empty command")
-            return self
-        raw = self.url or ""
-        try:
-            parsed = urlsplit(raw)
-            hostname = parsed.hostname
-            # Accessing ``port`` makes urllib reject malformed/non-numeric
-            # ports instead of leaving the failure for a later connection.
-            port = parsed.port
-        except ValueError as exc:
-            raise ValueError(
-                "streamable_http URL must be an absolute HTTP(S) URL without "
-                "userinfo, whitespace, or a fragment"
-            ) from exc
-        if (
-            not raw
-            or raw != raw.strip()
-            or any(character.isspace() or ord(character) < 32 for character in raw)
-            or "\\" in raw
-            or "#" in raw
-            or parsed.scheme not in {"http", "https"}
-            or hostname is None
-            or port is not None
-            and not 1 <= port <= 65535
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
-            raise ValueError(
-                "streamable_http URL must be an absolute HTTP(S) URL without "
-                "userinfo, whitespace, or a fragment"
-            )
+            _validate_stdio_command(self.command)
+        else:
+            _validate_http_url(self.url)
         return self
 
 

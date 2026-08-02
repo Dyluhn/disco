@@ -77,15 +77,15 @@ class TestRegisteredTargetAdapter:
     def test_synthetic_registry_uses_public_registry(self):
         """The synthetic registry must use the public registry, not a central switch."""
         registry = build_synthetic_registry()
-        assert registry.profile(SYNTHETIC_PROFILE_ID) is not None
-        assert [choice.id for choice in registry.profile_choices()] == [SYNTHETIC_PROFILE_ID]
+        assert registry.profiles.get(SYNTHETIC_PROFILE_ID) is not None
+        assert [choice.id for choice in registry.profiles.choices()] == [SYNTHETIC_PROFILE_ID]
 
     def test_synthetic_registry_resolves_engine(self):
         """The registry must resolve the engine for the synthetic profile."""
         registry = build_synthetic_registry()
-        profile = registry.profile(SYNTHETIC_PROFILE_ID)
+        profile = registry.profiles.get(SYNTHETIC_PROFILE_ID)
         assert profile is not None
-        engine = registry.engine(profile.engine)
+        engine = registry.components.engine(profile.engine)
         assert engine is not None
 
     def test_synthetic_registry_resolves_target(self):

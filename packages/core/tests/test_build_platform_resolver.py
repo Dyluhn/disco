@@ -285,6 +285,6 @@ def test_incompatible_reference_category_is_visible_and_scoped() -> None:
 
 def test_profile_choices_are_small_sorted_profile_records() -> None:
     registry = _registry()
-    choices = registry.profile_choices()
+    choices = registry.profiles.choices()
     assert [(choice.id, choice.label) for choice in choices] == [(_id("batch"), "Batch job")]
     assert set(type(choices[0]).model_fields) == {"id", "label"}

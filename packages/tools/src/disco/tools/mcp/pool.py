@@ -155,19 +155,8 @@ class McpPool:
 
     async def _connect_stdio(self, name: str, srv: McpServerConfig) -> None:
         """Connect one stdio server, build ToolDefs, verify approval hash."""
-        # Resolve SecretRefs via SecretsStore
-        resolved_env: dict[str, str] = {}
-        if srv.env and self._secrets:
-            for key, ref in srv.env.items():
-                val = self._secrets.get(ref)
-                if val is not None:
-                    resolved_env[key] = val
-
-        client = McpStdioClient(
-            command=list(srv.command or []),
-            args=list(srv.args or []),
-            env=resolved_env or None,
-        )
+        resolved_env = _resolve_stdio_env(srv.env, self._secrets)
+        client = McpStdioClient(**_stdio_launch_kwargs(srv, resolved_env))
 
         await self._exit_stack.enter_async_context(_ClientContext(name, client, self))
 
@@ -177,51 +166,9 @@ class McpPool:
         # List tools and build ToolDefs
         raw_tools: list[MCPTool] = await client.list_tools()
 
-        # Compute the description hash and check approval
-        tool_descs = [
-            {
-                "name": t.name,
-                "description": t.description or "",
-                "inputSchema": t.inputSchema or {},
-            }
-            for t in raw_tools
-        ]
-        new_hash = compute_description_hash(tool_descs)
+        _check_tool_approval(name, raw_tools, self._approvals)
 
-        stored = self._approvals.get(name)
-        if stored != new_hash:
-            raise ApprovalRequired(name, stored or "", new_hash)
-
-        # Build ToolDefs — only tools in allowed_tools (if set)
-        allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
-
-        for tool in raw_tools:
-            if allowed is not None and tool.name not in allowed:
-                _LOG.debug("McpPool: tool %r not in allowlist for server %r", tool.name, name)
-                continue
-
-            qname = qualified_name(name, tool.name)
-            if qname in self._tools:
-                _LOG.warning("McpPool: tool %r already registered — skipping", qname)
-                continue
-
-            # Wrap the description in the untrusted-text fence so the LLM
-            # knows it arrived over MCP (not a hardcoded tool description).
-            fenced_desc = _UNTRUSTED_DESC_WRAPPER.format(
-                name=name, desc=tool.description or "(no description)"
-            )
-
-            self._tools[qname] = ToolDef(
-                name=qname,
-                description=fenced_desc,
-                args_model=_schema_to_args_model(tool),
-                needs=frozenset(),
-                base_risk=srv.risk_tier,  # REQUIRED — not inferred
-                runs_in="in_process",  # stdio subprocess executes on the host
-                read_only=False,  # MCP tools are not assumed read-only
-                uses_capabilities=frozenset(),
-                behavior=OPAQUE_MCP_BEHAVIOR,
-            )
+        _register_stdio_tools(name, srv, raw_tools, self._tools)
 
     def snapshot(self) -> list[ToolDef]:
         """The frozen list of ToolDefs for one conversation.
@@ -273,6 +220,87 @@ class _ClientContext:
         await self.client.close()
         self.pool._clients.pop(self.name, None)
         self.pool._server_status[self.name] = "disconnected"
+
+
+def _resolve_stdio_env(env: dict[str, str] | None, secrets: Any | None) -> dict[str, str]:
+    """Resolve a server's SecretRefs via the SecretsStore into a plain env dict."""
+    resolved_env: dict[str, str] = {}
+    if env and secrets:
+        for key, ref in env.items():
+            val = secrets.get(ref)
+            if val is not None:
+                resolved_env[key] = val
+    return resolved_env
+
+
+def _stdio_launch_kwargs(srv: McpServerConfig, resolved_env: dict[str, str]) -> dict[str, Any]:
+    """Build the McpStdioClient constructor kwargs for one stdio server."""
+    return {
+        "command": list(srv.command or []),
+        "args": list(srv.args or []),
+        "env": resolved_env or None,
+    }
+
+
+def _check_tool_approval(name: str, raw_tools: list[MCPTool], approvals: dict[str, str]) -> str:
+    """Compute the description hash for a server's tools and verify it against the
+    stored approval. Returns the new hash; raises ApprovalRequired on mismatch."""
+    tool_descs = [
+        {
+            "name": t.name,
+            "description": t.description or "",
+            "inputSchema": t.inputSchema or {},
+        }
+        for t in raw_tools
+    ]
+    new_hash = compute_description_hash(tool_descs)
+
+    stored = approvals.get(name)
+    if stored != new_hash:
+        raise ApprovalRequired(name, stored or "", new_hash)
+    return new_hash
+
+
+def _register_stdio_tools(
+    name: str,
+    srv: McpServerConfig,
+    raw_tools: list[MCPTool],
+    tools: dict[str, ToolDef],
+) -> None:
+    """Register ToolDefs for one stdio server's tools into `tools` (in place).
+
+    Only tools in allowed_tools (if set) are registered; disallowed and
+    already-registered (duplicate) tools are skipped.
+    """
+    allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
+
+    for tool in raw_tools:
+        if allowed is not None and tool.name not in allowed:
+            _LOG.debug("McpPool: tool %r not in allowlist for server %r", tool.name, name)
+            continue
+
+        qname = qualified_name(name, tool.name)
+        if qname in tools:
+            _LOG.warning("McpPool: tool %r already registered — skipping", qname)
+            continue
+
+        # Wrap the description in the untrusted-text fence so the LLM
+        # knows it arrived over MCP (not a hardcoded tool description).
+        fenced_desc = _UNTRUSTED_DESC_WRAPPER.format(
+            name=name, desc=tool.description or "(no description)"
+        )
+
+        tools[qname] = ToolDef(
+            name=qname,
+            description=fenced_desc,
+            args_model=_schema_to_args_model(tool),
+            needs=frozenset(),
+            base_risk=srv.risk_tier,  # REQUIRED — not inferred
+            runs_in="in_process",  # stdio subprocess executes on the host
+            read_only=False,  # MCP tools are not assumed read-only
+            uses_capabilities=frozenset(),
+            behavior=OPAQUE_MCP_BEHAVIOR,
+        )
 
 
 def _schema_to_args_model(tool: MCPTool) -> type:

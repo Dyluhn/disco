@@ -1874,7 +1874,7 @@
   {
     "id": "PY-0187",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/agent-server/src/disco/agent_server/build_contract_service.py:_fold_contract_from_history:221-315",
@@ -2189,7 +2189,7 @@
   {
     "id": "PY-0222",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/agent-server/src/disco/agent_server/mcp_manager.py:McpManager:143-779",
@@ -2198,7 +2198,7 @@
   {
     "id": "PY-0223",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/agent-server/src/disco/agent_server/mcp_manager.py:_start_mcp_pool:320-461",
@@ -2207,7 +2207,7 @@
   {
     "id": "PY-0224",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/agent-server/src/disco/agent_server/mcp_manager.py:_start_mcp_pool:320-461",
@@ -2504,7 +2504,7 @@
   {
     "id": "PY-0257",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/agent-server/src/disco/agent_server/routes/mcp.py:get_mcp_server_status:146-185",
@@ -3494,7 +3494,7 @@
   {
     "id": "PY-0367",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/app-server/src/disco/app_server/mcp_config_service.py:update_mcp_server:193-261",
@@ -4052,7 +4052,7 @@
   {
     "id": "PY-0429",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/compiler.py:compile_prompt_context:162-332",
@@ -4061,7 +4061,7 @@
   {
     "id": "PY-0430",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/compiler.py:compile_prompt_context:162-332",
@@ -4070,7 +4070,7 @@
   {
     "id": "PY-0431",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/registry.py:BuildPlatformRegistry:124-288",
@@ -4079,7 +4079,7 @@
   {
     "id": "PY-0432",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/resolver.py:_effective_capabilities:105-147",
@@ -4088,7 +4088,7 @@
   {
     "id": "PY-0433",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/resolver.py:resolve_build_composition:324-485",
@@ -4097,7 +4097,7 @@
   {
     "id": "PY-0434",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-PLATFORM-STRUCTURE",
     "location": "packages/core/src/disco/core/build_platform/resolver.py:resolve_build_composition:324-485",
@@ -7607,7 +7607,7 @@
   {
     "id": "PY-0824",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/tools/src/disco/tools/mcp/config.py:_validate_transport_target:81-115",
@@ -7616,7 +7616,7 @@
   {
     "id": "PY-0825",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-11-MCP",
     "location": "packages/tools/src/disco/tools/mcp/pool.py:_connect_stdio:156-224",
