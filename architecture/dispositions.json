@@ -8363,7 +8363,7 @@
   {
     "id": "TS-0001",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/App.tsx:E2EBridgeMounter:91-156",
@@ -8381,7 +8381,7 @@
   {
     "id": "TS-0003",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/api/models.ts:<module>:1-645",
@@ -8588,7 +8588,7 @@
   {
     "id": "TS-0026",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/AudioSection.tsx:AudioSection:64-331",
@@ -8597,7 +8597,7 @@
   {
     "id": "TS-0027",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/AudioSection.tsx:AudioSection:64-331",
@@ -8606,7 +8606,7 @@
   {
     "id": "TS-0028",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/DataSourcesSection.tsx:DataSourcesSection:235-367",
@@ -8615,7 +8615,7 @@
   {
     "id": "TS-0029",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/EncoderSection.tsx:EncoderSection:46-217",
@@ -8624,7 +8624,7 @@
   {
     "id": "TS-0030",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/ImageGenSection.tsx:ImageGenSection:79-474",
@@ -8633,7 +8633,7 @@
   {
     "id": "TS-0031",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/ImageGenSection.tsx:ImageGenSection:79-474",
@@ -8642,7 +8642,7 @@
   {
     "id": "TS-0032",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/ProvidersSection.tsx:BrowseProvider:198-448",
@@ -8651,7 +8651,7 @@
   {
     "id": "TS-0033",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/ProvidersSection.tsx:<module>:1-603",
@@ -8660,7 +8660,7 @@
   {
     "id": "TS-0034",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/RoleFallbackSection.tsx:RoleFallbackSection:9-191",
@@ -8669,7 +8669,7 @@
   {
     "id": "TS-0035",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/SandboxSection.tsx:SandboxSection:113-383",
@@ -8678,7 +8678,7 @@
   {
     "id": "TS-0036",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SETTINGS",
     "location": "frontend/src/components/settings/ScheduleSection.tsx:ScheduleSection:189-431",
@@ -8840,7 +8840,7 @@
   {
     "id": "TS-0054",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/lib/elementMention.ts:parsePayload:77-99",
@@ -8849,7 +8849,7 @@
   {
     "id": "TS-0055",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/lib/harness/evidenceRedaction.ts:visit:18-55",
@@ -8858,7 +8858,7 @@
   {
     "id": "TS-0056",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/lib/resolvers/discoSemanticResolver.ts:resolveSemanticTarget:71-99",
@@ -8867,7 +8867,7 @@
   {
     "id": "TS-0057",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/lib/scheduleNL.ts:validateCronField:30-72",
@@ -8876,7 +8876,7 @@
   {
     "id": "TS-0058",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/lib/scheduleNL.ts:rrulePartsToCron:118-150",
@@ -8885,7 +8885,7 @@
   {
     "id": "TS-0059",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/views/HistoryView.tsx:HistoryView:174-412",
@@ -8894,7 +8894,7 @@
   {
     "id": "TS-0060",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/views/ProjectsView.tsx:ProjectsView:198-279",
@@ -8903,7 +8903,7 @@
   {
     "id": "TS-0061",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-SHELL",
     "location": "frontend/src/views/SpacesView.tsx:<module>:1-503",

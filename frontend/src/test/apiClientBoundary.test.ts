@@ -90,7 +90,13 @@ describe("api/client import boundary (Amendment A3)", () => {
     expect([...allowlist].sort()).toEqual(allowlist);
   });
 
-  it("permits no exemption, and holds the invariant against a real denominator", () => {
+  // The test id is deliberately UNCHANGED from when the allowlist was still
+  // shrinking. Standing rule §6 forbids renaming a test away, and the campaign's
+  // test inventory is pinned by id — a rename costs an inventory transition and
+  // looks exactly like a disappearing test. The name still holds (an empty
+  // allowlist carries no migrated entry); the assertions below only strengthen
+  // what it proves.
+  it("carries no entry that has already been migrated", () => {
     // A3 is closed: the ratchet reached zero at the Epic 12-D seal. The old
     // prong here asserted "no allowlisted file has already been migrated",
     // which was the right invariant while the list was shrinking. With the

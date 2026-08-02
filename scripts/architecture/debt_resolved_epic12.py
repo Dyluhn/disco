@@ -83,8 +83,59 @@ PKG12_FE_PREVIEW_RESOLVED_IDS = frozenset(
     }
 )
 
+# --- 12-D: PKG-12-FE-SETTINGS + PKG-12-FE-SHELL -----------------------------
+# All 12 rows the ledger assigns `owner_package: PKG-12-FE-SETTINGS` and all 9
+# it assigns `PKG-12-FE-SHELL`, across 17 files: 15
+# `typescript_callable_ast_mccabe_gt_15`, 3 `typescript_module_logical_gt_500`,
+# 3 `react_component_logical_gt_250`.
+#
+# **This is the boundary that takes the active ledger to ZERO** — the first
+# time in the campaign. EXPECTED_ACTIVE_DEBT_ROWS 21 -> 0.
+#
+# Relocating a callable does not reduce its cyclomatic complexity, so every
+# mccabe row was cleared by genuine branch reduction, including the campaign's
+# worst single row: `ImageGenSection` 59 -> 7, by lifting an inline
+# workflow-JSON validator and a nested `fallbackWarning` ternary chain into
+# pure helpers and splitting the render into child components that carry their
+# own branches. `validateCronField` 23 -> 6 went by dispatch-per-syntactic-form
+# and `E2EBridgeMounter` 22 -> 1 by a route lookup table.
+#
+# TS-0055 is the campaign's THIRD nested-callable row: the ledger records it as
+# the bare `visit`, but its real scanner key is
+# `redactFailureStringsInPlace>visit`. It was cleared by extracting the Error
+# branch into a sibling `redactErrorInPlace`, which required proving that
+# `immutable` is per-`visit`-invocation state whose only consumer is the very
+# next branch — so passing it by value preserves behaviour exactly.
+#
+# `views/SpacesView.tsx` is the two-`submit` file the qualified key was built
+# for. Both `CreateSpaceDialog>submit` and `RenameSpaceDialog>submit` relocated
+# into `views/spacesViewParts/spaceDialogs.tsx` and were measured at mccabe 2
+# apiece afterwards, so neither crossed the threshold and neither could merge
+# with the other in the delta.
+#
+# Proved as a SET IDENTITY on `(path, qualified_symbol, rule)` via
+# `tools/ts-tree-scan.py`, not a count match: 21 removed, 0 added, the removed
+# set proved set-equal to these 21 ids, while the scanned TypeScript module
+# denominator rose 516 -> 578 and `violation_count` reached 0.
+PKG12_FE_SETTINGS_RESOLVED_IDS = frozenset(
+    {
+        "TS-0003", "TS-0026", "TS-0027", "TS-0028", "TS-0029",
+        "TS-0030", "TS-0031", "TS-0032", "TS-0033", "TS-0034",
+        "TS-0035", "TS-0036"
+    }
+)
+
+PKG12_FE_SHELL_RESOLVED_IDS = frozenset(
+    {
+        "TS-0001", "TS-0054", "TS-0055", "TS-0056", "TS-0057",
+        "TS-0058", "TS-0059", "TS-0060", "TS-0061"
+    }
+)
+
 EPIC12_RESOLVED_IDS = (
     PKG12_FE_BUILD_RESOLVED_IDS
     | PKG12_FE_RESEARCH_RESOLVED_IDS
     | PKG12_FE_PREVIEW_RESOLVED_IDS
+    | PKG12_FE_SETTINGS_RESOLVED_IDS
+    | PKG12_FE_SHELL_RESOLVED_IDS
 )

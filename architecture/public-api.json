@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "b6a6a116d098afbbf22b30649ad5f12456621ec8",
+  "source_identity": "6ba5d8eaa3c86418f68f9cfb81f0150c344108a0",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -18143,6 +18143,21 @@
       ]
     },
     {
+      "path": "frontend/src/api/artifacts.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "artifactUrl",
+          "signature": "export function artifactUrl(conversationId: string, filename: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "workspaceFileUrl",
+          "signature": "export function workspaceFileUrl(conversationId: string, path: string): string"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/canvas.ts",
       "public_declarations": [
         {
@@ -18418,6 +18433,26 @@
       ]
     },
     {
+      "path": "frontend/src/api/deck.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deckExportUrl",
+          "signature": "export function deckExportUrl( conversationId: string, base: string, template: string, fmt: string, ): string"
+        },
+        {
+          "kind": "function",
+          "name": "fetchConversationState",
+          "signature": "export async function fetchConversationState(conversationId: string): Promise<Response>"
+        },
+        {
+          "kind": "function",
+          "name": "fetchDeckExport",
+          "signature": "export async function fetchDeckExport(url: string): Promise<Response>"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/deepResearch.ts",
       "public_declarations": [
         {
@@ -18519,6 +18554,41 @@
           "kind": "function",
           "name": "bindingRejectsNullableFields",
           "signature": "export function bindingRejectsNullableFields(): void"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/errors.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "apiFailureMessage",
+          "signature": "export function apiFailureMessage(error: unknown): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "isApiFailure",
+          "signature": "export function isApiFailure(error: unknown): error is ApiFailure"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ApiFailure",
+          "signature": "export interface ApiFailure { readonly message: string; readonly status: number; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/liveness.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "agentIsLive",
+          "signature": "export function agentIsLive(): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "apiIsLive",
+          "signature": "export function apiIsLive(): boolean"
         }
       ]
     },
@@ -18728,6 +18798,246 @@
       ]
     },
     {
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "appendFixtureCatalogueEntry",
+          "signature": "export function appendFixtureCatalogueEntry(entry: ModelInfo): ModelInfo[]"
+        },
+        {
+          "kind": "function",
+          "name": "createModel",
+          "signature": "export async function createModel(upsert: ModelUpsert): Promise<ModelInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "deleteModel",
+          "signature": "export async function deleteModel(id: string): Promise<ModelInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "fixtureCatalogueSnapshot",
+          "signature": "export function fixtureCatalogueSnapshot(): ModelInfo[]"
+        },
+        {
+          "kind": "function",
+          "name": "getAssignments",
+          "signature": "export async function getAssignments(): Promise<ModelAssignments>"
+        },
+        {
+          "kind": "function",
+          "name": "listModels",
+          "signature": "export async function listModels(): Promise<ModelInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "toModelInfo",
+          "signature": "export function toModelInfo(u: ModelUpsert): ModelInfo"
+        },
+        {
+          "kind": "function",
+          "name": "updateAssignments",
+          "signature": "export async function updateAssignments(patch: AssignmentsPatch): Promise<ModelAssignments>"
+        },
+        {
+          "kind": "function",
+          "name": "updateModel",
+          "signature": "export async function updateModel(id: string, upsert: ModelUpsert): Promise<ModelInfo[]>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getDataSourcesConfig",
+          "signature": "export async function getDataSourcesConfig(): Promise<DataSourcesConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getEncodersConfig",
+          "signature": "export async function getEncodersConfig(): Promise<EncodersConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getImageGenConfig",
+          "signature": "export async function getImageGenConfig(): Promise<ImageGenConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getRoleFallbackConfig",
+          "signature": "export async function getRoleFallbackConfig(): Promise<RoleFallbackConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getSandboxConfig",
+          "signature": "export async function getSandboxConfig(): Promise<SandboxConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getSandboxHealth",
+          "signature": "export async function getSandboxHealth(): Promise<SandboxHealth>"
+        },
+        {
+          "kind": "function",
+          "name": "getTtsConfig",
+          "signature": "export async function getTtsConfig(): Promise<TtsConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "testDataSource",
+          "signature": "export async function testDataSource(kind: \"search\" | \"extraction\"): Promise<ProbeResult>"
+        },
+        {
+          "kind": "function",
+          "name": "testImageGen",
+          "signature": "export async function testImageGen(): Promise<ProbeResult>"
+        },
+        {
+          "kind": "function",
+          "name": "testSandbox",
+          "signature": "export async function testSandbox(cfg: SandboxConfig): Promise<ProbeResult>"
+        },
+        {
+          "kind": "function",
+          "name": "testTts",
+          "signature": "export async function testTts(): Promise<ProbeResult>"
+        },
+        {
+          "kind": "function",
+          "name": "updateDataSourcesConfig",
+          "signature": "export async function updateDataSourcesConfig(cfg: DataSourcesConfig): Promise<DataSourcesConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateEncodersConfig",
+          "signature": "export async function updateEncodersConfig(cfg: EncodersConfig): Promise<EncodersConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateImageGenConfig",
+          "signature": "export async function updateImageGenConfig(cfg: ImageGenConfig): Promise<ImageGenConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateRoleFallbackConfig",
+          "signature": "export async function updateRoleFallbackConfig( cfg: RoleFallbackConfig, ): Promise<RoleFallbackConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateSandboxConfig",
+          "signature": "export async function updateSandboxConfig(cfg: SandboxConfig): Promise<SandboxConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateTtsConfig",
+          "signature": "export async function updateTtsConfig(cfg: TtsConfig): Promise<TtsConfig>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "clearOpenRouterKey",
+          "signature": "export async function clearOpenRouterKey(): Promise<OpenRouterKeyStatus>"
+        },
+        {
+          "kind": "function",
+          "name": "getOpenRouterKeyStatus",
+          "signature": "export async function getOpenRouterKeyStatus(): Promise<OpenRouterKeyStatus>"
+        },
+        {
+          "kind": "function",
+          "name": "listOpenRouterModels",
+          "signature": "export async function listOpenRouterModels( opts?: { allModalities?: boolean }, ): Promise<OpenRouterModel[]>"
+        },
+        {
+          "kind": "function",
+          "name": "openRouterUpsert",
+          "signature": "export function openRouterUpsert(m: OpenRouterModel): ModelUpsert"
+        },
+        {
+          "kind": "function",
+          "name": "setOpenRouterKey",
+          "signature": "export async function setOpenRouterKey(key: string): Promise<OpenRouterKeyStatus>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/modelsParts/platformConfig.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getBuildKernelConfig",
+          "signature": "export async function getBuildKernelConfig(): Promise<BuildKernelConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "getLiveBrowserConfig",
+          "signature": "export async function getLiveBrowserConfig(): Promise<LiveBrowserConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateBuildKernelConfig",
+          "signature": "export async function updateBuildKernelConfig( cfg: Pick<BuildKernelConfig, \"kind\">, ): Promise<BuildKernelConfig>"
+        },
+        {
+          "kind": "function",
+          "name": "updateLiveBrowserConfig",
+          "signature": "export async function updateLiveBrowserConfig(cfg: LiveBrowserConfig): Promise<LiveBrowserConfig>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "createProvider",
+          "signature": "export async function createProvider(body: ProviderCreate): Promise<ProviderMutationResult>"
+        },
+        {
+          "kind": "function",
+          "name": "deleteProvider",
+          "signature": "export async function deleteProvider(id: string): Promise<void>"
+        },
+        {
+          "kind": "function",
+          "name": "disableProviderModel",
+          "signature": "export async function disableProviderModel( providerId: string, catalogueId: string, ): Promise<ModelInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "enableProviderModel",
+          "signature": "export async function enableProviderModel( providerId: string, body: ProviderEnableBody, ): Promise<ModelInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "listProviderModels",
+          "signature": "export async function listProviderModels(providerId: string): Promise<ProviderCatalogueModel[]>"
+        },
+        {
+          "kind": "function",
+          "name": "listProviderPresets",
+          "signature": "export async function listProviderPresets(): Promise<ProviderPreset[]>"
+        },
+        {
+          "kind": "function",
+          "name": "listProviders",
+          "signature": "export async function listProviders(): Promise<ProviderInfo[]>"
+        },
+        {
+          "kind": "function",
+          "name": "updateProvider",
+          "signature": "export async function updateProvider( id: string, patch: ProviderPatch, ): Promise<ProviderMutationResult>"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/preview.ts",
       "public_declarations": [
         {
@@ -18744,6 +19054,11 @@
           "kind": "function",
           "name": "previewErrorReason",
           "signature": "export function previewErrorReason(message: string): string | null"
+        },
+        {
+          "kind": "function",
+          "name": "previewHostUrl",
+          "signature": "export function previewHostUrl(cid: string, port: number, base?: string): string | null"
         },
         {
           "kind": "function",
@@ -18848,6 +19163,31 @@
       ]
     },
     {
+      "path": "frontend/src/api/schedules.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "createSchedule",
+          "signature": "export async function createSchedule( conversationId: string, payload: { rrule: string; description: string; timezone: string; depth?: string; model_override?: string; }, ): Promise<ScheduleRow>"
+        },
+        {
+          "kind": "function",
+          "name": "deleteSchedule",
+          "signature": "export async function deleteSchedule(scheduleId: string): Promise<void>"
+        },
+        {
+          "kind": "function",
+          "name": "listSchedules",
+          "signature": "export async function listSchedules(conversationId: string): Promise<ScheduleRow[]>"
+        },
+        {
+          "kind": "function",
+          "name": "previewSchedule",
+          "signature": "export async function previewSchedule( rrule: string, timezone: string, n = 3, ): Promise<PreviewResult>"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/api/secrets.ts",
       "public_declarations": [
         {
@@ -18879,6 +19219,31 @@
           "kind": "InterfaceDeclaration",
           "name": "SecretStatus",
           "signature": "export interface SecretStatus { name: string; configured: boolean; locked: boolean; can_store: boolean; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/session.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "bootstrapSession",
+          "signature": "export async function bootstrapSession(): Promise<void>"
+        },
+        {
+          "kind": "function",
+          "name": "isDemoSession",
+          "signature": "export function isDemoSession(): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "isPairingRequired",
+          "signature": "export function isPairingRequired(error: unknown): error is Error"
+        },
+        {
+          "kind": "function",
+          "name": "pairSessionWithToken",
+          "signature": "export async function pairSessionWithToken(token: string): Promise<void>"
         }
       ]
     },
@@ -18964,6 +19329,21 @@
           "kind": "function",
           "name": "scheduleWorkflow",
           "signature": "export async function scheduleWorkflow(input: { instanceId: string; instanceDigest: string; cron: string; timezone: string; }): Promise<Record<string, unknown>>"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/appParts/e2eBridgeRouting.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveRouteMatch",
+          "signature": "export function deriveRouteMatch(pathname: string): { routePrefix: string | null; conversationId: string | null; }"
+        },
+        {
+          "kind": "function",
+          "name": "deriveSurface",
+          "signature": "export function deriveSurface(pathname: string, routePrefix: string | null, mode: Mode): Surface"
         }
       ]
     },
@@ -21184,6 +21564,541 @@
           "kind": "function",
           "name": "SkillsSection",
           "signature": "export function SkillsSection()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/ContextualFieldsPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ContextualFieldsPanel",
+          "signature": "export function ContextualFieldsPanel({ enabled, showUrl, showPaid, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, voiceA, setVoiceA, voiceB, setVoiceB, fieldsDirty, savePending, onSave, agentIsLive, }: { enabled: boolean; showUrl: boolean; showPaid: boolean; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; voiceA: string; setVoiceA: (value: string) => void; voiceB: string; setVoiceB: (value: string) => void; fieldsDirty: boolean; savePending: boolean; onSave: () => void; agentIsLive: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/EndpointUrlField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "EndpointUrlField",
+          "signature": "export function EndpointUrlField({ showPaid, baseUrl, setBaseUrl, }: { showPaid: boolean; baseUrl: string; setBaseUrl: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/ModeOptionList.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ModeOptionList",
+          "signature": "export function ModeOptionList({ active, pending, onSelect, }: { active: Mode | null; pending: boolean; onSelect: (mode: Mode) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/PaidFieldsRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PaidFieldsRow",
+          "signature": "export function PaidFieldsRow({ apiKeyEnv, setApiKeyEnv, model, setModel, }: { apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/SaveRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SaveRow",
+          "signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/VoiceFieldsRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "VoiceFieldsRow",
+          "signature": "export function VoiceFieldsRow({ voiceA, setVoiceA, voiceB, setVoiceB, }: { voiceA: string; setVoiceA: (value: string) => void; voiceB: string; setVoiceB: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/fieldsDirty.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computeAudioFieldsDirty",
+          "signature": "export function computeAudioFieldsDirty( data: TtsConfig | undefined, baseUrl: string, apiKeyEnv: string, model: string, voiceA: string, voiceB: string, ): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/modeOptions.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "modeOf",
+          "signature": "export function modeOf(enabled: boolean, provider: Provider): Mode"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "Mode",
+          "signature": "export type Mode = \"off\" | Provider;"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "Provider",
+          "signature": "export type Provider = \"bundled\" | \"speaches\" | \"openai\";"
+        },
+        {
+          "kind": "variable",
+          "name": "OPTIONS",
+          "signature": "export const OPTIONS: { mode: Mode; Icon: typeof Cpu; label: string; help: string }[] = [ { mode: \"off\", Icon: VolumeX, label: \"Off\", help: \"Audio overviews are disabled, and the agent-server unloads the voice model to free RAM. The tool fails soft with a clear message if invoked.\", }, { mode: \"bundled\", Icon: Cpu, label: \"Bundled (in-process)\", help: \"Kokoro ONNX/CPU, self-contained \u2014 no TTS server, no key. Lazy-loaded, so enabled-but-unused costs nothing; loads ~0.5 GB on first use. The default.\", }, { mode: \"speaches\", Icon: Server, label: \"Self-hosted endpoint\", help: \"An OpenAI-compatible /v1/audio/speech endpoint you run (Speaches / Kokoro-FastAPI). Keyless. Offloads the model from this host; leave the URL blank to use the server default.\", }, { mode: \"openai\", Icon: Cloud, label: \"Paid API (OpenAI-compatible)\", help: \"A vendor like OpenAI tts-1. Set the base URL, choose the stored key name, and set the model id. Use vendor voice names (e.g. alloy).\", }, ];"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/audioSectionParts/styles.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "FIELD_CLASS",
+          "signature": "export const FIELD_CLASS = \"rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/dataSourcesSectionParts/DataSourcesSaveRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DataSourcesSaveRow",
+          "signature": "export function DataSourcesSaveRow({ dirty, pending, error, onSave, }: { dirty: boolean; pending: boolean; error: Error | null; onSave: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/encoderSectionParts/EncoderEndpointsPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "EncoderEndpointsPanel",
+          "signature": "export function EncoderEndpointsPanel({ remote, urls, onUrlChange, dirty, pending, onSaveEndpoints, error, }: { remote: boolean; urls: EncoderUrls; onUrlChange: (key: keyof EncoderUrls, value: string) => void; dirty: boolean; pending: boolean; onSaveEndpoints: () => void; error: Error | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/encoderSectionParts/deriveEncoderState.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "isEncoderUrlsDirty",
+          "signature": "export function isEncoderUrlsDirty( urls: EncoderUrls, data: EncodersConfig | undefined, ): boolean"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "EncoderUrls",
+          "signature": "export interface EncoderUrls { embedder_url: string; reranker_url: string; nli_url: string; }"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/ComfyWorkflowField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ComfyWorkflowField",
+          "signature": "export function ComfyWorkflowField({ workflowJson, setWorkflowJson, workflowJsonError, }: { workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/ContextualFieldsPanel.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ContextualFieldsPanel",
+          "signature": "export function ContextualFieldsPanel({ provider, baseUrl, setBaseUrl, apiKeyEnv, setApiKeyEnv, model, setModel, workflowJson, setWorkflowJson, workflowJsonError, orModelsData, orModelsLoading, fieldsDirty, savePending, onSave, }: { provider: Provider; baseUrl: string; setBaseUrl: (value: string) => void; apiKeyEnv: string; setApiKeyEnv: (value: string) => void; model: string; setModel: (value: string) => void; workflowJson: string; setWorkflowJson: (value: string) => void; workflowJsonError: string | null; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/ModelField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ModelField",
+          "signature": "export function ModelField({ showComfy, showOpenRouter, model, setModel, orModelsData, orModelsLoading, }: { showComfy: boolean; showOpenRouter: boolean; model: string; setModel: (value: string) => void; orModelsData: OpenRouterModel[] | undefined; orModelsLoading: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/PricedModelSelect.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "PricedModelSelect",
+          "signature": "export function PricedModelSelect({ model, setModel, imageModels, }: { model: string; setModel: (value: string) => void; imageModels: OpenRouterModel[]; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/ProviderOptionList.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ProviderOptionList",
+          "signature": "export function ProviderOptionList({ active, pending, onSelect, }: { active: Provider | undefined; pending: boolean; onSelect: (provider: Provider) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SaveRow",
+          "signature": "export function SaveRow({ fieldsDirty, savePending, onSave, }: { fieldsDirty: boolean; savePending: boolean; onSave: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/StoredKeyField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "StoredKeyField",
+          "signature": "export function StoredKeyField({ apiKeyEnv, setApiKeyEnv, }: { apiKeyEnv: string; setApiKeyEnv: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/fallbackWarning.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getFallbackWarning",
+          "signature": "export function getFallbackWarning( data: ImageGenConfig | undefined, orKeyStatus: OpenRouterKeyStatus | undefined, ): string | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/fieldsDirty.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "computeImageGenFieldsDirty",
+          "signature": "export function computeImageGenFieldsDirty( data: ImageGenConfig | undefined, baseUrl: string, apiKeyEnv: string, model: string, workflowJson: string, ): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/providerOptions.ts",
+      "public_declarations": [
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "Provider",
+          "signature": "export type Provider = \"comfyui\" | \"openai\" | \"openrouter\";"
+        },
+        {
+          "kind": "variable",
+          "name": "OPTIONS",
+          "signature": "export const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: string; }[] = [ { provider: \"comfyui\", Icon: Server, label: \"Self-hosted (ComfyUI)\", help: \"Your ComfyUI graph API. Keyless, but the base URL is REQUIRED (without it, image-gen is unavailable). Ships a built-in SDXL/SD workflow \u2014 set Checkpoint to a model file that exists on your ComfyUI. For FLUX / SD3 / custom graphs, paste a 'Save (API Format)' workflow below.\", }, { provider: \"openai\", Icon: Cloud, label: \"Paid API (OpenAI-compatible)\", help: \"A vendor like OpenAI gpt-image-1 / DALL\u00b7E via /v1/images/generations (or ImageRouter's full /v1/openai/... URL). Set the base URL and choose the stored key name.\", }, { provider: \"openrouter\", Icon: Cloud, label: \"OpenRouter (image models)\", help: \"Image models via OpenRouter chat-completions (modalities:[image,text]) using the OpenRouter key in Providers. Paid \u2014 every OpenRouter image model costs credits. Set Model to an image model id; cheapest is google/gemini-2.5-flash-image.\", }, ];"
+        },
+        {
+          "kind": "variable",
+          "name": "orPrice",
+          "signature": "export const orPrice = (m: { price_in_per_m: number; price_out_per_m: number; image_price_per_m?: number; }): string => { if (m.image_price_per_m && m.image_price_per_m > 0) return `$${m.image_price_per_m.toFixed(2)} /M img-tok`; if (m.price_in_per_m > 0 || m.price_out_per_m > 0) return `$${m.price_in_per_m.toFixed(2)} in / $${m.price_out_per_m.toFixed(2)} out /Mtok`; return \"pricing on openrouter.ai\"; };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/styles.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "FIELD_CLASS",
+          "signature": "export const FIELD_CLASS = \"rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/imageGenSectionParts/workflowJsonValidator.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "getWorkflowJsonError",
+          "signature": "export function getWorkflowJsonError(workflowJson: string): string | null"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/AddProviderForm.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "AddProviderForm",
+          "signature": "export function AddProviderForm({ onCreated, }: { onCreated: (result: ProviderMutationResult) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/BrowseProvider.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "BrowseProvider",
+          "signature": "export function BrowseProvider({ provider, enabledModels, }: { provider: ProviderInfo; enabledModels: ModelInfo[]; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/CatalogueErrorBanner.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "CatalogueErrorBanner",
+          "signature": "export function CatalogueErrorBanner({ providerLabel, error, manualId, setManualId, manualCtx, setManualCtx, onManualAdd, addPending, }: { providerLabel: string; error: unknown; manualId: string; setManualId: (value: string) => void; manualCtx: string; setManualCtx: (value: string) => void; onManualAdd: (e: React.FormEvent) => void; addPending: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/GenericProviders.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "GenericProviders",
+          "signature": "export function GenericProviders()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/ModelRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ModelRow",
+          "signature": "export function ModelRow({ model, providerLabel, enabled, pending, contextWindow, ctxAskValue, onToggle, onCtxAskChange, onCtxAskSubmit, }: { model: ProviderCatalogueModel; providerLabel: string; enabled: boolean; pending: boolean; contextWindow: number | null | undefined; ctxAskValue: string | undefined; onToggle: () => void; onCtxAskChange: (value: string) => void; onCtxAskSubmit: (e: React.FormEvent) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/ToggleSwitch.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ToggleSwitch",
+          "signature": "export function ToggleSwitch({ checked, label, busy, onClick, }: { checked: boolean; label: string; busy: boolean; onClick: () => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "contextLabel",
+          "signature": "export function contextLabel(value: number | null | undefined): string"
+        },
+        {
+          "kind": "function",
+          "name": "errorText",
+          "signature": "export function errorText(error: unknown): string"
+        },
+        {
+          "kind": "function",
+          "name": "hostLabel",
+          "signature": "export function hostLabel(baseUrl: string): string"
+        },
+        {
+          "kind": "function",
+          "name": "priceLabel",
+          "signature": "export function priceLabel(m: ProviderCatalogueModel): string"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/providersSectionParts/styles.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "FIELD",
+          "signature": "export const FIELD = \"w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackFields.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FallbackFields",
+          "signature": "export function FallbackFields({ enabled, baseUrl, model, apiKeyEnv, onBaseUrlChange, onModelChange, onApiKeyEnvChange, }: { enabled: boolean; baseUrl: string; model: string; apiKeyEnv: string; onBaseUrlChange: (value: string) => void; onModelChange: (value: string) => void; onApiKeyEnvChange: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackIncompleteNotice.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FallbackIncompleteNotice",
+          "signature": "export function FallbackIncompleteNotice({ incomplete, }: { incomplete: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackSaveRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FallbackSaveRow",
+          "signature": "export function FallbackSaveRow({ canSave, pending, dirty, onSave, error, }: { canSave: boolean; pending: boolean; dirty: boolean; onSave: () => void; error: Error | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackToggle.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "FallbackToggle",
+          "signature": "export function FallbackToggle({ enabled, pending, onChange, }: { enabled: boolean; pending: boolean; onChange: (enabled: boolean) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/deriveRoleFallbackState.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "canSaveRoleFallback",
+          "signature": "export function canSaveRoleFallback( dirty: boolean, incomplete: boolean, pending: boolean, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "isRoleFallbackDirty",
+          "signature": "export function isRoleFallbackDirty( data: RoleFallbackConfig | undefined, enabled: boolean, baseUrl: string, model: string, apiKeyEnv: string, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "isRoleFallbackIncomplete",
+          "signature": "export function isRoleFallbackIncomplete( enabled: boolean, baseUrl: string, model: string, ): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxConfirmNote.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SandboxConfirmNote",
+          "signature": "export function SandboxConfirmNote({ meta, }: { meta: BackendMeta | undefined; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxConnectionFields.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SandboxConnectionFields",
+          "signature": "export function SandboxConnectionFields({ meta, draft, onFieldChange, }: { meta: BackendMeta | undefined; draft: SandboxConfig; onFieldChange: (field: SandboxFieldId, value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SandboxField",
+          "signature": "export function SandboxField({ field, label, value, disabled, onChange, }: { field: SandboxFieldId; label: string; value: string; disabled: boolean; onChange: (v: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxSaveRow.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SandboxSaveRow",
+          "signature": "export function SandboxSaveRow({ dirty, savePending, testPending, stub, onSave, onTest, saveError, probe, }: { dirty: boolean; savePending: boolean; testPending: boolean; stub: boolean | undefined; onSave: () => void; onTest: () => void; saveError: Error | null; probe: ProbeResult | null; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/ConfirmCard.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ConfirmCard",
+          "signature": "export function ConfirmCard({ preview, description, onConfirm, onCancel, busy, }: { preview: PreviewResult; description: string; onConfirm: () => void; onCancel: () => void; busy: boolean; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/ScheduleComposer.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ScheduleComposer",
+          "signature": "export function ScheduleComposer({ creating, preview, draft, parseError, previewError, previewLoading, busy, presets, onPreview, onSelectPreset, onConfirm, onCancel, onInputChange, }: { creating: boolean; preview: PreviewResult | null; draft: DraftState; parseError: string | null; previewError: string | null; previewLoading: boolean; busy: boolean; presets: readonly SchedulePreset[]; onPreview: () => void; onSelectPreset: (cron: string, description: string) => void; onConfirm: () => void; onCancel: () => void; onInputChange: (value: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/ScheduleList.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ScheduleList",
+          "signature": "export function ScheduleList({ isLoading, schedules, creating, onDelete, }: { isLoading: boolean; schedules: ScheduleRow[] | undefined; creating: boolean; onDelete: (scheduleId: string) => void; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/draftState.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "DraftState",
+          "signature": "export interface DraftState { input: string; // raw NL input from the user description: string | null; }"
+        },
+        {
+          "kind": "variable",
+          "name": "EMPTY_DRAFT",
+          "signature": "export const EMPTY_DRAFT: DraftState = { input: \"\", description: null };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/fmtDatetime.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "fmtDatetime",
+          "signature": "export function fmtDatetime(iso: string, timezone: string): string"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/scheduleSectionParts/types.ts",
+      "public_declarations": [
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "PreviewResult",
+          "signature": "export interface PreviewResult { next_runs: string[]; rrule: string; timezone: string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ScheduleRow",
+          "signature": "export interface ScheduleRow { schedule_id: string; conversation_id: string; rrule: string; description: string; timezone: string; depth: string | null; model_override: string | null; created_at: string; enabled: boolean; next_run: string | null; }"
         }
       ]
     },
@@ -24927,6 +25842,71 @@
       ]
     },
     {
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveQuerySpaceId",
+          "signature": "export function deriveQuerySpaceId( spaceFilter: \"all\" | \"unfiled\" | string, ): string | null | undefined"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowEmptyForSpace",
+          "signature": "export function deriveShowEmptyForSpace( isLoading: boolean, isError: boolean, allLength: number, spaceFilter: \"all\" | \"unfiled\" | string, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowEmptyHistory",
+          "signature": "export function deriveShowEmptyHistory( isLoading: boolean, isError: boolean, allLength: number, spaceFilter: \"all\" | \"unfiled\" | string, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowFilterBar",
+          "signature": "export function deriveShowFilterBar( isLoading: boolean, isError: boolean, allLength: number, spaceFilter: \"all\" | \"unfiled\" | string, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowList",
+          "signature": "export function deriveShowList(isLoading: boolean, isError: boolean, allLength: number): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/views/projectsViewParts/deriveVisibility.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "deriveShowConfigureStorage",
+          "signature": "export function deriveShowConfigureStorage( isLoading: boolean, isError: boolean, status: ProjectStorageStatus, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowEmptyProjects",
+          "signature": "export function deriveShowEmptyProjects( isLoading: boolean, isError: boolean, status: ProjectStorageStatus, allLength: number, ): boolean"
+        },
+        {
+          "kind": "function",
+          "name": "deriveShowProjectsContent",
+          "signature": "export function deriveShowProjectsContent( isLoading: boolean, isError: boolean, status: ProjectStorageStatus, allLength: number, ): boolean"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/views/spacesViewParts/spaceDialogs.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "CreateSpaceDialog",
+          "signature": "export function CreateSpaceDialog()"
+        },
+        {
+          "kind": "function",
+          "name": "RenameSpaceDialog",
+          "signature": "export function RenameSpaceDialog({ space }: { space: SpaceDetail })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/views/workflowReview/WorkflowRunSchedule.tsx",
       "public_declarations": [
         {
@@ -27135,6 +28115,998 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "appendFixtureCatalogueEntry",
+      "target_sha256": "f185f6b874da3e719da5aaadd0a1d36465bb269a2c9b2c9d869bf9bbfd5140a9",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "createModel",
+      "target_sha256": "dd80cd04987fa2426b09ba91c00950982c3d8ba2647213aa7ea6bb2a525592f0",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "deleteModel",
+      "target_sha256": "a3df61429b3fc759c29fb397063b55a7adf3d2e88e03d7d2feafc58c14a7c766",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "fixtureCatalogueSnapshot",
+      "target_sha256": "c104bb917fabc943dc61b8f99e0be1827c1fc80725f37d41aa3dd62d8a03bb42",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "getAssignments",
+      "target_sha256": "5d105ee81cf6fdb2fdcbd35fb1c1d7fa185088fe6d9164284afa056fb03a0bb7",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "listModels",
+      "target_sha256": "dab01f558f3c5b1359f24f9951ad266e88af63087b7cf4f169f6f58d442bf453",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "toModelInfo",
+      "target_sha256": "1ac5cf3fd2429ad99fd5711166b055b05acbe2a1d9478793e1394a20f85c6fad",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "updateAssignments",
+      "target_sha256": "715864c4cc48a0cb95241f40f3b18b4a8cead371bdaa570a8a31e6afaa25ecbe",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/crud.ts",
+      "public_name": "updateModel",
+      "target_sha256": "2b4d19d2445183208d0d04be10c9b4ef5c98e4b9194bc51124d78c27360817e8",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getDataSourcesConfig",
+      "target_sha256": "bb5115a102b59806e861e3c7d682a86080bf38258d529ad567e50a1ebfbd6961",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getEncodersConfig",
+      "target_sha256": "6819243eea7e0273359d4725310ad94480ae3c40ab2537dd6f7bfd7a5a8b4078",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getImageGenConfig",
+      "target_sha256": "47271e32a5cd7f9d0ef6b200fa57f4089b86288b8249f9217ed206a793dd7625",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getRoleFallbackConfig",
+      "target_sha256": "dcb9c22aa1429e08b9e04571fc05cc2931a4747ecf96f9580f5cdd51eeef24fa",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getSandboxConfig",
+      "target_sha256": "b8638ba0dbe9ad45adc0f7b2a986fb8ca57f5cf63b357fb3591decb8511d5846",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getSandboxHealth",
+      "target_sha256": "cb37ccefd1434b7b450a303301d39fecc2f0e722a14b21407b0f7d0d749fe095",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "getTtsConfig",
+      "target_sha256": "5269bc938c90cd2eb9a66892ab6625ebdc292992e2eb0ac893ce396867260aba",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "testDataSource",
+      "target_sha256": "1660fe0fe4abfa4e1270fec14c8cb029adc1ad27f693ce2d3212833752ac3fed",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "testImageGen",
+      "target_sha256": "6d1a708c5c072ef95a5b8b96ca3675bc59cfced95a1d83402c431d2973b53185",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "testSandbox",
+      "target_sha256": "fac3e77f09e54e629d355590718ce99410ab60d9c18e66674f46815f39bbe869",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "testTts",
+      "target_sha256": "93755e9d776284b3f21a77c087ed5053bc9a43913d1efec80d4e14a5f137aba6",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateDataSourcesConfig",
+      "target_sha256": "d067111e379c96902bc9a83fe7946938ff24df72609a404973f35340b9b252d4",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateEncodersConfig",
+      "target_sha256": "e2839a405af138d0f07f295f051ccca3b5d2d46d8807b7c44524b701573d1cd0",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateImageGenConfig",
+      "target_sha256": "fe049e84f423a8d01aa49bab940721b1be02dc46db3f45406d9460a25c9947f2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateRoleFallbackConfig",
+      "target_sha256": "81bebd897391c7e61a657adc935a2561a41367217cc9626b1f325e455b9017ba",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateSandboxConfig",
+      "target_sha256": "a078d7d0ee905c27cd4875b7c3ab70cf281d6384ef3843a92385b122111cdfca",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/deviceConfig.ts",
+      "public_name": "updateTtsConfig",
+      "target_sha256": "f5ef1e83cedbdf74aaed23780741fb4cb280f7ee112fe83f9e969be87ee6925b",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_name": "clearOpenRouterKey",
+      "target_sha256": "b6b3a15fc66bc5d5f218f3694b3adbfe013c0386e26881e083513c2e37d0f238",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_name": "getOpenRouterKeyStatus",
+      "target_sha256": "810678606680c21965568aa01964a328206a75aad291bb46fafb1ac9c5b6a1b6",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_name": "listOpenRouterModels",
+      "target_sha256": "2f635eedce944eab9f8c726105dd540d8e6f74f95d0164de853bcbe635ba9c7d",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_name": "openRouterUpsert",
+      "target_sha256": "5d63906d6a192187a739f82f7d543bc69beef90a4d10be1cb3417e96dcf42677",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/openRouter.ts",
+      "public_name": "setOpenRouterKey",
+      "target_sha256": "ac66d351abd97657d085bb3c96b20b66325269b5d927b8ce5faf3c30aa9874fb",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/platformConfig.ts",
+      "public_name": "getBuildKernelConfig",
+      "target_sha256": "5fa5d64c2434ab20e4819c7416ec68d324fa3f0e46ae1edd470fa7c6839d2866",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/platformConfig.ts",
+      "public_name": "getLiveBrowserConfig",
+      "target_sha256": "4c1f473df206146c44676a0543cfb8239813dd844c5977a52bdc33359d1ccab2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/platformConfig.ts",
+      "public_name": "updateBuildKernelConfig",
+      "target_sha256": "a539da456afaa92d28fb4c3340225b588c77e21420a6ea86bcb90fcb424f9723",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/platformConfig.ts",
+      "public_name": "updateLiveBrowserConfig",
+      "target_sha256": "7101d02b61ad1f1993c3096f77b99899ccaed7db05fd0880b39c1c128ca3bdd4",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "createProvider",
+      "target_sha256": "88ebe354967925160ed30016ca67aa17bf225b52266649a1c0b4661f5a246879",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "deleteProvider",
+      "target_sha256": "c26c5297f1acbe7e1d0e82d9a845ae7bf3f8e11b5510f8373486de1cfa4ec93c",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "disableProviderModel",
+      "target_sha256": "ce9b606d13899cc1da2b9a3bccbd1f1976d51e42fcbf4a46bc2ac127d5577227",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "enableProviderModel",
+      "target_sha256": "e6f00b65a2537a66afaa2794d0c77e8363e3d653ccede3f60394df14ac9b6964",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "listProviderModels",
+      "target_sha256": "d620170edd94ca423a89e5aa77b3624a1b95f71c5b52755f9f08498b465bcd52",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "listProviderPresets",
+      "target_sha256": "beb0638dfda13ac821ebc131f5b37809265c38ab7d18ed082fe682c9e098c7dd",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "listProviders",
+      "target_sha256": "1ffe97ff28718ee7a7d5435d9760c154f0969a01de65614765026c70fcfb7c29",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/modelsParts/providers.ts",
+      "public_name": "updateProvider",
+      "target_sha256": "27011716d8fbbb625192ea3b81532f75f370fbc5f0a76d8a53c98f99595c6647",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/schedules.ts",
+      "public_name": "createSchedule",
+      "target_sha256": "46a204fdeafc5348bad4c66e8d9be87e60e182fa4a140f8f978e07fc7f3da942",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/schedules.ts",
+      "public_name": "deleteSchedule",
+      "target_sha256": "3b531778deb92022e87f5bbe5a28ab35357a81345f85a7f56a77df354b4a9de5",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/schedules.ts",
+      "public_name": "listSchedules",
+      "target_sha256": "9f6a825e10feb2ad76779e2674cbab0bba2bc3b03c4230baa70ad98711109203",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/schedules.ts",
+      "public_name": "previewSchedule",
+      "target_sha256": "5c026ba36bdf28eeeabc30ca958d98245191fc38ebeab70d82e448949721f919",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/ContextualFieldsPanel.tsx",
+      "public_name": "ContextualFieldsPanel",
+      "target_sha256": "96cf4427e358d76e8bd1983e94cfcd31c209f5cff84094865440a8907cb12575",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/EndpointUrlField.tsx",
+      "public_name": "EndpointUrlField",
+      "target_sha256": "33b3b9d1c5678d812b94919081ae5d3d97daedfdd92d85cbc36b4be85ae3f306",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/ModeOptionList.tsx",
+      "public_name": "ModeOptionList",
+      "target_sha256": "ba22971917c50e516e8ebd80ac739669324a5ab2d0b3704adb9a4a2077086020",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/PaidFieldsRow.tsx",
+      "public_name": "PaidFieldsRow",
+      "target_sha256": "b95bd302822a1a974c367d7750cdc0c90beed443b63c31fc1184782e2c185f42",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/SaveRow.tsx",
+      "public_name": "SaveRow",
+      "target_sha256": "29e14bb1853ef6f19cc6b1f7502091c92293029a4b45ece4c629f23a70171354",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/VoiceFieldsRow.tsx",
+      "public_name": "VoiceFieldsRow",
+      "target_sha256": "cecc1b30c900411c3ed3aa0a16ab9e1e1a07ea3199c6beb90e7e9174996a241d",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/fieldsDirty.ts",
+      "public_name": "computeAudioFieldsDirty",
+      "target_sha256": "91200b82e8816519731278ebb3fb2c4884784983638b412170b0412171148be1",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/modeOptions.ts",
+      "public_name": "Mode",
+      "target_sha256": "2b7bc6a4dddfa8ec1ba28159de59d6b53ece3137918e1826508541b4c04a3448",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/modeOptions.ts",
+      "public_name": "OPTIONS",
+      "target_sha256": "3238ee1504e0dc0d644e7b1ee92a883b82b9ce0a152d99f5b76f88468ad4b244",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/modeOptions.ts",
+      "public_name": "Provider",
+      "target_sha256": "a874956fa90bbc344b51896a39fb245be54a6a487b8c92fd689de382773670c2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/modeOptions.ts",
+      "public_name": "modeOf",
+      "target_sha256": "bec049492666a7689000ade162e64c71ba4d043ebdd94f39464d8a3d884286e8",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/audioSectionParts/styles.ts",
+      "public_name": "FIELD_CLASS",
+      "target_sha256": "bd96871139fe1541829857c97e0363cadec7e6e4bd66a67f8ab6aaf6b9344e09",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/dataSourcesSectionParts/DataSourcesSaveRow.tsx",
+      "public_name": "DataSourcesSaveRow",
+      "target_sha256": "16d17276383940adb18eb624112886c4c3bbee6875f69b52f39a42c9987593a7",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/encoderSectionParts/EncoderEndpointsPanel.tsx",
+      "public_name": "EncoderEndpointsPanel",
+      "target_sha256": "f70cb571748a1016ada27d6215a771124f9fb43e35173352a7b1be7b08581580",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/encoderSectionParts/deriveEncoderState.ts",
+      "public_name": "EncoderUrls",
+      "target_sha256": "d473bea2d727245d8614faa926a8cf825f6a6b59e2ebe4cbbfe9a0a5862ce948",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/encoderSectionParts/deriveEncoderState.ts",
+      "public_name": "isEncoderUrlsDirty",
+      "target_sha256": "fc847e7df2c5efd74f37d8294842dcde20873958429e5eb571b01ed91a21124b",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ComfyWorkflowField.tsx",
+      "public_name": "ComfyWorkflowField",
+      "target_sha256": "da2ab3b2992253a484156baf0d26ee63c3eb76ce39868e2adb0fad661b43c5ae",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ContextualFieldsPanel.tsx",
+      "public_name": "ContextualFieldsPanel",
+      "target_sha256": "31eb79ffaf30f91c86a95f8019c49ec3b53691d9efa9d324c32ccf90c3456fc0",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ModelField.tsx",
+      "public_name": "ModelField",
+      "target_sha256": "3ea38205857c0d5fd7847b3a12757c0315e99438c96433cf8ee52a0fc490cf80",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/PricedModelSelect.tsx",
+      "public_name": "PricedModelSelect",
+      "target_sha256": "ea72068095e1e1993b574b61303cfb414ecbc6e86ee39f9e599ba081cbe372ed",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/ProviderOptionList.tsx",
+      "public_name": "ProviderOptionList",
+      "target_sha256": "cde05abd952a699c207d41c24feac17a20ff21b61f1a46ddaccc6a7f94a13fd8",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/SaveRow.tsx",
+      "public_name": "SaveRow",
+      "target_sha256": "8c56049d7f1d58eca8b6f30e0b9a8eee4674d99a3c0b647d33258b82178467ec",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/StoredKeyField.tsx",
+      "public_name": "StoredKeyField",
+      "target_sha256": "a89f59f7c289cd3511c5a1636c5295949a1eb30a780df9bdfc0e605662adb83a",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/fallbackWarning.ts",
+      "public_name": "getFallbackWarning",
+      "target_sha256": "cd5ceb3fb3881a2dfc9697bd96c31b9c3c0e705dd7b124d72cef0a96a68f07e3",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/fieldsDirty.ts",
+      "public_name": "computeImageGenFieldsDirty",
+      "target_sha256": "d1ce5691297fe5676f1034841ddd59abefdce1651b36fe4eab24afc904d52262",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/providerOptions.ts",
+      "public_name": "OPTIONS",
+      "target_sha256": "de963654d9e1002f7bc74f4e23c7b60e5757bb12de6a3529cb6324c31ac0ee9f",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/providerOptions.ts",
+      "public_name": "Provider",
+      "target_sha256": "f031c105d5932fa92c2e988f96361b0913d3c3f8336398d2d462cd1cb5e9c5f2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/providerOptions.ts",
+      "public_name": "orPrice",
+      "target_sha256": "b0d5a3137eaf1e086e9c06fa30cd5197f10397eab4199d25942d3cdbab1f5c42",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/styles.ts",
+      "public_name": "FIELD_CLASS",
+      "target_sha256": "40fb7d2de40722644db40b171ab1c00f9d59a5352b6c9d9e78b6844f63db8837",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/imageGenSectionParts/workflowJsonValidator.ts",
+      "public_name": "getWorkflowJsonError",
+      "target_sha256": "807774a0c1f15c60dc77060abf5e5e35684c04281228953913392e456f1de6e1",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/AddProviderForm.tsx",
+      "public_name": "AddProviderForm",
+      "target_sha256": "c81ad4ae51b2028859219b578f533a449821fa9ed2f2718fd40049e98fabcd30",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/BrowseProvider.tsx",
+      "public_name": "BrowseProvider",
+      "target_sha256": "ffbcfd1f14f1ac97cf16ec40ad4a4d4fd0a63ecf3371dc44e2f2c0e2feba38ab",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/CatalogueErrorBanner.tsx",
+      "public_name": "CatalogueErrorBanner",
+      "target_sha256": "5fbe486b020c4835fc4facef6926273dc82f9416f9ed9fb0539b379801f0be9e",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/GenericProviders.tsx",
+      "public_name": "GenericProviders",
+      "target_sha256": "9139cb52f85988b1844d70e59fe7fc8b487958efb0a93ff3adf70d54059e83c8",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/ModelRow.tsx",
+      "public_name": "ModelRow",
+      "target_sha256": "5a08aab00d8918a325169a05d535f8708805effb696dcdb7705c88d92dbf6d6d",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/ToggleSwitch.tsx",
+      "public_name": "ToggleSwitch",
+      "target_sha256": "a1a7dc0e0acc66dfad1ea99b357da7d5a919cd8c38bc9d04301237df00185a9e",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "contextLabel",
+      "target_sha256": "3a8b3180714bdf60791fcbba9bba7444729574ea7055769dc63e5fc9884db47b",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "errorText",
+      "target_sha256": "3e7ad08f0c63ff6dccd0c81c98fd668f999d0c9e852d1abd4cff520e3e18bda7",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "hostLabel",
+      "target_sha256": "253993c776107b1d5a2bd1b0efcf5186468168113a29cd23216c7cb88bfc358a",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/helpers.ts",
+      "public_name": "priceLabel",
+      "target_sha256": "397218599e8b4d6f0fc9517873a53126f44a005d5d52cb9501b94781097374e1",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/providersSectionParts/styles.ts",
+      "public_name": "FIELD",
+      "target_sha256": "f482c6e5a49bd63d2140eb3086da36535f3d61493fb694ded92a889f449342d7",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackFields.tsx",
+      "public_name": "FallbackFields",
+      "target_sha256": "ee5cd9245caac04dcd6d953ab966fda035f0fc1ec9bc68f74f59cf72ba8c6ca2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackIncompleteNotice.tsx",
+      "public_name": "FallbackIncompleteNotice",
+      "target_sha256": "bb6a5e9774fad7bc9ad4ff075d48dc00b74b2f64495d246bac0ff95f7b9f86c3",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackSaveRow.tsx",
+      "public_name": "FallbackSaveRow",
+      "target_sha256": "7f684fc8ff10ba497342dcdc18e6a5306988429bbf34e86fa9c7b069e8330b8c",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/FallbackToggle.tsx",
+      "public_name": "FallbackToggle",
+      "target_sha256": "19d460974c47660a27aecd1ed0e86d71a61a86df31e9251bc49d4544d28e33f2",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/deriveRoleFallbackState.ts",
+      "public_name": "canSaveRoleFallback",
+      "target_sha256": "f2b883a72254ff62713055ea3e8d9c4e36a4c0c46427ef97cc721844f51f0ec5",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/deriveRoleFallbackState.ts",
+      "public_name": "isRoleFallbackDirty",
+      "target_sha256": "fdc3027df37aed53badb57498a1acd28097c6c488f5d61d6ea13b442efeb4f99",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/roleFallbackSectionParts/deriveRoleFallbackState.ts",
+      "public_name": "isRoleFallbackIncomplete",
+      "target_sha256": "78a9baa9fbcade96ea38856f887a5b20d449b752201000ba38d88ff597cf85c0",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxConfirmNote.tsx",
+      "public_name": "SandboxConfirmNote",
+      "target_sha256": "f863e1d454ebde4d3134248bd884831b1622ea778d4643106bb1593bf2732c4f",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxConnectionFields.tsx",
+      "public_name": "SandboxConnectionFields",
+      "target_sha256": "99c667230e9c58dd2a57c683661347f445c719d84474786dcad261604be07ebb",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxField.tsx",
+      "public_name": "SandboxField",
+      "target_sha256": "c829c3c8257f821b1ba4e4637f05ae4382a0f1e5f0620a2d2ca2983fa41ee393",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/sandboxSectionParts/SandboxSaveRow.tsx",
+      "public_name": "SandboxSaveRow",
+      "target_sha256": "ea08db70429c2966aaee869aafe81cb022741b4b7b99381234abddc47bc0c48b",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/ConfirmCard.tsx",
+      "public_name": "ConfirmCard",
+      "target_sha256": "223c8585534a24959bca4b3a9a383fa2f1da1715bb454cb09ef480124c57d806",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/ScheduleComposer.tsx",
+      "public_name": "ScheduleComposer",
+      "target_sha256": "d2dec8428f798967c57a1c4e81f85283cceb3b0f1504b2a37c73f2b6a85f561c",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/ScheduleList.tsx",
+      "public_name": "ScheduleList",
+      "target_sha256": "24685631b6f395d5efe40aa49ead93cb2ef24531681597f3b0fc0e81e44ead7b",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/draftState.ts",
+      "public_name": "DraftState",
+      "target_sha256": "85e9efec8f13038a84664ab268c0e65a669411fd9d1d1cec2ec551e881b209ac",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/draftState.ts",
+      "public_name": "EMPTY_DRAFT",
+      "target_sha256": "f4d3de7280ba66c7c2f36e2fb7cbf3b824f922da4ad13e6432e7f3cc7dba1f80",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/fmtDatetime.ts",
+      "public_name": "fmtDatetime",
+      "target_sha256": "d5e205bfc8188d1cecfaeb9281668e665e172f8e1ae86b282ac514c3ad6a7d3e",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/types.ts",
+      "public_name": "PreviewResult",
+      "target_sha256": "dde7a812aa6d35c99564cd6a764d06d9d8c6caf9f31ec7a971ec0a09c91c1938",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/scheduleSectionParts/types.ts",
+      "public_name": "ScheduleRow",
+      "target_sha256": "77db6e5b91aa76d1bac36089f299c9cdc7bfa27c5553f581acb150e8f15a0f8c",
+      "owner_package": "PKG-12-FE-SETTINGS",
+      "reason": "Epic 12-D (PKG-12-FE-SETTINGS): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/artifacts.ts",
+      "public_name": "artifactUrl",
+      "target_sha256": "9d4456dd1346136f8d458d5daa6757dc7cd197d7e3de98aba4d0dd2647800fb9",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/artifacts.ts",
+      "public_name": "workspaceFileUrl",
+      "target_sha256": "f8a63b4157aa68d1546d7be6a52701724a83c740d1d3cd5381ebcb77dd0a098c",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deck.ts",
+      "public_name": "deckExportUrl",
+      "target_sha256": "a913c7ccc5ce3841b982693b47bbbc2c8dde0e80850836a4e07b2c044468ca4f",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deck.ts",
+      "public_name": "fetchConversationState",
+      "target_sha256": "162e17b125700ba71748c8691ca93c3e668a988d5c6145a1338cc4aee9a2da57",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deck.ts",
+      "public_name": "fetchDeckExport",
+      "target_sha256": "24b6f917a5e4941f9965ec0c310a4e0db10afe459b0f00fe17fbb08022ded9a9",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/errors.ts",
+      "public_name": "ApiFailure",
+      "target_sha256": "1633c94ffe9b5528cba1367c8012d7b4b907e22c64075eca34bad1c24c453ebe",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/errors.ts",
+      "public_name": "apiFailureMessage",
+      "target_sha256": "a76e6d5af6989b08585c2c9be6529facfc91e6f4200479c346ee7fc9c009c5cb",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/errors.ts",
+      "public_name": "isApiFailure",
+      "target_sha256": "0c33eaacaf9440bdb13db1958cd4e4fcdf79ecb392623f14ee634f05081bf303",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/liveness.ts",
+      "public_name": "agentIsLive",
+      "target_sha256": "c1267e6a79ee45856c02d429b7fe440d33884741ab6429fdd17c8706aba16090",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/liveness.ts",
+      "public_name": "apiIsLive",
+      "target_sha256": "6415241ee72d6d524097045dc234b1d6becb27d748b8057e1c6a4c9783957ceb",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/preview.ts",
+      "public_name": "previewHostUrl",
+      "target_sha256": "032b0b582802f3906c4eccb5efeef2b7aa7d5cc52dab3681cab642698c81fd6f",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/session.ts",
+      "public_name": "bootstrapSession",
+      "target_sha256": "264b5607ce4827b43c4c9ef48f4bdb928c8dfea49d9d5976a8b0949e48f3bb11",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/session.ts",
+      "public_name": "isDemoSession",
+      "target_sha256": "f403d3a0c05a85c9db331a524c6fd6ae63c1d14e4b4cdc0d57e54616c34d9ab4",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/session.ts",
+      "public_name": "isPairingRequired",
+      "target_sha256": "1568ce24eeffd8b1bc9f35ad5eaed2d622b742fd63fefa0a76d32751a0394388",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/session.ts",
+      "public_name": "pairSessionWithToken",
+      "target_sha256": "c85f743384c776ad2a848091d5fd978b4dd43526efa5f0bd43270fe9d4193954",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (Amendment A3, attributed PKG-12-FE-SHELL): additive api-layer seam so no file under components/ or views/ statically imports @/api/client; clears no debt row."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/appParts/e2eBridgeRouting.ts",
+      "public_name": "deriveRouteMatch",
+      "target_sha256": "7f4fd7a12e6d625f1d59f87c96020b9486cec2ee9625f1f47d719520af780cb5",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/appParts/e2eBridgeRouting.ts",
+      "public_name": "deriveSurface",
+      "target_sha256": "392914f6bc9789e2f2ff3dd81325d9b67b9c53feb0579cbfea2db7803c85a412",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/types/agent.ts",
       "public_name": "AgentEvent",
       "target_sha256": "17f69907d5578aa57abadbaa2bce58c08fee457c2f4af6f72964a45ebdf5fb18",
@@ -27188,6 +29160,86 @@
       "target_sha256": "274c87ebb630fa74e224d176c68e37b9033994ec03ff9298dc99e44ac645ba69",
       "owner_package": "PKG-12-FE-SHELL",
       "reason": "Epic 12-A (A3): the wire half of the split server-frame union, gated against Python."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_name": "deriveQuerySpaceId",
+      "target_sha256": "9440cd48b4fbf29c384d5e829f05ff68e0054ffda14953b70d07c79b1f38916c",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowEmptyForSpace",
+      "target_sha256": "1ea338a02de83e3988f765f98686e1020e0b0c8ed53bdc016169a4c6a6b6296a",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowEmptyHistory",
+      "target_sha256": "7067f8fb6709d2f5ed94f992ec0ac6eec2daebd19998d7e1014ac41c6a0242bf",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowFilterBar",
+      "target_sha256": "5477a46c3568b7a68d910e6c47384c1f18abf024f9b8476c709cc932cf693e4d",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/historyViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowList",
+      "target_sha256": "6b686eb4fb05c60ab1b6c8fd16607d3a3983f6b3b3dced6cc747ce815b9e5d59",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/projectsViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowConfigureStorage",
+      "target_sha256": "7023dbff63e60353e15c784d4c54ca6d5a1a8854da2742b7dc08a042d6d0b4ab",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/projectsViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowEmptyProjects",
+      "target_sha256": "fdd0b3648a8ff396c997aeb9370ebe609d11d5ae3cb281ffc64238b5bf5acc41",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/projectsViewParts/deriveVisibility.ts",
+      "public_name": "deriveShowProjectsContent",
+      "target_sha256": "4d198d74d3dff5b5a8f1b890ed64313f561e6d6bd38cb6d09168f40aa99965c1",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/spacesViewParts/spaceDialogs.tsx",
+      "public_name": "CreateSpaceDialog",
+      "target_sha256": "07f85cf84a1bdac1fa581da9016346a9971516072854a006a6b2fb001511d5fe",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/views/spacesViewParts/spaceDialogs.tsx",
+      "public_name": "RenameSpaceDialog",
+      "target_sha256": "8ffce22a96dc152bf6ec1f7f693941bf36c91ed7e414b7fc4d4cf6f7adeb4d77",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-D (PKG-12-FE-SHELL): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     }
   ],
   "compatibility_bridges": [],
