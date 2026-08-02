@@ -86,7 +86,7 @@ class _FakeRuntime:
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
         )
-        self._uploads = SimpleNamespace(
+        self.uploads = SimpleNamespace(
             store=self.store_upload,
             names=self.get_upload_names,
             size=self.get_upload_size,
@@ -535,7 +535,7 @@ def test_sidecar_quota_counts_toward_limit() -> None:
     sess = _FakeSession()
     rt._executors[cid] = _FakeExecutor(sess)
     # Pre-fill sidecar with 99 MB — near the 100 MB cap.
-    rt._uploads.store(cid, "big.bin", b"x" * (99 * 1024 * 1024))
+    rt.uploads.store(cid, "big.bin", b"x" * (99 * 1024 * 1024))
     client = TestClient(create_app(store, runtime=rt))
     # 2 MB extra pushes over 100 MB → rejected.
     r = _upload(client, cid, [("files", b"x" * (2 * 1024 * 1024), "extra.bin")])
@@ -552,7 +552,7 @@ def test_sidecar_quota_allows_when_under() -> None:
     sess = _FakeSession()
     rt._executors[cid] = _FakeExecutor(sess)
     # Pre-fill sidecar with 90 MB — 5 MB more is safe.
-    rt._uploads.store(cid, "big.bin", b"x" * (90 * 1024 * 1024))
+    rt.uploads.store(cid, "big.bin", b"x" * (90 * 1024 * 1024))
     client = TestClient(create_app(store, runtime=rt))
     r = _upload(client, cid, [("files", b"x" * (5 * 1024 * 1024), "ok.bin")])
     assert r.status_code == 200
@@ -578,7 +578,7 @@ async def test_upload_survives_recreation() -> None:
 
     # Verify it is in the sandbox AND sidecar.
     assert await sess.read_file("uploads/data.txt") == data
-    assert rt._uploads.names(cid) == {"data.txt"}
+    assert rt.uploads.names(cid) == {"data.txt"}
 
     # 2. Simulate sandbox recreation (wipe it).
     sess._files = {}
@@ -620,11 +620,11 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         upload_store = UploadStore(tmpdir)
-        rt._uploads = upload_store
+        rt.uploads = upload_store
         rt._lifecycle._rehydration._uploads._uploads = upload_store
         data = b"post-restart data"
-        rt._uploads.store(cid, "data.csv", data)
-        assert rt._uploads.names(cid) == {"data.csv"}
+        rt.uploads.store(cid, "data.csv", data)
+        assert rt.uploads.names(cid) == {"data.csv"}
 
         # Post-restart state: no executor, no pending session.
         assert not rt._run_resources.has_executor(cid)

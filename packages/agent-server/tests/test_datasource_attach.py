@@ -85,7 +85,7 @@ class _FakeRuntime:
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
         )
-        self._uploads = SimpleNamespace(
+        self.uploads = SimpleNamespace(
             store=self.store_upload,
             names=self.get_upload_names,
             size=self.get_upload_size,

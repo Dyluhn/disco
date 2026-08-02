@@ -182,7 +182,7 @@ def _wire_foundation(
 ) -> None:
     rt._store = store
     rt._skill_store = skill_store or SkillStore()
-    rt._uploads = UploadStore(f"{db_path}.uploads" if db_path else "")
+    rt.uploads = UploadStore(f"{db_path}.uploads" if db_path else "")
     rt._secret_store = secret_store or SecretStore()
     rt._config_store = _config_store(config, config_store)
     rt._sandbox = SandboxRuntimeService(
@@ -238,8 +238,8 @@ def _wire_foundation(
         rt._projects,
         rt._settings,
     )
-    rt._title_service = TitleService(store, rt._router_now)
-    rt._suggestion_service = SuggestionService(
+    rt.titles = TitleService(store, rt._router_now)
+    rt.suggestions = SuggestionService(
         rt._router_now,
         lambda: rt._projects.current_project_store().root or "",
     )
@@ -247,7 +247,7 @@ def _wire_foundation(
 
 def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
     executors = BuildExecutorAccess(rt._run_resources)
-    rt._share = ShareService(
+    rt.share = ShareService(
         rt._store,
         rt._settings._surface_of,
         rt._projects.current_project_store,
@@ -303,7 +303,7 @@ def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
             lifecycle_sandbox,
             lifecycle_runs,
             LifecyclePersistenceNotifier(rt._persistence_notifier),
-            LifecycleUploads(rt._uploads),
+            LifecycleUploads(rt.uploads),
         ),
         lifecycle_store,
         lifecycle_runs,
@@ -338,7 +338,7 @@ def _wire_research(
         rt._mcp,
         injected_providers=research_providers,
     )
-    rt._spaces = SpaceService(
+    rt.spaces = SpaceService(
         ConfiguredProjectRoot(rt._config_store),
         research_provider,
     )
@@ -348,7 +348,7 @@ def _wire_research(
         drivers=rt._drivers,
         settings=rt._settings,
         preflight=rt._driver_preflight,
-        spaces=rt._spaces,
+        spaces=rt.spaces,
         cancellations=rt._cancellations,
         provider=research_provider,
         state=rt._research_state,
@@ -375,7 +375,7 @@ def _wire_workspace(rt: _RuntimeWiringSchema) -> None:
             rt._contract,
             rt._dr,
             rt._mcp,
-            rt._spaces,
+            rt.spaces,
         ),
         ConversationContextDisposal(
             rt._connections,
@@ -512,7 +512,7 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
     rt._run_controller = RunController(
         rt._run_registry,
         rt._run_supervisor,
-        rt._title_service,
+        rt.titles,
         rt._sandbox_resources,
         rt._build_platform,
         rt._drivers,
@@ -559,7 +559,7 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
         ResumeWorkspaceFence(rt._workspace),
         ResumeSurfaceSettings(rt._settings),
         rt._lifecycle_commands,
-        ResumeEnvironmentProbe(rt._projects, rt._uploads, rt._sessions),
+        ResumeEnvironmentProbe(rt._projects, rt.uploads, rt._sessions),
         PinnedRunStart(rt._kernel_pins),
     )
     rt._disco_kernel._bind_resume(rt._resume)
@@ -594,13 +594,13 @@ def _wire_run_completion(
         observability,
     )
     completion.bind(rt._run_finalizer)
-    rt._run_sweep = RunStrandedSweep(
+    rt.run_sweep = RunStrandedSweep(
         rt._run_registry,
         rt._loop_registry,
         rt._store,
         rt._run_finalizer,
     )
-    rt._idle_sweeper = LifecycleIdleSweeper(rt._lifecycle, rt._run_sweep)
+    rt._idle_sweeper = LifecycleIdleSweeper(rt._lifecycle, rt.run_sweep)
     rt._run_execution = RunPersistenceSupervisor(
         rt._run_registry,
         rt._run_authorities,
@@ -639,7 +639,7 @@ def _wire_workflows(rt: _RuntimeWiringSchema) -> None:
             rt._run_finalizer,
         ),
     )
-    rt._schedule = ScheduleService(
+    rt.schedules = ScheduleService(
         rt._store,
         workflow_runs=workflow_runs,
         project_access=WorkflowProjectAccessAdapter(rt._projects),

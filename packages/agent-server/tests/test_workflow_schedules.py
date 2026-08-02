@@ -296,7 +296,7 @@ def _runtime(
 
 
 def _workflow_runs(runtime: ConversationRuntime) -> WorkflowRunService:
-    return cast(WorkflowRunService, runtime._schedule._workflow_runs)
+    return cast(WorkflowRunService, runtime.schedules._workflow_runs)
 
 
 def _workflow_run_control(runtime: ConversationRuntime) -> Any:
@@ -304,7 +304,7 @@ def _workflow_run_control(runtime: ConversationRuntime) -> Any:
 
 
 def _workflow_manager(runtime: ConversationRuntime) -> WorkflowScheduleManager:
-    manager_runtime = cast(ConversationRuntime, runtime._schedule._runtime_port)
+    manager_runtime = cast(ConversationRuntime, runtime.schedules._runtime_port)
     return WorkflowScheduleManager(manager_runtime)
 
 

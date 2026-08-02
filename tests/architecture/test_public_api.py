@@ -961,8 +961,10 @@ class TestFrontendPublicApi:
         # case no compatibility bridge can express. 6 after Epic 11-D did the
         # same to BuildPlatformRegistry to clear PY-0431, whose public-method
         # width no parts extraction could reduce (a thin delegator still counts
-        # toward service_public_methods, and a mixin is evasion).
-        assert len(baseline["member_transitions"]) == 6
+        # toward service_public_methods, and a mixin is evasion). 7 after Epic
+        # 13-B1 deleted 29 ConversationRuntime delegates at an unchanged origin
+        # — the same case, on the class the facade was installed onto.
+        assert len(baseline["member_transitions"]) == 7
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -970,6 +972,7 @@ class TestFrontendPublicApi:
             "ConfigStore",
             "SecretStore",
             "BuildPlatformRegistry",
+            "ConversationRuntime",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

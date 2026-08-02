@@ -274,7 +274,7 @@ def test_bundle_scrubs_secrets_in_events(client_with_runtime: TestClient) -> Non
                 ),
             )
         )
-        bundle = loop.run_until_complete(rt2.share_export(cid2, owner_id="local"))
+        bundle = loop.run_until_complete(rt2.share.share_export(cid2, owner_id="local"))
     finally:
         loop.close()
     assert bundle["ok"] is True
@@ -393,8 +393,8 @@ def test_share_export_is_deterministic_for_same_event_log() -> None:
                 StatusEvent(status=ConversationStatus.FINISHED),
             )
         )
-        b1 = loop.run_until_complete(rt.share_export(cid, owner_id="local"))
-        b2 = loop.run_until_complete(rt.share_export(cid, owner_id="local"))
+        b1 = loop.run_until_complete(rt.share.share_export(cid, owner_id="local"))
+        b2 = loop.run_until_complete(rt.share.share_export(cid, owner_id="local"))
     finally:
         loop.close()
     # Strip the volatile `exported_at` and `share` envelope (the
@@ -414,7 +414,9 @@ def test_share_export_unknown_conversation_returns_not_found() -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(rt.share_export("conv_does_not_exist", owner_id="local"))
+        result = loop.run_until_complete(
+            rt.share.share_export("conv_does_not_exist", owner_id="local")
+        )
     finally:
         loop.close()
     assert result["ok"] is False
@@ -438,7 +440,7 @@ def test_share_export_includes_surface_in_bundle() -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(rt.share_export(cid, owner_id="local"))
+        result = loop.run_until_complete(rt.share.share_export(cid, owner_id="local"))
     finally:
         loop.close()
     assert result["ok"] is True
@@ -464,7 +466,7 @@ def test_share_tokens_table_persists_tokens_across_runtimes(tmp_path) -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        r = loop.run_until_complete(rt1.create_share_link_async(cid, owner_id="local"))
+        r = loop.run_until_complete(rt1.share.create_share_link_async(cid, owner_id="local"))
     finally:
         loop.close()
     assert r["ok"] is True
@@ -472,7 +474,7 @@ def test_share_tokens_table_persists_tokens_across_runtimes(tmp_path) -> None:
     # Reopen the store.
     store2 = SqliteEventStore(str(db_path))
     rt2 = CR(store2)
-    row = rt2.lookup_share_link(token)
+    row = rt2.share.lookup_share_link(token)
     assert row is not None
     assert row["conversation_id"] == cid
     assert row["owner_id"] == "local"
@@ -549,13 +551,13 @@ def test_share_tokens_revoke_owner_scoped(tmp_path) -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        r = loop.run_until_complete(rt.create_share_link_async(cid, owner_id="alice"))
+        r = loop.run_until_complete(rt.share.create_share_link_async(cid, owner_id="alice"))
     finally:
         loop.close()
     token = r["token"]
     # Alice (correct owner) can revoke.
-    assert rt.revoke_share_link(token, owner_id="alice") is True
+    assert rt.share.revoke_share_link(token, owner_id="alice") is True
     # Bob (wrong owner) cannot revoke — but the row is already revoked
     # so the WHERE `revoked_at IS NULL` clause already filters it out.
     # We can confirm the lookup returns None for everyone.
-    assert rt.lookup_share_link(token) is None
+    assert rt.share.lookup_share_link(token) is None
