@@ -4,6 +4,13 @@ Relocated from ``public_api`` in Epic 10-D and extended with the member-level
 transition authority (:mod:`._members`).  ``root`` is threaded through because
 the member authority must prove its ``accepting_commit`` resolves in this
 repository; nothing else about these checks changed.
+
+Epic 12-A added the frontend declaration authority (:mod:`._frontend`).  Before
+it, ``_check_changed_identities`` rejected every changed frontend identity
+unconditionally, so a signature change to an already-public frontend
+declaration could not be authorized by any record type.  The two surfaces now
+have symmetric treatment: a changed identity is authorized by the record that
+claims it, and rejected with a surface-specific message when none does.
 """
 
 from __future__ import annotations
@@ -11,7 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import _members
+from . import _frontend, _members
 from ._constants import (
     BRIDGE_FIELDS,
     PACKAGE,
@@ -141,7 +148,9 @@ def check_metadata(
     transitions = transition_authority(baseline, problems)
     bridges = bridge_authority(baseline, problems)
     members = _members.member_authority(baseline, root, problems)
+    declarations = _frontend.declaration_authority(baseline, root, problems)
     _members.check_authority_disjoint(members, bridges, problems)
+    _frontend.check_declaration_disjoint(declarations, bridges, members, problems)
     stale_transitions = sorted(set(transitions) - set(targets))
     if stale_transitions:
         problems.append(
@@ -153,6 +162,10 @@ def check_metadata(
         )
     for (path, public_name), record in members.items():
         _check_one_member(record, ("python", path, public_name), targets, problems)
+    for (path, public_name), record in declarations.items():
+        _frontend.check_one_declaration(
+            record, ("frontend", path, public_name), targets, problems
+        )
 
 
 def _check_python_change(
@@ -196,16 +209,41 @@ def _check_python_change(
         )
 
 
-def _check_python_changes(
+def _check_frontend_change(
+    identity: TargetIdentity, added: set[TargetKey], removed: set[TargetKey],
+    previous_targets: dict[TargetKey, dict[str, Any]],
+    current_targets: dict[TargetKey, dict[str, Any]],
+    current_declarations: dict[tuple[str, str], dict[str, Any]],
+    problems: list[str],
+) -> None:
+    """Authorize a changed frontend declaration, or reject it as before."""
+    record = current_declarations.get((identity[1], identity[2]))
+    if record is None:
+        problems.append(f"frontend incompatible change cannot be bridged: {identity}")
+        return
+    _frontend.check_declaration_change(
+        identity,
+        [key for key in removed if key[:3] == identity],
+        [key for key in added if key[:3] == identity],
+        previous_targets, current_targets, record, problems,
+    )
+
+
+def _check_changed_identities(
     changed: set[TargetIdentity], added: set[TargetKey], removed: set[TargetKey],
     previous_targets: dict[TargetKey, dict[str, Any]],
     current_targets: dict[TargetKey, dict[str, Any]],
     current_bridges: dict[tuple[str, str], dict[str, Any]],
-    current_members: dict[tuple[str, str], dict[str, Any]], problems: list[str],
+    current_members: dict[tuple[str, str], dict[str, Any]],
+    current_declarations: dict[tuple[str, str], dict[str, Any]],
+    problems: list[str],
 ) -> None:
     for identity in sorted(changed):
         if identity[0] == "frontend":
-            problems.append(f"frontend incompatible change cannot be bridged: {identity}")
+            _check_frontend_change(
+                identity, added, removed, previous_targets,
+                current_targets, current_declarations, problems,
+            )
         else:
             _check_python_change(
                 identity, added, removed, previous_targets,
@@ -275,17 +313,26 @@ def check_regeneration_delta(
         problems.append(f"public API regeneration deletes targets: {sorted(deleted)}")
     changed = {key[:3] for key in removed if key[:3] in current_identities}
     changed_python = {item for item in changed if item[0] == "python"}
+    changed_frontend = {item for item in changed if item[0] == "frontend"}
     current_bridges = bridge_authority(inventory, problems)
     current_members = _members.member_authority(inventory, root, problems)
+    current_declarations = _frontend.declaration_authority(inventory, root, problems)
     # An identity is member-authorized only if a record claims it; everything
     # else still needs a bridge. The two authorities are proven disjoint in
     # check_metadata, so this partition cannot double-authorize.
     member_identities = {("python", path, name) for path, name in current_members}
     changed_members = changed_python & member_identities
     changed_bridges = changed_python - member_identities
-    _check_python_changes(
-        changed, added, removed, previous_targets,
-        current_targets, current_bridges, current_members, problems,
+    # The frontend surface has one authority rather than two, so the partition
+    # is simply "claimed or not"; an unclaimed change keeps the original
+    # unconditional rejection.
+    declaration_identities = {
+        ("frontend", path, name) for path, name in current_declarations
+    }
+    changed_declarations = changed_frontend & declaration_identities
+    _check_changed_identities(
+        changed, added, removed, previous_targets, current_targets,
+        current_bridges, current_members, current_declarations, problems,
     )
     _check_transition_delta(previous, inventory, added, current_keys, problems)
     _check_bridge_delta(
@@ -293,4 +340,7 @@ def check_regeneration_delta(
     )
     _members.check_member_delta(
         previous, inventory, root, current_identities, changed_members, problems,
+    )
+    _frontend.check_declaration_delta(
+        previous, inventory, root, current_identities, changed_declarations, problems,
     )

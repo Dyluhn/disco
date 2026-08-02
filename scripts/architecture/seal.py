@@ -81,6 +81,11 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/public_api_parts/_authority.py",
     "scripts/architecture/public_api_parts/_constants.py",
     "scripts/architecture/public_api_parts/_contracts.py",
+    # Epic 12-A added the fourth authority: no record type could express a
+    # signature change to an already-public FRONTEND declaration, which binding
+    # Amendment A3 requires. It decides which frontend changes may regenerate
+    # the public-API authority, so it is hash-gated exactly like the other three.
+    "scripts/architecture/public_api_parts/_frontend.py",
     "scripts/architecture/public_api_parts/_members.py",
     "scripts/architecture/public_api_parts/_surface.py",
     "scripts/architecture/test_inventory_parts/__init__.py",

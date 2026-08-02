@@ -928,7 +928,9 @@ class TestFrontendPublicApi:
             "the old public name through an explicit bridge until PKG-13. A "
             "member-level change at an unchanged origin requires an explicit "
             "member transition pinning both signature digests and the exact "
-            "member delta."
+            "member delta. A frontend declaration change requires an explicit "
+            "frontend declaration transition pinning both target digests and "
+            "both declaration texts."
         )
         # No longer empty as of Epic 10-D: every added public target carries an
         # owning-package transition, and the two accepted member-level changes

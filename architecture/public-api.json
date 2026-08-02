@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "efdd187bc7522de5dd27a2916cb3349d6e3da2c7",
+  "source_identity": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -22336,6 +22336,11 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "DatasourceEvent",
+          "signature": "export interface DatasourceEvent extends EventBase { kind: \"datasource\"; name: string; docs: string; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "DeliverableEvent",
           "signature": "export interface DeliverableEvent extends EventBase { kind: \"deliverable\"; title: string; path: string; artifact_kind: \"app\" | \"files\"; /** Canonical URL the deliverable is reachable at (deploy target / tunnel / preview). */ deployment_url?: string; }"
         },
@@ -22363,6 +22368,11 @@
           "kind": "InterfaceDeclaration",
           "name": "IsolationInfo",
           "signature": "export interface IsolationInfo { tier: string; // \"gvisor\" | \"container-remote\" | \"container\" | \u2026 label: string; adversarialSafe: boolean; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "KnowledgeEvent",
+          "signature": "export interface KnowledgeEvent extends EventBase { kind: \"knowledge\"; scope: string; snippet: string; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -22418,6 +22428,11 @@
           "kind": "InterfaceDeclaration",
           "name": "RiskAssessment",
           "signature": "export interface RiskAssessment { risk: SecurityRisk; rationale: string; analyzer: string; self_assessed?: SecurityRisk; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "RuntimeConstraintEvent",
+          "signature": "export interface RuntimeConstraintEvent extends EventBase { kind: \"runtime_constraint\"; constraint_key: string; scope: string; guidance: string; alternative: string; capability_generation: string; active: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -22477,7 +22492,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "AgentEvent",
-          "signature": "export type AgentEvent = | MessageEvent | ActionEvent | ObservationEvent | AgentErrorEvent | CondensationEvent | StatusEvent | WorkspaceVersionEvent | WorkspaceRestoredEvent | WorkspaceMutationEvent | BuildPlatformAdmissionEvent | AppKitEjectionEvent | PlanEvent | ReportEvent | AlternativesEvent | ClarifyEvent | QuestionsV2Event | ScheduleEvent | ScheduleRunEvent | DeliverableEvent | VerifierStartedEvent | VerifierVerdictEvent | VerifierShadowEvent | ContextResolvedEvent | ContextSummaryEvent | ErrorEvent;"
+          "signature": "export type AgentEvent = | MessageEvent | ActionEvent | ObservationEvent | AgentErrorEvent | CondensationEvent | StatusEvent | WorkspaceVersionEvent | WorkspaceRestoredEvent | WorkspaceMutationEvent | BuildPlatformAdmissionEvent | AppKitEjectionEvent | PlanEvent | ReportEvent | AlternativesEvent | ClarifyEvent | QuestionsV2Event | ScheduleEvent | ScheduleRunEvent | DeliverableEvent | VerifierStartedEvent | VerifierVerdictEvent | VerifierShadowEvent | ContextResolvedEvent | ContextSummaryEvent | KnowledgeEvent | DatasourceEvent | RuntimeConstraintEvent | ErrorEvent;"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -22501,8 +22516,18 @@
         },
         {
           "kind": "TypeAliasDeclaration",
+          "name": "WSClientSynthesizedFrame",
+          "signature": "export type WSClientSynthesizedFrame = { type: \"connection\"; state: \"connected\" | \"degraded\" };"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
           "name": "WSServerFrame",
-          "signature": "export type WSServerFrame = | { type: \"state\"; state: ConversationState } | { type: \"event\"; event: AgentEvent } | { type: \"file_stream\"; file_stream: FileStreamFrame } | { type: \"error\"; error: { detail?: string } } | { type: \"connection\"; state: \"connected\" | \"degraded\" } | { type: \"pong\" } | { type: \"mcp_approval_required\"; mcp_approval: McpApprovalPayload };"
+          "signature": "export type WSServerFrame = WSWireServerFrame | WSClientSynthesizedFrame;"
+        },
+        {
+          "kind": "TypeAliasDeclaration",
+          "name": "WSWireServerFrame",
+          "signature": "export type WSWireServerFrame = | { type: \"state\"; state: ConversationState } | { type: \"event\"; event: AgentEvent } | { type: \"token\"; token: string; token_for_event_id?: string | null } | { type: \"file_stream\"; file_stream: FileStreamFrame } | { type: \"error\"; error: { detail?: string } } | { type: \"pong\" } | { type: \"mcp_approval_required\"; mcp_approval: McpApprovalPayload };"
         }
       ]
     },
@@ -23394,6 +23419,62 @@
       "target_sha256": "5f20985984bfd973055cacbd33344965697ac487c8a42b9ef9cb5315a49af8fa",
       "owner_package": "PKG-11-SETTINGS",
       "reason": "Epic 11-B: authority moved off this class onto collaborators exposed as plain __init__ attributes; origin unchanged, members removed (see the paired member_transitions record)"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "AgentEvent",
+      "target_sha256": "17f69907d5578aa57abadbaa2bce58c08fee457c2f4af6f72964a45ebdf5fb18",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): widened union; the change itself is authorized by a frontend declaration transition."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "DatasourceEvent",
+      "target_sha256": "1199f16626df4e1e18fcc43605b3488a72eed17154143a40c27013a6ba803c51",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): TS mirror for a backend event kind the union omitted."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "KnowledgeEvent",
+      "target_sha256": "21531131a8b746e5b5523689f403a63d551316bd69d6a8c443b9a4177e4aeea1",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): TS mirror for a backend event kind the union omitted."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "RuntimeConstraintEvent",
+      "target_sha256": "3a819ecc69e09a05cf4ca42100f8b0661c8f2204ec3f43666b1fbc7ad57d2019",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): TS mirror for a backend event kind the union omitted."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSClientSynthesizedFrame",
+      "target_sha256": "47ebb2c41dd25c5ef3c4c08cdfe85b763c53466aa85de0cec7b8ccb2c4447cee",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): the client-invented half of the split server-frame union."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSServerFrame",
+      "target_sha256": "488c32170d00302956e4c451f21a5429de235173c31c608a11ecb9e2d12913f6",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): recomposed union; the change itself is authorized by a frontend declaration transition."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSWireServerFrame",
+      "target_sha256": "274c87ebb630fa74e224d176c68e37b9033994ec03ff9298dc99e44ac645ba69",
+      "owner_package": "PKG-12-FE-SHELL",
+      "reason": "Epic 12-A (A3): the wire half of the split server-frame union, gated against Python."
     }
   ],
   "compatibility_bridges": [],
@@ -23566,5 +23647,33 @@
       "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11B-ACCEPTANCE-RECEIPT.md"
     }
   ],
-  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta."
+  "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "AgentEvent",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type AgentEvent = | MessageEvent | ActionEvent | ObservationEvent | AgentErrorEvent | CondensationEvent | StatusEvent | WorkspaceVersionEvent | WorkspaceRestoredEvent | WorkspaceMutationEvent | BuildPlatformAdmissionEvent | AppKitEjectionEvent | PlanEvent | ReportEvent | AlternativesEvent | ClarifyEvent | QuestionsV2Event | ScheduleEvent | ScheduleRunEvent | DeliverableEvent | VerifierStartedEvent | VerifierVerdictEvent | VerifierShadowEvent | ContextResolvedEvent | ContextSummaryEvent | ErrorEvent;",
+      "new_signature": "export type AgentEvent = | MessageEvent | ActionEvent | ObservationEvent | AgentErrorEvent | CondensationEvent | StatusEvent | WorkspaceVersionEvent | WorkspaceRestoredEvent | WorkspaceMutationEvent | BuildPlatformAdmissionEvent | AppKitEjectionEvent | PlanEvent | ReportEvent | AlternativesEvent | ClarifyEvent | QuestionsV2Event | ScheduleEvent | ScheduleRunEvent | DeliverableEvent | VerifierStartedEvent | VerifierVerdictEvent | VerifierShadowEvent | ContextResolvedEvent | ContextSummaryEvent | KnowledgeEvent | DatasourceEvent | RuntimeConstraintEvent | ErrorEvent;",
+      "old_target_sha256": "69d04f39ab7d6bd0911a2ac2161006f2f4967e6902ec84c464aea94dceac15b3",
+      "new_target_sha256": "17f69907d5578aa57abadbaa2bce58c08fee457c2f4af6f72964a45ebdf5fb18",
+      "owner_package": "PKG-12-FE-SHELL",
+      "accepting_commit": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
+      "accepting_receipt": "2026-08-02/EPIC12A-BOUNDARY/EPIC-12A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSServerFrame",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type WSServerFrame = | { type: \"state\"; state: ConversationState } | { type: \"event\"; event: AgentEvent } | { type: \"file_stream\"; file_stream: FileStreamFrame } | { type: \"error\"; error: { detail?: string } } | { type: \"connection\"; state: \"connected\" | \"degraded\" } | { type: \"pong\" } | { type: \"mcp_approval_required\"; mcp_approval: McpApprovalPayload };",
+      "new_signature": "export type WSServerFrame = WSWireServerFrame | WSClientSynthesizedFrame;",
+      "old_target_sha256": "7f3e226d9280e4273a74bbf32df5b3aaf56aae2a2e2a3bd2c0322b6ffa16e6de",
+      "new_target_sha256": "488c32170d00302956e4c451f21a5429de235173c31c608a11ecb9e2d12913f6",
+      "owner_package": "PKG-12-FE-SHELL",
+      "accepting_commit": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
+      "accepting_receipt": "2026-08-02/EPIC12A-BOUNDARY/EPIC-12A-ACCEPTANCE-RECEIPT.md"
+    }
+  ],
+  "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta. A frontend declaration change requires an explicit frontend declaration transition pinning both target digests and both declaration texts."
 }

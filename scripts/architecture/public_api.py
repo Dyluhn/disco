@@ -20,7 +20,14 @@ from typing import Any
 
 from . import public_surface
 from .policy import REPO_ROOT, load_json
-from .public_api_parts import _authority, _constants, _contracts, _members, _surface
+from .public_api_parts import (
+    _authority,
+    _constants,
+    _contracts,
+    _frontend,
+    _members,
+    _surface,
+)
 from .public_surface import scan_frontend_public_surface, scan_python_public_surface
 
 # Monkeypatched by the adversarial suite — must be read through this module.
@@ -53,6 +60,9 @@ _canonical = _surface.canonical
 _extract_init_surface = _surface.extract_init_surface
 _valid_bridge = _authority.valid_bridge
 extract_initializer = public_surface.extract_initializer
+# Epic 12-A's fourth authority is reached the same way, so its adversarial
+# battery needs no second sys.path-dependent import of its own.
+_frontend_authority = _frontend
 
 
 def load_public_api(root: Path | None = None) -> dict[str, Any]:
@@ -235,6 +245,7 @@ def regenerate_public_api(
     additive_transitions: list[dict[str, Any]] | None = None,
     compatibility_bridges: list[dict[str, Any]] | None = None,
     member_transitions: list[dict[str, Any]] | None = None,
+    frontend_declaration_transitions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     resolved_root = REPO_ROOT if root is None else root
     source_identity, prior = _regeneration_prior(resolved_root, source_identity)
@@ -268,6 +279,11 @@ def regenerate_public_api(
         "member_transitions": _carried(
             previous, "member_transitions", member_transitions
         ),
+        "frontend_declaration_transitions": _carried(
+            previous,
+            "frontend_declaration_transitions",
+            frontend_declaration_transitions,
+        ),
         "compatibility_rule": (
             "Any deleted or renamed public name, origin, signature, frontend "
             "export/type/schema, or contract byte fails. Additions require an "
@@ -275,7 +291,9 @@ def regenerate_public_api(
             "the old public name through an explicit bridge until PKG-13. A "
             "member-level change at an unchanged origin requires an explicit "
             "member transition pinning both signature digests and the exact "
-            "member delta."
+            "member delta. A frontend declaration change requires an explicit "
+            "frontend declaration transition pinning both target digests and "
+            "both declaration texts."
         ),
     }
     problems: list[str] = []
@@ -300,6 +318,9 @@ def regenerate_public_api(
         "frontend_module_count": len(inventory["frontend_modules"]),
         "contract_file_count": len(inventory["contract_files"]),
         "member_transition_count": len(inventory["member_transitions"]),
+        "frontend_declaration_transition_count": len(
+            inventory["frontend_declaration_transitions"]
+        ),
     }
 
 

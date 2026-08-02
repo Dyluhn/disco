@@ -14,7 +14,9 @@ This is the third authority beside ``additive_transitions`` and
 a record exists for the identity, and it is fail-closed on every prong:
 
 1. exact field set, every value non-empty, ``owner_package`` well-formed, and
-   ``surface`` is ``python`` (a frontend change is never bridgeable);
+   ``surface`` is ``python``.  A frontend change is never expressible here —
+   prongs 3 and 4 have no frontend input — and is authorized instead by
+   :mod:`._frontend`, the fourth authority Epic 12-A added;
 2. ``old_signature_sha256``/``new_signature_sha256`` pin the **stored** and
    **live** signature bytes, so a record authorizes exactly one transition;
 3. ``old_origin == new_origin == record["origin"]`` — sameness is asserted,
@@ -60,7 +62,15 @@ def _members_of(signature: Any) -> list[str] | None:
     return members
 
 
-def _commit_resolves(root: Path, value: str) -> bool:
+def commit_resolves(root: Path, value: str) -> bool:
+    """Report whether ``value`` names a commit object in this repository.
+
+    Shared with :mod:`._frontend`, whose prong 1 asserts the same thing about a
+    frontend record's ``accepting_commit``.  Copying it would have made a third
+    occurrence in the tree (``test_inventory_parts/_splits.py`` holds the
+    second), which standing §6 treats as the threshold for a general mechanism
+    rather than another clone.
+    """
     try:
         result = subprocess.run(
             ["git", "-C", str(root), "cat-file", "-e", f"{value}^{{commit}}"],
@@ -104,7 +114,7 @@ def _valid_member_row(row: Any, root: Path) -> bool:
         return False
     if not GIT_SHA.fullmatch(row["accepting_commit"]):
         return False
-    return _commit_resolves(root, row["accepting_commit"])
+    return commit_resolves(root, row["accepting_commit"])
 
 
 def member_authority(
