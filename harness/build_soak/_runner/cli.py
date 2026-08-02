@@ -22,6 +22,7 @@ from ..adapters.disco_api import (
     InfraProbeError,
     Transport,
 )
+from ..browser_capability import load_capability, scope_declaration
 from ..efficiency import (
     aggregate as aggregate_efficiency,
 )
@@ -406,6 +407,12 @@ def _batch_summary(
             "final": final_resources.to_dict(),
         },
         "inspect_required": inspect_required,
+        # A6.1: what this run could and could not evaluate, computed from the
+        # scenarios' own declared claims and a recorded capability verdict.
+        "scope": scope_declaration(
+            execution.selected,
+            load_capability(getattr(args, "browser_capability", None)),
+        ),
         "status_counts": dict(sorted(status_counts.items())),
         "failure_code_counts": dict(sorted(failure_counts.items())),
         "runs": runs,
@@ -658,15 +665,34 @@ def _argument_parser() -> argparse.ArgumentParser:
         "build; a cutoff here WHILE STILL PROGRESSING is recorded INVALID_RUN (inconclusive), "
         "not a product BUILD_DID_NOT_FINISH (Bug 15).",
     )
+    _add_scenario_arguments(p)
+    _add_resource_arguments(p)
+    return p
+
+
+def _add_scenario_arguments(p: argparse.ArgumentParser) -> None:
+    """Scenario selection, seeding, and the A6.1 scope input.
+
+    Grouped into their own owner for the same reason `_add_resource_arguments`
+    is: `_argument_parser` is a flat registration list that grows with every
+    flag, and it sits against the 100-logical-line callable cap.
+    """
+
     p.add_argument("--scenarios", default=str(_SCENARIOS))
+    p.add_argument(
+        "--browser-capability",
+        default=None,
+        help="path to a recorded browser-capability probe verdict (JSON). Amendment A6.1: "
+        "the batch summary's scope block reports which browser-dependent claims this run "
+        "could not evaluate. Omitted, the capability reads 'unproven' and those claims read "
+        "'not_evaluated' — never 'evaluated'.",
+    )
     p.add_argument(
         "--seed-base",
         type=int,
         default=0,
         help="first deterministic task seed; each iteration increments it by one",
     )
-    _add_resource_arguments(p)
-    return p
 
 
 def main(argv: list[str] | None = None) -> int:
