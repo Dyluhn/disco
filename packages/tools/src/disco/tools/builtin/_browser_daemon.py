@@ -17,10 +17,30 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 from urllib.parse import urlsplit as urlsplit
 
+# Register #7 — THIS MODULE IS SHIPPED STANDALONE. `browser_parts.ensure_daemon`
+# writes it to `<workspace>/.pmx/_browser_daemon.py` and the sandbox executes it
+# as a script, so `__main__` has no parent package and every package-relative
+# import below is unsatisfiable by construction. That is exactly how campaign
+# commit cb19126a broke the browser daemon: it died here, at import, before any
+# browser logic ran, for four consecutive canaries.
+#
+# The shipper puts this module's interior parts under
+# `<workspace>/.pmx/_browser_daemon_shipped/`, so naming that package here (PEP
+# 366) makes the SAME relative imports resolve under script execution. The
+# alternative — a second, absolute-import arm — would duplicate fourteen import
+# lines and hide the parts package from the type checker, which is what let the
+# defect through in the first place. `ensure_daemon._SHIPPED_PACKAGE` must agree
+# with this name; `test_shipped_standalone_artifacts.py` proves it does by
+# executing the shipped file set rather than by comparing the two literals.
+if not __package__:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    __package__ = "_browser_daemon_shipped"
+
 from playwright.sync_api import sync_playwright
 
 from ._browser_daemon_parts import dispatch as _dispatch
 from ._browser_daemon_parts import dom_signals as _dom_signals
+from ._browser_daemon_parts import engine_select as _engine_select
 from ._browser_daemon_parts.dom_signals import (
     _count_visible_semantic_elements as _count_visible_semantic_elements,
 )
@@ -59,6 +79,11 @@ except ValueError:
 if not 0 <= PORT <= 65535:
     PORT = 8901
 PORT_FILE = os.path.join(WORKSPACE_ROOT, ".pmx/browser-port")
+# Published beside the port file so the engine that actually calibrated ready is
+# recorded as a fact OF THIS RUN. A probe that re-derives the engine in its own
+# environment can disagree with the daemon's own measurement — that gap is
+# exactly what kept the browser outage misdiagnosed (HARN-1b/B2).
+ENGINE_FILE = os.path.join(WORKSPACE_ROOT, ".pmx/browser-engine")
 INSTANCE_ID = hashlib.sha256(WORKSPACE_ROOT.encode()).hexdigest()
 SCREENSHOT_DIR = os.path.join(WORKSPACE_ROOT, ".pmx/screenshots")
 MAX_CONSOLE = 200
@@ -168,6 +193,10 @@ class BrowserState:
         self.screenshot_seq = 0
         self.render_ready = False
         self.render_error = ""
+        # Which engine's renderer actually calibrated ready. Empty until
+        # `start()` measures one; published alongside the port file so evidence
+        # records the engine that ran rather than the engine a probe guessed.
+        self.render_engine = ""
 
     # Compatibility properties for existing callers/tests: the historical
     # single page is exactly the fixed agent lane.
@@ -230,58 +259,83 @@ class BrowserState:
         context.add_init_script(_STEALTH_INIT_SCRIPT)
         return context
 
-    def start(self, display: str | None = None):
-        self.playwright = sync_playwright().start()
-        # gVisor is the isolation boundary, hence --no-sandbox is acceptable HERE only.
-        # W-46: --disable-blink-features=AutomationControlled removes the Blink flag
-        # that otherwise sets navigator.webdriver=true and trips WAF bot heuristics.
-        launch_args = ["--no-sandbox", "--disable-blink-features=AutomationControlled"]
-        # S-W5: agent/browser sandboxes reach the public web through the
-        # private/non-global-denying sidecar, not a raw bridge. Playwright does
-        # not reliably inherit HTTP_PROXY into Chromium, so wire it explicitly.
-        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
-        launch_kwargs = {}
-        executable_path = os.environ.get("DISCO_BROWSER_EXECUTABLE")
-        if executable_path:
-            launch_kwargs["executable_path"] = executable_path
-        if proxy_url:
-            launch_kwargs["proxy"] = {
-                "server": proxy_url,
-                "bypass": "localhost,127.0.0.1,[::1]",
-            }
-        if display:
-            import os as _os
+    def _release_browser(self):
+        """Drop the context/browser owned by a rejected engine attempt."""
+        for resource in (self.context, self.browser):
+            if resource is not None:
+                try:
+                    resource.close()
+                except Exception:
+                    pass
+        self.context = None
+        self.browser = None
 
-            _os.environ["DISPLAY"] = display
-            launch_args.append(f"--display={display}")
-            self.browser = self.playwright.chromium.launch(
-                headless=False, args=launch_args, **launch_kwargs
-            )
-        else:
-            self.browser = self.playwright.chromium.launch(
-                headless=True, args=launch_args, **launch_kwargs
-            )
+    def _calibrate_engine(self, engine, options):
+        """Launch one engine and measure whether it can paint text.
+
+        Returns ``(outcome, context)`` — the calibrated context on ``"ready"``
+        and ``None`` on every other outcome, so the caller holds the winning
+        context as a value instead of re-deriving it from mutable state. On
+        ``"ready"`` this leaves ``self.browser``/``self.context`` bound to the
+        winning engine; otherwise it releases both, so the next candidate starts
+        from a clean owner and a rejected engine leaks no process.
+        """
+        try:
+            self.browser = engine.launch(**options)
+        except Exception as exc:
+            self.browser = None
+            return f"launch_failed:{type(exc).__name__}", None
         # W-46: a realistic desktop-Chrome context — UA without "HeadlessChrome", a
         # locale/timezone, and an Accept-Language header — so a server fingerprinting
         # the request sees a normal browser. Same sandbox egress; only the fingerprint
         # changes (lite.cnn worked already; full CNN's WAF keyed on these tells).
-        self.context = self._new_context()
-        self.host_context = None
-        calibration_page = self.context.new_page()
+        self.context = context = self._new_context()
+        calibration_page = context.new_page()
         try:
-            if not _text_renderer_ready(calibration_page):
-                self.render_error = (
-                    "browser renderer unavailable: Chromium could not lay out ordinary "
-                    "system-font text; painted browser evidence is unavailable"
-                )
-                raise BrowserRendererUnavailable(self.render_error)
+            ready = _text_renderer_ready(calibration_page)
         finally:
             calibration_page.close()
+        if ready:
+            return "ready", context
+        self._release_browser()
+        return "renderer_not_ready", None
+
+    def start(self, display: str | None = None):
+        self.playwright = sync_playwright().start()
+        if display:
+            os.environ["DISPLAY"] = display
+        # HARN-1b/B2: the engine is chosen by MEASUREMENT, not by name. Each
+        # installed engine is launched and put through this daemon's own
+        # `_text_renderer_ready` calibration, and the first that passes wins;
+        # `ENGINE_ORDER` is only the order in which they are asked. Hard-coding
+        # Chromium made a renderer that cannot paint text terminal, even with a
+        # working engine installed beside it.
+        executables = _engine_select.executables_from_env(os.environ)
+        proxy = _engine_select.proxy_settings(os.environ)
+        attempts: list[dict[str, Any]] = []
+        self.render_engine = ""
+        ready_context = None
+        for engine_name, engine in _engine_select.installed_engines(self.playwright):
+            outcome, context = self._calibrate_engine(
+                engine,
+                _engine_select.launch_options(
+                    engine_name, display=display, executables=executables, proxy=proxy
+                ),
+            )
+            attempts.append({"engine": engine_name, "outcome": outcome})
+            if context is not None:
+                self.render_engine = engine_name
+                ready_context = context
+                break
+        if ready_context is None:
+            self.render_error = _engine_select.renderer_unavailable_message(attempts)
+            raise BrowserRendererUnavailable(self.render_error)
+        self.host_context = None
         # A restart creates two empty bounded lanes, with the host-verifier page
         # lazy so ordinary browsing pays for one page only.
         self._lanes = {name: BrowserPageState() for name in _LANES}
         self._nonces.clear()
-        self._bind_page("agent", self.context.new_page())
+        self._bind_page("agent", ready_context.new_page())
         self.render_ready = True
         self.render_error = ""
 
@@ -313,6 +367,10 @@ class BrowserState:
         self.context = None
         self.host_context = None
         self.browser = None
+        # A stopped stack owns no engine; `start()` re-measures on every restart
+        # because the winning engine is a property of the environment, not a
+        # setting to remember.
+        self.render_engine = ""
         playwright, self.playwright = self.playwright, None
         if playwright is not None:
             try:
@@ -796,6 +854,21 @@ class BrowserHandler(BaseHTTPRequestHandler):
         return _dom_signals.get_elements(page, max_elements=MAX_ELEMENTS)
 
 
+def _publish_atomic(path, text):
+    """Publish one small owned fact under `.pmx/` without a torn read.
+
+    Exactly the contract the port file has always used — private mode, a temp
+    file in the same directory, atomic replace — factored out so the engine
+    record cannot drift from it.
+    """
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    with open(tmp_path, "w", encoding="ascii") as handle:
+        handle.write(f"{text}\n")
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, path)
+
+
 def run():
     server = None
     bound_port = None
@@ -809,13 +882,10 @@ def run():
         state.start()
         server = HTTPServer(("127.0.0.1", PORT), BrowserHandler)
         bound_port = int(server.server_port)
-        os.makedirs(os.path.dirname(PORT_FILE), mode=0o700, exist_ok=True)
-        tmp_port_file = f"{PORT_FILE}.{os.getpid()}.tmp"
-        with open(tmp_port_file, "w", encoding="ascii") as handle:
-            handle.write(f"{bound_port}\n")
-        os.chmod(tmp_port_file, 0o600)
-        os.replace(tmp_port_file, PORT_FILE)
+        _publish_atomic(PORT_FILE, bound_port)
+        _publish_atomic(ENGINE_FILE, state.render_engine)
         print(f"Browser daemon listening on 127.0.0.1:{bound_port}")
+        print(f"Browser daemon renderer engine: {state.render_engine}")
         server.serve_forever()
     except KeyboardInterrupt:
         pass
@@ -828,6 +898,7 @@ def run():
                     recorded_port = int(handle.read().strip())
                 if recorded_port == bound_port:
                     os.unlink(PORT_FILE)
+                    os.unlink(ENGINE_FILE)
             except (FileNotFoundError, OSError, ValueError):
                 pass
         state.stop()

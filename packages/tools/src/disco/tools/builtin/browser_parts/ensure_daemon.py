@@ -11,6 +11,8 @@ constants/callables it needs are threaded through explicitly from
 from __future__ import annotations
 
 import asyncio
+import json
+import posixpath
 import shlex
 import sys
 from collections.abc import Callable
@@ -23,6 +25,21 @@ if TYPE_CHECKING:
 
     from ...anatomy import ToolContext
     from ..browser import BrowserUnavailableError
+
+# Register #7 — the daemon is shipped as a standalone script, so the interior
+# parts package `_browser_daemon.py` imports must travel with it. The daemon
+# names this same package (PEP 366) when it runs without a parent package; the
+# two literals are proven to agree by executing the shipped file set in
+# `test_shipped_standalone_artifacts.py`, not by comparing them.
+_SHIPPED_PACKAGE = "_browser_daemon_shipped"
+_PARTS_DIRNAME = "_browser_daemon_parts"
+_SHIPPED_PACKAGE_INIT = (
+    b'"""Shipped container for the browser daemon\'s interior parts.\n\n'
+    b"Written by `browser_parts.ensure_daemon._ship_daemon_files`. The daemon\n"
+    b"executes as a script, so it adopts this package name to keep its\n"
+    b"package-relative imports resolvable (register #7).\n"
+    b'"""\n'
+)
 
 
 async def _current_url_if_healthy(
@@ -48,6 +65,20 @@ async def _ship_daemon_files(
     daemon_src = daemon_src_path.read_text()
     await ctx.sandbox.write_file(daemon_target_path, daemon_src.encode("utf-8"))
 
+    # Register #7: ship the daemon's interior parts package alongside it. Before
+    # this, only the two files below were shipped, so the daemon's own
+    # `_browser_daemon_parts` imports could not resolve in the sandbox and it
+    # died at import. The parts are copied VERBATIM — the shipped bytes of each
+    # module are the repo's bytes, so the sandbox runs the code the gates saw.
+    shipped_root = posixpath.join(posixpath.dirname(daemon_target_path), _SHIPPED_PACKAGE)
+    await ctx.sandbox.write_file(
+        posixpath.join(shipped_root, "__init__.py"), _SHIPPED_PACKAGE_INIT
+    )
+    for part in sorted((daemon_src_path.parent / _PARTS_DIRNAME).glob("*.py")):
+        await ctx.sandbox.write_file(
+            posixpath.join(shipped_root, _PARTS_DIRNAME, part.name), part.read_bytes()
+        )
+
     # Ship live_view.py alongside the daemon so the daemon can import _live_view.
     if live_view_src_path.exists():
         live_view_src = live_view_src_path.read_text()
@@ -61,7 +92,7 @@ async def _build_launch_command(
     *,
     daemon_target_path: str,
     daemon_port_path: str,
-    chromium_executable: Callable[[], str | None],
+    browser_executables: Callable[[], dict[str, str]],
     playwright_runtime: Callable[[], tuple[str, str] | None],
 ) -> str:
     # `BrowserTool.run` proves the sandbox before dispatching; the extraction
@@ -76,9 +107,17 @@ async def _build_launch_command(
     # fresh daemon binds port 0 and atomically publishes the port it owns.
     await ctx.sandbox.exec_shell(f"rm -f {daemon_port_path}", timeout_s=5)
 
-    executable = await asyncio.to_thread(chromium_executable)
+    # HARN-1b/B2: ship a path for EVERY installed engine, not just Chromium's.
+    # The daemon picks by measured renderer readiness, and a candidate it cannot
+    # launch is not a candidate — with only Chromium's path shipped, a Chromium
+    # that cannot paint text left it nothing to fall back to.
+    executables = await asyncio.to_thread(browser_executables)
     runtime = await asyncio.to_thread(playwright_runtime)
-    executable_env = f" DISCO_BROWSER_EXECUTABLE={shlex.quote(executable)}" if executable else ""
+    executable_env = (
+        f" DISCO_BROWSER_EXECUTABLES={shlex.quote(json.dumps(executables, sort_keys=True))}"
+        if executables
+        else ""
+    )
     daemon_python, playwright_pythonpath = runtime or (sys.executable, "")
     pythonpath_env = (
         f" PYTHONPATH={shlex.quote(playwright_pythonpath)}" if playwright_pythonpath else ""
@@ -164,7 +203,7 @@ async def ensure_daemon(
     daemon_target_path: str,
     daemon_port_path: str,
     daemon_url_default: str,
-    chromium_executable: Callable[[], str | None],
+    browser_executables: Callable[[], dict[str, str]],
     playwright_runtime: Callable[[], tuple[str, str] | None],
     bounded_startup_diagnostic: Callable[..., str],
     unavailable_message: str,
@@ -193,7 +232,7 @@ async def ensure_daemon(
         ctx,
         daemon_target_path=daemon_target_path,
         daemon_port_path=daemon_port_path,
-        chromium_executable=chromium_executable,
+        browser_executables=browser_executables,
         playwright_runtime=playwright_runtime,
     )
     await _start_daemon_session(
