@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "6ba5d8eaa3c86418f68f9cfb81f0150c344108a0",
+  "source_identity": "64c2b8d51a18017dbef4ee4fb04e9f76dbef3aea",
   "collected": {
     "counts": {
-      "packages": 9876,
+      "packages": 9880,
       "harness": 1253,
       "integrations": 9,
       "tests": 376
     },
-    "total": 11514,
+    "total": 11518,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5203,6 +5203,10 @@
         "packages/core/tests/test_loop_integration.py::test_truly_blank_turn_retries_once_and_executes_tool",
         "packages/core/tests/test_loop_integration.py::test_truncated_prose_does_not_end_run_and_injects_continue_reminder",
         "packages/core/tests/test_loop_integration.py::test_unclosed_think_wedge_injects_continue_reminder_and_continues",
+        "packages/core/tests/test_loop_ports.py::test_collaborator_handles_are_not_ports",
+        "packages/core/tests/test_loop_ports.py::test_every_port_member_is_declared_on_the_compat_surface",
+        "packages/core/tests/test_loop_ports.py::test_ports_are_disjoint",
+        "packages/core/tests/test_loop_ports.py::test_the_eight_measured_ports_are_all_present",
         "packages/core/tests/test_loop_state_machine.py::test_finished_reopens_to_idle_on_new_message",
         "packages/core/tests/test_loop_state_machine.py::test_max_iterations_forces_error",
         "packages/core/tests/test_loop_state_machine.py::test_run_to_finish_emits_running_then_finished",
@@ -11535,9 +11539,9 @@
     }
   },
   "mapping_static": {
-    "identity": "6ba5d8eaa3c86418f68f9cfb81f0150c344108a0",
-    "python_test_file_count": 791,
-    "python_static_test_id_count": 9392,
+    "identity": "64c2b8d51a18017dbef4ee4fb04e9f76dbef3aea",
+    "python_test_file_count": 792,
+    "python_static_test_id_count": 9396,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11987,6 +11991,7 @@
       "packages/core/tests/test_loop_confirmation.py",
       "packages/core/tests/test_loop_extra.py",
       "packages/core/tests/test_loop_integration.py",
+      "packages/core/tests/test_loop_ports.py",
       "packages/core/tests/test_loop_state_machine.py",
       "packages/core/tests/test_loop_step.py",
       "packages/core/tests/test_loop_stophooks.py",
@@ -17442,6 +17447,10 @@
       "packages/core/tests/test_loop_integration.py::test_truly_blank_turn_retries_once_and_executes_tool",
       "packages/core/tests/test_loop_integration.py::test_truncated_prose_does_not_end_run_and_injects_continue_reminder",
       "packages/core/tests/test_loop_integration.py::test_unclosed_think_wedge_injects_continue_reminder_and_continues",
+      "packages/core/tests/test_loop_ports.py::test_collaborator_handles_are_not_ports",
+      "packages/core/tests/test_loop_ports.py::test_every_port_member_is_declared_on_the_compat_surface",
+      "packages/core/tests/test_loop_ports.py::test_ports_are_disjoint",
+      "packages/core/tests/test_loop_ports.py::test_the_eight_measured_ports_are_all_present",
       "packages/core/tests/test_loop_state_machine.py::test_finished_reopens_to_idle_on_new_message",
       "packages/core/tests/test_loop_state_machine.py::test_max_iterations_forces_error",
       "packages/core/tests/test_loop_state_machine.py::test_run_to_finish_emits_running_then_finished",
@@ -28134,6 +28143,38 @@
           "packages/core/tests/test_event_contract_corpus.py::test_migration_is_pure_idempotent_and_defensively_copies",
           "packages/core/tests/test_event_contract_corpus.py::test_store_rejects_untyped_values_before_any_persistence",
           "packages/core/tests/test_event_contract_corpus.py::test_unknown_kind_and_unexpected_known_kind_field_fail_closed"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-02-GATE-13A",
+      "root": "packages",
+      "source_identity_before": "6ba5d8eaa3c86418f68f9cfb81f0150c344108a0",
+      "source_identity_after": "64c2b8d51a18017dbef4ee4fb04e9f76dbef3aea",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9876,
+          "after_count": 9880,
+          "added_ids": [
+            "packages/core/tests/test_loop_ports.py::test_collaborator_handles_are_not_ports",
+            "packages/core/tests/test_loop_ports.py::test_every_port_member_is_declared_on_the_compat_surface",
+            "packages/core/tests/test_loop_ports.py::test_ports_are_disjoint",
+            "packages/core/tests/test_loop_ports.py::test_the_eight_measured_ports_are_all_present"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_loop_ports.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_loop_ports.py::test_collaborator_handles_are_not_ports",
+          "packages/core/tests/test_loop_ports.py::test_every_port_member_is_declared_on_the_compat_surface",
+          "packages/core/tests/test_loop_ports.py::test_ports_are_disjoint",
+          "packages/core/tests/test_loop_ports.py::test_the_eight_measured_ports_are_all_present"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
