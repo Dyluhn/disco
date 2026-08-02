@@ -248,10 +248,10 @@ class TestMappingStatic:
             # test ids — one case is parametrized over the three discovered
             # trusted-component probes — so the same two-count split applies
             # again, in different proportions.
-            "python_test_file_count": 789,
-            "python_static_test_id_count": 9358,
-            "typescript_test_file_count": 238,
-            "typescript_static_test_id_count": 1200,
+            "python_test_file_count": 790,
+            "python_static_test_id_count": 9365,
+            "typescript_test_file_count": 239,
+            "typescript_static_test_id_count": 1203,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -283,7 +283,7 @@ class TestMappingStatic:
     def test_mapping_static_fixture_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         fixtures = baseline["mapping_static"]["fixtures"]
-        assert len(fixtures) == 176
+        assert len(fixtures) == 177
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -379,12 +379,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1150, 175)
+            == (1153, 176)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1150
-        assert len(set(frontend["vitest_files_list"])) == 175
+        assert len(set(frontend["vitest_ids_list"])) == 1153
+        assert len(set(frontend["vitest_files_list"])) == 176
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -536,13 +536,13 @@ class TestCollectedCounts:
         collected = baseline["collected"]
         expected = {
             "packages": 9876,
-            "harness": 1252,
+            "harness": 1253,
             "integrations": 9,
-            "tests": 333,
+            "tests": 339,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11470 == sum(expected.values())
+        assert collected["total"] == 11477 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -558,7 +558,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11470}
+        assert result == {"collected_total": 11477}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -577,9 +577,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9358,
-            "typescript_static_ids": 1200,
-            "collected_total": 11470,
+            "python_static_ids": 9365,
+            "typescript_static_ids": 1203,
+            "collected_total": 11477,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

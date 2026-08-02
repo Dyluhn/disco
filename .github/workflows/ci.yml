@@ -99,8 +99,18 @@ jobs:
         working-directory: frontend
         run: npm run test
 
+      # Amendment A3 restores the `api/client.ts` funnel with a
+      # `no-restricted-imports` boundary rule. A boundary rule that runs only in
+      # the advisory job cannot hold a line, so ESLint is promoted here — the
+      # same move Amendment A2 made for tests/architecture, and on the same
+      # precondition: it was verified green BEFORE being made required, never
+      # wired-then-silenced. The advisory job keeps its own full-tsc step.
+      - name: ESLint (import boundaries + style — required since Epic 12-A)
+        working-directory: frontend
+        run: npm run lint
+
   advisory:
-    name: advisory (full suite, eslint, full tsc)
+    name: advisory (full suite, full tsc)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -118,10 +128,18 @@ jobs:
       - name: Full pytest (incl. integration — needs browser/shell/docker)
         run: uv run pytest
 
-      # Advisory: harness/tests includes a contract suite that currently flags a
-      # KNOWN PRE-EXISTING drift — the RP-08 `schedule` / `schedule_run` event
-      # kinds have no TypeScript mirror (tracked as a follow-up). It runs here so
-      # the drift stays visible without blocking the required gate.
+      # Advisory. The Python↔TS drift this comment used to describe is GONE:
+      # `schedule` / `schedule_run` have had TypeScript mirrors for some time,
+      # and Epic 12-A closed the remaining event-kind and frame-type gaps, so
+      # harness/tests/test_contract.py is green and its allowlists are empty.
+      # That parity is now also enforced fail-closed in the required job by
+      # packages/core/tests/test_frontend_contract_parity.py, which reads the TS
+      # side with the pinned compiler instead of a regex.
+      #
+      # This job stays advisory for the one KNOWN remaining failure here:
+      # test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events
+      # (unrelated to contract parity, reproduces at the Epic 12-A parent
+      # a9daf96d, unowned as of this writing).
       - name: Harness tests (contract/fuzz/eval — advisory)
         run: PYTHONPATH=. uv run pytest harness/tests
 

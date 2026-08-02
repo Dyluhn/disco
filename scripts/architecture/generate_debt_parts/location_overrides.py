@@ -23,10 +23,19 @@ LOCATION_OVERRIDES = {
         "harness/build_soak/adapters/_client_collection.py:"
         "_CollectionMixin.collect_browser_evidence:409-491"
     ),
+    # Re-anchored 2026-08-02 (Epic 12-A). The TS anchors moved when Amendment
+    # A3's contract-parity gate landed: three event interfaces were added ahead
+    # of the AgentEvent union, and WSServerFrame became an alias over
+    # WSWireServerFrame | WSClientSynthesizedFrame. Location only — DM-017 stays
+    # ACTIVE and owned by PKG-12-FE-SHELL. Its concern ("three event kinds and
+    # token frame absent from TS; connection is UI-local") is now discharged in
+    # substance and enforced fail-closed by
+    # packages/core/tests/test_frontend_contract_parity.py, but resolving the
+    # observation belongs to its named owner, not to this gate boundary.
     "DM-017": (
         "packages/core/src/disco/core/events.py:Event:187-217 + "
         "packages/core/src/disco/core/wire.py:WSServerFrame:39-65 + "
-        "frontend/src/types/agent.ts:AgentEvent/WSServerFrame:351-425"
+        "frontend/src/types/agent.ts:AgentEvent/WSServerFrame:388-489"
     ),
     "PY-0189": (
         "packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py:"

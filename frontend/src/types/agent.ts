@@ -348,6 +348,43 @@ export interface ScheduleRunEvent extends EventBase {
   coalesced?: boolean; // default false on the wire
 }
 
+/** A scoped best-practice snippet injected into the agent's context (Cluster 7).
+ *  Mirrors the backend `KnowledgeEvent`. `scope` is an optional applicability
+ *  hint (task keyword or path glob); `snippet` is the guidance itself. Pinned
+ *  against condensation so standing guidance survives a long run. */
+export interface KnowledgeEvent extends EventBase {
+  kind: "knowledge";
+  scope: string;
+  snippet: string;
+}
+
+/** Durable data-API / schema documentation the agent learned or was given
+ *  (Cluster 7). Mirrors the backend `DatasourceEvent`. Condensation-IMMUNE: the
+ *  exact contract stays verbatim across an arbitrarily long build, so an API
+ *  shape learned mid-run can't be compressed into lossy prose and hallucinated
+ *  back. `docs` carries endpoint shape, auth, params and an example response. */
+export interface DatasourceEvent extends EventBase {
+  kind: "datasource";
+  name: string;
+  docs: string;
+}
+
+/** A host-authored typed runtime constraint, with a usable alternative. Mirrors
+ *  the backend `RuntimeConstraintEvent`. Host authority only — the backend fixes
+ *  `source` to SYSTEM, so a model-authored lookalike in ordinary content carries
+ *  no authority. `constraint_key` is stable identity: only the newest event for
+ *  a key stays live, so repeated observations never grow context. `active: false`
+ *  explicitly lifts the constraint for its key. */
+export interface RuntimeConstraintEvent extends EventBase {
+  kind: "runtime_constraint";
+  constraint_key: string;
+  scope: string;
+  guidance: string;
+  alternative: string;
+  capability_generation: string;
+  active: boolean;
+}
+
 export type AgentEvent =
   | MessageEvent
   | ActionEvent
@@ -373,6 +410,9 @@ export type AgentEvent =
   | VerifierShadowEvent
   | ContextResolvedEvent
   | ContextSummaryEvent
+  | KnowledgeEvent
+  | DatasourceEvent
+  | RuntimeConstraintEvent
   | ErrorEvent;
 
 export interface ConversationState {
@@ -415,14 +455,38 @@ export interface McpApprovalPayload {
   old_description_hash: string;
 }
 
-export type WSServerFrame =
+/** Frames the BACKEND actually sends. This is the mirror of `core/wire.py`'s
+ *  `WSServerFrame.type` literal and is held to it byte-for-byte by
+ *  `packages/core/tests/test_frontend_contract_parity.py` — adding a variant
+ *  here that the backend does not declare, or omitting one it does, fails CI.
+ *
+ *  `token` is declared because the backend declares it. No model emits token
+ *  frames on this socket today ("present for contract completeness" — wire.py),
+ *  so no UI path consumes it; the type exists so the mirror stays honest and so
+ *  a future token stream finds the contract already correct. */
+export type WSWireServerFrame =
   | { type: "state"; state: ConversationState }
   | { type: "event"; event: AgentEvent }
+  | { type: "token"; token: string; token_for_event_id?: string | null }
   | { type: "file_stream"; file_stream: FileStreamFrame }
   | { type: "error"; error: { detail?: string } }
-  | { type: "connection"; state: "connected" | "degraded" }
   | { type: "pong" }
   | { type: "mcp_approval_required"; mcp_approval: McpApprovalPayload };
+
+/** Frames the WS CLIENT synthesizes locally — they never cross the wire and the
+ *  backend has no equivalent. `subscribeConversation` emits `connection` when
+ *  the socket recovers (`api/agent.ts`, on open after a degraded spell) and when
+ *  it has failed past the degraded threshold (on close); `useBuildStream`'s
+ *  reducer folds it into `connectionState`.
+ *
+ *  Kept in a separate union, and asserted DISJOINT from the wire union by the
+ *  parity gate, so this cannot become a hiding place for a frame that really is
+ *  backend surface. */
+export type WSClientSynthesizedFrame = { type: "connection"; state: "connected" | "degraded" };
+
+/** What an `onFrame` consumer receives: real wire frames plus the locally
+ *  synthesized transport frames. */
+export type WSServerFrame = WSWireServerFrame | WSClientSynthesizedFrame;
 
 /** A watch-it-write delta: the driver is assembling a file body in a tool call.
  *  `delta` appends to the per-path buffer. NOT persisted — superseded by the
