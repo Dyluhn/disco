@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         TurnControlPort,
     )
 
-    class _LoopFacet(
+    class ValveLoopFacet(
 
         ConversationModePort,
 
@@ -67,7 +67,7 @@ _LOG = logging.getLogger("disco.loop")
 
 
 class _ValveHost:
-    _loop: _LoopFacet
+    _loop: ValveLoopFacet
 
     async def post_noop_valve(self) -> Disp:
         raise NotImplementedError

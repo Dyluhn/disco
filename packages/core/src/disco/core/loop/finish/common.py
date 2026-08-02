@@ -1,7 +1,7 @@
 """Shared implementation for the finish path package.
 
 Extracted from engine.py as a stateful collaborator: `FinishGate` holds a
-back-ref to its `_LoopFacet` and runs the affirmative-finish pipeline. The
+back-ref to its `FinishLoopFacet` and runs the affirmative-finish pipeline. The
 module-level verify-command builders, the web-deliverable / browser-verify
 helpers, the finish-cap constants, and the `_DoDWorkspaceUnavailable` exception
 moved here too (re-exported from engine for back-compat). Method bodies are
@@ -152,7 +152,7 @@ if TYPE_CHECKING:
         TurnControlPort,
     )
 
-    class _LoopFacet(
+    class FinishLoopFacet(
 
         ConversationModePort,
 
@@ -211,7 +211,7 @@ _HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
 _FALSY = frozenset({"0", "false", "no", "off"})
 
 
-def _appkit_scope_active(loop: _LoopFacet) -> bool:
+def _appkit_scope_active(loop: FinishLoopFacet) -> bool:
     """True when the loop is running under the strict AppKit tool surface.
 
     The build-phase tool-surface signal is ``verify_appkit_app``: it is present in
@@ -813,7 +813,7 @@ class _DoDWorkspaceUnavailable(Exception):
 
 class _FinishGateProto:
     if TYPE_CHECKING:
-        _loop: _LoopFacet
+        _loop: FinishLoopFacet
 
         def _contract_required_deliverable_paths(self) -> list[str]: ...
 

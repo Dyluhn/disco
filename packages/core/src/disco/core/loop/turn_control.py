@@ -195,7 +195,8 @@ from .turn_control_support import (
 from .valve_landing import ValveLandingMixin as _ValveLandingMixin
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .meta_tool_common import MetaToolLoopFacet
+    from .valve_landing import ValveLoopFacet
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -208,7 +209,7 @@ class Valve(
 ):
     """Compatibility owner for the ordered Loop valve surface."""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: ValveLoopFacet) -> None:
         self._loop = loop
         self._post_noop_active = False
 
@@ -220,5 +221,5 @@ class Valve(
 class MetaToolHandlers(_MetaToolHandlerMixin):
     """Compatibility owner for the Loop virtual-tool handler surface."""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: MetaToolLoopFacet) -> None:
         self._loop = loop
