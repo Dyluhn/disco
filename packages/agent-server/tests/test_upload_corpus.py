@@ -92,7 +92,7 @@ class _FakeRuntime:
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
         )
-        self._uploads = SimpleNamespace(
+        self.uploads = SimpleNamespace(
             store=self.store_upload,
             names=self.get_upload_names,
             size=self.get_upload_size,
@@ -256,7 +256,7 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
         prewarm_model_probe=mock.AsyncMock(),
         prewarm_vision_probe=mock.AsyncMock(),
     )
-    runtime._schedule = SimpleNamespace(_schedule_manager_loop=mock.AsyncMock())
+    runtime.schedules = SimpleNamespace(_schedule_manager_loop=mock.AsyncMock())
     runtime._idle_sweeper = SimpleNamespace(run=mock.AsyncMock())
     runtime._live_sessions = _LiveSessions()
     runtime._config_store = ConfigStore()

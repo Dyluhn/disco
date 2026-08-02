@@ -221,7 +221,7 @@ def _apply_create_runtime_settings(
     if body.recency_window is not None:
         runtime.set_recency(conversation_id, body.recency_window)
     if validated_space_ids:
-        runtime.set_space_ids(conversation_id, validated_space_ids)
+        runtime.spaces.set_space_ids(conversation_id, validated_space_ids)
     if body.sources:
         runtime.set_research_sources(conversation_id, body.sources)
     # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.

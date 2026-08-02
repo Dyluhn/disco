@@ -20,17 +20,11 @@ if TYPE_CHECKING:
     from disco.core import ToolCall, ToolResult, WorkspaceMutationEvent
     from disco.core.appkit import BuildBrief
     from disco.core.llm import SandboxSettings
-    from disco.core.workflow import ScheduleSpec
-    from disco.retrieval import DefaultCorpusService, DiskVectorStore
     from disco.tools import SandboxSession
     from disco.tools.projects import ProjectStore, VersionRecord
     from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
     from .runtime import ConversationRuntime
-    from .space_store import JsonSpaceStore
-    from .suggestion_service import SuggestionService
-    from .title_service import TitleService
-    from .workflow_schedule import WorkflowScheduleRunRecord
     from .workspace_commit import CommittedWorkspaceView
 
 
@@ -257,21 +251,6 @@ async def require_committed_host_mirror_locked(
     return await self._workspace.require_committed_host_mirror_locked(conversation_id)
 
 
-def store_upload(self, conversation_id: str, filename: str, data: bytes) -> None:
-
-    self._uploads.store(conversation_id, filename, data)
-
-
-def get_upload_names(self, conversation_id: str) -> set[str]:
-
-    return self._uploads.names(conversation_id)
-
-
-def get_upload_size(self, conversation_id: str) -> int:
-
-    return self._uploads.size(conversation_id)
-
-
 def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None:
 
     self._dr.add_upload_passages(conversation_id, passages)
@@ -331,11 +310,6 @@ def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> 
     self._run_controller.kick(conversation_id, claimed_user_seq=claimed_user_seq)
 
 
-async def sweep_stranded_runs_once(self) -> int:
-
-    return await self._run_sweep.sweep_once()
-
-
 async def reconcile_sandbox_backend(self) -> int:
 
     return await self._sandbox_resources.reconcile()
@@ -386,65 +360,14 @@ async def sweep_abandoned_gates_once(self, *, owner_id: str = DEFAULT_OWNER_ID) 
     return await self._lifecycle.sweep_abandoned_gates_once(owner_id=owner_id)
 
 
-def title_service(self) -> TitleService:
-
-    return self._title_service
-
-
-def suggestion_service(self) -> SuggestionService:
-
-    return self._suggestion_service
-
-
 def project_store(self) -> ProjectStore:
 
     return self._projects.current_project_store()
 
 
-def space_store(self) -> JsonSpaceStore:
-
-    return self._spaces.space_store()
-
-
-def space_vector_store(self) -> DiskVectorStore:
-
-    return self._spaces.space_vector_store()
-
-
-def space_corpus_service(self) -> DefaultCorpusService:
-
-    return self._spaces.space_corpus_service()
-
-
-def set_space_ids(self, conversation_id: str, space_ids: list[str] | frozenset[str]) -> None:
-
-    self._spaces.set_space_ids(conversation_id, space_ids)
-
-
-def get_space_ids(self, conversation_id: str | None) -> frozenset[str]:
-
-    return self._spaces.get_space_ids(conversation_id)
-
-
 async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict:
 
     return await self._workspace.restore_version(conversation_id, seq)
-
-
-async def share_export(
-    self,
-    conversation_id: str,
-    *,
-    owner_id: str = DEFAULT_OWNER_ID,
-    before_seq: int | None = None,
-) -> dict[str, Any]:
-
-    return await self._share.share_export(conversation_id, owner_id=owner_id, before_seq=before_seq)
-
-
-async def share_import(self, bundle: Any, *, owner_id: str = DEFAULT_OWNER_ID) -> dict[str, Any]:
-
-    return await self._share.share_import(bundle, owner_id=owner_id)
 
 
 async def export_report(
@@ -456,41 +379,6 @@ async def export_report(
 ) -> tuple[bytes, str, str] | None:
 
     return await self._dr.export_report(conversation_id, fmt, owner_id=owner_id)
-
-
-def create_share_link(
-    self,
-    conversation_id: str,
-    *,
-    owner_id: str = DEFAULT_OWNER_ID,
-) -> dict[str, Any]:
-
-    return self._share.create_share_link(conversation_id, owner_id=owner_id)
-
-
-async def create_share_link_async(
-    self,
-    conversation_id: str,
-    *,
-    owner_id: str = DEFAULT_OWNER_ID,
-) -> dict[str, Any]:
-
-    return await self._share.create_share_link_async(conversation_id, owner_id=owner_id)
-
-
-def lookup_share_link(self, token: str) -> dict | None:
-
-    return self._share.lookup_share_link(token)
-
-
-def list_share_links(self, *, owner_id: str) -> list[dict]:
-
-    return self._share.list_share_links(owner_id=owner_id)
-
-
-def revoke_share_link(self, token: str, *, owner_id: str) -> bool:
-
-    return self._share.revoke_share_link(token, owner_id=owner_id)
 
 
 def resolve_cid_prefix(self, cid8: str) -> str | None:
@@ -594,146 +482,14 @@ async def forget_conversation(self, conversation_id: str) -> None:
     await self._workspace.forget(conversation_id)
 
 
-async def run_sealed_workflow_schedule(
-    self,
-    *,
-    schedule_id: str,
-    spec: ScheduleSpec,
-    owner_id: str = DEFAULT_OWNER_ID,
-    coalesced: bool = False,
-) -> WorkflowScheduleRunRecord:
-
-    return await self._schedule.run_sealed_workflow_schedule(
-        schedule_id=schedule_id, spec=spec, owner_id=owner_id, coalesced=coalesced
-    )
-
-
-def create_schedule(
-    self,
-    *,
-    conversation_id: str,
-    owner_id: str,
-    rrule: str,
-    description: str,
-    timezone: str = "UTC",
-    depth: str | None = None,
-    model_override: str | None = None,
-) -> dict:
-
-    return self._schedule.create_schedule(
-        conversation_id=conversation_id,
-        owner_id=owner_id,
-        rrule=rrule,
-        description=description,
-        timezone=timezone,
-        depth=depth,
-        model_override=model_override,
-    )
-
-
-def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
-
-    return self._schedule.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
-
-
-def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
-
-    return self._schedule.delete_schedule(schedule_id, owner_id=owner_id)
-
-
-async def fire_schedule_now(self, schedule_id: str, *, owner_id: str) -> bool:
-
-    return await self._schedule.fire_now(schedule_id, owner_id=owner_id)
-
-
-def create_workflow_schedule(
-    self,
-    spec: ScheduleSpec,
-    *,
-    owner_id: str,
-) -> dict:
-
-    return self._schedule.create_workflow_schedule(spec, owner_id=owner_id)
-
-
-def list_workflow_schedules(
-    self,
-    *,
-    owner_id: str | None = None,
-    include_unclaimed_legacy: bool = False,
-) -> list[dict]:
-
-    return self._schedule.list_workflow_schedules(
-        owner_id=owner_id, include_unclaimed_legacy=include_unclaimed_legacy
-    )
-
-
-def list_workflow_schedule_runs(
-    self,
-    *,
-    schedule_id: str | None = None,
-    owner_id: str | None = None,
-    include_unclaimed_legacy: bool = False,
-    limit: int = 100,
-) -> list[dict]:
-
-    return self._schedule.list_workflow_schedule_runs(
-        schedule_id=schedule_id,
-        owner_id=owner_id,
-        include_unclaimed_legacy=include_unclaimed_legacy,
-        limit=limit,
-    )
-
-
-async def fire_workflow_schedule_now(
-    self,
-    schedule_id: str,
-    *,
-    owner_id: str,
-    include_unclaimed_legacy: bool = False,
-) -> dict | None:
-
-    return await self._schedule.fire_workflow_schedule_now(
-        schedule_id, owner_id=owner_id, include_unclaimed_legacy=include_unclaimed_legacy
-    )
-
-
-def preview_schedule_runs(
-    self,
-    rrule: str,
-    n: int = 3,
-    *,
-    timezone: str = "UTC",
-) -> list[str]:
-
-    return self._schedule.preview_schedule_runs(rrule, n, timezone=timezone)
-
-
 def running_conversation_ids(self) -> set[str]:
 
     return set(self._run_registry.active_conversation_ids())
 
 
-def list_recent_schedule_runs(self, *, owner_id: str, limit: int = 50) -> list[dict]:
-
-    return self._schedule.list_recent_schedule_runs(owner_id=owner_id, limit=limit)
-
-
 def _install_schedule_compatibility(runtime_cls: type[ConversationRuntime]) -> None:
     """Bridge PKG-11-WORKFLOWS migration; PKG-13-FACADES removes these delegates."""
-
-    runtime_cls.run_sealed_workflow_schedule = run_sealed_workflow_schedule
-    runtime_cls.create_schedule = create_schedule
-    runtime_cls.list_schedules = list_schedules
-    runtime_cls.delete_schedule = delete_schedule
-    runtime_cls.fire_schedule_now = fire_schedule_now
-    runtime_cls.create_workflow_schedule = create_workflow_schedule
-    runtime_cls.list_workflow_schedules = list_workflow_schedules
-    runtime_cls.list_workflow_schedule_runs = list_workflow_schedule_runs
-    runtime_cls.fire_workflow_schedule_now = fire_workflow_schedule_now
-    runtime_cls.preview_schedule_runs = preview_schedule_runs
     runtime_cls.running_conversation_ids = running_conversation_ids
-    runtime_cls.list_recent_schedule_runs = list_recent_schedule_runs
 
 
 def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> None:
@@ -805,12 +561,6 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.require_committed_host_mirror_locked = require_committed_host_mirror_locked
 
-    runtime_cls.store_upload = store_upload
-
-    runtime_cls.get_upload_names = get_upload_names
-
-    runtime_cls.get_upload_size = get_upload_size
-
     runtime_cls.add_upload_passages = add_upload_passages
 
     runtime_cls.get_upload_passages = get_upload_passages
@@ -824,8 +574,6 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
     runtime_cls.research_stream = research_stream
 
     runtime_cls.kick = kick
-
-    runtime_cls.sweep_stranded_runs_once = sweep_stranded_runs_once
 
     runtime_cls.reconcile_sandbox_backend = reconcile_sandbox_backend
 
@@ -847,39 +595,11 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.sweep_abandoned_gates_once = sweep_abandoned_gates_once
 
-    runtime_cls.title_service = title_service
-
-    runtime_cls.suggestion_service = suggestion_service
-
     runtime_cls.project_store = project_store
-
-    runtime_cls.space_store = space_store
-
-    runtime_cls.space_vector_store = space_vector_store
-
-    runtime_cls.space_corpus_service = space_corpus_service
-
-    runtime_cls.set_space_ids = set_space_ids
-
-    runtime_cls.get_space_ids = get_space_ids
 
     runtime_cls.restore_workspace_version = restore_workspace_version
 
-    runtime_cls.share_export = share_export
-
-    runtime_cls.share_import = share_import
-
     runtime_cls.export_report = export_report
-
-    runtime_cls.create_share_link = create_share_link
-
-    runtime_cls.create_share_link_async = create_share_link_async
-
-    runtime_cls.lookup_share_link = lookup_share_link
-
-    runtime_cls.list_share_links = list_share_links
-
-    runtime_cls.revoke_share_link = revoke_share_link
 
     runtime_cls.resolve_cid_prefix = resolve_cid_prefix
 

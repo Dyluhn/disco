@@ -155,10 +155,7 @@ class _FailingSuggestionService:
 
 class _Runtime:
     def __init__(self, service: object) -> None:
-        self._service = service
-
-    def suggestion_service(self) -> object:
-        return self._service
+        self.suggestions = service
 
 
 def test_suggestions_route_falls_back_to_curated() -> None:

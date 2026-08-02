@@ -29,7 +29,7 @@ async def _create_schedule_response(
                 cfg = runtime._config_store.load()
                 if last in cfg.models:
                     schedule_model = last
-        result = runtime.create_schedule(
+        result = runtime.schedules.create_schedule(
             conversation_id=conversation_id,
             owner_id=owner_id,
             rrule=body.rrule,
@@ -46,21 +46,21 @@ async def _create_schedule_response(
 def _delete_schedule_response(
     runtime: ConversationRuntime, schedule_id: str, owner_id: str
 ) -> dict:
-    deleted = runtime.delete_schedule(schedule_id, owner_id=owner_id)
+    deleted = runtime.schedules.delete_schedule(schedule_id, owner_id=owner_id)
     return {"ok": deleted, "schedule_id": schedule_id, "deleted": deleted}
 
 
 async def _fire_schedule_now_response(
     runtime: ConversationRuntime, schedule_id: str, owner_id: str
 ) -> dict:
-    fired = await runtime.fire_schedule_now(schedule_id, owner_id=owner_id)
+    fired = await runtime.schedules.fire_now(schedule_id, owner_id=owner_id)
     if not fired:
         raise HTTPException(status_code=404, detail={"reason": "schedule_not_found"})
     return {"ok": True, "schedule_id": schedule_id, "fired": True}
 
 
 def _preview_schedule_response(runtime: ConversationRuntime, body: PreviewScheduleBody) -> dict:
-    times = runtime.preview_schedule_runs(
+    times = runtime.schedules.preview_schedule_runs(
         body.rrule,
         body.n,
         timezone=body.timezone,
@@ -77,14 +77,14 @@ def _create_workflow_schedule_response(
     runtime: ConversationRuntime, body: ScheduleSpec, owner_id: str
 ) -> dict:
     try:
-        return runtime.create_workflow_schedule(body, owner_id=owner_id)
+        return runtime.schedules.create_workflow_schedule(body, owner_id=owner_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc
 
 
 def _list_workflow_schedules_response(runtime: ConversationRuntime, session: AuthSession) -> dict:
     return {
-        "schedules": runtime.list_workflow_schedules(
+        "schedules": runtime.schedules.list_workflow_schedules(
             owner_id=session.owner_id,
             include_unclaimed_legacy=session.is_admin,
         )
@@ -98,7 +98,7 @@ def _list_workflow_schedule_runs_response(
     limit: int,
 ) -> dict:
     return {
-        "runs": runtime.list_workflow_schedule_runs(
+        "runs": runtime.schedules.list_workflow_schedule_runs(
             schedule_id=schedule_id,
             owner_id=session.owner_id,
             include_unclaimed_legacy=session.is_admin,
@@ -110,7 +110,7 @@ def _list_workflow_schedule_runs_response(
 async def _fire_workflow_schedule_now_response(
     runtime: ConversationRuntime, schedule_id: str, session: AuthSession
 ) -> dict:
-    record = await runtime.fire_workflow_schedule_now(
+    record = await runtime.schedules.fire_workflow_schedule_now(
         schedule_id,
         owner_id=session.owner_id,
         include_unclaimed_legacy=session.is_admin,
@@ -150,7 +150,7 @@ def make_schedules_router(
         if runtime is None:
             return {"schedules": []}
         return {
-            "schedules": runtime.list_schedules(
+            "schedules": runtime.schedules.list_schedules(
                 owner_id=current_owner_id(request), conversation_id=conversation_id
             )
         }

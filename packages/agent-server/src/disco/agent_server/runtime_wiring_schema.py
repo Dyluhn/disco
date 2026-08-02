@@ -79,7 +79,7 @@ class _RuntimeWiringSchema:
 
     _store: SqliteEventStore
     _skill_store: SkillStore
-    _uploads: UploadStore
+    uploads: UploadStore
     _secret_store: SecretStore
     _config_store: ConfigStore
     _sandbox: SandboxRuntimeService
@@ -102,9 +102,9 @@ class _RuntimeWiringSchema:
     _lifecycle_idle: LifecycleIdleSweepDeps
     _idle_sweeper: LifecycleIdleSweeper
     _workspace_fence: WorkspaceFenceService
-    _title_service: TitleService
-    _suggestion_service: SuggestionService
-    _share: ShareService
+    titles: TitleService
+    suggestions: SuggestionService
+    share: ShareService
     _resume: ResumeService
     _workspace: WorkspaceCoordinator
     _workspace_ownership: WorkspaceOwnership
@@ -118,12 +118,12 @@ class _RuntimeWiringSchema:
     _research_state: DeepResearchState
     _research_live_state: DeepResearchLiveState
     _dr: DeepResearchService
-    _spaces: SpaceService
+    spaces: SpaceService
     _build_retrieval: BuildRetrievalCapabilities
     _build_shadows: BuildShadowLedger
     _artifact_manifest_shadow: ArtifactManifestShadow
     _loop_factory: BuildLoopFactory
-    _schedule: ScheduleService
+    schedules: ScheduleService
     _sessions: SessionsService
     _live_sessions: LiveSessionDirectory
     _preview: PreviewService
@@ -136,6 +136,6 @@ class _RuntimeWiringSchema:
     _kernel_pins: KernelPinRegistry
     _conversation_control: ConversationControlService
     _run_finalizer: RunFinalizer
-    _run_sweep: RunStrandedSweep
+    run_sweep: RunStrandedSweep
     _run_execution: RunPersistenceSupervisor
     _router_now: Callable[..., DefaultLLMRouter]

@@ -50,7 +50,7 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
         router=DefaultLLMRouter(_CFG, {"scripted": ScriptedProvider(_STEP)}),
         sandbox_service=ProcessSandboxService(),
     )
-    runtime._title_service.schedule = MagicMock()
+    runtime.titles.schedule = MagicMock()
     runtime._build_platform.prepare_route_pin = AsyncMock()
     runtime._drivers.resolve_context = AsyncMock(return_value=MagicMock())
     return runtime
@@ -300,7 +300,7 @@ async def test_stranded_running_swept_to_recovery(monkeypatch):
     runtime._run_ingress.claim_user_seq(cid, seq)
     await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
 
-    acted = await runtime._run_sweep.sweep_once()
+    acted = await runtime.run_sweep.sweep_once()
     assert acted == 1, "the stranded RUNNING conversation must be detected"
 
     state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)

@@ -27,7 +27,7 @@ async def test_mcp_connection_attempt_cannot_own_agent_readiness(tmp_path) -> No
     runtime.prewarm_model_probe = AsyncMock()
     runtime.prewarm_vision_probe = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
-    runtime._schedule._schedule_manager_loop = AsyncMock()
+    runtime.schedules._schedule_manager_loop = AsyncMock()
     runtime._mcp._close_mcp_pool = AsyncMock()
     app = create_app(store, runtime=runtime)
 

@@ -375,9 +375,14 @@ class TestFrontendDeclarationAuthorized:
         assert public_api.check_public_api(tmp_path)["ok"] is True
 
     def test_python_member_authority_is_unaffected(self) -> None:
-        """The live authority still carries its six Python member transitions."""
+        """The live authority still carries its Python member transitions.
+
+        Seven as of Epic 13-B1; the frontend declaration authority must stay
+        disjoint from the Python member authority however many rows the latter
+        carries.
+        """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 6
+        assert len(baseline["member_transitions"]) == 7
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

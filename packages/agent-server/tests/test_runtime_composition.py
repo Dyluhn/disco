@@ -44,7 +44,7 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
     assert runtime._conversation_control._pins is runtime._kernel_pins
     assert runtime._conversation_control._runs is runtime._run_registry
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
-    assert runtime._run_sweep._completion is runtime._run_finalizer
+    assert runtime.run_sweep._completion is runtime._run_finalizer
     assert runtime._dr._state is runtime._research_state
     assert runtime._dr._live_state is runtime._research_live_state
 
@@ -55,7 +55,7 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
         runtime._control,
         runtime._conversation_control,
         runtime._run_finalizer,
-        runtime._run_sweep,
+        runtime.run_sweep,
         runtime._run_execution,
     )
     assert all(not hasattr(owner, "_rt") for owner in explicit_owners)
@@ -91,7 +91,12 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     }
 
     assert len(active_ingress) == 12
-    assert len(compatibility) == 100
+    # 13-B1 dissolved seven collaborator families (29 delegates): _share,
+    # _spaces, _suggestion_service, _title_service, _schedule, _uploads and
+    # _run_sweep are now the declared public seam share/spaces/suggestions/
+    # titles/schedules/uploads/run_sweep. This count is a ratchet: it falls as
+    # 13-B proceeds and must never rise.
+    assert len(compatibility) == 71
     assert public == active_ingress | compatibility
     assert all(
         getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
@@ -205,7 +210,7 @@ async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> N
     runtime._mcp._close_mcp_pool = AsyncMock()
     runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
-    runtime._schedule._schedule_manager_loop = AsyncMock()
+    runtime.schedules._schedule_manager_loop = AsyncMock()
     runtime._drivers.prewarm_model_probe = AsyncMock()
     runtime._drivers.prewarm_vision_probe = AsyncMock()
     runtime.aclose = AsyncMock()

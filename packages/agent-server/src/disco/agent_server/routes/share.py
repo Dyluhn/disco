@@ -15,7 +15,7 @@ from ._common import require_owned_conversation
 async def _create_share_response(
     runtime: ConversationRuntime, conversation_id: str, owner_id: str
 ) -> dict:
-    result = await runtime.create_share_link_async(
+    result = await runtime.share.create_share_link_async(
         conversation_id,
         owner_id=owner_id,
     )
@@ -34,7 +34,7 @@ async def _create_share_response(
 
 
 def _revoke_share_response(runtime: ConversationRuntime, token: str, owner_id: str) -> dict:
-    ok = runtime.revoke_share_link(
+    ok = runtime.share.revoke_share_link(
         token,
         owner_id=owner_id,
     )
@@ -44,7 +44,7 @@ def _revoke_share_response(runtime: ConversationRuntime, token: str, owner_id: s
 async def _export_share_bundle_response(
     runtime: ConversationRuntime, conversation_id: str, owner_id: str
 ) -> dict:
-    result = await runtime.share_export(conversation_id, owner_id=owner_id)
+    result = await runtime.share.share_export(conversation_id, owner_id=owner_id)
     if not result.get("ok"):
         raise HTTPException(
             status_code=404,
@@ -56,7 +56,7 @@ async def _export_share_bundle_response(
 async def _import_share_bundle_response(
     runtime: ConversationRuntime, bundle: dict, owner_id: str
 ) -> dict:
-    result = await runtime.share_import(
+    result = await runtime.share.share_import(
         bundle,
         owner_id=owner_id,
     )
@@ -69,13 +69,13 @@ async def _import_share_bundle_response(
 
 
 async def _share_bundle_response(runtime: ConversationRuntime, token: str) -> dict:
-    row = runtime.lookup_share_link(token)
+    row = runtime.share.lookup_share_link(token)
     if row is None:
         # 404 with NO distinguishing detail — revoked and never-issued
         # tokens are intentionally conflated. A probe that varies the
         # token string sees 404 every time.
         raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found"})
-    result = await runtime.share_export(
+    result = await runtime.share.share_export(
         row["conversation_id"],
         owner_id=row["owner_id"],
         before_seq=row["bundle_seq"],
@@ -124,7 +124,7 @@ def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         """List active, owner-scoped share links."""
         if runtime is None:
             return {"links": []}
-        return {"links": runtime.list_share_links(owner_id=current_owner_id(request))}
+        return {"links": runtime.share.list_share_links(owner_id=current_owner_id(request))}
 
     @router.delete("/api/share/{token}")
     async def revoke_share(token: str, request: Request) -> dict:

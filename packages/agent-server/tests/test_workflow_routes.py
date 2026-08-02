@@ -109,7 +109,7 @@ def _quiet_startup(runtime: ConversationRuntime) -> None:
     rt.prewarm_model_probe = mock.AsyncMock()
     rt.prewarm_vision_probe = mock.AsyncMock()
     rt._idle_sweeper.run = mock.AsyncMock()
-    rt._schedule._schedule_manager_loop = mock.AsyncMock()
+    rt.schedules._schedule_manager_loop = mock.AsyncMock()
     rt._mcp._close_mcp_pool = mock.AsyncMock()
 
 
@@ -562,7 +562,31 @@ async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
             self.fired_schedule_id = schedule_id
             return {"run_cid": "conv_started"}
 
+    class _RecordingSchedules:
+        """Doubles the schedule service the workflows route now reaches.
+
+        13-B1 moved the route from ``runtime.create_workflow_schedule(...)`` to
+        ``runtime.schedules.create_workflow_schedule(...)``, so overriding the
+        method on the runtime subclass no longer observes the call. The
+        recordings still land on the runtime, so the assertions below are
+        unchanged.
+        """
+
+        def __init__(self, owner: RecordingRuntime) -> None:
+            self._owner = owner
+
+        def create_workflow_schedule(self, spec: ScheduleSpec, *, owner_id: str) -> dict:
+            return self._owner.create_workflow_schedule(spec, owner_id=owner_id)
+
+        async def fire_workflow_schedule_now(
+            self, schedule_id: str, *, owner_id: str
+        ) -> dict | None:
+            return await self._owner.fire_workflow_schedule_now(
+                schedule_id, owner_id=owner_id
+            )
+
     runtime = RecordingRuntime(store, config_store=cfg_store)
+    runtime.schedules = _RecordingSchedules(runtime)
     app = FastAPI()
     app.include_router(make_workflows_router(store, runtime))
     transport = httpx.ASGITransport(app=app)

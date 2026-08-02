@@ -66,12 +66,12 @@ async def _sandbox_upload_usage(
     conversation_id: str,
     session: Any,
 ) -> tuple[set[str], int]:
-    server_names = runtime._uploads.names(conversation_id)
+    server_names = runtime.uploads.names(conversation_id)
     try:
         sandbox_names: set[str] = set(await session.list_dir("uploads"))
     except Exception:  # noqa: BLE001 — uploads/ may not exist yet
         sandbox_names = set()
-    existing_bytes = runtime._uploads.size(conversation_id)
+    existing_bytes = runtime.uploads.size(conversation_id)
     for filename in sandbox_names - server_names:
         with contextlib.suppress(Exception):
             existing_bytes += len(await session.read_file(f"uploads/{filename}"))
@@ -110,7 +110,7 @@ async def _store_upload(
             paths=(upload_path,),
         )
         await session.write_file(upload_path, data)
-        runtime._uploads.store(conversation_id, final_name, data)
+        runtime.uploads.store(conversation_id, final_name, data)
         return final_name
 
 

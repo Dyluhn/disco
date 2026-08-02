@@ -207,7 +207,7 @@ def _make_runtime_lifespan(
                 await active_runtime.prewarm_vision_probe()
             idle_sweep_task = asyncio.create_task(active_runtime._idle_sweeper.run())
             # RP-08: start the schedule manager loop alongside the idle sweep.
-            schedule_task = asyncio.create_task(active_runtime._schedule._schedule_manager_loop())
+            schedule_task = asyncio.create_task(active_runtime.schedules._schedule_manager_loop())
         try:
             yield
         finally:

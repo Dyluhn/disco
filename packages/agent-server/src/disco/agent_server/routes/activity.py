@@ -50,7 +50,7 @@ def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime |
                     }
                 )
 
-        recent_runs = runtime.list_recent_schedule_runs(
+        recent_runs = runtime.schedules.list_recent_schedule_runs(
             owner_id=owner_id,
             limit=limit,
         )

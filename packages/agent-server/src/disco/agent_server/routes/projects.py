@@ -169,7 +169,7 @@ async def _handle_backfill_titles(
     candidates = [
         summary.conversation_id for summary in summaries if not summary.title or retitle_fallbacks
     ]
-    titled = await runtime._title_service.backfill(
+    titled = await runtime.titles.backfill(
         candidates,
         retitle_fallbacks=retitle_fallbacks,
     )
