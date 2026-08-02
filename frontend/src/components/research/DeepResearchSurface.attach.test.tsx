@@ -12,9 +12,17 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { DeepResearchSurface } from "./DeepResearchSurface";
-import * as clientModule from "@/api/client";
 
 // ---- module-level mocks -------------------------------------------------------
+
+// Epic 12-C / Amendment A3: components/ and views/ may not import `@/api/client`.
+// `vi.mock` intercepts by specifier and needs no static import, so this controls
+// exactly the same `agentLive` the previous `vi.spyOn(clientModule, …)` did.
+const { agentLiveMock } = vi.hoisted(() => ({ agentLiveMock: vi.fn(() => true) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  agentLive: () => agentLiveMock(),
+}));
 
 vi.mock("@/api/agent", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@/api/agent")>();
@@ -75,7 +83,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
     });
     window.localStorage.clear();
     // Make agentLive() return true so the lazy ensureCid callback is actionable.
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
+    agentLiveMock.mockReturnValue(true);
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -91,7 +99,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
   });
 
   it("UploadComposer renders but self-disables when agentLive is false (offline/fixture mode)", async () => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(false);
+    agentLiveMock.mockReturnValue(false);
     renderSurface();
 
     // The composer is ALWAYS rendered inline. With agentLive false no lazy cid

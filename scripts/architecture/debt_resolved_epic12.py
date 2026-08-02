@@ -44,4 +44,47 @@ PKG12_FE_BUILD_RESOLVED_IDS = frozenset(
     }
 )
 
-EPIC12_RESOLVED_IDS = PKG12_FE_BUILD_RESOLVED_IDS
+# --- 12-C: PKG-12-FE-RESEARCH + PKG-12-FE-PREVIEW ---------------------------
+# All 13 rows the ledger assigns `owner_package: PKG-12-FE-RESEARCH` and all 3
+# it assigns `PKG-12-FE-PREVIEW`, across 6 files: 10
+# `typescript_callable_ast_mccabe_gt_15`, 2 `typescript_module_logical_gt_500`,
+# 3 `react_component_logical_gt_250`, 1 `react_hook_logical_gt_200`.
+#
+# Relocating a callable does not reduce its cyclomatic complexity, so every
+# mccabe row was cleared by genuine branch distribution: `deriveStats` 37 -> a
+# per-tool-name handler set over one accumulator; `PreviewPane` 76 -> 9 and
+# `DeepResearchSurface` 48 -> 8 by moving self-contained JSX conditional regions
+# into child components that carry their own branches; `ExportModal` 22 -> under
+# 15 by collapsing near-duplicate `handleMd`/`handleFmt` into one `runExport`.
+#
+# TS-0024 is the campaign's second NESTED-callable row: the ledger records it as
+# the bare `viaStream`, but its real scanner key is `AudioSection>viaStream`. It
+# was cleared by moving the SSE read loop OUT of the component tree entirely and
+# into `api/deepResearch.ts` — which Amendment A3 required anyway, since raw
+# transport is banned under `src/components/` and `src/hooks/`.
+#
+# Proved as a SET IDENTITY on `(path, qualified_symbol, rule)` via
+# `tools/ts-tree-scan.py`, not a count match: 16 removed, 0 added, the removed
+# set proved set-equal to these 16 ids, while the scanned TypeScript module
+# denominator rose 477 -> 516.
+#
+# EXPECTED_ACTIVE_DEBT_ROWS 37 -> 21 (0 python + 21 typescript).
+PKG12_FE_RESEARCH_RESOLVED_IDS = frozenset(
+    {
+        "TS-0007", "TS-0019", "TS-0020", "TS-0021", "TS-0022",
+        "TS-0023", "TS-0024", "TS-0025", "TS-0043", "TS-0044",
+        "TS-0051", "TS-0052", "TS-0053"
+    }
+)
+
+PKG12_FE_PREVIEW_RESOLVED_IDS = frozenset(
+    {
+        "TS-0016", "TS-0017", "TS-0018"
+    }
+)
+
+EPIC12_RESOLVED_IDS = (
+    PKG12_FE_BUILD_RESOLVED_IDS
+    | PKG12_FE_RESEARCH_RESOLVED_IDS
+    | PKG12_FE_PREVIEW_RESOLVED_IDS
+)

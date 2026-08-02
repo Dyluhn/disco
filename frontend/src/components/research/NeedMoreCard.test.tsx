@@ -40,7 +40,15 @@ vi.mock("@/hooks/useTemplates", () => ({
   ],
 }));
 
-vi.mock("@/api/deepResearch", () => ({
+// Epic 12-C: spread the real module before overriding. Amendment A3 moved the
+// report export/audio TRANSPORT into this api module (raw fetch is forbidden
+// under src/components/ and src/hooks/), so a wholesale replacement would
+// resolve those functions to `undefined` for every file in the render tree.
+// The four stubs below are unchanged; everything else now passes through to the
+// real implementation, which calls agentFetch -> the global `fetch` this file
+// already stubs via vi.stubGlobal. No assertion is altered.
+vi.mock("@/api/deepResearch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/deepResearch")>()),
   exportReportAsMarkdown: vi.fn(),
   exportReport: vi.fn().mockResolvedValue(true),
   serializeReportToMarkdown: vi.fn().mockReturnValue("# Report\n\nContent"),

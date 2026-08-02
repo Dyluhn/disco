@@ -18,7 +18,15 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import { ResearchSurface } from "@/components/ResearchSurface";
-import * as clientModule from "@/api/client";
+
+// Epic 12-C / Amendment A3: components/ and views/ may not import `@/api/client`.
+// `vi.mock` intercepts by specifier and needs no static import, so this controls
+// exactly the same `agentLive` the previous `vi.spyOn(clientModule, …)` did.
+const { agentLiveMock } = vi.hoisted(() => ({ agentLiveMock: vi.fn(() => false) }));
+vi.mock("@/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/api/client")>()),
+  agentLive: () => agentLiveMock(),
+}));
 
 // ScopeControl's Radix menu is covered independently in controls.test.tsx. This
 // parent-state test needs only its value/callback contract.
@@ -59,7 +67,7 @@ function renderSurface() {
 
 describe("W-06 — draft persists across Search ↔ Deep Research toggle", () => {
   beforeEach(() => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(false);
+    agentLiveMock.mockReturnValue(false);
   });
   afterEach(() => vi.restoreAllMocks());
 

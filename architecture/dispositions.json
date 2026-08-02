@@ -8417,7 +8417,7 @@
   {
     "id": "TS-0007",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/ResearchSurface.tsx:ResearchSurface:17-211",
@@ -8498,7 +8498,7 @@
   {
     "id": "TS-0016",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-PREVIEW",
     "location": "frontend/src/components/build/canvas/PreviewPane.tsx:PreviewPane:231-747",
@@ -8507,7 +8507,7 @@
   {
     "id": "TS-0017",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-PREVIEW",
     "location": "frontend/src/components/build/canvas/PreviewPane.tsx:PreviewPane:231-747",
@@ -8516,7 +8516,7 @@
   {
     "id": "TS-0018",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-PREVIEW",
     "location": "frontend/src/components/build/canvas/PreviewPane.tsx:<module>:1-747",
@@ -8525,7 +8525,7 @@
   {
     "id": "TS-0019",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/DeepResearchSurface.tsx:DeepResearchSurface:97-545",
@@ -8534,7 +8534,7 @@
   {
     "id": "TS-0020",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/DeepResearchSurface.tsx:DeepResearchSurface:97-545",
@@ -8543,7 +8543,7 @@
   {
     "id": "TS-0021",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/NeedMoreCard.tsx:ExportModal:190-446",
@@ -8552,7 +8552,7 @@
   {
     "id": "TS-0022",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/NeedMoreCard.tsx:ExportModal:190-446",
@@ -8561,7 +8561,7 @@
   {
     "id": "TS-0023",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/NeedMoreCard.tsx:AudioSection:555-820",
@@ -8570,7 +8570,7 @@
   {
     "id": "TS-0024",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/NeedMoreCard.tsx:viaStream:587-659",
@@ -8579,7 +8579,7 @@
   {
     "id": "TS-0025",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/components/research/NeedMoreCard.tsx:<module>:1-1062",
@@ -8741,7 +8741,7 @@
   {
     "id": "TS-0043",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/hooks/useDeepResearch.ts:useDeepResearch:37-400",
@@ -8750,7 +8750,7 @@
   {
     "id": "TS-0044",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/hooks/useDeepResearch.ts:useDeepResearch:37-400",
@@ -8813,7 +8813,7 @@
   {
     "id": "TS-0051",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/lib/deepResearchTrace.ts:derivePlanProgress:62-95",
@@ -8822,7 +8822,7 @@
   {
     "id": "TS-0052",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/lib/deepResearchTrace.ts:deriveStats:124-211",
@@ -8831,7 +8831,7 @@
   {
     "id": "TS-0053",
     "disposition": "VIOLATION",
-    "state": "active",
+    "state": "resolved",
     "original_type": "VIOLATION",
     "owner_package": "PKG-12-FE-RESEARCH",
     "location": "frontend/src/lib/deepResearchTrace.ts:deriveLiveTrace:317-373",

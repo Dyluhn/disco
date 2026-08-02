@@ -17,7 +17,7 @@
  * and client-driven exports.
  */
 
-import { agentFetch, agentLive, agentSend, fixtureDelay } from "./client";
+import { agentFetch, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
 import type { ReportEvent, ReportSection } from "@/types/agent";
 
 export interface DeepResearchSubmit {
@@ -270,3 +270,166 @@ export function serializeReportToMarkdown(
 /** Re-export the types for use by hooks (avoids importing this file from
  * non-hook code; the hooks import these types from @/types/agent directly). */
 export type { ReportEvent, ReportSection };
+
+// ── NeedMoreCard transport (Amendment A3) ───────────────────────────────────
+//
+// The NeedMoreCard export dialog and audio-overview section used to call
+// `agentFetch`/`agentHttpBase` directly (components may not import
+// `@/api/client`, nor use raw `fetch`/WebSocket/XHR — that's the api-layer's
+// job). These four functions are that transport, moved here verbatim from
+// NeedMoreCard.tsx's ExportModal/AudioSection so the component/hook layer
+// only ever calls into `@/api/*`.
+
+/** Fetch a report export blob (MD or PDF) from the agent-server report/export
+ * endpoint. Used by NeedMoreCard's export dialog for BOTH the File System
+ * Access save-picker path and the plain anchor-download fallback. */
+export async function fetchReportExportBlob(
+  cid: string,
+  fmt: "md" | "pdf",
+  body: string | undefined,
+): Promise<Blob> {
+  const res = await agentFetch(
+    `/api/conversations/${cid}/report/export?fmt=${fmt}`,
+    {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body,
+    },
+  );
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const errBody = await res.json();
+      detail = errBody.detail?.reason || errBody.detail || JSON.stringify(errBody);
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(`Export failed (${res.status}): ${detail}`);
+  }
+  return res.blob();
+}
+
+/** One parsed SSE frame from the audio-overview stream. */
+export interface AudioStreamEvent {
+  stage?: string;
+  current?: number;
+  total?: number;
+  mp3_url?: string;
+  reason?: string;
+  // W-08: real voice-model download byte counters.
+  downloaded?: number;
+  pct?: number;
+  file_index?: number;
+  file_total?: number;
+}
+
+/** Parse complete `data: {...}\n\n` SSE frames out of `buffer`, returning the
+ * parsed events plus the unconsumed remainder (a partial frame still being
+ * accumulated). A frame with no `data:` line, or a `data:` line that isn't
+ * valid JSON, is silently skipped — the driver just keeps reading. Split out
+ * of `streamReportAudio` so neither callable's branching exceeds the mccabe
+ * cap. */
+function parseSseFrames(buffer: string): [AudioStreamEvent[], string] {
+  const events: AudioStreamEvent[] = [];
+  let rest = buffer;
+  let sep: number;
+  while ((sep = rest.indexOf("\n\n")) >= 0) {
+    const frame = rest.slice(0, sep);
+    rest = rest.slice(sep + 2);
+    const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
+    if (!dataLine) continue;
+    try {
+      events.push(JSON.parse(dataLine.slice(5).trim()) as AudioStreamEvent);
+    } catch {
+      continue;
+    }
+  }
+  return [events, rest];
+}
+
+/** Stream the SSE audio-overview endpoint, invoking `onEvent` once per parsed
+ * frame; `onEvent` returns true once it has handled a terminal (done / error)
+ * event. Resolves `false` on network failure or a non-OK / bodyless response
+ * so the caller can fall back to `requestReportAudioBlocking`; otherwise
+ * resolves whether a terminal event was ever handled (mirrors the prior
+ * `viaStream` semantics: the read loop always runs to completion, it doesn't
+ * stop early just because a terminal event arrived). */
+export async function streamReportAudio(
+  cid: string,
+  mode: string,
+  body: string | undefined,
+  onEvent: (ev: AudioStreamEvent) => boolean,
+): Promise<boolean> {
+  const headers = body ? { "Content-Type": "application/json" } : undefined;
+  let res: Response;
+  try {
+    res = await agentFetch(`/conversations/${cid}/report/audio/stream?mode=${mode}`, {
+      method: "POST",
+      headers,
+      body,
+    });
+  } catch {
+    return false; // network / endpoint unavailable → fall back
+  }
+  if (!res.ok || !res.body) return false;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let handled = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const [events, rest] = parseSseFrames(buffer);
+    buffer = rest;
+    for (const ev of events) {
+      if (onEvent(ev)) handled = true;
+    }
+  }
+  return handled;
+}
+
+/** Blocking fallback for audio-overview generation — the original single-shot
+ * POST used when the SSE stream can't start or never yields a terminal event.
+ * Throws with the same reason-extraction + message mapping as the former
+ * inline `viaBlocking` (tts_disabled gets the friendly Settings message;
+ * anything else becomes "Audio overview failed: <reason>"). */
+export async function requestReportAudioBlocking(
+  cid: string,
+  mode: string,
+  body: string | undefined,
+): Promise<{ mp3_url: string }> {
+  const headers = body ? { "Content-Type": "application/json" } : undefined;
+  const res = await agentFetch(`/conversations/${cid}/report/audio?mode=${mode}`, {
+    method: "POST",
+    headers,
+    body,
+  });
+  if (!res.ok) {
+    let reason = `${res.status}`;
+    try {
+      const resBody = (await res.json()) as { detail?: { reason?: string } | string };
+      const detail = resBody?.detail;
+      if (typeof detail === "object" && detail !== null) {
+        reason = detail.reason ?? reason;
+      } else if (typeof detail === "string") {
+        reason = detail;
+      }
+    } catch {
+      /* opaque */
+    }
+    throw new Error(
+      reason === "tts_disabled"
+        ? "Audio overview is disabled in Settings → Audio — enable it to generate."
+        : `Audio overview failed: ${reason}`,
+    );
+  }
+  return res.json();
+}
+
+/** The agent-server's absolute URL for a report-relative audio asset path
+ * (e.g. the `mp3_url` an audio-overview response returns). */
+export function absoluteAudioUrl(mp3Url: string): string {
+  return `${agentHttpBase()}${mp3Url}`;
+}

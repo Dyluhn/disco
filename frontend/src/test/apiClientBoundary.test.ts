@@ -37,7 +37,7 @@ const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * `BuildSurface.tsx`, `build/AgentCanvas.tsx` and `build/DeliverablePanel.tsx`
  * — onto `api/` modules and deleted their entries.
  */
-const CEILING = 33;
+const CEILING = 28;
 
 type FlatConfigBlock = {
   files?: string[];
