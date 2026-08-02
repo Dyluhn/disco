@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+  "source_identity": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
   "collected": {
     "counts": {
       "packages": 9870,
@@ -11469,7 +11469,7 @@
     }
   },
   "mapping_static": {
-    "identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+    "identity": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
     "python_test_file_count": 787,
     "python_static_test_id_count": 9341,
     "python_test_files": [
@@ -26426,6 +26426,41 @@
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client"
         ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-11-PLATFORM-STRUCTURE",
+      "root": "multiple",
+      "source_identity_before": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+      "source_identity_after": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9870,
+          "after_count": 9870,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1236,
+          "after_count": 1236,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 333,
+          "after_count": 333,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []

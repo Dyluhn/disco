@@ -157,7 +157,52 @@ EPIC11C_RESOLVED_IDS = (
 )
 
 
+# --- Epic 11-D (PLATFORM-STRUCTURE 7 + MCP 7) ------------------------------
+# The sub-epic that CLOSES Epic 11 and drives active PYTHON debt to ZERO.
+#
+# Nine of these fourteen were mccabe rows, so each was cleared by decomposing
+# the decision structure, never by relocating a callable: `compile_prompt_context`
+# 23 -> two phase helpers, `resolve_build_composition` 28 -> four, and
+# `_validate_transport_target` 19 -> a stdio/http validator pair (whose http half
+# still measured 16 until its 10-operand `or` chain moved behind a predicate).
+#
+# PY-0431 (`BuildPlatformRegistry` 14/12) could not be cleared by extraction at
+# all — `service_public_methods` counts non-underscore defs in the class body, so
+# a thin delegator still counts and a mixin is evasion. Authority was moved onto
+# two collaborators exposed as plain `__init__` attributes (`ProfileCatalog`,
+# `ComponentCatalog`) with a shared `_ComponentKeyspace` retaining the one
+# id-uniqueness invariant that spanned both, following the 11-B precedent.
+# Catalog mutation stayed underscore-private so namespace protection remains
+# enforceable only through the registry's public `register_*` methods.
+#
+# NO adjudications — every row had a genuine seam — so `architecture/policy.json`
+# is untouched and the tree-count identity holds exactly: tree == active python
+# rows, now 0 == 0.
+#
+# EXPECTED_ACTIVE_DEBT_ROWS 76 -> 62 (0 python + 62 typescript).
+PKG11_PLATFORM_STRUCTURE_RESOLVED_IDS = frozenset(
+    {
+        "PY-0187", "PY-0429", "PY-0430", "PY-0431", "PY-0432",
+        "PY-0433", "PY-0434"
+    }
+)
+
+PKG11_MCP_RESOLVED_IDS = frozenset(
+    {
+        "PY-0222", "PY-0223", "PY-0224", "PY-0257", "PY-0367",
+        "PY-0824", "PY-0825"
+    }
+)
+
+EPIC11D_RESOLVED_IDS = (
+    PKG11_PLATFORM_STRUCTURE_RESOLVED_IDS | PKG11_MCP_RESOLVED_IDS
+)
+
+
 # --- Epic 11 aggregate -----------------------------------------------------
 EPIC11_RESOLVED_IDS = (
-    EPIC11A_RESOLVED_IDS | EPIC11B_RESOLVED_IDS | EPIC11C_RESOLVED_IDS
+    EPIC11A_RESOLVED_IDS
+    | EPIC11B_RESOLVED_IDS
+    | EPIC11C_RESOLVED_IDS
+    | EPIC11D_RESOLVED_IDS
 )

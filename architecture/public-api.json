@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "eab2c2fd3e6a4709a18bf0740e8ba494afe3a322",
+  "source_identity": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -7360,20 +7360,12 @@
           "signature": "class BuildPlatformRegistry()",
           "members": [
             "def __init__(self) -> None",
-            "def component_specs(self) -> tuple[ComponentSpec, ...]",
-            "def connector(self, component_id: ComponentId) -> DeploymentConnector | None",
-            "def engine(self, component_id: ComponentId) -> ConstructionEngine | None",
-            "def exporter(self, component_id: ComponentId) -> PackageExporter | None",
-            "def profile(self, component_id: ComponentId) -> BuildProfile | None",
-            "def profile_choices(self) -> tuple[ProfileChoice, ...]",
             "def register_component(self, spec: ComponentSpec) -> None",
             "def register_connector(self, spec: ComponentSpec, definition: DeploymentConnectorDefinition) -> None",
             "def register_engine(self, spec: ComponentSpec, definition: ConstructionEngineDefinition) -> None",
             "def register_exporter(self, spec: ComponentSpec, definition: PackageExporterDefinition) -> None",
             "def register_profile(self, profile: BuildProfile) -> None",
-            "def register_target(self, spec: ComponentSpec, definition: TargetAdapterDefinition) -> None",
-            "def spec(self, component_id: ComponentId) -> ComponentSpec | None",
-            "def target(self, component_id: ComponentId) -> TargetAdapter | None"
+            "def register_target(self, spec: ComponentSpec, definition: TargetAdapterDefinition) -> None"
           ],
           "fields": []
         },
@@ -23373,6 +23365,14 @@
     },
     {
       "surface": "python",
+      "path": "packages/core/src/disco/core/build_platform/__init__.py",
+      "public_name": "BuildPlatformRegistry",
+      "target_sha256": "9772bc82a975f5477d7882a5f8a154835d2d9266d23b4f985f559dbfa2d15cbf",
+      "owner_package": "PKG-11-PLATFORM-STRUCTURE",
+      "reason": "Epic 11-D: authority moved off this class onto collaborators exposed as plain __init__ attributes; origin unchanged, members removed (see the paired member_transitions record)"
+    },
+    {
+      "surface": "python",
       "path": "packages/app-server/src/disco/app_server/__init__.py",
       "public_name": "ConfigState",
       "target_sha256": "266c3e5aae9fae3bdfb0ded4f4b52ae40ff2ad2426cf74a235cd9374db5f71a7",
@@ -23430,6 +23430,28 @@
       "owner_package": "PKG-08-VERIFY",
       "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
       "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/build_platform/__init__.py",
+      "public_name": "BuildPlatformRegistry",
+      "origin": "disco.core.build_platform.registry.BuildPlatformRegistry",
+      "removed_members": [
+        "def component_specs(self) -> tuple[ComponentSpec, ...]",
+        "def connector(self, component_id: ComponentId) -> DeploymentConnector | None",
+        "def engine(self, component_id: ComponentId) -> ConstructionEngine | None",
+        "def exporter(self, component_id: ComponentId) -> PackageExporter | None",
+        "def profile(self, component_id: ComponentId) -> BuildProfile | None",
+        "def profile_choices(self) -> tuple[ProfileChoice, ...]",
+        "def spec(self, component_id: ComponentId) -> ComponentSpec | None",
+        "def target(self, component_id: ComponentId) -> TargetAdapter | None"
+      ],
+      "added_members": [],
+      "old_signature_sha256": "0e79243d63a0a9540275033e0cf74c3aae049401586989b396d1c5f11b61a4fc",
+      "new_signature_sha256": "e1eccc00eed42af26ec2d2c881105b4c05acc55aa3899da575753fa965b95f19",
+      "owner_package": "PKG-11-PLATFORM-STRUCTURE",
+      "accepting_commit": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
+      "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11D-ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",

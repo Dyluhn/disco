@@ -938,14 +938,18 @@ class TestFrontendPublicApi:
         assert baseline["compatibility_bridges"] == []
         # 2 through Epic 10-D; 5 after Epic 11-B moved authority off three
         # config classes onto collaborators at an UNCHANGED origin — the exact
-        # case no compatibility bridge can express.
-        assert len(baseline["member_transitions"]) == 5
+        # case no compatibility bridge can express. 6 after Epic 11-D did the
+        # same to BuildPlatformRegistry to clear PY-0431, whose public-method
+        # width no parts extraction could reduce (a thin delegator still counts
+        # toward service_public_methods, and a mixin is evasion).
+        assert len(baseline["member_transitions"]) == 6
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
             "ConfigState",
             "ConfigStore",
             "SecretStore",
+            "BuildPlatformRegistry",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

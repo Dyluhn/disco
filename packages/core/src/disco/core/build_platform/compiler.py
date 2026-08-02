@@ -159,24 +159,9 @@ def _render_module(module: ModuleRef, content: str) -> str:
     )
 
 
-def compile_prompt_context(
-    *,
-    prompt_modules: tuple[ModuleRef, ...],
-    context_modules: tuple[ModuleRef, ...],
-    requested_tools: frozenset[str],
-    effective_capabilities: EffectiveCapabilityPolicy,
-    effective_policy: EffectivePolicy,
-    inputs: PromptContextInputs,
-) -> PromptContextComposition:
-    """Compile the deterministic model-facing bill of materials.
-
-    `effective_policy` is accepted as an explicit authority input so portable text
-    can never become an alternate policy source.  It is intentionally not parsed
-    or mutated by this compiler.
-    """
-
-    _ = effective_policy
-    active_modules = prompt_modules + context_modules
+def _compile_module_bom(
+    active_modules: tuple[ModuleRef, ...], inputs: PromptContextInputs
+) -> tuple[list[ModuleBillOfMaterials], list[CompositionDenial]]:
     body_ids = [body.component.canonical for body in inputs.module_bodies]
     if len(body_ids) != len(set(body_ids)):
         raise CompositionCompileError("module bodies contain duplicate component IDs")
@@ -249,7 +234,19 @@ def compile_prompt_context(
                 rendered_content=rendered,
             )
         )
+    return module_bom, denials
 
+
+def _resolve_visible_tools(
+    requested_tools: frozenset[str],
+    effective_capabilities: EffectiveCapabilityPolicy,
+    inputs: PromptContextInputs,
+) -> tuple[
+    list[ToolDescriptor],
+    list[ToolCapabilityBasis],
+    list[ValidatedToolExample],
+    list[CompositionDenial],
+]:
     catalog_names = [tool.name for tool in inputs.tool_catalog]
     if len(catalog_names) != len(set(catalog_names)):
         raise CompositionCompileError("tool catalog contains duplicate names")
@@ -257,6 +254,7 @@ def compile_prompt_context(
     visible: list[ToolDescriptor] = []
     basis: list[ToolCapabilityBasis] = []
     examples: list[ValidatedToolExample] = []
+    denials: list[CompositionDenial] = []
     for tool_name in sorted(requested_tools):
         tool = catalog.get(tool_name)
         if tool is None:
@@ -302,6 +300,32 @@ def compile_prompt_context(
         examples.extend(
             ValidatedToolExample(tool=tool_name, example=example) for example in tool.examples
         )
+    return visible, basis, examples, denials
+
+
+def compile_prompt_context(
+    *,
+    prompt_modules: tuple[ModuleRef, ...],
+    context_modules: tuple[ModuleRef, ...],
+    requested_tools: frozenset[str],
+    effective_capabilities: EffectiveCapabilityPolicy,
+    effective_policy: EffectivePolicy,
+    inputs: PromptContextInputs,
+) -> PromptContextComposition:
+    """Compile the deterministic model-facing bill of materials.
+
+    `effective_policy` is accepted as an explicit authority input so portable text
+    can never become an alternate policy source.  It is intentionally not parsed
+    or mutated by this compiler.
+    """
+
+    _ = effective_policy
+    active_modules = prompt_modules + context_modules
+    module_bom, module_denials = _compile_module_bom(active_modules, inputs)
+    visible, basis, examples, tool_denials = _resolve_visible_tools(
+        requested_tools, effective_capabilities, inputs
+    )
+    denials = module_denials + tool_denials
 
     source_characters = sum(module.source_character_count for module in module_bom)
     module_characters = sum(module.rendered_character_count for module in module_bom)

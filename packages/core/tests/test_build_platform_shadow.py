@@ -24,7 +24,7 @@ def _composition(*, appkit: bool, tools: frozenset[str]):
         appkit_tools=(tools if appkit else frozenset()),
     )
     profile_id = APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID
-    profile = registry.profile(profile_id)
+    profile = registry.profiles.get(profile_id)
     assert profile is not None
     prompt_id = profile.prompt_modules[0].component
     bodies = tuple(body for body in builtin_module_bodies() if body.component == prompt_id)

@@ -130,16 +130,16 @@ def test_nonweb_target_verifier_rejects_corrupted_target_output(tmp_path: Path) 
 
 def test_synthetic_registration_uses_public_registry_without_central_switch() -> None:
     registry = build_synthetic_registry()
-    profile = registry.profile(SYNTHETIC_PROFILE_ID)
+    profile = registry.profiles.get(SYNTHETIC_PROFILE_ID)
     assert profile is not None
     assert profile.id == SYNTHETIC_PROFILE_ID
     assert profile.engine == SYNTHETIC_ENGINE_ID
     assert profile.target == SYNTHETIC_TARGET_ID
     assert profile.exporter == SYNTHETIC_EXPORTER_ID
-    assert [choice.id for choice in registry.profile_choices()] == [SYNTHETIC_PROFILE_ID]
-    engine = registry.engine(SYNTHETIC_ENGINE_ID)
-    target = registry.target(SYNTHETIC_TARGET_ID)
-    exporter = registry.exporter(SYNTHETIC_EXPORTER_ID)
+    assert [choice.id for choice in registry.profiles.choices()] == [SYNTHETIC_PROFILE_ID]
+    engine = registry.components.engine(SYNTHETIC_ENGINE_ID)
+    target = registry.components.target(SYNTHETIC_TARGET_ID)
+    exporter = registry.components.exporter(SYNTHETIC_EXPORTER_ID)
     assert engine is not None and engine.id == SYNTHETIC_ENGINE_ID
     assert target is not None and target.id == SYNTHETIC_TARGET_ID
     assert exporter is not None and exporter.id == SYNTHETIC_EXPORTER_ID
@@ -150,19 +150,19 @@ def test_synthetic_registration_uses_public_registry_without_central_switch() ->
         SYNTHETIC_VERIFIER_ID,
         SYNTHETIC_PREVIEW_ID,
     ):
-        spec = registry.spec(component_id)
+        spec = registry.components.spec(component_id)
         assert spec is not None and spec.id == component_id
 
     unknown = ComponentId(namespace="synthetic", name="unknown", version="1")
-    assert registry.profile(unknown) is None
-    assert registry.spec(unknown) is None
-    assert registry.engine(unknown) is None
-    assert registry.target(unknown) is None
-    assert registry.exporter(unknown) is None
-    assert registry.connector(unknown) is None
-    assert registry.profile(SYNTHETIC_TARGET_ID) is None
-    assert registry.spec(SYNTHETIC_PROFILE_ID) is None
-    assert registry.engine(SYNTHETIC_TARGET_ID) is None
-    assert registry.target(SYNTHETIC_ENGINE_ID) is None
-    assert registry.exporter(SYNTHETIC_TARGET_ID) is None
-    assert registry.connector(SYNTHETIC_TARGET_ID) is None
+    assert registry.profiles.get(unknown) is None
+    assert registry.components.spec(unknown) is None
+    assert registry.components.engine(unknown) is None
+    assert registry.components.target(unknown) is None
+    assert registry.components.exporter(unknown) is None
+    assert registry.components.connector(unknown) is None
+    assert registry.profiles.get(SYNTHETIC_TARGET_ID) is None
+    assert registry.components.spec(SYNTHETIC_PROFILE_ID) is None
+    assert registry.components.engine(SYNTHETIC_TARGET_ID) is None
+    assert registry.components.target(SYNTHETIC_ENGINE_ID) is None
+    assert registry.components.exporter(SYNTHETIC_TARGET_ID) is None
+    assert registry.components.connector(SYNTHETIC_TARGET_ID) is None

@@ -24,8 +24,8 @@ def test_appkit_has_a_distinct_strict_engine_and_governed_lifecycle() -> None:
         }
     )
     registry = build_builtin_registry(appkit_tools=tools)
-    appkit_engine = registry.engine(APPKIT_ENGINE_ID)
-    freeform_engine = registry.engine(FREEFORM_ENGINE_ID)
+    appkit_engine = registry.components.engine(APPKIT_ENGINE_ID)
+    freeform_engine = registry.components.engine(FREEFORM_ENGINE_ID)
     assert isinstance(appkit_engine, ConstructionEngine)
     assert isinstance(freeform_engine, ConstructionEngine)
     assert type(appkit_engine) is not type(freeform_engine)

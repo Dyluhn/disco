@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from disco.core.llm.config import RouterConfig
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.mcp import McpServerConfig
 from fastapi import APIRouter, HTTPException
@@ -75,6 +76,52 @@ def _http_runtime_state(runtime: ConversationRuntime, name: str) -> dict[str, An
             if key in {"code", "attempts", "exception_type"} and isinstance(value, (str, int))
         }
     return state
+
+
+def _resolve_live_status(
+    runtime: ConversationRuntime,
+    name: str,
+    cfg: RouterConfig,
+    srv: McpServerConfig,
+) -> tuple[str, dict[str, Any]]:
+    """Compute the single-server status + any live HTTP tracking state.
+
+    Mirrors the per-server resolution `get_mcp_server_status` needs: disabled
+    servers report "disabled"; enabled streamable_http servers defer to the
+    manager's own sanitized tracking; other enabled servers defer to the pool.
+    """
+
+    status = "disabled" if not cfg.mcp.enabled or not srv.enabled else "disconnected"
+    live_http: dict[str, Any] = {}
+    if cfg.mcp.enabled and srv.enabled and srv.transport == "streamable_http":
+        live_http = _http_runtime_state(runtime, name)
+        status = str(live_http.get("status") or "disconnected")
+    elif cfg.mcp.enabled and srv.enabled:
+        if runtime._mcp._pool is not None:
+            status = runtime._mcp._pool.server_status().get(name, "disconnected")
+    return status, live_http
+
+
+def _apply_approval_projection(
+    result: dict[str, Any],
+    name: str,
+    approval_pending: dict[str, dict],
+    mcp_enabled: bool,
+    srv_enabled: bool,
+    live_http: dict[str, Any],
+) -> None:
+    """Layer the approval-pending projection onto a status `result`, in place."""
+
+    if name in approval_pending:
+        result["approval_required"] = True
+        result["description_hash"] = approval_pending[name].get("new_hash", "")
+        result["old_description_hash"] = approval_pending[name].get("old_hash", "")
+        if mcp_enabled and srv_enabled:
+            result["status"] = "approval_required"
+    else:
+        result["approval_required"] = False
+    if "diagnostic" in live_http:
+        result["diagnostic"] = live_http["diagnostic"]
 
 
 def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
@@ -155,14 +202,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
         if srv is None:
             return _invalid_server_entry(name, diagnostic or {})
 
-        status = "disabled" if not cfg.mcp.enabled or not srv.enabled else "disconnected"
-        live_http: dict[str, Any] = {}
-        if cfg.mcp.enabled and srv.enabled and srv.transport == "streamable_http":
-            live_http = _http_runtime_state(runtime, name)
-            status = str(live_http.get("status") or "disconnected")
-        elif cfg.mcp.enabled and srv.enabled:
-            if runtime._mcp._pool is not None:
-                status = runtime._mcp._pool.server_status().get(name, "disconnected")
+        status, live_http = _resolve_live_status(runtime, name, cfg, srv)
 
         approval_pending = runtime.mcp_approval_state()
         result: dict = {
@@ -171,16 +211,9 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             "enabled": srv.enabled,
             "status": status,
         }
-        if name in approval_pending:
-            result["approval_required"] = True
-            result["description_hash"] = approval_pending[name].get("new_hash", "")
-            result["old_description_hash"] = approval_pending[name].get("old_hash", "")
-            if cfg.mcp.enabled and srv.enabled:
-                result["status"] = "approval_required"
-        else:
-            result["approval_required"] = False
-        if "diagnostic" in live_http:
-            result["diagnostic"] = live_http["diagnostic"]
+        _apply_approval_projection(
+            result, name, approval_pending, cfg.mcp.enabled, srv.enabled, live_http
+        )
 
         return result
 

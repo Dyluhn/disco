@@ -12,6 +12,7 @@ from typing import Protocol
 from disco.core import (
     ActionEvent,
     ConversationStatus,
+    Event,
     EventSource,
     MessageEvent,
     ObservationEvent,
@@ -181,6 +182,51 @@ _AUDIT_KIND_TERMS: tuple[tuple[ContractKind, tuple[str, ...]], ...] = (
 )
 
 
+def _first_brief_app_kind(events: list[Event]) -> tuple[str | None, int]:
+    """Scan events for the first persisted ENVIRONMENT build-brief message.
+
+    Returns (app_kind, brief_seq) for the FIRST brief found — matching
+    activate_contract_for_brief's first-wins rule. Returns (None, -1) when no
+    brief was ever declared.
+    """
+    from .build_messages import parse_build_brief_content
+
+    for i, ev in enumerate(events):
+        if isinstance(ev, MessageEvent) and ev.source == EventSource.ENVIRONMENT:
+            payload = parse_build_brief_content(ev.message.content, meta=ev.meta)
+            if payload is not None:
+                raw = payload.get("app_kind")
+                app_kind = raw if isinstance(raw, str) else None
+                return app_kind, i
+    return None, -1
+
+
+def _replay_tracker_events(events: list[Event], tracker: BuildPhaseTracker) -> None:
+    """Replay the post-brief event slice into `tracker`, in event order.
+
+    Walks ActionEvent/ObservationEvent pairs to feed note_tool_success, and
+    VerifierStartedEvent/VerifierVerdictEvent to feed note_finalizer_called /
+    note_verifier_result — the exact transition inputs the live run feeds.
+    """
+    actions: dict[str, str] = {}
+    for ev in events:
+        if isinstance(ev, ActionEvent):
+            actions[ev.id] = ev.tool_call.tool_name
+        elif isinstance(ev, ObservationEvent):
+            if ev.tool_result.success:
+                aid = ev.action_id
+                if aid is not None:
+                    tool = actions.get(aid)
+                    if tool:
+                        tracker.note_tool_success(tool)
+        elif isinstance(ev, VerifierStartedEvent):
+            tracker.note_finalizer_called()
+        elif isinstance(ev, VerifierVerdictEvent):
+            verdict = str(ev.verdict) if ev.verdict is not None else None
+            if verdict is not None:
+                tracker.note_verifier_result(passed=verdict == "pass")
+
+
 class BuildContractService:
     """Per-conversation build-contract lifecycle and its mutable state."""
 
@@ -258,18 +304,7 @@ class BuildContractService:
             )
             return
 
-        from .build_messages import parse_build_brief_content
-
-        app_kind: str | None = None
-        brief_seq = -1
-        for i, ev in enumerate(events):
-            if isinstance(ev, MessageEvent) and ev.source == EventSource.ENVIRONMENT:
-                payload = parse_build_brief_content(ev.message.content, meta=ev.meta)
-                if payload is not None:
-                    raw = payload.get("app_kind")
-                    app_kind = raw if isinstance(raw, str) else None
-                    brief_seq = i
-                    break  # FIRST brief wins, matching activate_contract_for_brief
+        app_kind, brief_seq = _first_brief_app_kind(events)
         if app_kind is None:
             return  # never declared — identical to today's no-brief behavior
 
@@ -289,23 +324,7 @@ class BuildContractService:
         if entry is None:
             return
         tracker = entry[1]
-        actions: dict[str, str] = {}
-        for ev in events[brief_seq + 1 :]:
-            if isinstance(ev, ActionEvent):
-                actions[ev.id] = ev.tool_call.tool_name
-            elif isinstance(ev, ObservationEvent):
-                if ev.tool_result.success:
-                    aid = ev.action_id
-                    if aid is not None:
-                        tool = actions.get(aid)
-                        if tool:
-                            tracker.note_tool_success(tool)
-            elif isinstance(ev, VerifierStartedEvent):
-                tracker.note_finalizer_called()
-            elif isinstance(ev, VerifierVerdictEvent):
-                verdict = str(ev.verdict) if ev.verdict is not None else None
-                if verdict is not None:
-                    tracker.note_verifier_result(passed=verdict == "pass")
+        _replay_tracker_events(events[brief_seq + 1 :], tracker)
         _log.info(
             "contract fold: %s restored kind=%s phase=%s from %d events",
             conversation_id,
