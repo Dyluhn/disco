@@ -69,7 +69,19 @@ except ImportError:
 # against `owner_package` was proven mechanically before the sets were wired;
 # see `debt_resolved_epic11.py`. Reconciliation at the 11-A seal:
 # 104 python tree violations + 62 TypeScript rows = 166.
-EXPECTED_ACTIVE_DEBT_ROWS = 21
+# Epic 12-D registers the last 21 rows: all 12 PKG-12-FE-SETTINGS and all 9
+# PKG-12-FE-SHELL, proven set-equal to `owner_package` mechanically before the
+# sets were wired (see `debt_resolved_epic12.py`). Reconciliation at the 12-D
+# seal: 0 python tree violations + 0 TypeScript violations = 0.
+#
+# **THE ACTIVE LEDGER IS NOW EMPTY.** A zero here is a real value, not a
+# disabled check: `check_arch_debt` still re-derives the full 991-ID
+# disposition universe and still fails on any row that reappears, and
+# `check_arch_budget` still asserts tree violations == active rows, which is
+# now 0 == 0 on BOTH the python and TypeScript sides. The ratchet has no slack
+# left, so any newly-introduced violation anywhere in the tree fails the gate
+# immediately rather than hiding under an allowance.
+EXPECTED_ACTIVE_DEBT_ROWS = 0
 EXPECTED_OBSERVATIONS = 12
 
 # The source identity the disposition rows were sealed against.

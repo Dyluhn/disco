@@ -861,7 +861,14 @@ class TestFrontendPublicApi:
         # proof: the 12-C regeneration asserts 0 deleted and 0 changed identities,
         # because every decomposed module keeps DECLARING its own surface and the
         # frontend digest is computed withoutBody.
-        assert len(live["frontend_modules"]) == 337
+        # 399 after Epic 12-D decomposed PKG-12-FE-SETTINGS + PKG-12-FE-SHELL
+        # (56 new part modules) and Amendment A3's allowlist closure added six
+        # api-seam modules (`errors`, `liveness`, `session`, `schedules`,
+        # `artifacts`, `deck`). Same shape, same proof: 0 deleted, 0 changed
+        # identities. `api/preview.ts` gains ONE declaration and is the only
+        # pre-existing module whose row moves — an addition, not a change to any
+        # existing declaration's signature.
+        assert len(live["frontend_modules"]) == 399
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
