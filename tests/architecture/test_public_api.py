@@ -850,7 +850,11 @@ class TestFrontendPublicApi:
         )
 
         assert len(live["contract_files"]) == 15
-        assert len(live["frontend_modules"]) == 234
+        # 234 through Epic 12-A; 298 after Epic 12-B decomposed PKG-12-FE-BUILD
+        # into 65 new modules and folded `buildTrace/activityTypes.ts` back into
+        # its parent (net +64). Every one of them is additive surface — the 12-B
+        # regeneration proves 0 deleted and 0 changed declarations.
+        assert len(live["frontend_modules"]) == 298
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

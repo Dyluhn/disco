@@ -87,19 +87,172 @@ export function AgentStatusBar({
    *  witnessed the transitions on a possibly-dead stream. */
   seq?: number;
 }) {
-  const active = ACTIVE.includes(status);
-
   const waiting =
     status === "WAITING_FOR_CONFIRMATION" || status === "AWAITING_PLAN_APPROVAL";
-  // Graceful Stop is meaningful while the agent is actually running or waiting
-  // on a gate — a non-destructive halt, distinct from the red teardown Kill.
-  const canStop =
-    status === "RUNNING" ||
-    status === "WAITING_FOR_CONFIRMATION" ||
-    status === "AWAITING_USER_DECISION" ||
-    status === "AWAITING_USER_QUESTION" ||
-    status === "PAUSED";
+
+  return (
+    <div className="flex items-center justify-between gap-inline">
+      <div className="flex items-center gap-inline">
+        <StatusLabel status={status} waiting={waiting} seq={seq} />
+        <StatusBadges
+          isolation={isolation}
+          autonomous={autonomous}
+          assist={assist}
+          sandboxState={sandboxState}
+          connectionState={connectionState}
+          events={events}
+          modelId={modelId}
+        />
+      </div>
+      <AgentControls status={status} onKill={onKill} onStop={onStop} onResume={onResume} />
+    </div>
+  );
+}
+
+/** The status text + spinner, colored by waiting/active/idle. The raw
+ * ConversationStatus is exposed on data-status so tests read the real phase
+ * deterministically — never by regexing the page body, where the status label
+ * collides with agent chat prose (an agent SAYING "working" is not the run
+ * being RUNNING). The visible text stays the friendly label. */
+function StatusLabel({
+  status,
+  waiting,
+  seq,
+}: {
+  status: ConversationStatus;
+  waiting: boolean;
+  seq?: number;
+}) {
+  const active = ACTIVE.includes(status);
+  return (
+    <span
+      data-disco-control="build.status"
+      data-status={status}
+      data-seq={seq ?? 0}
+      className={cn(
+        "flex items-center gap-hair font-ui text-[0.8rem]",
+        waiting ? "text-warn" : active ? "text-text" : "text-text-muted",
+      )}
+    >
+      {status === "RUNNING" && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+      {STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+/** The row of informational pills: isolation tier, autonomous/assist tiers,
+ * suspended sandbox, degraded connection, and the cumulative cost meter. Each
+ * pill decides its own visibility — the caller always renders this fragment. */
+function StatusBadges({
+  isolation,
+  autonomous,
+  assist,
+  sandboxState,
+  connectionState,
+  events,
+  modelId,
+}: {
+  isolation: IsolationInfo | null;
+  autonomous?: boolean;
+  assist?: boolean;
+  sandboxState?: "active" | "suspended";
+  connectionState: "connected" | "degraded";
+  events: AgentEvent[];
+  modelId?: string | null;
+}) {
   const Shield = isolation?.adversarialSafe ? ShieldCheck : ShieldHalf;
+  return (
+    <>
+      {/* the isolation tier — honest about a shared-kernel tier not being adversarial-safe */}
+      {isolation === null ? (
+        <span
+          aria-label="isolation tier loading"
+          className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-faint"
+        >
+          …
+        </span>
+      ) : (
+        <span
+          title={isolation.label}
+          className={cn(
+            "flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem]",
+            isolation.adversarialSafe ? "text-text-muted" : "text-weak",
+          )}
+        >
+          <Shield className="size-3" aria-hidden />
+          {isolation.tier}
+        </span>
+      )}
+      {autonomous && (
+        <span
+          title="Autonomous run — the agent works headless: it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you"
+          className="flex items-center gap-hair rounded-full border border-accent/40 px-inline py-px font-ui text-[0.7rem] text-accent"
+        >
+          autonomous
+        </span>
+      )}
+      {/* Execution-tier badge: "Assist" (weak/small-model tier) vs "Standard" (capable).
+          Server-derived — no user toggle this pass; read from state.extras.assist. */}
+      {assist !== undefined && (
+        <span
+          title={
+            assist
+              ? "Assist tier — running with small-model compensations (weak driver)"
+              : "Standard tier — running with a capable model"
+          }
+          className={cn(
+            "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem]",
+            assist
+              ? "border-warn/40 text-warn"
+              : "border-hairline text-text-faint",
+          )}
+        >
+          {assist ? "Assist" : "Standard"}
+        </span>
+      )}
+      {sandboxState === "suspended" && (
+        <span
+          title="Sandbox suspended — workspace is saved; it will resume on your next message"
+          className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+        >
+          suspended
+        </span>
+      )}
+      {connectionState === "degraded" && (
+        <span
+          title="Stream reconnecting — activity will replay when the connection returns"
+          data-disco-control="build.connection"
+          data-connection-state="degraded"
+          className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+        >
+          <WifiOff className="size-3" aria-hidden />
+          reconnecting…
+        </span>
+      )}
+      {/* RP-14: cost meter mounts only when a model is wired in — callers that
+          don't pass modelId (and the pre-RP-14 test suites) never touch the
+          models query, so no QueryClientProvider is required of them. */}
+      {modelId != null && <CostMeter events={events} modelId={modelId} />}
+    </>
+  );
+}
+
+/** The Resume / Stop / Kill control cluster. Owns the two pieces of purely
+ * client-local pending state (the cooperative "Stopping…" wait and the Kill
+ * arm/confirm) — neither is derived from server state, both just gate which
+ * button is visible right now. */
+function AgentControls({
+  status,
+  onKill,
+  onStop,
+  onResume,
+}: {
+  status: ConversationStatus;
+  onKill: () => void;
+  onStop?: () => void;
+  onResume?: () => void;
+}) {
+  const active = ACTIVE.includes(status);
 
   // "Stopping…" pending: Stop is cooperative — the loop honors the cancel only at
   // its next checkpoint, so the click would otherwise feel dead. Show pending from
@@ -117,183 +270,160 @@ export function AgentStatusBar({
   }, [active]);
 
   return (
-    <div className="flex items-center justify-between gap-inline">
-      <div className="flex items-center gap-inline">
-        <span
-          // The raw ConversationStatus is exposed on data-status so tests read the
-          // real phase deterministically — never by regexing the page body, where the
-          // status label collides with agent chat prose (an agent SAYING "working" is
-          // not the run being RUNNING). The visible text stays the friendly label.
-          data-disco-control="build.status"
-          data-status={status}
-          data-seq={seq ?? 0}
-          className={cn(
-            "flex items-center gap-hair font-ui text-[0.8rem]",
-            waiting ? "text-warn" : active ? "text-text" : "text-text-muted",
-          )}
-        >
-          {status === "RUNNING" && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
-          {STATUS_LABEL[status]}
-        </span>
-        {/* the isolation tier — honest about a shared-kernel tier not being adversarial-safe */}
-        {isolation === null ? (
-          <span
-            aria-label="isolation tier loading"
-            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-faint"
-          >
-            …
-          </span>
-        ) : (
-          <span
-            title={isolation.label}
-            className={cn(
-              "flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem]",
-              isolation.adversarialSafe ? "text-text-muted" : "text-weak",
-            )}
-          >
-            <Shield className="size-3" aria-hidden />
-            {isolation.tier}
-          </span>
-        )}
-        {autonomous && (
-          <span
-            title="Autonomous run — the agent works headless: it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you"
-            className="flex items-center gap-hair rounded-full border border-accent/40 px-inline py-px font-ui text-[0.7rem] text-accent"
-          >
-            autonomous
-          </span>
-        )}
-        {/* Execution-tier badge: "Assist" (weak/small-model tier) vs "Standard" (capable).
-            Server-derived — no user toggle this pass; read from state.extras.assist. */}
-        {assist !== undefined && (
-          <span
-            title={
-              assist
-                ? "Assist tier — running with small-model compensations (weak driver)"
-                : "Standard tier — running with a capable model"
-            }
-            className={cn(
-              "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem]",
-              assist
-                ? "border-warn/40 text-warn"
-                : "border-hairline text-text-faint",
-            )}
-          >
-            {assist ? "Assist" : "Standard"}
-          </span>
-        )}
-        {sandboxState === "suspended" && (
-          <span
-            title="Sandbox suspended — workspace is saved; it will resume on your next message"
-            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
-          >
-            suspended
-          </span>
-        )}
-        {connectionState === "degraded" && (
-          <span
-            title="Stream reconnecting — activity will replay when the connection returns"
-            data-disco-control="build.connection"
-            data-connection-state="degraded"
-            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
-          >
-            <WifiOff className="size-3" aria-hidden />
-            reconnecting…
-          </span>
-        )}
-        {/* RP-14: cost meter mounts only when a model is wired in — callers that
-            don't pass modelId (and the pre-RP-14 test suites) never touch the
-            models query, so no QueryClientProvider is required of them. */}
-        {modelId != null && <CostMeter events={events} modelId={modelId} />}
-      </div>
-
-      <div className="flex items-center gap-hair">
-        {onResume && (status === "PAUSED" || status === "IDLE") && (
-          <button
-            type="button"
-            onClick={onResume}
-            aria-label="Resume the agent — continue this build where it left off"
-            data-disco-control="resume"
-            className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
-          >
-            <Play className="size-3.5" aria-hidden />
-            Resume
-          </button>
-        )}
-        {onStop && canStop && status !== "PAUSED" && !confirmingKill && (
-          <button
-            type="button"
-            onClick={() => {
-              setStopping(true);
-              onStop();
-            }}
-            disabled={stopping}
-            aria-label="Stop the agent gracefully (does not tear down the sandbox)"
-            data-disco-control="stop"
-            // #22: stable, deterministic phase of the cooperative stop. "idle" = can
-            // stop, not yet clicked; "stopping" = clicked, loop still finishing its
-            // in-flight step. The terminal "stopped" phase is the control's ABSENCE
-            // (the loop settled to PAUSED/IDLE and this button unmounts) — asserted
-            // via the status label + Resume affordance, never a lying live Stop.
-            data-stop-state={stopping ? "stopping" : "idle"}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
-          >
-            {stopping ? (
-              <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            ) : (
-              <Square className="size-3.5" aria-hidden />
-            )}
-            {stopping ? "Stopping…" : "Stop"}
-          </button>
-        )}
-        {/* Kill: destructive → inline confirm. First click arms; second confirms. */}
-        {confirmingKill ? (
-          <div className="flex items-center gap-hair">
-            <span className="whitespace-nowrap font-ui text-[0.74rem] text-unsupported">
-              Kill this run?
-            </span>
-            <button
-              type="button"
-              onClick={() => {
-                setConfirmingKill(false);
-                onKill();
-              }}
-              aria-label="Confirm kill: stop, tear down the sandbox, revoke its access"
-              data-disco-control="kill-confirm"
-              className="flex items-center gap-hair rounded-control border border-unsupported bg-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity hover:opacity-90"
-            >
-              <OctagonX className="size-3.5" aria-hidden />
-              Confirm
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirmingKill(false)}
-              aria-label="Cancel — keep the run"
-              className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
-            >
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirmingKill(true)}
-            disabled={!active}
-            aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
-            data-disco-control="kill"
-            className={cn(
-              "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
-              active
-                ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
-                : "cursor-not-allowed border-hairline text-text-faint",
-            )}
-          >
-            <OctagonX className="size-3.5" aria-hidden />
-            Kill
-          </button>
-        )}
-      </div>
+    <div className="flex items-center gap-hair">
+      <ResumeButton status={status} onResume={onResume} />
+      <StopButton
+        status={status}
+        onStop={onStop}
+        confirmingKill={confirmingKill}
+        stopping={stopping}
+        onClick={() => {
+          setStopping(true);
+          onStop?.();
+        }}
+      />
+      <KillControl
+        active={active}
+        confirmingKill={confirmingKill}
+        onArm={() => setConfirmingKill(true)}
+        onCancel={() => setConfirmingKill(false)}
+        onConfirm={() => {
+          setConfirmingKill(false);
+          onKill();
+        }}
+      />
     </div>
+  );
+}
+
+function ResumeButton({
+  status,
+  onResume,
+}: {
+  status: ConversationStatus;
+  onResume?: () => void;
+}) {
+  if (!onResume || (status !== "PAUSED" && status !== "IDLE")) return null;
+  return (
+    <button
+      type="button"
+      onClick={onResume}
+      aria-label="Resume the agent — continue this build where it left off"
+      data-disco-control="resume"
+      className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
+    >
+      <Play className="size-3.5" aria-hidden />
+      Resume
+    </button>
+  );
+}
+
+/** Graceful Stop is meaningful while the agent is actually running or waiting
+ * on a gate — a non-destructive halt, distinct from the red teardown Kill.
+ * Hidden while a Kill confirm is armed (mutually exclusive controls). */
+function StopButton({
+  status,
+  onStop,
+  confirmingKill,
+  stopping,
+  onClick,
+}: {
+  status: ConversationStatus;
+  onStop?: () => void;
+  confirmingKill: boolean;
+  stopping: boolean;
+  onClick: () => void;
+}) {
+  const canStop =
+    status === "RUNNING" ||
+    status === "WAITING_FOR_CONFIRMATION" ||
+    status === "AWAITING_USER_DECISION" ||
+    status === "AWAITING_USER_QUESTION" ||
+    status === "PAUSED";
+  if (!onStop || !canStop || status === "PAUSED" || confirmingKill) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={stopping}
+      aria-label="Stop the agent gracefully (does not tear down the sandbox)"
+      data-disco-control="stop"
+      // #22: stable, deterministic phase of the cooperative stop. "idle" = can
+      // stop, not yet clicked; "stopping" = clicked, loop still finishing its
+      // in-flight step. The terminal "stopped" phase is the control's ABSENCE
+      // (the loop settled to PAUSED/IDLE and this button unmounts) — asserted
+      // via the status label + Resume affordance, never a lying live Stop.
+      data-stop-state={stopping ? "stopping" : "idle"}
+      className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
+    >
+      {stopping ? (
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+      ) : (
+        <Square className="size-3.5" aria-hidden />
+      )}
+      {stopping ? "Stopping…" : "Stop"}
+    </button>
+  );
+}
+
+/** Kill: destructive → inline confirm. First click arms; second confirms. */
+function KillControl({
+  active,
+  confirmingKill,
+  onArm,
+  onCancel,
+  onConfirm,
+}: {
+  active: boolean;
+  confirmingKill: boolean;
+  onArm: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (confirmingKill) {
+    return (
+      <div className="flex items-center gap-hair">
+        <span className="whitespace-nowrap font-ui text-[0.74rem] text-unsupported">
+          Kill this run?
+        </span>
+        <button
+          type="button"
+          onClick={onConfirm}
+          aria-label="Confirm kill: stop, tear down the sandbox, revoke its access"
+          data-disco-control="kill-confirm"
+          className="flex items-center gap-hair rounded-control border border-unsupported bg-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity hover:opacity-90"
+        >
+          <OctagonX className="size-3.5" aria-hidden />
+          Confirm
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Cancel — keep the run"
+          className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onArm}
+      disabled={!active}
+      aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
+      data-disco-control="kill"
+      className={cn(
+        "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
+        active
+          ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
+          : "cursor-not-allowed border-hairline text-text-faint",
+      )}
+    >
+      <OctagonX className="size-3.5" aria-hidden />
+      Kill
+    </button>
   );
 }
 

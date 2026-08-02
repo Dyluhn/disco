@@ -2,6 +2,11 @@
  * The Build surface orchestrator hook (parallel to useResearch): create a Build
  * conversation, drive its task through the agent loop, and expose the live trace +
  * the gate (confirm/reject) + the kill switch. Components consume only this.
+ *
+ * Line-count decomposition (PKG-12-FE-BUILD/TS-0040): the model-picker state, the
+ * patch-before-continue wiring, and the lazily-created upload conversation each
+ * moved to a private sub-hook below (same file — none of this is public surface,
+ * so `useBuild` stays the only export).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,26 +23,13 @@ import {
   markFreshMode,
 } from "@/lib/sessionResume";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
-import { useBuildStream, type BuildSession } from "./useBuildStream";
+import { useBuildStream, type BuildSession, type BuildStream } from "./useBuildStream";
 
-/** Opens a build-like conversation. `surface` is "build" (software framing) or
- * "agent" (general-task framing) — identical machinery. If `resumeCid` is given
- * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
- * existing conversation — the WebSocket replays history-then-live, so prior events
- * restore (the stored surface is authoritative; resume never re-sets it). */
-export function useBuild(
-  resumeCid?: string | null,
-  surface: "build" | "agent" = "build",
-  /** A5: a seeded handoff. When the /build/:cid route is opened with a seedTask
-   *  (e.g. "build a deck from this report"), KICK it once instead of a plain resume.
-   *  The conversation was already created (autonomous) by the handoff caller. */
-  seedTask?: string | null,
-  /** R3: optional large context (the full DR report) sent as a hidden
-   *  ENVIRONMENT message alongside the short seedTask, so the model receives it
-   *  but the chat history isn't flooded with the whole report. */
-  seedContext?: string | null,
-) {
-  const [session, setSession] = useState<BuildSession | null>(null);
+/** On the resume path, seed the model picker with the conversation's CURRENT pinned
+ * model (from /state) so it reflects reality rather than a misleading "default" —
+ * unless the user has already picked. One-shot, guarded by modelTouched. Also owns
+ * the touched flag so a later patch-before-continue knows whether to send anything. */
+function useModelSelection(resumeCid?: string | null) {
   const [modelId, setModelIdRaw] = useState<string | null>(null); // null → server default
   // Track an explicit user pick so the resume-seed (below) never clobbers it.
   const modelTouched = useRef(false);
@@ -45,37 +37,7 @@ export function useBuild(
     modelTouched.current = true;
     setModelIdRaw(id);
   }, []);
-  // Create-time choice: run this build headless (no questions, auto-approve plan).
-  // Off by default. Locked once the conversation is created (it's a per-run mode).
-  const [autonomousChoice, setAutonomousChoice] = useState(false);
-  // Create-time choice: the weak-model ASSIST tier. EXPLICIT opt-in only — never
-  // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
-  // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
-  const [assistChoice, setAssistChoice] = useState(false);
-  const { verbose: verboseChat } = useVerboseAgentChat();
-  const quietChoice = !verboseChat;
 
-  // G1/DR-4: pre-created cid for the empty state UploadComposer.
-  // BW-08: pre-create is LAZY — it does NOT POST /conversations on mount. The
-  // eager mount-create minted a fresh server row for every visit to the empty
-  // state (25/25 build + 271/271 agent of those rows had 0 events), flooding
-  // History/Projects with "(untitled)" ghosts. Instead the cid is created on a
-  // REAL signal: an actual upload (ensurePreCid, called by the paperclip) or
-  // submit (which falls through to create.mutate when no preCid exists). The
-  // same cid is reused so uploads in the pending session survive the kick.
-  const [preCid, setPreCid] = useState<string | null>(null);
-  const preCidRef = useRef<string | null>(null);
-  const preCreateFlightRef = useRef<Promise<string> | null>(null);
-  const preCreate = useMutation({
-    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
-      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
-  });
-
-  const stream = useBuildStream(session);
-
-  // On the resume path, seed the model picker with the conversation's CURRENT pinned
-  // model (from /state) so it reflects reality rather than a misleading "default" —
-  // unless the user has already picked. One-shot, guarded by modelTouched.
   useEffect(() => {
     if (!resumeCid || !agentLive() || modelTouched.current) return;
     let cancelled = false;
@@ -92,18 +54,27 @@ export function useBuild(
     };
   }, [resumeCid]);
 
-  // #24 + terminal-state model swap: land the model pick on the backend BEFORE a
-  // terminal-state continuation (resume / replan / steer) re-kicks, so the NEW model
-  // composes the next turn instead of being silently ignored. The state-aware backend
-  // gate accepts the change in terminal/parked states (ERROR/STUCK/FINISHED/PAUSED/IDLE)
-  // and 409s mid-run — which we swallow, so this is a safe no-op while RUNNING.
-  //
-  // TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
-  // (modelTouched). An untouched picker — including one seeded from /state on resume —
-  // means "leave the model as-is", so we send NOTHING (the backend leaves it). When
-  // touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
-  // DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
-  // override so the next turn runs the server default (NOT a silent-ignore).
+  return { modelId, setModelId, modelTouched };
+}
+
+/** #24 + terminal-state model swap: land the model pick on the backend BEFORE a
+ * terminal-state continuation (resume / replan / steer) re-kicks, so the NEW model
+ * composes the next turn instead of being silently ignored. The state-aware backend
+ * gate accepts the change in terminal/parked states (ERROR/STUCK/FINISHED/PAUSED/IDLE)
+ * and 409s mid-run — which we swallow, so this is a safe no-op while RUNNING.
+ *
+ * TOUCHED-vs-UNTOUCHED: only PATCH when the user actually changed the picker
+ * (modelTouched). An untouched picker — including one seeded from /state on resume —
+ * means "leave the model as-is", so we send NOTHING (the backend leaves it). When
+ * touched we ALWAYS send model_override, INCLUDING when the user explicitly chose
+ * DEFAULT (modelId === null) — that is an intentional RESET, and the backend clears the
+ * override so the next turn runs the server default (NOT a silent-ignore). */
+function useModelAwareContinuations(
+  session: BuildSession | null,
+  stream: BuildStream,
+  modelId: string | null,
+  modelTouched: React.MutableRefObject<boolean>,
+) {
   const applyModelBeforeContinue = useCallback(async () => {
     if (!session?.cid) return;
     if (!modelTouched.current) return; // user didn't change the model → leave it
@@ -117,7 +88,7 @@ export function useBuild(
     } catch {
       /* gate rejected (a run is in flight) — keep the existing model */
     }
-  }, [session?.cid, stream, modelId]);
+  }, [session?.cid, stream, modelId, modelTouched]);
 
   // Resume a terminal/paused conversation — PATCH the (possibly newly-picked) model
   // first so the re-kick composes with it, then call the underlying HTTP resume.
@@ -144,6 +115,94 @@ export function useBuild(
       stream.steer(text);
     },
     [applyModelBeforeContinue, stream],
+  );
+
+  return { resume, requestPlan, steer };
+}
+
+/** G1/DR-4: pre-created cid for the empty state UploadComposer.
+ * BW-08: pre-create is LAZY — it does NOT POST /conversations on mount. The
+ * eager mount-create minted a fresh server row for every visit to the empty
+ * state (25/25 build + 271/271 agent of those rows had 0 events), flooding
+ * History/Projects with "(untitled)" ghosts. Instead the cid is created on a
+ * REAL signal: an actual upload (ensurePreCid, called by the paperclip) or
+ * submit (which falls through to create.mutate when no preCid exists). The
+ * same cid is reused so uploads in the pending session survive the kick. */
+function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean) {
+  const [preCid, setPreCid] = useState<string | null>(null);
+  const preCidRef = useRef<string | null>(null);
+  const preCreateFlightRef = useRef<Promise<string> | null>(null);
+  const preCreate = useMutation({
+    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
+  });
+
+  // W-07: lazily obtain the upload cid. Concurrent callers share one in-flight
+  // create so selecting a file and immediately submitting cannot fork the run.
+  const ensurePreCid = useCallback(async () => {
+    if (!agentLive()) return null;
+    const existing = preCidRef.current ?? preCid;
+    if (existing) return existing;
+    if (preCreateFlightRef.current) return preCreateFlightRef.current;
+    const flight = preCreate
+      .mutateAsync({ modelOverride: null, autonomous: false, quiet: quietChoice })
+      .then((cid) => {
+        preCidRef.current = cid;
+        setPreCid(cid);
+        return cid;
+      });
+    preCreateFlightRef.current = flight;
+    try {
+      return await flight;
+    } finally {
+      if (preCreateFlightRef.current === flight) preCreateFlightRef.current = null;
+    }
+  }, [preCid, preCreate, quietChoice]);
+
+  const clearPreCid = useCallback(() => {
+    preCidRef.current = null;
+    setPreCid(null);
+  }, []);
+
+  return { preCid, preCidRef, preCreateFlightRef, ensurePreCid, clearPreCid };
+}
+
+/** Opens a build-like conversation. `surface` is "build" (software framing) or
+ * "agent" (general-task framing) — identical machinery. If `resumeCid` is given
+ * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
+ * existing conversation — the WebSocket replays history-then-live, so prior events
+ * restore (the stored surface is authoritative; resume never re-sets it). */
+export function useBuild(
+  resumeCid?: string | null,
+  surface: "build" | "agent" = "build",
+  /** A5: a seeded handoff. When the /build/:cid route is opened with a seedTask
+   *  (e.g. "build a deck from this report"), KICK it once instead of a plain resume.
+   *  The conversation was already created (autonomous) by the handoff caller. */
+  seedTask?: string | null,
+  /** R3: optional large context (the full DR report) sent as a hidden
+   *  ENVIRONMENT message alongside the short seedTask, so the model receives it
+   *  but the chat history isn't flooded with the whole report. */
+  seedContext?: string | null,
+) {
+  const [session, setSession] = useState<BuildSession | null>(null);
+  const { modelId, setModelId, modelTouched } = useModelSelection(resumeCid);
+  // Create-time choice: run this build headless (no questions, auto-approve plan).
+  // Off by default. Locked once the conversation is created (it's a per-run mode).
+  const [autonomousChoice, setAutonomousChoice] = useState(false);
+  // Create-time choice: the weak-model ASSIST tier. EXPLICIT opt-in only — never
+  // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
+  // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
+  const [assistChoice, setAssistChoice] = useState(false);
+  const { verbose: verboseChat } = useVerboseAgentChat();
+  const quietChoice = !verboseChat;
+
+  const precreated = usePrecreatedUploadCid(surface, quietChoice);
+  const stream = useBuildStream(session);
+  const { resume, requestPlan, steer } = useModelAwareContinuations(
+    session,
+    stream,
+    modelId,
+    modelTouched,
   );
 
   // Resume path: when a route param hands us a cid, jump straight in. The
@@ -198,35 +257,10 @@ export function useBuild(
       return { cid, task, kick: true };
     },
     onSuccess: (nextSession) => {
-      preCidRef.current = null;
-      setPreCid(null);
+      precreated.clearPreCid();
       setSession(nextSession);
     },
   });
-
-  // W-07: lazily obtain the upload cid. Concurrent callers share one in-flight
-  // create so selecting a file and immediately submitting cannot fork the run.
-  const ensurePreCid = useCallback(async () => {
-    if (!agentLive()) return null;
-    const existing = preCidRef.current ?? preCid;
-    if (existing) return existing;
-    if (preCreateFlightRef.current) return preCreateFlightRef.current;
-    const flight = preCreate.mutateAsync({
-      modelOverride: null,
-      autonomous: false,
-      quiet: quietChoice,
-    }).then((cid) => {
-      preCidRef.current = cid;
-      setPreCid(cid);
-      return cid;
-    });
-    preCreateFlightRef.current = flight;
-    try {
-      return await flight;
-    } finally {
-      if (preCreateFlightRef.current === flight) preCreateFlightRef.current = null;
-    }
-  }, [preCid, preCreate, quietChoice]);
 
   const submit = useCallback(
     async (task: string) => {
@@ -234,7 +268,8 @@ export function useBuild(
       if (!trimmed) return;
       clearFreshMode(surface);
       // G1/DR-4: use pre-created cid if available so uploads survive.
-      const uploadCid = preCidRef.current ?? preCid ?? preCreateFlightRef.current;
+      const uploadCid =
+        precreated.preCidRef.current ?? precreated.preCid ?? precreated.preCreateFlightRef.current;
       if (uploadCid) {
         // Apply the user's CURRENT model pick + autonomous + assist choice to it
         // BEFORE the kick. The target may still be the in-flight attachment
@@ -268,7 +303,9 @@ export function useBuild(
       autonomousChoice,
       assistChoice,
       quietChoice,
-      preCid,
+      precreated.preCid,
+      precreated.preCidRef,
+      precreated.preCreateFlightRef,
       surface,
     ],
   );
@@ -299,10 +336,10 @@ export function useBuild(
     reset,
     /** G1/DR-4: pre-created cid for the empty state UploadComposer. null once
      *  a session is live (the cid is on session.cid then) or on the resume path. */
-    preCid: session === null && !resumeCid ? preCid : null,
+    preCid: session === null && !resumeCid ? precreated.preCid : null,
     /** W-07: lazily create-or-return the upload cid so Attach works pre-cid.
      *  Exposed only when a server exists (offline → Attach stays disabled). */
-    ensurePreCid: agentLive() ? ensurePreCid : undefined,
+    ensurePreCid: agentLive() ? precreated.ensurePreCid : undefined,
     ...stream,
     // Override the stream's continuations with the patch-before-kick variants so a
     // terminal-state model change actually drives the next turn (must come AFTER the

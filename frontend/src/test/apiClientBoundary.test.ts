@@ -29,8 +29,15 @@ import config from "../../eslint.config.js";
 
 const FRONTEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** The allowlist measured at Epic 12-A open. May only decrease. */
-const CEILING = 36;
+/**
+ * The allowlist ceiling. May only decrease.
+ *
+ * 36 at Epic 12-A open (the measured drift when the rule landed); 33 at the
+ * Epic 12-B seal, which migrated the three files it decomposed —
+ * `BuildSurface.tsx`, `build/AgentCanvas.tsx` and `build/DeliverablePanel.tsx`
+ * — onto `api/` modules and deleted their entries.
+ */
+const CEILING = 33;
 
 type FlatConfigBlock = {
   files?: string[];

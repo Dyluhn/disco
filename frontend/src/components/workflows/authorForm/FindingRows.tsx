@@ -1,0 +1,37 @@
+import { CheckCircle2 } from "lucide-react";
+import type { WorkflowValidationFinding } from "@/types/workflow";
+
+export function FindingRows({ findings }: { findings: WorkflowValidationFinding[] }) {
+  if (findings.length === 0) {
+    return (
+      <div className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted">
+        <CheckCircle2 className="size-4 text-supported" aria-hidden />
+        No validation findings.
+      </div>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-hair">
+      {findings.map((finding, index) => (
+        <li
+          key={`${finding.code}-${finding.path}-${index}`}
+          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.8rem]"
+          data-severity={finding.severity}
+        >
+          <span
+            className={
+              finding.severity === "error"
+                ? "font-semibold text-unsupported"
+                : "font-semibold text-warn"
+            }
+          >
+            {finding.severity}
+          </span>
+          <span className="text-text-muted"> · {finding.code}</span>
+          <div className="text-text">{finding.message}</div>
+          <div className="font-mono text-[0.7rem] text-text-faint">{finding.path}</div>
+        </li>
+      ))}
+    </ul>
+  );
+}

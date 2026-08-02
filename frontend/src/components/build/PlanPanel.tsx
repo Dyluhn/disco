@@ -83,6 +83,28 @@ function StatusChip({ status }: { status: ConversationStatus }) {
   );
 }
 
+type StepSummary = { done: number; total: number; fraction: number } | null;
+
+/** The glanceable "N of M" + progress-bar figure for the header. Checklist mode
+ * (Deep Research) uses the engine-derived progress map; Build mode has no
+ * per-step truth, so it reads all-done-or-nothing off the real run status. No
+ * steps at all → no figure (there's nothing to summarize). */
+function derivePlanProgress(
+  plan: PlanView,
+  status: ConversationStatus | undefined,
+  progress: Map<number, StepState> | undefined,
+  checklist: boolean,
+): StepSummary {
+  if (plan.steps.length === 0) return null;
+  if (checklist) return planProgressSummary(plan.steps.length, progress!);
+  const finished = status === "FINISHED";
+  return {
+    done: finished ? plan.steps.length : 0,
+    total: plan.steps.length,
+    fraction: finished ? 1 : 0,
+  };
+}
+
 export function PlanPanel({
   plan,
   progress,
@@ -113,23 +135,7 @@ export function PlanPanel({
   // Checklist mode only when a reliable engine-derived progress map is supplied
   // (Deep Research) and we're not at the approval gate.
   const checklist = !gate && progress !== undefined;
-  const progressSummary = checklist ? planProgressSummary(plan.steps.length, progress!) : null;
-  const stepSummary =
-    plan.steps.length > 0
-      ? {
-          done: progressSummary
-            ? progressSummary.done
-            : status === "FINISHED"
-              ? plan.steps.length
-              : 0,
-          total: progressSummary ? progressSummary.total : plan.steps.length,
-          fraction: progressSummary
-            ? progressSummary.fraction
-            : status === "FINISHED"
-              ? 1
-              : 0,
-        }
-      : null;
+  const stepSummary = derivePlanProgress(plan, status, progress, checklist);
   const defaultExpanded = defaultPlanPanelExpanded({ gate, status });
   const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
   const expanded = manualExpanded ?? defaultExpanded;
@@ -151,52 +157,15 @@ export function PlanPanel({
         gate ? "border-2 border-accent" : "border border-hairline",
       )}
     >
-      <header className="flex items-center gap-inline">
-        <button
-          type="button"
-          onClick={() => setManualExpanded(!expanded)}
-          aria-expanded={expanded}
-          aria-controls={`plan-panel-body-${plan.id}`}
-          aria-label={expanded ? "Collapse plan" : "Expand plan"}
-          data-disco-control="plan-panel-toggle"
-          className="-mx-hair flex min-w-0 flex-1 items-center gap-inline rounded-control px-hair py-hair text-left transition-colors hover:bg-surface-2/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-        >
-          {expanded ? (
-            <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-          )}
-          <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
-          <span className="min-w-fit shrink-0 whitespace-nowrap font-ui text-[0.9rem] font-medium text-text">
-            {gate ? "Review the plan" : "Plan"}
-          </span>
-          <span className="shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
-            revision {plan.revision}
-          </span>
-          <span className="ml-auto flex shrink-0 items-center gap-inline">
-            {stepSummary && (
-              <span className="flex items-center gap-hair">
-                <span className="font-mono text-[0.72rem] text-text-faint">
-                  {stepSummary.done}/{stepSummary.total}
-                </span>
-                <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-                  <span
-                    className="block h-full bg-accent transition-[width]"
-                    style={{ width: `${Math.round(stepSummary.fraction * 100)}%` }}
-                  />
-                </span>
-              </span>
-            )}
-            {/* Build: one honest status chip from the real run state. */}
-            {!gate && !checklist && status && <StatusChip status={status} />}
-          </span>
-        </button>
-        {gate && (
-          <span className="shrink-0 rounded-full border border-accent px-inline py-px font-ui text-[0.7rem] uppercase tracking-wide text-accent">
-            needs your approval
-          </span>
-        )}
-      </header>
+      <PlanPanelHeader
+        plan={plan}
+        gate={gate}
+        checklist={checklist}
+        status={status}
+        stepSummary={stepSummary}
+        expanded={expanded}
+        onToggle={() => setManualExpanded(!expanded)}
+      />
 
       <div
         id={`plan-panel-body-${plan.id}`}
@@ -228,92 +197,210 @@ export function PlanPanel({
             </details>
           )}
 
-          {plan.steps.length > 0 && (
-            <ol className="mt-body flex flex-col gap-hair">
-              {plan.steps.map((step, i) => {
-                // Checklist mode (DR) shows a per-step icon; Build shows a static
-                // numbered outline of the approach (no per-step state at all).
-                const state = checklist ? (progress!.get(i + 1) ?? "pending") : null;
-                return (
-                  <li key={i} className="flex items-start gap-inline">
-                    <span className="mt-px flex items-center gap-hair">
-                      <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
-                        {i + 1}
-                      </span>
-                      {state && <StepIcon state={state} />}
-                    </span>
-                    <span
-                      className={cn(
-                        "font-ui text-[0.84rem] leading-snug",
-                        state === "done" ? "text-text-muted" : "text-text",
-                      )}
-                    >
-                      {step.title}
-                      {step.detail && (
-                        <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
-                      )}
-                    </span>
-                  </li>
-                );
-              })}
-            </ol>
-          )}
+          <PlanStepsList steps={plan.steps} checklist={checklist} progress={progress} />
 
           {gate && (
-            <>
-              {revising ? (
-                <div className="mt-body flex flex-col gap-hair">
-                  <textarea
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    rows={2}
-                    autoFocus
-                    placeholder="Describe the changes you want in the plan…"
-                    className="w-full resize-none rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
-                  />
-                  <div className="flex items-center justify-end gap-inline">
-                    <button
-                      type="button"
-                      onClick={() => setRevising(false)}
-                      className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={submitRevision}
-                      disabled={!text.trim()}
-                      data-disco-control="revise-plan"
-                      className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
-                    >
-                      Send revision
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="mt-body flex items-center justify-end gap-inline">
-                  <button
-                    type="button"
-                    onClick={() => setRevising(true)}
-                    data-disco-control="revise-plan-open"
-                    className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
-                  >
-                    Revise…
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onApprove}
-                    data-disco-control="approve-plan"
-                    className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
-                  >
-                    {approveLabel ?? "Approve & build"}
-                  </button>
-                </div>
-              )}
-            </>
+            <PlanApprovalGate
+              revising={revising}
+              text={text}
+              onTextChange={setText}
+              onStartRevise={() => setRevising(true)}
+              onCancelRevise={() => setRevising(false)}
+              onSubmitRevise={submitRevision}
+              onApprove={onApprove}
+              approveLabel={approveLabel}
+            />
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+/** The collapsible header: chevron toggle, title, revision badge, the glanceable
+ * step-progress figure or Build's honest status chip, and the gate's "needs your
+ * approval" pill. */
+function PlanPanelHeader({
+  plan,
+  gate,
+  checklist,
+  status,
+  stepSummary,
+  expanded,
+  onToggle,
+}: {
+  plan: PlanView;
+  gate: boolean;
+  checklist: boolean;
+  status?: ConversationStatus;
+  stepSummary: StepSummary;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <header className="flex items-center gap-inline">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        aria-controls={`plan-panel-body-${plan.id}`}
+        aria-label={expanded ? "Collapse plan" : "Expand plan"}
+        data-disco-control="plan-panel-toggle"
+        className="-mx-hair flex min-w-0 flex-1 items-center gap-inline rounded-control px-hair py-hair text-left transition-colors hover:bg-surface-2/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+      >
+        {expanded ? (
+          <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+        )}
+        <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
+        <span className="min-w-fit shrink-0 whitespace-nowrap font-ui text-[0.9rem] font-medium text-text">
+          {gate ? "Review the plan" : "Plan"}
+        </span>
+        <span className="shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
+          revision {plan.revision}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-inline">
+          {stepSummary && (
+            <span className="flex items-center gap-hair">
+              <span className="font-mono text-[0.72rem] text-text-faint">
+                {stepSummary.done}/{stepSummary.total}
+              </span>
+              <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                <span
+                  className="block h-full bg-accent transition-[width]"
+                  style={{ width: `${Math.round(stepSummary.fraction * 100)}%` }}
+                />
+              </span>
+            </span>
+          )}
+          {/* Build: one honest status chip from the real run state. */}
+          {!gate && !checklist && status && <StatusChip status={status} />}
+        </span>
+      </button>
+      {gate && (
+        <span className="shrink-0 rounded-full border border-accent px-inline py-px font-ui text-[0.7rem] uppercase tracking-wide text-accent">
+          needs your approval
+        </span>
+      )}
+    </header>
+  );
+}
+
+/** The numbered outline of steps. Checklist mode (DR) shows a per-step icon;
+ * Build shows a static numbered outline of the approach (no per-step state at
+ * all). Omitted entirely when there are no real steps (never a fake "1." placeholder). */
+function PlanStepsList({
+  steps,
+  checklist,
+  progress,
+}: {
+  steps: PlanView["steps"];
+  checklist: boolean;
+  progress?: Map<number, StepState>;
+}) {
+  if (steps.length === 0) return null;
+  return (
+    <ol className="mt-body flex flex-col gap-hair">
+      {steps.map((step, i) => {
+        const state = checklist ? (progress!.get(i + 1) ?? "pending") : null;
+        return (
+          <li key={i} className="flex items-start gap-inline">
+            <span className="mt-px flex items-center gap-hair">
+              <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
+                {i + 1}
+              </span>
+              {state && <StepIcon state={state} />}
+            </span>
+            <span
+              className={cn(
+                "font-ui text-[0.84rem] leading-snug",
+                state === "done" ? "text-text-muted" : "text-text",
+              )}
+            >
+              {step.title}
+              {step.detail && (
+                <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
+              )}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The approval gate's action row: Approve/Revise… normally, or the revision
+ * textarea + Send/Cancel once Revise… has been clicked. */
+function PlanApprovalGate({
+  revising,
+  text,
+  onTextChange,
+  onStartRevise,
+  onCancelRevise,
+  onSubmitRevise,
+  onApprove,
+  approveLabel,
+}: {
+  revising: boolean;
+  text: string;
+  onTextChange: (text: string) => void;
+  onStartRevise: () => void;
+  onCancelRevise: () => void;
+  onSubmitRevise: () => void;
+  onApprove?: () => void;
+  approveLabel?: string;
+}) {
+  if (revising) {
+    return (
+      <div className="mt-body flex flex-col gap-hair">
+        <textarea
+          value={text}
+          onChange={(e) => onTextChange(e.target.value)}
+          rows={2}
+          autoFocus
+          placeholder="Describe the changes you want in the plan…"
+          className="w-full resize-none rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+        />
+        <div className="flex items-center justify-end gap-inline">
+          <button
+            type="button"
+            onClick={onCancelRevise}
+            className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onSubmitRevise}
+            disabled={!text.trim()}
+            data-disco-control="revise-plan"
+            className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+          >
+            Send revision
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-body flex items-center justify-end gap-inline">
+      <button
+        type="button"
+        onClick={onStartRevise}
+        data-disco-control="revise-plan-open"
+        className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+      >
+        Revise…
+      </button>
+      <button
+        type="button"
+        onClick={onApprove}
+        data-disco-control="approve-plan"
+        className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
+      >
+        {approveLabel ?? "Approve & build"}
+      </button>
+    </div>
   );
 }

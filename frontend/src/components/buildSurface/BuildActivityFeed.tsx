@@ -1,0 +1,78 @@
+/**
+ * The Build surface's Activity heading + replay scrubber + scrollable feed
+ * viewport + the docked "scroll to latest" chevron. The feed's actual content
+ * (ERROR / plan-gate / running-activity) is passed as `children` so this
+ * wrapper stays agnostic to that branching (see BuildActivityFeedContent).
+ * Extracted verbatim from BuildSurface.tsx (PKG-12-FE-BUILD).
+ */
+
+import { ChevronDown } from "lucide-react";
+import type { ReactNode } from "react";
+import { ReplayScrubber } from "@/components/build/ReplayScrubber";
+import type { ReplayState } from "@/lib/useReplay";
+
+export function BuildActivityFeed({
+  isReplaying,
+  replay,
+  eventsLength,
+  feedScrollRef,
+  onFeedScroll,
+  showScrollDown,
+  scrollFeedToBottom,
+  children,
+}: {
+  isReplaying: boolean;
+  replay: ReplayState;
+  eventsLength: number;
+  feedScrollRef: React.RefObject<HTMLDivElement | null>;
+  onFeedScroll: () => void;
+  showScrollDown: boolean;
+  scrollFeedToBottom: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
+      <div className="flex items-baseline justify-between">
+        <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
+          Activity
+        </h2>
+        <span
+          className="font-ui text-[0.68rem] text-text-faint"
+          title="The agent works one step at a time; an up-front plan preview lands with the planner step."
+        >
+          live task list
+        </span>
+      </div>
+      {/* RP-06: replay scrubber — step through the event log when not live. */}
+      {isReplaying && eventsLength > 0 && <ReplayScrubber replay={replay} />}
+      <div
+        ref={feedScrollRef}
+        onScroll={onFeedScroll}
+        data-testid="build-activity-feed"
+        className="mt-inline min-h-0 flex-1 overflow-y-auto pb-inline lg:pr-hair"
+      >
+        {children}
+      </div>
+      {/* F15/W-41: the jump-to-latest control occupies its own flex row.
+          Keeping it outside the scroll viewport reserves real layout space
+          at every width/zoom and prevents it from covering transcript text. */}
+      {showScrollDown && (
+        <div
+          data-testid="build-scroll-to-latest-dock"
+          className="flex shrink-0 items-center justify-center py-hair"
+        >
+          <button
+            type="button"
+            onClick={scrollFeedToBottom}
+            aria-label="Scroll to latest activity"
+            title="Scroll to latest activity"
+            data-disco-control="build.scroll-to-bottom"
+            className="flex items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
+          >
+            <ChevronDown className="size-4" aria-hidden />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
