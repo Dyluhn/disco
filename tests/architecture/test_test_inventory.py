@@ -237,8 +237,13 @@ class TestMappingStatic:
             # the doubles extracted out of test_verify_appkit_app.py to clear
             # PY-0889. It defines no test — the collected node-id set is
             # unchanged at 9,278 — but it is a file under a tests/ root.
-            "python_test_file_count": 787,
-            "python_static_test_id_count": 9341,
+            # 788 from the A6 boundary: harness/build_soak/tests/
+            # test_browser_capability.py, the A6.1 scope-gauge tests. Its 16
+            # collected node ids are 13 static test ids — one case is
+            # parametrized four ways — which is why the two counts move by
+            # different amounts.
+            "python_test_file_count": 788,
+            "python_static_test_id_count": 9354,
             "typescript_test_file_count": 238,
             "typescript_static_test_id_count": 1200,
         }
@@ -525,13 +530,13 @@ class TestCollectedCounts:
         collected = baseline["collected"]
         expected = {
             "packages": 9870,
-            "harness": 1236,
+            "harness": 1252,
             "integrations": 9,
             "tests": 333,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11448 == sum(expected.values())
+        assert collected["total"] == 11464 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -547,7 +552,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11448}
+        assert result == {"collected_total": 11464}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -566,9 +571,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9341,
+            "python_static_ids": 9354,
             "typescript_static_ids": 1200,
-            "collected_total": 11448,
+            "collected_total": 11464,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

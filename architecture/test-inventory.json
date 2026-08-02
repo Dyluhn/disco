@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
+  "source_identity": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
   "collected": {
     "counts": {
       "packages": 9870,
-      "harness": 1236,
+      "harness": 1252,
       "integrations": 9,
       "tests": 333
     },
-    "total": 11448,
+    "total": 11464,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -10328,6 +10328,22 @@
         "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_fires_on_progress_event_status_stuck_finished",
         "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_is_bounded_and_returns_on_timeout",
         "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_replan_bump_not_user_append",
+        "harness/build_soak/tests/test_browser_capability.py::test_available_capability_reads_evaluated",
+        "harness/build_soak/tests/test_browser_capability.py::test_claim_kind_set_is_pinned_to_the_products_own_authority",
+        "harness/build_soak/tests/test_browser_capability.py::test_full_scope_true_only_when_nothing_was_skipped",
+        "harness/build_soak/tests/test_browser_capability.py::test_http_ready_is_browser_dependent",
+        "harness/build_soak/tests/test_browser_capability.py::test_missing_probe_path_is_unproven_not_available",
+        "harness/build_soak/tests/test_browser_capability.py::test_real_appkit_scenario_declares_four_browser_claims",
+        "harness/build_soak/tests/test_browser_capability.py::test_recorded_probe_roundtrips",
+        "harness/build_soak/tests/test_browser_capability.py::test_scenario_without_browser_claims_is_evaluable_under_any_capability",
+        "harness/build_soak/tests/test_browser_capability.py::test_scope_block_carries_no_pass_or_fail_verdict",
+        "harness/build_soak/tests/test_browser_capability.py::test_unavailable_capability_reads_not_evaluated",
+        "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload0]",
+        "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload1]",
+        "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload2]",
+        "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload3]",
+        "harness/build_soak/tests/test_browser_capability.py::test_unproven_capability_never_reads_evaluated",
+        "harness/build_soak/tests/test_browser_capability.py::test_unreadable_probe_is_unproven_and_does_not_raise",
         "harness/build_soak/tests/test_browser_evidence_oracles.py::test_all_pass_on_green_evidence",
         "harness/build_soak/tests/test_browser_evidence_oracles.py::test_all_skip_without_evidence",
         "harness/build_soak/tests/test_browser_evidence_oracles.py::test_browser_ws_not_connected_fails",
@@ -11469,13 +11485,14 @@
     }
   },
   "mapping_static": {
-    "identity": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
-    "python_test_file_count": 787,
-    "python_static_test_id_count": 9341,
+    "identity": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
+    "python_test_file_count": 788,
+    "python_static_test_id_count": 9354,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
       "harness/build_soak/tests/test_api_runner.py",
+      "harness/build_soak/tests/test_browser_capability.py",
       "harness/build_soak/tests/test_browser_evidence_oracles.py",
       "harness/build_soak/tests/test_classifier.py",
       "harness/build_soak/tests/test_classify_captured.py",
@@ -12560,6 +12577,19 @@
       "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_fires_on_progress_event_status_stuck_finished",
       "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_is_bounded_and_returns_on_timeout",
       "harness/build_soak/tests/test_api_runner.py::test_wait_for_followup_pickup_replan_bump_not_user_append",
+      "harness/build_soak/tests/test_browser_capability.py::test_available_capability_reads_evaluated",
+      "harness/build_soak/tests/test_browser_capability.py::test_claim_kind_set_is_pinned_to_the_products_own_authority",
+      "harness/build_soak/tests/test_browser_capability.py::test_full_scope_true_only_when_nothing_was_skipped",
+      "harness/build_soak/tests/test_browser_capability.py::test_http_ready_is_browser_dependent",
+      "harness/build_soak/tests/test_browser_capability.py::test_missing_probe_path_is_unproven_not_available",
+      "harness/build_soak/tests/test_browser_capability.py::test_real_appkit_scenario_declares_four_browser_claims",
+      "harness/build_soak/tests/test_browser_capability.py::test_recorded_probe_roundtrips",
+      "harness/build_soak/tests/test_browser_capability.py::test_scenario_without_browser_claims_is_evaluable_under_any_capability",
+      "harness/build_soak/tests/test_browser_capability.py::test_scope_block_carries_no_pass_or_fail_verdict",
+      "harness/build_soak/tests/test_browser_capability.py::test_unavailable_capability_reads_not_evaluated",
+      "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven",
+      "harness/build_soak/tests/test_browser_capability.py::test_unproven_capability_never_reads_evaluated",
+      "harness/build_soak/tests/test_browser_capability.py::test_unreadable_probe_is_unproven_and_does_not_raise",
       "harness/build_soak/tests/test_browser_evidence_oracles.py::test_all_pass_on_green_evidence",
       "harness/build_soak/tests/test_browser_evidence_oracles.py::test_all_skip_without_evidence",
       "harness/build_soak/tests/test_browser_evidence_oracles.py::test_browser_ws_not_connected_fails",
@@ -26395,6 +26425,59 @@
     "module_splits_require_an_exact_transition_record": true
   },
   "additive_transitions": [
+    {
+      "package": "PKG-02-GATE-A6",
+      "root": "harness",
+      "source_identity_before": "5de2640450ca3a2a45e627ef8653658fc8a449c6",
+      "source_identity_after": "4b8e1d9d529effeb2f16eb6cedd66e58085d3bff",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1236,
+          "after_count": 1252,
+          "added_ids": [
+            "harness/build_soak/tests/test_browser_capability.py::test_available_capability_reads_evaluated",
+            "harness/build_soak/tests/test_browser_capability.py::test_claim_kind_set_is_pinned_to_the_products_own_authority",
+            "harness/build_soak/tests/test_browser_capability.py::test_full_scope_true_only_when_nothing_was_skipped",
+            "harness/build_soak/tests/test_browser_capability.py::test_http_ready_is_browser_dependent",
+            "harness/build_soak/tests/test_browser_capability.py::test_missing_probe_path_is_unproven_not_available",
+            "harness/build_soak/tests/test_browser_capability.py::test_real_appkit_scenario_declares_four_browser_claims",
+            "harness/build_soak/tests/test_browser_capability.py::test_recorded_probe_roundtrips",
+            "harness/build_soak/tests/test_browser_capability.py::test_scenario_without_browser_claims_is_evaluable_under_any_capability",
+            "harness/build_soak/tests/test_browser_capability.py::test_scope_block_carries_no_pass_or_fail_verdict",
+            "harness/build_soak/tests/test_browser_capability.py::test_unavailable_capability_reads_not_evaluated",
+            "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload0]",
+            "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload1]",
+            "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload2]",
+            "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven[payload3]",
+            "harness/build_soak/tests/test_browser_capability.py::test_unproven_capability_never_reads_evaluated",
+            "harness/build_soak/tests/test_browser_capability.py::test_unreadable_probe_is_unproven_and_does_not_raise"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "harness/build_soak/tests/test_browser_capability.py"
+        ],
+        "python_static_test_ids": [
+          "harness/build_soak/tests/test_browser_capability.py::test_available_capability_reads_evaluated",
+          "harness/build_soak/tests/test_browser_capability.py::test_claim_kind_set_is_pinned_to_the_products_own_authority",
+          "harness/build_soak/tests/test_browser_capability.py::test_full_scope_true_only_when_nothing_was_skipped",
+          "harness/build_soak/tests/test_browser_capability.py::test_http_ready_is_browser_dependent",
+          "harness/build_soak/tests/test_browser_capability.py::test_missing_probe_path_is_unproven_not_available",
+          "harness/build_soak/tests/test_browser_capability.py::test_real_appkit_scenario_declares_four_browser_claims",
+          "harness/build_soak/tests/test_browser_capability.py::test_recorded_probe_roundtrips",
+          "harness/build_soak/tests/test_browser_capability.py::test_scenario_without_browser_claims_is_evaluable_under_any_capability",
+          "harness/build_soak/tests/test_browser_capability.py::test_scope_block_carries_no_pass_or_fail_verdict",
+          "harness/build_soak/tests/test_browser_capability.py::test_unavailable_capability_reads_not_evaluated",
+          "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven",
+          "harness/build_soak/tests/test_browser_capability.py::test_unproven_capability_never_reads_evaluated",
+          "harness/build_soak/tests/test_browser_capability.py::test_unreadable_probe_is_unproven_and_does_not_raise"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
     {
       "package": "PKG-03-HARNESS-TRANSPORT",
       "root": "harness",
