@@ -1,8 +1,8 @@
-"""Internal AgentLoop collaborator."""
+"""Internal _LoopFacet collaborator."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..security import RiskAssessment
 from .engine_contracts import (
@@ -32,13 +32,44 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ContextGroundingPort,
+        ConversationModePort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, gate
+        counters, the event log, the plan lifecycle, tool execution, turn control.
+        """
 
 from .plan_submission import _handle_submitted_plan
 
 
 async def _preserve_planning_prose(
-    loop: AgentLoop, step: AgentStep, events: list[Event]
+    loop: _LoopFacet, step: AgentStep, events: list[Event]
 ) -> list[Event]:
     """Publish a planner acknowledgement before adding host guidance."""
     if step.thought.strip() and not loop._quiet:
@@ -53,7 +84,7 @@ async def _preserve_planning_prose(
 
 
 async def _maybe_harvest_prose_plan(
-    loop: AgentLoop, events: list[Event]
+    loop: _LoopFacet, events: list[Event]
 ) -> Disp | None:
     if not (
         loop._revision_force_submit_enabled
@@ -95,7 +126,7 @@ async def _maybe_harvest_prose_plan(
 
 
 async def _maybe_force_submit_prose(
-    loop: AgentLoop, events: list[Event]
+    loop: _LoopFacet, events: list[Event]
 ) -> Disp | None:
     if not (
         loop._revision_force_submit_enabled
@@ -121,7 +152,7 @@ async def _maybe_force_submit_prose(
     return Disp.CONTINUE
 
 
-async def _nudge_planner(loop: AgentLoop) -> Disp:
+async def _nudge_planner(loop: _LoopFacet) -> Disp:
     loop._plan_nudges += 1
     nudge = (
         _WORKFLOW_ROUTER_PLAN_NUDGE
@@ -140,7 +171,7 @@ async def _nudge_planner(loop: AgentLoop) -> Disp:
 
 
 async def _handle_planning_prose(
-    loop: AgentLoop, step: AgentStep, events: list[Event]
+    loop: _LoopFacet, step: AgentStep, events: list[Event]
 ) -> Disp:
     events = await _preserve_planning_prose(loop, step, events)
     harvested = await _maybe_harvest_prose_plan(loop, events)
@@ -153,7 +184,7 @@ async def _handle_planning_prose(
 
 
 async def _refuse_planning_tool(
-    loop: AgentLoop, step: AgentStep, events: list[Event]
+    loop: _LoopFacet, step: AgentStep, events: list[Event]
 ) -> Disp:
     tool_call = step.tool_call
     assert tool_call is not None
@@ -188,7 +219,7 @@ async def _refuse_planning_tool(
 
 
 async def _handle_planning_tool(
-    loop: AgentLoop, step: AgentStep, events: list[Event]
+    loop: _LoopFacet, step: AgentStep, events: list[Event]
 ) -> Disp:
     tool_call = step.tool_call
     assert tool_call is not None
@@ -202,7 +233,7 @@ async def _handle_planning_tool(
 
 
 class PlanningGateController:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:

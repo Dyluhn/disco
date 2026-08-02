@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..events import ConversationStatus, StatusEvent
 from . import signals
 from .control import Disp
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import GateCounterPort, LoopEventPort, PlanLifecyclePort
+
+    class _LoopFacet(GateCounterPort, LoopEventPort, PlanLifecyclePort, Protocol):
+        """The loop capability this module uses: gate counters, the event log, the plan lifecycle.
+        """
 
 
-async def harvest_revision_plan_after_refusal(loop: AgentLoop) -> Disp | None:
+async def harvest_revision_plan_after_refusal(loop: _LoopFacet) -> Disp | None:
     """Route a synthesized one-step revision plan through the normal approval gate."""
     synth = signals.harvested_revision_plan_from_user(await loop._events())
     if synth is None:

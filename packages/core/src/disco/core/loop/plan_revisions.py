@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter  # noqa: F401 — compatibility facade binding
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..dod import (
     CommandExitPredicate,
@@ -55,7 +55,24 @@ from .plan_repair_detection import (  # noqa: F401 — re-exported for back-comp
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ConversationModePort, GateCounterPort, LoopEventPort, PlanLifecyclePort
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: conversation mode, gate counters, the event log,
+        the plan lifecycle.
+        """
 
 IDEMPOTENT_PLAN_DETAIL = "plan_revision_idempotent"
 IDEMPOTENT_PLAN_DIAGNOSTIC = "identical_plan_redirect"
@@ -142,7 +159,7 @@ def is_idempotent_plan_revision(events: list[Event], candidate: PlanEvent) -> bo
 
 
 async def preflight_plan_revision(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     candidate: PlanEvent,
     events: list[Event],
 ) -> Disp | None:
@@ -307,7 +324,7 @@ def idempotent_execution_guidance(events: list[Event]) -> str:
 
 
 async def redirect_idempotent_revision(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     candidate: PlanEvent,
     events: list[Event],
 ) -> Disp:
@@ -339,7 +356,7 @@ async def redirect_idempotent_revision(
 
 
 async def reject_plan_weakening(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     candidate: PlanEvent,
     diff: PlanPredicateDiff,
 ) -> Disp:
@@ -365,7 +382,7 @@ async def reject_plan_weakening(
 
 
 async def reject_invalid_revision_conditions(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     candidate: PlanEvent,
     errors: list[str],
 ) -> Disp:
@@ -397,7 +414,7 @@ async def reject_invalid_revision_conditions(
     return Disp.CONTINUE
 
 
-async def route_plan_approval_gate(loop: AgentLoop, plan: PlanEvent) -> Disp:
+async def route_plan_approval_gate(loop: _LoopFacet, plan: PlanEvent) -> Disp:
     """Route a persisted candidate through one guarded approval boundary."""
     events = await loop._events()
     try:

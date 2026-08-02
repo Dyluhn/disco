@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..events import (
     ConversationStatus,
@@ -21,13 +21,53 @@ from .turn_control_support import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ConversationModePort,
+        FinishVerificationPort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        FinishVerificationPort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+
+        """Shared loop capability for the Valve composition.
+
+
+        This declaration is inherited by every mixin in the
+
+        composition, so it carries the union of what they reach:
+
+        conversation mode, finish verification, gate counters, the event log,
+    the plan lifecycle, tool execution, turn control.
+
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
 
 class _ValveHost:
-    _loop: AgentLoop
+    _loop: _LoopFacet
 
     async def post_noop_valve(self) -> Disp:
         raise NotImplementedError

@@ -1,10 +1,10 @@
 """Execute-and-observe, hard-reset, and the C20 subagent fan-out.
 
 Extracted from engine.py as a stateful collaborator: `Observer` holds a back-ref
-to its `AgentLoop` and runs the §4.1 execute→observe contract (incl. the F9
+to its `_LoopFacet` and runs the §4.1 execute→observe contract (incl. the F9
 read-dedup gate + sandbox-restart notice), the §8 hard-reset pointer flush, and
 the bounded `delegate_explore` fan-out. Bodies are byte-identical to the former
-AgentLoop methods with `self.` rewritten to `self._loop.` (sibling calls stay
+_LoopFacet methods with `self.` rewritten to `self._loop.` (sibling calls stay
 in-collaborator). None of these methods hold `self._loop._lock` — they run
 outside the conversation lock by contract.
 """
@@ -12,7 +12,7 @@ outside the conversation lock by contract.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..effects import ActionProfile, EffectCapability
 from ..events import ActionEvent, Event, ToolResult
@@ -41,7 +41,24 @@ from .observation_execution import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ContextGroundingPort, ConversationModePort, LoopEventPort, ToolExecutionPort
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        LoopEventPort,
+
+        ToolExecutionPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, the event
+        log, tool execution.
+        """
 
 _DELEGATE_ACTION_PROFILE = ActionProfile(
     capabilities=frozenset(
@@ -64,7 +81,7 @@ _FANOUT_INPUT_MAX_CHARS = 4_000
 
 
 class Observer:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     async def collect_pointer_manifest_paths(self, events: list[Event]) -> list[str]:

@@ -1,8 +1,8 @@
-"""Internal AgentLoop collaborator."""
+"""Internal _LoopFacet collaborator."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
     _FORCE_SUBMIT_DIRECTIVE,
@@ -23,13 +23,38 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ConversationModePort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: conversation mode, gate counters, the event log,
+        the plan lifecycle, turn control.
+        """
 
 
 class PlanSubmissionController:
     """Validate and route one structured planning-phase submission."""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     @staticmethod
@@ -240,7 +265,7 @@ class PlanSubmissionController:
 
 
 async def _handle_submitted_plan(
-    loop: AgentLoop, tool_call: ToolCall, events: list[Event]
+    loop: _LoopFacet, tool_call: ToolCall, events: list[Event]
 ) -> Disp:
     """Compatibility entry point for the historical engine helper."""
     return await PlanSubmissionController(loop).handle(tool_call, events)

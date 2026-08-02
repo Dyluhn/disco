@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from ..llm import OperatingMode
 from .fc_kit import _nearest_tool_name
@@ -18,7 +18,43 @@ from .tool_specs import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ConversationModePort,
+        FinishVerificationPort,
+        GateCounterPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+    )
+
+
+    class _LoopFacet(
+
+
+        ConversationModePort,
+
+
+        FinishVerificationPort,
+
+
+        GateCounterPort,
+
+
+        PlanLifecyclePort,
+
+
+        ToolExecutionPort,
+
+
+        Protocol,
+
+
+    ):
+
+        """The loop capability this module uses: conversation mode, finish verification, gate
+
+        counters, the plan lifecycle, tool execution.
+
+        """
 
 _FORCE_SUBMIT_READ_GRACE = 3
 
@@ -26,7 +62,7 @@ _FORCE_SUBMIT_READ_GRACE = 3
 class ToolVisibility:
     """Own the advertised/accepted tool surface for one loop."""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     def readonly_tool_names(self) -> frozenset[str] | None:

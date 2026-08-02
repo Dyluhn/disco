@@ -1,10 +1,10 @@
 """The model-driving step: tool-set assembly + one bounded `agent.step()`.
 
 Extracted from engine.py as a stateful collaborator: `Driver` holds a back-ref
-to its `AgentLoop` and runs the (e) drive step — mode-scoped tool visibility, the
+to its `_LoopFacet` and runs the (e) drive step — mode-scoped tool visibility, the
 watch-it-write stream hook, the weak-model invalid-tool requery ladder (Rung 7),
 transient-retry backoff, and the context-window hard-reset path. Bodies are
-byte-identical to the former AgentLoop methods with `self.` rewritten to
+byte-identical to the former _LoopFacet methods with `self.` rewritten to
 `self._loop.` (sibling calls stay in-collaborator).
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
 
 from ..context.compaction import CompactionPolicy, context_compact_if_needed
 from ..events import (
@@ -65,7 +65,42 @@ from .tool_visibility import ToolVisibility
 if TYPE_CHECKING:
     from ..llm import StreamChunk
     from .boundaries import StreamHook
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ContextGroundingPort,
+        ConversationModePort,
+        FinishVerificationPort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        FinishVerificationPort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, finish
+        verification, gate counters, the event log, the plan lifecycle, tool execution, turn
+        control.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -121,7 +156,7 @@ def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
 
 
 class Driver:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
         self._tools = ToolVisibility(loop)
 

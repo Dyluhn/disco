@@ -16,7 +16,7 @@ gets duplicated.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from .common import *
 from .common import (
@@ -86,7 +86,12 @@ _REEXPORTED_CONTENT_GATE_PART_NAMES = (
 )
 
 if TYPE_CHECKING:
-    from ..loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ..ports import ConversationModePort, FinishVerificationPort, LoopEventPort
+
+    class _LoopFacet(ConversationModePort, FinishVerificationPort, LoopEventPort, Protocol):
+        """The loop capability this module uses: conversation mode, finish verification, the event
+        log.
+        """
 
 _DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
     {
@@ -195,7 +200,7 @@ def _selected_app_deliverable_present(events: list[Event]) -> bool:
     )
 
 
-def _finish_alias(loop: AgentLoop) -> str | None:
+def _finish_alias(loop: _LoopFacet) -> str | None:
     return getattr(loop, "_finish_alias", None)
 
 
@@ -237,7 +242,7 @@ def _plan_dod_spec(plan: PlanEvent | None) -> DoDSpec | None:
     )
 
 
-async def _dictated_content_fallback_paths(loop: AgentLoop, events: list[Event]) -> list[str]:
+async def _dictated_content_fallback_paths(loop: _LoopFacet, events: list[Event]) -> list[str]:
     """Deliverable-path sources used when no app has been explicitly selected yet."""
 
     paths: list[str] = []

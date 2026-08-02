@@ -36,7 +36,7 @@ exactly the large workspaces where an unsealable finish matters most.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..common import (
     _FINISH_SEAL_CAP,
@@ -49,7 +49,11 @@ from ..common import (
 )
 
 if TYPE_CHECKING:
-    from ...loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ...ports import FinishVerificationPort, GateCounterPort, LoopEventPort
+
+    class _LoopFacet(FinishVerificationPort, GateCounterPort, LoopEventPort, Protocol):
+        """The loop capability this module uses: finish verification, gate counters, the event log.
+        """
 
 
 def _format_blocking_entries(blocking: list[str]) -> str:
@@ -60,7 +64,7 @@ def _format_blocking_entries(blocking: list[str]) -> str:
     return shown
 
 
-async def _emit_seal_refusal(loop: AgentLoop, shown: str, blocking: list[str]) -> None:
+async def _emit_seal_refusal(loop: _LoopFacet, shown: str, blocking: list[str]) -> None:
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -93,7 +97,7 @@ async def _emit_seal_refusal(loop: AgentLoop, shown: str, blocking: list[str]) -
     )
 
 
-async def _emit_seal_loud_release(loop: AgentLoop, shown: str, blocking: list[str]) -> None:
+async def _emit_seal_loud_release(loop: _LoopFacet, shown: str, blocking: list[str]) -> None:
     # Cap reached: LOUD release — mirror the verify/browser valves. The
     # terminal stays reachable; the unsealed truth stays visible (marker +
     # human-facing warning now, strict-seal refusal + typed persistence
@@ -126,7 +130,7 @@ async def _emit_seal_loud_release(loop: AgentLoop, shown: str, blocking: list[st
     )
 
 
-async def seal_gate_allows_finish(loop: AgentLoop) -> bool:
+async def seal_gate_allows_finish(loop: _LoopFacet) -> bool:
     """Run the REL-27 sealability probe and gate. See module docstring."""
     probe = loop._finish_sealability_probe
     if probe is None:

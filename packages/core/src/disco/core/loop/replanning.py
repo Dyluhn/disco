@@ -1,8 +1,8 @@
-"""Internal AgentLoop collaborator."""
+"""Internal _LoopFacet collaborator."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
     _MIDSTEP_STEER_REFUSAL,
@@ -22,11 +22,39 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ContextGroundingPort,
+        ConversationModePort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, gate
+        counters, the event log, the plan lifecycle, turn control.
+        """
 
 
 class ReplanningController:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     async def enter_planning(self, text: str = "") -> ConversationState:

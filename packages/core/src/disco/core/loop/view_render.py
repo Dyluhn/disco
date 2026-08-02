@@ -7,16 +7,16 @@ consumers are unchanged. The remaining view-rendering projections (the plan
 receipts, the F8 arg-shrink transform, the router overflow signal, and the
 ``ViewBuilder`` coordinator) stay here, split under the architecture limits.
 
-Extracted from engine.py (the AgentLoop god-class). These are render-time
+Extracted from engine.py (the _LoopFacet god-class). These are render-time
 projections — they carry no loop state: the snapshot takes the sandbox
 explicitly, the others are pure over their inputs. Bodies are byte-identical to
-the former AgentLoop methods.
+the former _LoopFacet methods.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..context import (
     ArtifactMemoryStore,
@@ -78,7 +78,32 @@ from .view_snapshot import (
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ContextGroundingPort,
+        ConversationModePort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+    )
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, the event
+        log, the plan lifecycle, tool execution.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -396,14 +421,14 @@ class ViewBuilder:
     """Materialize the model-facing View each turn: microcompact, condense if
     triggered (§8), gate the C6 tail-recap, apply the F8 shrink (assist), and
     append the always-fresh workspace snapshot. Back-ref collaborator: body is
-    byte-identical to the former AgentLoop._materialize_view with self. →
+    byte-identical to the former _LoopFacet._materialize_view with self. →
     self._loop..
 
     W2 addition: holds a ``FileStateTracker`` instance across turns to power
     the stale-aware snapshot (full body only for stale/never-shown files,
     one-line pointer for unchanged known files) and the stale-change notice."""
 
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
         # W2 — per-ViewBuilder file-state tracker (mutable, survives across
         # turns). Starts empty; populated by workspace_snapshot_message as

@@ -10,7 +10,7 @@ this text out is a pure LOC/complexity extraction: no wording, ordering, or
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ....events import (
     ConversationStatus,
@@ -26,11 +26,14 @@ from ...plan_conditions import DictatedContentCondition
 from .errors import _DictatedContentInspectionIncomplete
 
 if TYPE_CHECKING:
-    from ...loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ...ports import GateCounterPort, LoopEventPort, TurnControlPort
+
+    class _LoopFacet(GateCounterPort, LoopEventPort, TurnControlPort, Protocol):
+        """The loop capability this module uses: gate counters, the event log, turn control."""
 
 
 async def emit_dictated_content_inspection_incomplete_notice(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     inspection_error: _DictatedContentInspectionIncomplete,
     inspection_cause: dict[str, str | int],
 ) -> None:
@@ -59,7 +62,7 @@ async def emit_dictated_content_inspection_incomplete_notice(
 
 
 async def emit_dictated_content_cap_release_notice(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     cond: DictatedContentCondition,
     file_word: str,
     files: str,
@@ -89,7 +92,7 @@ async def emit_dictated_content_cap_release_notice(
 
 
 async def emit_dictated_content_refusal_notice(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     cond: DictatedContentCondition,
     file_word: str,
     files: str,
@@ -122,7 +125,7 @@ async def emit_dictated_content_refusal_notice(
     )
 
 
-async def emit_dangling_plan_evidence_notice(loop: AgentLoop) -> None:
+async def emit_dangling_plan_evidence_notice(loop: _LoopFacet) -> None:
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -146,7 +149,7 @@ async def emit_dangling_plan_evidence_notice(loop: AgentLoop) -> None:
     )
 
 
-async def emit_dod_workspace_unavailable_notice(loop: AgentLoop) -> None:
+async def emit_dod_workspace_unavailable_notice(loop: _LoopFacet) -> None:
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -165,7 +168,7 @@ async def emit_dod_workspace_unavailable_notice(loop: AgentLoop) -> None:
 
 
 async def emit_plan_verifier_failure_notice(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     plan: PlanEvent,
     failure: PlanVerifierFailure,
     failed_results: list[Any],
@@ -204,7 +207,7 @@ async def emit_plan_verifier_failure_notice(
     )
 
 
-async def emit_plan_verifier_replan_required_notice(loop: AgentLoop) -> None:
+async def emit_plan_verifier_replan_required_notice(loop: _LoopFacet) -> None:
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -229,7 +232,7 @@ async def emit_plan_verifier_replan_required_notice(loop: AgentLoop) -> None:
 
 
 async def emit_plan_verification_passed_notice(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     plan: PlanEvent,
     predicate_fps: list[str],
     spec_fingerprint: str,
@@ -248,7 +251,7 @@ async def emit_plan_verification_passed_notice(
     )
 
 
-async def emit_external_dod_cap_pause_notice(loop: AgentLoop) -> None:
+async def emit_external_dod_cap_pause_notice(loop: _LoopFacet) -> None:
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -266,7 +269,7 @@ async def emit_external_dod_cap_pause_notice(loop: AgentLoop) -> None:
     )
 
 
-async def emit_external_dod_unmet_notice(loop: AgentLoop, verdict: Any) -> None:
+async def emit_external_dod_unmet_notice(loop: _LoopFacet, verdict: Any) -> None:
     unmet_lines: list[str] = []
     for result in verdict.results:
         if result.passed:
@@ -298,7 +301,7 @@ async def emit_external_dod_unmet_notice(loop: AgentLoop, verdict: Any) -> None:
     )
 
 
-async def land_execution_nudge_exhausted(loop: AgentLoop, execution_nudges: int) -> None:
+async def land_execution_nudge_exhausted(loop: _LoopFacet, execution_nudges: int) -> None:
     await loop._land_blocked(
         reason="approve_plan_no_execution",
         guidance=(
@@ -311,7 +314,7 @@ async def land_execution_nudge_exhausted(loop: AgentLoop, execution_nudges: int)
     )
 
 
-async def emit_execution_nudge(loop: AgentLoop, thought: str, nudge_text: str) -> bool:
+async def emit_execution_nudge(loop: _LoopFacet, thought: str, nudge_text: str) -> bool:
     """Surface the model's reasoning (if any) then send the nudge.
 
     Returns True iff the thought was non-blank and got surfaced — the caller

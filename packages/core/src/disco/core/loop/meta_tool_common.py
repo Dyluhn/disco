@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..effects import ActionProfile, EffectCapability
 from ..events import (
@@ -28,13 +28,48 @@ from .turn_control_support import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ContextGroundingPort,
+        ConversationModePort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class MetaToolLoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+
+        """Shared loop capability for the MetaToolHandlers composition.
+
+        Inherited by every mixin in the composition, so it carries the
+        union of what they reach: context grounding, conversation mode, gate
+        counters, the event log, the plan lifecycle, tool execution, turn control.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
 
 class MetaToolCommonMixin:
-    _loop: AgentLoop
+    _loop: MetaToolLoopFacet
 
     async def handle_notify_user(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..events import ConversationStatus, PlanEvent, PlanStep, StatusEvent
 from ..llm import OperatingMode
@@ -10,7 +10,12 @@ from ..workflow import WorkflowRun
 from . import signals
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ConversationModePort, LoopEventPort, PlanLifecyclePort
+
+    class _LoopFacet(ConversationModePort, LoopEventPort, PlanLifecyclePort, Protocol):
+        """The loop capability this module uses: conversation mode, the event log, the plan
+        lifecycle.
+        """
 
 
 def _workflow_plan_title(workflow_run: WorkflowRun) -> str:
@@ -21,7 +26,7 @@ def _workflow_plan_title(workflow_run: WorkflowRun) -> str:
 
 
 async def seed_approved_workflow_plan(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     workflow_run: WorkflowRun,
 ) -> None:
     """Append the same plan+approval facts an already-approved workflow represents."""
@@ -42,7 +47,7 @@ async def seed_approved_workflow_plan(
     await loop._seed_context_from_plan()
 
 
-async def abort_workflow_to_router(loop: AgentLoop) -> None:
+async def abort_workflow_to_router(loop: _LoopFacet) -> None:
     """Clear the sealed workflow run and return the loop to router planning mode."""
     loop._workflow_run = None
     loop.mode = OperatingMode.PLANNING

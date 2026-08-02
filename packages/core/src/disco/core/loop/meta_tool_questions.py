@@ -26,13 +26,13 @@ from .turn_control_support import (
 
 if TYPE_CHECKING:
     from ..events import ClarifyQuestionItem, QuestionsV2Item
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .meta_tool_common import MetaToolLoopFacet
 
 _LOG = logging.getLogger("disco.loop")
 
 
 class MetaToolQuestionMixin:
-    _loop: AgentLoop
+    _loop: MetaToolLoopFacet
 
     async def _refuse_questions_v2(self, step: AgentStep, message: str) -> Disp:
         assert step.tool_call is not None

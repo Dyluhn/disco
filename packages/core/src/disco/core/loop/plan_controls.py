@@ -1,8 +1,8 @@
-"""Internal AgentLoop collaborator."""
+"""Internal _LoopFacet collaborator."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..events import AlternativeOption
 from .engine_contracts import (
@@ -33,11 +33,39 @@ from .engine_contracts import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import (
+        ConversationModePort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: conversation mode, gate counters, the event log,
+        the plan lifecycle, tool execution, turn control.
+        """
 
 
 class PlanApprovalController:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     async def _plan_approval_status(

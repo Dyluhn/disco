@@ -24,7 +24,7 @@ import re  # noqa: F401 — compatibility facade binding
 import shlex  # noqa: F401 — compatibility facade binding
 from collections.abc import Callable  # noqa: F401 — compatibility facade binding
 from pathlib import PurePosixPath  # noqa: F401 — compatibility facade binding
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlsplit  # noqa: F401 — compatibility facade binding
 
 from ..appkit.spec import (  # noqa: F401 — compatibility facade bindings
@@ -133,13 +133,30 @@ from .planner_arguments import (  # noqa: F401 — re-exported for back-compat
 from .turn_control import _CONTINUE_OPTION_ID
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ConversationModePort, GateCounterPort, LoopEventPort, PlanLifecyclePort
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: conversation mode, gate counters, the event log,
+        the plan lifecycle.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
 
 class Planner:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     def discard_plan_predicates(self, revision: int) -> None:

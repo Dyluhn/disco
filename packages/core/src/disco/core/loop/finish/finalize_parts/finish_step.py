@@ -10,7 +10,7 @@ the ``if verify_cmd:`` block of ``_FinalizeMixin.normalize_finish_step`` in
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..common import (
     _FINISH_VERIFY_CAP,
@@ -26,10 +26,13 @@ from .plan_verifier_preflight import preflight_failed_plan_verifier
 from .verify_receipt import reuse_finish_verify_receipt
 
 if TYPE_CHECKING:
-    from ...loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ...ports import GateCounterPort, LoopEventPort
+
+    class _LoopFacet(GateCounterPort, LoopEventPort, Protocol):
+        """The loop capability this module uses: gate counters, the event log."""
 
 
-async def _emit_malformed_strip_notice(loop: AgentLoop, verify_cmd: str) -> None:
+async def _emit_malformed_strip_notice(loop: _LoopFacet, verify_cmd: str) -> None:
     # Broken CHECK, not a failed task → auto-strip and finish.
     await loop._emit(
         MessageEvent(
@@ -52,7 +55,7 @@ async def _emit_malformed_strip_notice(loop: AgentLoop, verify_cmd: str) -> None
     )
 
 
-async def _emit_verify_refusal(loop: AgentLoop, verify_cmd: str) -> None:
+async def _emit_verify_refusal(loop: _LoopFacet, verify_cmd: str) -> None:
     # Real failure: refuse + keep working (the forcing function).
     await loop._emit(
         MessageEvent(
@@ -76,7 +79,7 @@ async def _emit_verify_refusal(loop: AgentLoop, verify_cmd: str) -> None:
     )
 
 
-async def _emit_verify_cap_release(loop: AgentLoop, verify_cmd: str) -> None:
+async def _emit_verify_cap_release(loop: _LoopFacet, verify_cmd: str) -> None:
     # Cap reached: LOUD release — don't grind forever on a gate the model
     # can't satisfy (mirrors the browser-verify valve). The failure stays
     # visible (status detail + reminder + summary).
@@ -124,7 +127,7 @@ async def _emit_verify_cap_release(loop: AgentLoop, verify_cmd: str) -> None:
 
 
 async def resolve_finish_verify_disposition(
-    loop: AgentLoop,
+    loop: _LoopFacet,
     verify_cmd: str,
     events: list[Event],
     *,

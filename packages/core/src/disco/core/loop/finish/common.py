@@ -1,7 +1,7 @@
 """Shared implementation for the finish path package.
 
 Extracted from engine.py as a stateful collaborator: `FinishGate` holds a
-back-ref to its `AgentLoop` and runs the affirmative-finish pipeline. The
+back-ref to its `_LoopFacet` and runs the affirmative-finish pipeline. The
 module-level verify-command builders, the web-deliverable / browser-verify
 helpers, the finish-cap constants, and the `_DoDWorkspaceUnavailable` exception
 moved here too (re-exported from engine for back-compat). Method bodies are
@@ -21,7 +21,7 @@ import json
 import logging
 import posixpath
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from ...context.artifact_projection import (
     artifact_manifest_reader_enabled,
@@ -142,7 +142,42 @@ from ._common_parts.verifier_values import (
 )
 
 if TYPE_CHECKING:
-    from ..loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ..ports import (
+        ConversationModePort,
+        FinishVerificationPort,
+        GateCounterPort,
+        LoopEventPort,
+        PlanLifecyclePort,
+        ToolExecutionPort,
+        TurnControlPort,
+    )
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        FinishVerificationPort,
+
+        GateCounterPort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        TurnControlPort,
+
+        Protocol,
+
+    ):
+
+        """Shared loop capability for the FinishGate composition.
+
+        Inherited by every mixin in the composition, so it carries the
+        union of what they reach: conversation mode, finish verification, gate counters, the event
+        log, the plan lifecycle, tool execution, turn control.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -176,7 +211,7 @@ _HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
 _FALSY = frozenset({"0", "false", "no", "off"})
 
 
-def _appkit_scope_active(loop: AgentLoop) -> bool:
+def _appkit_scope_active(loop: _LoopFacet) -> bool:
     """True when the loop is running under the strict AppKit tool surface.
 
     The build-phase tool-surface signal is ``verify_appkit_app``: it is present in
@@ -778,7 +813,7 @@ class _DoDWorkspaceUnavailable(Exception):
 
 class _FinishGateProto:
     if TYPE_CHECKING:
-        _loop: AgentLoop
+        _loop: _LoopFacet
 
         def _contract_required_deliverable_paths(self) -> list[str]: ...
 

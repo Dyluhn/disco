@@ -31,13 +31,13 @@ from .turn_control_support import (
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .meta_tool_common import MetaToolLoopFacet
 
 _LOG = logging.getLogger("disco.loop")
 
 
 class MetaToolPlanningMixin:
-    _loop: AgentLoop
+    _loop: MetaToolLoopFacet
 
     @staticmethod
     def _invalid_empty_revision_count(events: list[Event]) -> int:

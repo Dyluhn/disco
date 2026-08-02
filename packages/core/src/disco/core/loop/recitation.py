@@ -1,15 +1,15 @@
 """Recitation cadence (C6) + scheduled re-grounding (HS-03) + MEMORY write-through.
 
 Extracted from engine.py as a stateful collaborator: `RecitationRegrounder`
-holds a back-reference to its `AgentLoop` and reads/writes the loop's cadence
+holds a back-reference to its `_LoopFacet` and reads/writes the loop's cadence
 counters (`_recitation_*`, `_hs03_reground_*`) and emits through the loop's
-primitives. Method bodies are byte-identical to the former AgentLoop methods,
+primitives. Method bodies are byte-identical to the former _LoopFacet methods,
 with `self.` mechanically rewritten to `self._loop.`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..events import (
     Event,
@@ -24,7 +24,24 @@ from .messages import _hs03_reground_message, _latest_user_instruction
 
 if TYPE_CHECKING:
     from .boundaries import Sandbox
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ContextGroundingPort, ConversationModePort, LoopEventPort, ToolExecutionPort
+
+    class _LoopFacet(
+
+        ContextGroundingPort,
+
+        ConversationModePort,
+
+        LoopEventPort,
+
+        ToolExecutionPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: context grounding, conversation mode, the event
+        log, tool execution.
+        """
 
 # The view.py tag for the tail recitation. We look at the last rendered
 # message to decide whether to keep it — if it starts with this sentinel it
@@ -33,7 +50,7 @@ _RECITATION_SENTINEL = "<current-objective>"
 
 
 class RecitationRegrounder:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     def recitation_signature(self, events: list[Event]) -> str | None:

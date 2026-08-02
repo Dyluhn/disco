@@ -9,7 +9,7 @@ now delegates here.
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from ..common import (
     ActionEvent,
@@ -22,7 +22,10 @@ from ..common import (
 )
 
 if TYPE_CHECKING:
-    from ...loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from ...ports import LoopEventPort
+
+    class _LoopFacet(LoopEventPort, Protocol):
+        """The loop capability this module uses: the event log."""
 
 
 def _latest_action_event(events: list[Event]) -> ActionEvent | None:
@@ -60,7 +63,7 @@ def _plan_verifier_failed_after(events: list[Event], since_index: int) -> bool:
 
 
 async def reuse_finish_verify_receipt(
-    loop: AgentLoop, verify_cmd: str, events: list[Event]
+    loop: _LoopFacet, verify_cmd: str, events: list[Event]
 ) -> bool:
     """Reuse one exact, immediately preceding executor-backed shell result.
 

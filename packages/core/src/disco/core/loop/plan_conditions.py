@@ -1,10 +1,10 @@
 """C18 — advisory plan-step done-condition evaluation.
 
 Extracted from engine.py as a stateful collaborator: `PlanStepConditions` holds
-a back-ref to its `AgentLoop`, reads the loop's per-(revision, index) predicate
+a back-ref to its `_LoopFacet`, reads the loop's per-(revision, index) predicate
 map, and emits advisory notes through the loop's primitives. Sibling calls stay
 inside the collaborator; loop state/primitives go through `self._loop`. Bodies
-byte-identical to the former AgentLoop methods.
+byte-identical to the former _LoopFacet methods.
 
 Dictated-content condition extraction lives in :mod:`dictated_content_conditions`
 and is re-exported here as the compatibility surface.
@@ -17,7 +17,7 @@ import os
 import re  # noqa: F401 — compatibility facade binding
 import shlex
 from dataclasses import dataclass  # noqa: F401 — compatibility facade binding
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..context import ArtifactMemoryStore, context_mark_resolved, context_write_summary
 from ..dod import (
@@ -74,7 +74,24 @@ from .dictated_content_conditions import (  # noqa: F401 — re-exported for bac
 )
 
 if TYPE_CHECKING:
-    from .loop_facade_compat import _AgentLoopCompatibility as AgentLoop
+    from .ports import ConversationModePort, LoopEventPort, PlanLifecyclePort, ToolExecutionPort
+
+    class _LoopFacet(
+
+        ConversationModePort,
+
+        LoopEventPort,
+
+        PlanLifecyclePort,
+
+        ToolExecutionPort,
+
+        Protocol,
+
+    ):
+        """The loop capability this module uses: conversation mode, the event log, the plan
+        lifecycle, tool execution.
+        """
 
 _LOG = logging.getLogger("disco.loop")
 _PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})
@@ -125,7 +142,7 @@ def _resolve_persisted_action(events: list[Event], action: ActionEvent) -> Actio
 
 
 def _emit_step_done_note(
-    loop: AgentLoop, idx: int, latest_plan: PlanEvent, passed: bool, reason: str
+    loop: _LoopFacet, idx: int, latest_plan: PlanEvent, passed: bool, reason: str
 ) -> MessageEvent:
     verdict_word = "met" if passed else "NOT met"
     body = (
@@ -141,7 +158,7 @@ def _emit_step_done_note(
 
 
 class PlanStepConditions:
-    def __init__(self, loop: AgentLoop) -> None:
+    def __init__(self, loop: _LoopFacet) -> None:
         self._loop = loop
 
     async def maybe_emit_plan_step_done_condition_note(self, action: ActionEvent) -> None:
