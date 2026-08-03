@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from disco.agent_server import runtime_compatibility
 from disco.agent_server.app import _make_runtime_lifespan
 from disco.agent_server.runtime import ConversationRuntime
 from disco.agent_server.runtime_composition import wire_runtime
@@ -82,15 +81,8 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
         "send_user_turn",
         "start",
     }
-    compatibility = {
-        name
-        for name, member in vars(runtime_compatibility).items()
-        if inspect.isfunction(member)
-        and not name.startswith("_")
-        and name != "install_runtime_compatibility"
-    }
-
-    assert len(active_ingress) == 12
+    active_ingress.add("execute_disco_tool")
+    assert len(active_ingress) == 13
     # 13-B1 dissolved seven collaborator families (29 delegates): _share,
     # _spaces, _suggestion_service, _title_service, _schedule, _uploads and
     # _run_sweep are now the declared public seam share/spaces/suggestions/
@@ -100,15 +92,10 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # sandbox_resources/live_sessions/conversation_control/drivers. 13-B3
     # dissolved four more (18 delegates): _preview, _dr, _mcp and
     # _run_controller, now preview/deep_research/mcp/run_controller. 13-B5
-    # dissolved the remaining single-owner families; execute_disco_tool remains
-    # as the final orchestration delegate. This count
-    # is a ratchet: it falls as 13-B proceeds and must never rise.
-    assert len(compatibility) == 1
-    assert public == active_ingress | compatibility
-    assert all(
-        getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
-        for name in compatibility
-    )
+    # B6 owns the final orchestration directly in runtime.py; no compatibility
+    # installer or facade delegate remains.
+    assert public == active_ingress
+    assert ConversationRuntime.execute_disco_tool.__module__ == "disco.agent_server.runtime"
 
 
 def test_application_owners_do_not_retain_the_runtime() -> None:

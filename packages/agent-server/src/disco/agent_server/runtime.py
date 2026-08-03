@@ -14,8 +14,12 @@ import os
 from typing import TYPE_CHECKING, Any, cast
 
 from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
+    EventSource,
     MessageEvent,
+    ObservationEvent,
     PlanEvent,
     SkillStore,
     StatusEvent,
@@ -66,7 +70,6 @@ from .build_loop_components import (
     workflow_router_enabled as workflow_router_enabled,
 )
 from .driver_context import ResolvedDriverContext
-from .runtime_compatibility import install_runtime_compatibility
 from .runtime_composition import wire_runtime
 from .runtime_model_probe import (
     _LIVE_MODEL_PROBE_CACHE as _LIVE_MODEL_PROBE_CACHE,
@@ -468,4 +471,38 @@ class ConversationRuntime:
         await self._run_supervisor.close_resources()
 
 
-install_runtime_compatibility(ConversationRuntime)
+async def execute_disco_tool(
+    self: ConversationRuntime, conversation_id: str, tool_call: ToolCall
+) -> ToolResult:
+    """Execute one composed tool and record its action/result events."""
+
+    executor = self._run_resources.executor(conversation_id)
+    if executor is None:
+        self._loop_factory.loop_for(conversation_id)
+        executor = self._run_resources.executor(conversation_id)
+    if executor is None:
+        raise RuntimeError("tool executor was not composed")
+    action = ActionEvent(
+        source=EventSource.AGENT,
+        thought=f"[disco] {tool_call.tool_name}",
+        tool_call=tool_call,
+    )
+    await self._store.append(conversation_id, action)
+    result = await executor.execute(tool_call)
+    if result.success:
+        await self._store.append(
+            conversation_id, ObservationEvent(tool_result=result, action_id=action.id)
+        )
+    else:
+        await self._store.append(
+            conversation_id,
+            AgentErrorEvent(
+                error=result.error or "tool failed",
+                action_id=action.id,
+                tool_call_id=tool_call.call_id,
+            ),
+        )
+    return result
+
+
+ConversationRuntime.execute_disco_tool = execute_disco_tool

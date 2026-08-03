@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "bea3945c73bcfefcee45d5860639d3b543cb404b",
+  "source_identity": "b8d3c2de483fd59e1d1b1a407503717167bd0748",
   "collected": {
     "counts": {
       "packages": 9880,
@@ -11539,7 +11539,7 @@
     }
   },
   "mapping_static": {
-    "identity": "bea3945c73bcfefcee45d5860639d3b543cb404b",
+    "identity": "b8d3c2de483fd59e1d1b1a407503717167bd0748",
     "python_test_file_count": 792,
     "python_static_test_id_count": 9396,
     "python_test_files": [
@@ -26929,7 +26929,7 @@
       "package": "PKG-02-GATE-13B6",
       "root": "multiple",
       "source_identity_before": "fb946d1234f101c539a5cfb59d59f8692263a19c",
-      "source_identity_after": "bea3945c73bcfefcee45d5860639d3b543cb404b",
+      "source_identity_after": "b8d3c2de483fd59e1d1b1a407503717167bd0748",
       "collected_roots": {
         "packages": {
           "before_count": 9880,
