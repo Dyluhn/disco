@@ -433,7 +433,7 @@ async def test_reconstruction_events_land_before_running_flip():
     await store.append(CID, action)
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
 
-    result = await rt.resume_conversation(CID)
+    result = await rt.conversation_control.resume_conversation(CID)
     await _cancel_task(rt)
 
     assert result["ok"] is True

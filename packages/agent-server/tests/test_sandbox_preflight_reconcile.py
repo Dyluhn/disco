@@ -177,7 +177,7 @@ async def test_reconcile_destroys_stale_backend_sessions_only():
     fresh_pending = _FakeSession("local")
     rt._run_resources.set_pending_session("c3", fresh_pending)
 
-    n = await rt.reconcile_sandbox_backend()
+    n = await rt.sandbox_resources.reconcile()
 
     assert n == 2
     assert stale_pending.destroyed and not rt._run_resources.has_pending_session("c1")
@@ -204,7 +204,7 @@ async def test_reconcile_skips_live_running_conversation():
     task = asyncio.create_task(_running())
     rt._run_registry.register_task("c1", task)  # type: ignore[arg-type]
     try:
-        n = await rt.reconcile_sandbox_backend()
+        n = await rt.sandbox_resources.reconcile()
         assert n == 0
         assert not busy.destroyed and rt._run_resources.has_executor("c1")  # mid-turn → untouched
     finally:
@@ -224,7 +224,7 @@ async def test_evict_stale_backend_lazy_path_drops_cached_loop():
     pending = _FakeSession("gvisor")
     rt._run_resources.set_pending_session("c1", pending)
 
-    rt._sandbox_resources.evict_stale("c1")  # synchronous eviction + scheduled async destroy
+    rt.sandbox_resources.evict_stale("c1")  # synchronous eviction + scheduled async destroy
 
     assert not rt._run_resources.has_executor("c1") and rt._loop_registry.loop("c1") is None
     assert not rt._run_resources.has_pending_session("c1")
@@ -243,7 +243,7 @@ async def test_evict_stale_backend_noop_when_backend_unchanged():
     rt._run_resources.set_executor("c1", _fake_executor(sess))
     rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     assert (
         rt._run_resources.has_executor("c1")
         and rt._loop_registry.loop("c1") is not None
@@ -266,7 +266,7 @@ async def test_evict_stale_backend_uses_effective_local_podman_identity(monkeypa
     rt._run_resources.set_executor("c1", _fake_executor(session))
     rt._loop_registry.bind("c1", loop)  # type: ignore[arg-type]
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
     assert rt._run_resources.executor("c1")._sandbox is session  # type: ignore[union-attr]
@@ -295,7 +295,7 @@ async def test_evict_stale_backend_uses_effective_podman_socket_identity(monkeyp
     rt._run_resources.set_executor("c1", _fake_executor(session))
     rt._loop_registry.bind("c1", loop)  # type: ignore[arg-type]
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
     assert rt._run_resources.executor("c1")._sandbox is session  # type: ignore[union-attr]
@@ -315,7 +315,7 @@ async def test_reconcile_preserves_effective_local_podman_identity(monkeypatch):
     session = _FakeSession("podman")
     rt._run_resources.set_pending_session("c1", session)
 
-    assert await rt.reconcile_sandbox_backend() == 0
+    assert await rt.sandbox_resources.reconcile() == 0
     assert rt._run_resources.pending_session("c1") is session
     assert not session.destroyed
 
@@ -332,7 +332,7 @@ async def test_reconcile_effective_engine_change_still_evicts(monkeypatch):
     stale = _FakeSession("podman")
     rt._run_resources.set_pending_session("c1", stale)
 
-    assert await rt.reconcile_sandbox_backend() == 1
+    assert await rt.sandbox_resources.reconcile() == 1
     assert stale.destroyed
     assert not rt._run_resources.has_pending_session("c1")
 
@@ -355,7 +355,7 @@ async def test_evict_stale_backend_skips_gated_conversation():
         "c1", ConversationStatus.AWAITING_PLAN_APPROVAL
     )  # parked at a gate
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
     assert (
@@ -375,7 +375,7 @@ async def test_evict_stale_backend_evicts_idle_conversation():
     rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
     rt._run_recovery.record_status("c1", ConversationStatus.IDLE)  # not a gate
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -400,7 +400,7 @@ async def test_reconcile_skips_gated_conversation():
     rt._run_resources.set_executor("c2", _fake_executor(idle))
     rt._loop_registry.bind("c2", object())  # type: ignore[arg-type]
 
-    n = await rt.reconcile_sandbox_backend()
+    n = await rt.sandbox_resources.reconcile()
 
     assert n == 1
     assert not gated.destroyed and rt._run_resources.has_executor("c1")  # gated → preserved
@@ -425,7 +425,7 @@ async def test_evict_stale_backend_clears_rehydrated_marker():
     rt._connection_state._wake_locks["c1"] = asyncio.Lock()
     rt._connection_state._last_sessions["c1"] = [object()]  # type: ignore[list-item]
 
-    rt._sandbox_resources.evict_stale("c1")
+    rt.sandbox_resources.evict_stale("c1")
     await asyncio.sleep(0)
 
     assert (
@@ -446,6 +446,6 @@ async def test_reconcile_clears_rehydrated_marker():
     rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
     rt._lifecycle._rehydration._rehydrated.add("c1")
 
-    await rt.reconcile_sandbox_backend()
+    await rt.sandbox_resources.reconcile()
 
     assert "c1" not in rt._lifecycle._rehydration._rehydrated

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "9e51ab9b8c2d46a66ec583bb7abbb9d5649f8df0",
+  "source_identity": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
   "collected": {
     "counts": {
       "packages": 9880,
@@ -11539,7 +11539,7 @@
     }
   },
   "mapping_static": {
-    "identity": "9e51ab9b8c2d46a66ec583bb7abbb9d5649f8df0",
+    "identity": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
     "python_test_file_count": 792,
     "python_static_test_id_count": 9396,
     "python_test_files": [
@@ -23575,7 +23575,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_workspace_route.py",
-        "line": 58,
+        "line": 66,
         "fixture": "bare_client",
         "scope": "pytest.fixture"
       },
@@ -23683,7 +23683,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_workspace_route.py",
-        "line": 52,
+        "line": 60,
         "fixture": "client",
         "scope": "pytest.fixture"
       },
@@ -23887,7 +23887,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_artifact_route.py",
-        "line": 219,
+        "line": 213,
         "fixture": "live_client",
         "scope": "pytest.fixture"
       },
@@ -29167,6 +29167,39 @@
             "path": "packages/agent-server/tests/test_wo_a4_bus_quota_integration.py",
             "line": 57,
             "fixture": "a4",
+            "scope": "pytest.fixture"
+          }
+        ]
+      }
+    },
+    {
+      "package": "PKG-02-GATE-13B2",
+      "root": "multiple",
+      "source_identity_before": "9e51ab9b8c2d46a66ec583bb7abbb9d5649f8df0",
+      "source_identity_after": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_workspace_route.py",
+            "line": 66,
+            "fixture": "bare_client",
+            "scope": "pytest.fixture"
+          },
+          {
+            "path": "packages/agent-server/tests/test_workspace_route.py",
+            "line": 60,
+            "fixture": "client",
+            "scope": "pytest.fixture"
+          },
+          {
+            "path": "packages/agent-server/tests/test_artifact_route.py",
+            "line": 213,
+            "fixture": "live_client",
             "scope": "pytest.fixture"
           }
         ]

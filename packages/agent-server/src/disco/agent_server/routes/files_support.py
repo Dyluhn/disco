@@ -155,7 +155,7 @@ async def ingest_uploads(
     store: SqliteEventStore,
     runtime: ConversationRuntime,
 ) -> UploadBatch:
-    session = runtime.upload_session(conversation_id)
+    session = runtime.sessions.upload_session(conversation_id)
     saved: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for upload in files:
@@ -196,7 +196,7 @@ async def _read_artifact_bytes(
 ) -> bytes | None:
     if is_runtime_secret_path(norm):
         return None
-    session = runtime.live_session(conversation_id)
+    session = runtime.live_sessions.live_session(conversation_id)
     if session is not None:
         with contextlib.suppress(Exception):
             return await session.read_file(norm)

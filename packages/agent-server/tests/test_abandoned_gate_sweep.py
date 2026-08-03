@@ -108,7 +108,7 @@ async def test_connected_gate_not_reaped_even_past_ttl(monkeypatch):
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = await _gated_conv(store, "conv_connected", ConversationStatus.AWAITING_USER_DECISION)
-    rt.on_connect(cid)  # UI attached
+    rt.connections.on_connect(cid)  # UI attached
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
     reaped = await rt.sweep_abandoned_gates_once()

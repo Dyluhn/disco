@@ -106,9 +106,9 @@ async def test_pin_survives_later_controls(store: SqliteEventStore) -> None:
     await runtime.send_user_turn(CID, "build it")
     pinned = runtime._kernel_pins.current(CID)
 
-    await runtime._conversation_control.confirm(CID)
+    await runtime.conversation_control.confirm(CID)
     runtime._control.confirm.assert_awaited_once_with(CID)
-    await runtime._conversation_control.approve_plan(CID)
+    await runtime.conversation_control.approve_plan(CID)
     runtime._control.approve_plan.assert_awaited_once_with(CID)
     assert runtime._kernel_pins.current(CID) is pinned is runtime._disco_kernel
 
@@ -131,7 +131,7 @@ async def test_pin_survives_midrun_config_change(store: SqliteEventStore) -> Non
     pinned = runtime._kernel_pins.current(CID)
 
     _set_legacy_kernel_value(runtime, "pi_experimental")
-    await runtime._conversation_control.confirm(CID)
+    await runtime.conversation_control.confirm(CID)
 
     assert runtime._kernel_pins.current(CID) is pinned is runtime._disco_kernel
 
@@ -152,19 +152,19 @@ def test_legacy_kernel_values_pin_disco(
 async def test_every_control_op_pins_when_no_pin_exists(store: SqliteEventStore) -> None:
     for op, check in (
         (
-            lambda runtime: runtime._conversation_control.reject(CID, "no"),
+            lambda runtime: runtime.conversation_control.reject(CID, "no"),
             lambda runtime: runtime._control.reject,
         ),
         (
-            lambda runtime: runtime._conversation_control.approve_plan(CID),
+            lambda runtime: runtime.conversation_control.approve_plan(CID),
             lambda runtime: runtime._control.approve_plan,
         ),
         (
-            lambda runtime: runtime._conversation_control.request_plan(CID, "again"),
+            lambda runtime: runtime.conversation_control.request_plan(CID, "again"),
             lambda runtime: runtime._control.request_plan,
         ),
         (
-            lambda runtime: runtime._conversation_control.pick_alternative(CID, "opt-1"),
+            lambda runtime: runtime.conversation_control.pick_alternative(CID, "opt-1"),
             lambda runtime: runtime._test_loop.pick_alternative,
         ),
     ):
@@ -182,7 +182,7 @@ async def test_control_op_raise_rolls_back_freshly_created_pin(
     runtime._control.confirm = AsyncMock(side_effect=RuntimeError("kernel down"))
 
     with pytest.raises(RuntimeError, match="kernel down"):
-        await runtime._conversation_control.confirm(CID)
+        await runtime.conversation_control.confirm(CID)
 
     assert runtime._kernel_pins.current(CID) is None
 
@@ -196,7 +196,7 @@ async def test_control_op_raise_preserves_a_preexisting_pin(
     runtime._control.confirm = AsyncMock(side_effect=RuntimeError("boom"))
 
     with pytest.raises(RuntimeError, match="boom"):
-        await runtime._conversation_control.confirm(CID)
+        await runtime.conversation_control.confirm(CID)
 
     assert runtime._kernel_pins.current(CID) is pinned
 

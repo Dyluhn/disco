@@ -568,7 +568,7 @@ async def test_apply_change_on_finished_reresolves_driver(tmp_path, monkeypatch)
     assert ok is True
     assert rt._loop_registry.loop("c1") is None
     # The next compose resolves AGENT_DRIVER to the NEW model (not the old one).
-    router = rt._drivers.router(pick=rt._settings.model_binding._model_overrides["c1"])
+    router = rt.drivers.router(pick=rt._settings.model_binding._model_overrides["c1"])
     assert router._config.assignments[ModelRole.AGENT_DRIVER] == new
 
 
@@ -631,7 +631,7 @@ async def test_explicit_null_on_terminal_clears_override_to_default(tmp_path, mo
     assert "c1" not in rt._settings.model_binding._model_overrides  # CLEARED (not left at model_a)
     assert rt._loop_registry.loop("c1") is None  # evicted → next kick re-resolves
     # The next compose resolves AGENT_DRIVER to the DEFAULT, not the prior explicit A.
-    resolved = rt._drivers.router(
+    resolved = rt.drivers.router(
         pick=rt._settings.model_binding._model_overrides.get("c1")
     )._config.model_for(ModelRole.AGENT_DRIVER)
     assert resolved == default

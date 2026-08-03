@@ -46,7 +46,7 @@ def test_live_url_route_disabled_returns_503():
     store = MagicMock(spec=SqliteEventStore)
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
-    runtime.live_session.return_value = None
+    runtime.live_sessions.live_session.return_value = None
 
     app = create_app(store, runtime=runtime)
 
@@ -82,7 +82,7 @@ def test_live_url_route_no_sandbox_returns_503():
     store = MagicMock(spec=SqliteEventStore)
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
-    runtime.live_session.return_value = None  # no sandbox
+    runtime.live_sessions.live_session.return_value = None  # no sandbox
 
     app = create_app(store, runtime=runtime)
 
@@ -127,7 +127,7 @@ def _enabled_app(*, session, upstream):
     store = MagicMock(spec=SqliteEventStore)
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
-    runtime.live_session.return_value = session
+    runtime.live_sessions.live_session.return_value = session
     runtime.wake_for_preview = AsyncMock(return_value=upstream)
     return create_app(store, runtime=runtime)
 
@@ -443,7 +443,7 @@ def test_live_ready_route_healthy_daemon_is_ready_with_NO_live_start():
     store = MagicMock(spec=SqliteEventStore)
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
-    runtime.live_session.return_value = session
+    runtime.live_sessions.live_session.return_value = session
     runtime.wake_for_preview = AsyncMock(return_value="http://192.168.1.77:49213")
     app = create_app(store, runtime=runtime)
 

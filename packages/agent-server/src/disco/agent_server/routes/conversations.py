@@ -237,7 +237,7 @@ async def _read_workspace_file(
 ) -> bytes | None:
     """Read an allowlisted workspace image from the live sandbox, falling back to
     the project-store snapshot on disk. Returns None when no source has the file."""
-    session = runtime.live_session(conversation_id)
+    session = runtime.live_sessions.live_session(conversation_id)
     if session is not None:
         try:
             data = await session.read_file(norm)

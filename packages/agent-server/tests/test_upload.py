@@ -81,7 +81,7 @@ class _FakeRuntime:
         self._pending_sessions: dict[str, _FakeSession] = {}
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
-        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self.sessions = SimpleNamespace(upload_session=self.upload_session)
         self._workspace = SimpleNamespace(
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
@@ -92,7 +92,7 @@ class _FakeRuntime:
             size=self.get_upload_size,
         )
         self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
-        self._live_sessions = _LiveSessions(self._executors)
+        self.live_sessions = _LiveSessions(self._executors)
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 
@@ -452,7 +452,7 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     rt._settings._set_surface(cid, "build")
 
     with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
-        session = rt._sessions.upload_session(cid)
+        session = rt.sessions.upload_session(cid)
         assert rt._run_resources.has_pending_session(cid)
         assert session._auto_preview_disabled is True
 
@@ -474,7 +474,7 @@ def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None
     rt._settings._set_surface(cid, "research")
 
     with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
-        session = rt._sessions.upload_session(cid)
+        session = rt.sessions.upload_session(cid)
 
     assert session._auto_preview_disabled is False
 
@@ -496,7 +496,7 @@ async def test_pending_session_destroyed_on_kill(
     store.create_conversation(cid, owner_id="local")
 
     with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
-        session = rt._sessions.upload_session(cid)
+        session = rt.sessions.upload_session(cid)
     assert rt._run_resources.has_pending_session(cid)
 
     session.destroy = mock.AsyncMock()

@@ -93,7 +93,7 @@ class _RuntimeWiringSchema:
     _driver_contexts: DriverContextState
     _appkit_ejections: AppKitEjectionLedger
     _settings: RuntimeSettings
-    _drivers: DriverRuntime
+    drivers: DriverRuntime
     _driver_preflight: DriverPreflight
     _cancellations: CancellationRegistry
     _mcp: McpManager
@@ -113,7 +113,7 @@ class _RuntimeWiringSchema:
     _build_platform: BuildPlatformRuntime
     _lifecycle: LifecycleManager
     _lifecycle_commands: LifecycleCommandService
-    _connections: ConnectionTracker
+    connections: ConnectionTracker
     _appkit_ejection: AppKitEjectionService
     _research_state: DeepResearchState
     _research_live_state: DeepResearchLiveState
@@ -124,17 +124,17 @@ class _RuntimeWiringSchema:
     _artifact_manifest_shadow: ArtifactManifestShadow
     _loop_factory: BuildLoopFactory
     schedules: ScheduleService
-    _sessions: SessionsService
-    _live_sessions: LiveSessionDirectory
+    sessions: SessionsService
+    live_sessions: LiveSessionDirectory
     _preview: PreviewService
-    _sandbox_resources: SandboxResourceReconciler
+    sandbox_resources: SandboxResourceReconciler
     _run_supervisor: RunSupervisor
     _run_controller: RunController
     _run_kills: RunKillService
     _control: ControlOps
     _disco_kernel: DiscoKernel
     _kernel_pins: KernelPinRegistry
-    _conversation_control: ConversationControlService
+    conversation_control: ConversationControlService
     _run_finalizer: RunFinalizer
     run_sweep: RunStrandedSweep
     _run_execution: RunPersistenceSupervisor

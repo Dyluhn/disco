@@ -145,7 +145,7 @@ def test_loop_for_selects_strict_appkit_prompt_profile() -> None:
     cid = "ak-prompt"
     rt.set_surface(cid, "agent")
     rt.set_appkit_mode(cid, True)
-    with mock.patch.object(rt._drivers, "router", wraps=rt._drivers.router) as router_now:
+    with mock.patch.object(rt.drivers, "router", wraps=rt.drivers.router) as router_now:
         with mock.patch.object(rt, "_sandbox_service_now"):
             rt._loop_for(cid)
     assert any(call.kwargs.get("appkit_mode") is True for call in router_now.call_args_list)

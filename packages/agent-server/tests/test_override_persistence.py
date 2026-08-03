@@ -226,15 +226,15 @@ async def test_on_disconnect_grace_fires_suspend_but_reconnect_cancels_it(tmp_pa
     # reconnect within the grace → the pending suspend is cancelled, sandbox kept
     keep = _FakeExecutor()
     rt._run_resources.set_executor("conv_a", keep)
-    rt.on_connect("conv_a")
-    rt.on_disconnect("conv_a", grace_s=0.05)
-    rt.on_connect("conv_a")  # a blip reconnected before the grace elapsed
+    rt.connections.on_connect("conv_a")
+    rt.connections.on_disconnect("conv_a", grace_s=0.05)
+    rt.connections.on_connect("conv_a")  # a blip reconnected before the grace elapsed
     await asyncio.sleep(0.12)
     assert keep.killed is False
     assert rt._run_resources.has_executor("conv_a")
 
     # now the viewer really leaves and nothing reconnects → suspend fires
-    rt.on_disconnect("conv_a", grace_s=0.05)
+    rt.connections.on_disconnect("conv_a", grace_s=0.05)
     await asyncio.sleep(0.12)
     assert keep.killed is True
     assert not rt._run_resources.has_executor("conv_a")

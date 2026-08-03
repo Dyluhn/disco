@@ -95,7 +95,7 @@ async def test_preflight_driver_blocks_on_auth_error():
         async def complete(self, req, *, context=None):
             raise LLMAuthError("invalid api key", provider="x")
 
-    rt._drivers.router = lambda **kw: _DeadRouter()
+    rt.drivers.router = lambda **kw: _DeadRouter()
     reason = await rt._preflight_driver("c1")
     assert reason is not None
     assert "rejected the API key" in reason
@@ -110,7 +110,7 @@ async def test_preflight_driver_blocks_on_connect_error():
         async def complete(self, req, *, context=None):
             raise LLMTransientError("connection error: refused", provider="x")
 
-    rt._drivers.router = lambda **kw: _UnreachableRouter()
+    rt.drivers.router = lambda **kw: _UnreachableRouter()
     reason = await rt._preflight_driver("c1")
     assert reason is not None and "unreachable" in reason
 
@@ -133,7 +133,7 @@ async def test_preflight_driver_passes_and_caches_success(monkeypatch):
             self.calls += 1
 
     ok = _OkRouter()
-    rt._drivers.router = lambda **kw: ok
+    rt.drivers.router = lambda **kw: ok
     assert await rt._preflight_driver("c1") is None
     assert await rt._preflight_driver("c1") is None
     assert ok.calls == 1  # second call served from the short-TTL success cache
@@ -162,7 +162,7 @@ async def test_concurrent_cold_preflights_singleflight_per_model(monkeypatch):
             await asyncio.sleep(0.05)
 
     router = _SlowOkRouter()
-    rt._drivers.router = lambda **kw: router
+    rt.drivers.router = lambda **kw: router
 
     results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
 
@@ -201,7 +201,7 @@ async def test_concurrent_hard_preflight_failure_is_shared_but_not_cached_long_t
             raise LLMAuthError("invalid api key", provider="x")
 
     router = _DeadRouter()
-    rt._drivers.router = lambda **kw: router
+    rt.drivers.router = lambda **kw: router
     rt._driver_preflight._SHARED_RESULT_TTL_S = 0.01
 
     results = await asyncio.gather(*(rt._preflight_driver(f"c{i}") for i in range(6)))
@@ -246,7 +246,7 @@ async def test_shared_preflight_failure_expires_without_a_later_caller():
         async def complete(self, req, *, context=None):
             raise LLMAuthError("invalid api key", provider="x")
 
-    rt._drivers.router = lambda **kw: _DeadRouter()
+    rt.drivers.router = lambda **kw: _DeadRouter()
     assert await rt._preflight_driver("c1") is not None
     assert rt._driver_preflight._inflight
 
@@ -264,7 +264,7 @@ async def test_aclose_cancels_and_drains_orphaned_shared_preflight():
             started.set()
             await asyncio.sleep(60)
 
-    rt._drivers.router = lambda **kw: _SlowRouter()
+    rt.drivers.router = lambda **kw: _SlowRouter()
     waiter = asyncio.create_task(rt._preflight_driver("c1"))
     await started.wait()
     waiter.cancel()
@@ -291,7 +291,7 @@ async def test_preflight_driver_is_wall_bounded_on_black_hole():
         async def complete(self, req, *, context=None):
             await asyncio.sleep(60)  # endpoint accepted but never answers
 
-    rt._drivers.router = lambda **kw: _BlackHoleRouter()
+    rt.drivers.router = lambda **kw: _BlackHoleRouter()
     rt._driver_preflight._TIMEOUT_S = 0.1  # tiny bound for the test
 
     t0 = time.monotonic()
@@ -322,7 +322,7 @@ async def test_preflight_driver_retries_then_proceeds_on_transient_timeout():
             return  # answered on the retry
 
     flaky = _FlakyRouter()
-    rt._drivers.router = lambda **kw: flaky
+    rt.drivers.router = lambda **kw: flaky
     assert await rt._preflight_driver("c1") is None  # proceeds, not terminal
     assert flaky.calls == 2  # one miss, then a successful re-probe
 
@@ -348,7 +348,7 @@ async def test_preflight_driver_soft_degrades_for_already_working_conversation()
             return  # healthy
 
     router = _SwitchRouter()
-    rt._drivers.router = lambda **kw: router
+    rt.drivers.router = lambda **kw: router
 
     # First kick: the driver is healthy → THIS (conversation, role, model) is proven.
     assert await rt._preflight_driver("c1") is None
@@ -380,7 +380,7 @@ async def test_preflight_driver_never_soft_degrades_hard_auth_failure_after_succ
                 raise LLMAuthError("invalid api key", provider="x")
 
     router = _SwitchRouter()
-    rt._drivers.router = lambda **kw: router
+    rt.drivers.router = lambda **kw: router
     assert await rt._preflight_driver("c1") is None
 
     rt._driver_preflight._ok.clear()
@@ -408,7 +408,7 @@ async def test_preflight_driver_still_terminal_when_genuinely_unreachable():
             raise TimeoutError  # black hole: never answers
 
     dead = _DeadRouter()
-    rt._drivers.router = lambda **kw: dead
+    rt.drivers.router = lambda **kw: dead
     reason = await rt._preflight_driver("c2")  # never proven
     assert reason is not None
     assert "timed out" in reason and "unreachable" in reason
@@ -443,14 +443,14 @@ async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
     rt._driver_preflight._BACKOFF_S = 0.0
-    rt._drivers._config_store = _RoleStore()  # type: ignore[assignment]
+    rt.drivers._config_store = _RoleStore()  # type: ignore[assignment]
 
     # Driver A (AGENT_DRIVER / model-a) is healthy → proves THAT driver only.
     class _OkRouter:
         async def complete(self, req, *, context=None):
             return
 
-    rt._drivers.router = lambda **kw: _OkRouter()
+    rt.drivers.router = lambda **kw: _OkRouter()
     assert await rt._preflight_driver("c1", role=ModelRole.AGENT_DRIVER) is None
     assert ("c1", ModelRole.AGENT_DRIVER, "model-a") in rt._driver_preflight._proven
 
@@ -466,7 +466,7 @@ async def test_preflight_soft_degrade_is_per_driver_not_per_conversation():
             raise TimeoutError
 
     dead = _DeadRouter()
-    rt._drivers.router = lambda **kw: dead
+    rt.drivers.router = lambda **kw: dead
     reason = await rt._preflight_driver("c1", role=ModelRole.RAG_ANSWERER)
     assert reason is not None and "timed out" in reason and "unreachable" in reason
     assert dead.calls == rt._driver_preflight._ATTEMPTS  # actually probed, not masked
@@ -529,7 +529,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
         def stream_complete(self, req, *, context=None):  # pragma: no cover
             raise LLMAuthError("rewriter key rejected", provider="x")
 
-    rt._drivers.router = lambda **kw: _DeadRewriterRouter()
+    rt.drivers.router = lambda **kw: _DeadRewriterRouter()
 
     await store.append(
         "c1",

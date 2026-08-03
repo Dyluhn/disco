@@ -8,8 +8,9 @@ GET  /conversations/{cid}/deck/editor?path={base}
 PUT  /conversations/{cid}/deck/editor?path={base}
     Apply an RFC-6902 JSON Patch to the authored JSON (schema-or-revert → 422 on a
     bad patch, workspace UNTOUCHED), re-render HTML + PPTX, and write all three
-    back. Write-back is LIVE-SESSION-ONLY (runtime.live_session is read-only / no
-    create): no live session → 409 {"reason": "no_live_sandbox"} with NO writes, so
+    back. Write-back is LIVE-SESSION-ONLY (runtime.live_sessions.live_session is
+    read-only / no create): no live session → 409 {"reason": "no_live_sandbox"}
+    with NO writes, so
     the editor shows a clear "re-open the build to edit" state (no false affordance).
 
 `base` is the deck base name WITHOUT extension (the slides tool's `base_name`).
@@ -549,7 +550,7 @@ async def _patch_deck_response(
             status_code=422, detail={"reason": "render_failed", "message": str(exc)}
         ) from exc
 
-    session = live_runtime.live_session(conversation_id)
+    session = live_runtime.live_sessions.live_session(conversation_id)
     if session is None:
         raise HTTPException(status_code=409, detail={"reason": "no_live_sandbox"})
 

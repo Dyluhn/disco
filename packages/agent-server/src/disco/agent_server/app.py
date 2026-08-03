@@ -202,9 +202,9 @@ def _make_runtime_lifespan(
             with contextlib.suppress(Exception):  # never block boot on reconciliation
                 await active_runtime.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
-                await active_runtime.prewarm_model_probe()
+                await active_runtime.drivers.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once
-                await active_runtime.prewarm_vision_probe()
+                await active_runtime.drivers.prewarm_vision_probe()
             idle_sweep_task = asyncio.create_task(active_runtime._idle_sweeper.run())
             # RP-08: start the schedule manager loop alongside the idle sweep.
             schedule_task = asyncio.create_task(active_runtime.schedules._schedule_manager_loop())
@@ -273,7 +273,7 @@ def _configure_middleware(
         # Fix 2 (codex P1): in-sandbox liveness fallback so the canonical iframe
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(
-            runtime._live_sessions if runtime is not None else None
+            runtime.live_sessions if runtime is not None else None
         ),
         require_capability=True,
         redemption_store=store,

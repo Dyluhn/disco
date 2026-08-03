@@ -60,9 +60,9 @@ def test_context_window_uses_the_conversation_model_override(tmp_path, monkeypat
     _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
     cid = "conv_context_override"
 
-    assert rt._drivers.context_window(cid) == 32768
+    assert rt.drivers.context_window(cid) == 32768
     rt.set_model_override(cid, "or-test-model")
-    assert rt._drivers.context_window(cid) == 128000
+    assert rt.drivers.context_window(cid) == 128000
 
 
 def test_stale_context_window_override_falls_back_to_default(tmp_path, monkeypatch):
@@ -70,7 +70,7 @@ def test_stale_context_window_override_falls_back_to_default(tmp_path, monkeypat
     cid = "conv_stale_context_override"
     rt.set_model_override(cid, "deleted-model")
 
-    assert rt._drivers.context_window(cid) == 32768
+    assert rt.drivers.context_window(cid) == 32768
 
 
 def test_no_db_path_returns_none(tmp_path, monkeypatch):
