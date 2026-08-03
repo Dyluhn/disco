@@ -277,9 +277,9 @@ def test_advisory_vision_field_never_blocks_finish():
     (verdict/passed) only. A passing host verdict with a failing/empty advisory
     `vision` field still yields a PASS finish label — the visual review can never
     flip a passing verdict to fail."""
-    from disco.core.loop.finish.verify_gates import _HostVerifyGateMixin
+    from disco.core.loop.finish.verify_gates import _HostVerifyBaseService
 
-    label = _HostVerifyGateMixin._verdict_label
+    label = _HostVerifyBaseService._verdict_label
     passing = {"verdict": "pass", "passed": True}
     assert label(passing) == "pass"
     # A failing advisory vision block does NOT change the finish label.

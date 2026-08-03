@@ -8,7 +8,7 @@ from disco.core import (
     WorkspaceMutationEvent,
     event_matches_current_workspace_intent,
 )
-from disco.core.loop.finish.common import _latest_app_deliverable_event
+from disco.core.loop.finish import _latest_app_deliverable_event
 
 
 async def _admit_view(

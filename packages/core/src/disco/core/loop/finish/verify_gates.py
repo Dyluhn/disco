@@ -1,13 +1,15 @@
 """Browser, host, export, and render-verification gates for FinishGate."""
 
-# ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
 from typing import Any, cast
 
+from ...events import ActionEvent, Event, ObservationEvent, ToolCall, VerifierStartedEvent
+from ...verification import HostVerificationClaim, HostVerificationResult
 from ...verify_medium import VerifierMediumHint
-from .common import *
-from .common import _FinishGateProto
+from ..boundaries import AgentStep, HostVerificationDeliverable, VerifierContextSeed
+from ..control import Disp
+from .common import _FinishGateComponent, signals
 from .verify_gate_parts import appkit_typed as _pt_appkit_typed
 from .verify_gate_parts import browser_gate as _pt_browser_gate
 from .verify_gate_parts import export_gate as _pt_export_gate
@@ -123,7 +125,7 @@ _WorkflowPathParams = _pt_workflow_paths._WorkflowPathParams
 _render_workflow_output_path = _pt_workflow_paths.render_workflow_output_path
 
 
-class _FinishVerifyMixin(_FinishGateProto):
+class _FinishVerifyService(_FinishGateComponent):
     async def finish_verify_passed(self, command: str) -> tuple[bool, bool]:
         """Run the agent's stated acceptance check before allowing `finish`
         (verify-on-finish post-condition gate). The agent attaches a shell
@@ -219,7 +221,16 @@ class _FinishVerifyMixin(_FinishGateProto):
         return None
 
 
-class _HostVerifyBaseMixin(_FinishGateProto):
+class _HostVerifyBaseService(_FinishGateComponent):
+    def _active_verify_tool(self) -> str | None:
+        return self._coordinator._active_verify_tool()
+
+    def _contract_required_deliverable_paths(self) -> list[str]:
+        return self._coordinator._content._contract_required_deliverable_paths()
+
+    async def _record_verifier_failure_to_context(self, **kwargs):
+        return await self._coordinator._record_verifier_failure_to_context(**kwargs)
+
     async def _host_artifact_file_exists(self, path: str) -> bool | None:
         return await host_artifact_file_exists(self, path)
 
@@ -353,7 +364,7 @@ class _HostVerifyBaseMixin(_FinishGateProto):
         return await _judge_semantic_claims(self, deliverable, events, host_verdict)
 
 
-class _HostVerifyGateMixin(_HostVerifyBaseMixin):
+class _HostVerifyGateService(_HostVerifyBaseService):
     async def _host_verify_failure_disposition(
         self, deliverable: HostVerificationDeliverable, verdict: dict
     ) -> Disp:
@@ -438,7 +449,7 @@ class _HostVerifyGateMixin(_HostVerifyBaseMixin):
         return await _gate_host_verify_fn(self, step, events, preverified=preverified)
 
 
-class _BrowserVerifyGateMixin(_FinishGateProto):
+class _BrowserVerifyGateService(_FinishGateComponent):
     async def _detect_preview_url(self) -> str | None:
         """P1-1 — detect the URL the live deliverable currently serves on, using the
         SAME backend-aware resolver the `verify_web_app` tool uses
@@ -502,7 +513,11 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         silently converts repeated failed verification into 'done' — it finishes
         ONLY with an explicit blocked/incomplete summary."""
         return await _gate_verify_web_app_fn(
-            self, events, tool_name, step=step, appkit_prepared=appkit_prepared
+            self._coordinator,
+            events,
+            tool_name,
+            step=step,
+            appkit_prepared=appkit_prepared,
         )
 
     def _browser_verification_unavailable(self) -> bool:
@@ -587,14 +602,18 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
         # until a clean browser observation (zero console errors) exists
         # since the last state-changing edit.
-        return await _gate_browser_verify_fn(self, step, events, appkit_prepared=appkit_prepared)
+        return await _gate_browser_verify_fn(
+            self._coordinator, step, events, appkit_prepared=appkit_prepared
+        )
 
 
-class _ExportRenderGateMixin(_FinishGateProto):
+class _ExportRenderGateService(_FinishGateComponent):
     async def _manifest_export_artifact_path(
         self, events: list[Event], *, require_shown: bool
     ) -> str | None:
-        return await _manifest_export_artifact_path_fn(self, events, require_shown=require_shown)
+        return await _manifest_export_artifact_path_fn(
+            self._coordinator, events, require_shown=require_shown
+        )
 
     async def gate_export_render(self, step: AgentStep, events: list[Event]) -> Disp:
         """[P10] Refuse FINISHED when a rendered export (deck/document) is BLANK,
@@ -609,10 +628,10 @@ class _ExportRenderGateMixin(_FinishGateProto):
         genuinely-broken renderer can't trap the run — it releases with a loud
         UNVERIFIED warning, exactly like the browser-verify valve. Decision/message
         logic is pure (``contract.export_render``); this method only emits."""
-        return await _gate_export_render_fn(self, step, events)
+        return await _gate_export_render_fn(self._coordinator, step, events)
 
 
-class _RenderVerifyGateMixin(_FinishGateProto):
+class _RenderVerifyGateService(_FinishGateComponent):
     async def _workflow_output_path_exists(self, path: str) -> tuple[bool, str]:
         return await _workflow_output_path_exists_fn(self, path)
 
@@ -637,4 +656,4 @@ class _RenderVerifyGateMixin(_FinishGateProto):
         the P10 check). Returns CONTINUE (a gate refused — caller must not finish),
         HALT (a gate landed the terminal status / loop-breaker), or FALLTHROUGH (all
         render-verify gates clear)."""
-        return await _run_finish_verify_gates_fn(self, step, events)
+        return await _run_finish_verify_gates_fn(self._coordinator, step, events)

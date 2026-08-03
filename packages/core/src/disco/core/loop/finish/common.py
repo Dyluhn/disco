@@ -9,8 +9,7 @@ byte-identical with `self.` rewritten to `self._loop.` (sibling calls stay
 in-collaborator).
 """
 
-# Intentional re-export surface consumed by split mixins via
-# ``from .common import *``; locally-unused imports are part of that API.
+# Shared implementation helpers are imported explicitly by finish services.
 # ruff: noqa: F401
 
 from __future__ import annotations
@@ -809,6 +808,14 @@ class _DoDWorkspaceUnavailable(Exception):
     that state would be a silent fail — the agent would loop forever
     on a gate that cannot run. Logging + skipping is the honest
     behavior; the audit trail sees the log line."""
+
+
+class _FinishGateComponent:
+    """Base for finish services with an explicit coordinator reference."""
+
+    def __init__(self, loop: Any, coordinator: Any) -> None:
+        self._loop = loop
+        self._coordinator = coordinator
 
 
 class _FinishGateProto:

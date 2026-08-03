@@ -28,9 +28,8 @@ from _dictated_content_support import (
 )
 from disco.core import ConversationStatus, DeliverableEvent, EventSource, StatusEvent
 from disco.core.llm import OperatingMode
-from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP
+from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP, _safe_deliverable_file_path
 from disco.core.loop.finish import content_gates as content_gates_module
-from disco.core.loop.finish.common import _safe_deliverable_file_path
 from loop_fakes import ScriptedAgent, action_step, build_loop
 
 

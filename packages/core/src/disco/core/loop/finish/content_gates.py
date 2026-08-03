@@ -12,13 +12,19 @@ class stays a real orchestration surface rather than a place where policy
 gets duplicated.
 """
 
-# ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Protocol
+import posixpath
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from .common import *
+from ...dod import DoDSpec, FileExistsPredicate, predicate_fingerprints
+from ...dod_evaluator import DoDEvaluator
+from ...events import ConversationStatus, DeliverableEvent, Event, PlanEvent, StatusEvent
+from ...llm import OperatingMode
+from ..boundaries import AgentStep
+from ..control import Disp
+from ..plan_conditions import DictatedContentCondition, dictated_content_conditions_from_events
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
     _DOD_REFUSAL_CAP,
@@ -28,11 +34,12 @@ from .common import (
     _appkit_scope_active,
     _deliverable_event_paths,
     _DoDWorkspaceUnavailable,
-    _FinishGateProto,
+    _FinishGateComponent,
     _is_web_deliverable,
     _latest_plan_revision,
     _plan_file_exists_paths,
     _safe_deliverable_file_path,
+    signals,
 )
 from .content_gate_parts.app_bundle import (
     _DICTATED_CONTENT_BUNDLE_MAX_DEPTH,
@@ -275,7 +282,7 @@ def _dedupe_normalized_paths(paths: list[str]) -> list[str]:
     return out
 
 
-class _ContentGateMixin(_FinishGateProto):
+class _ContentGateService(_FinishGateComponent):
     async def _dictated_content_selected_app_entry(self, events: list[Event]) -> str | None:
         latest_app = next(
             (

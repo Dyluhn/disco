@@ -41,7 +41,7 @@ from disco.core import (
 from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, NeverConfirm
-from disco.core.loop.finish.common import (
+from disco.core.loop.finish import (
     _is_web_deliverable,
     _latest_app_deliverable_event,
 )

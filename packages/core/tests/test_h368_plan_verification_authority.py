@@ -27,7 +27,7 @@ from disco.core.dod_evaluator import DoDEvaluator
 from disco.core.llm import OperatingMode
 from disco.core.loop import signals
 from disco.core.loop.control import Disp
-from disco.core.loop.finish.common import _plan_file_exists_paths
+from disco.core.loop.finish import _plan_file_exists_paths
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop
 
 pytestmark = pytest.mark.asyncio

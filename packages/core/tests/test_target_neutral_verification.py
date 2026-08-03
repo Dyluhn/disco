@@ -19,7 +19,7 @@ from disco.core import (
 from disco.core.effects import ActionProfile, EffectCapability
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, HostVerificationDeliverable, NeverConfirm
-from disco.core.loop.finish.common import (
+from disco.core.loop.finish import (
     _last_productive_seq,
     _last_verification_authority_seq,
 )

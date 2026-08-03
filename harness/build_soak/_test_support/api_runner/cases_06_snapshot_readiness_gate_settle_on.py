@@ -553,7 +553,7 @@ async def _impl_test_snapshot_read_only_serve_and_verify_shells_preserve_file_wr
     shell action as an opaque write erased the exact SHA and mislabeled the final capture
     ``present_unproven``.  All of these strictly read-only shapes must preserve the write proof.
     """
-    from disco.core.loop.finish.common import _static_verify_command
+    from disco.core.loop.finish import _static_verify_command
 
     db = tmp_path / "disco.db"
     proj = tmp_path / "projects"

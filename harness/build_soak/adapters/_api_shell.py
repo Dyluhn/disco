@@ -105,7 +105,7 @@ def _http_server_segment_is_read_only(tokens: list[str]) -> bool:
 
 def _matches_static_verify_command(command: str, declared: set[str]) -> bool:
     try:
-        from disco.core.loop.finish.common import _static_verify_command
+        from disco.core.loop.finish import _static_verify_command
 
         return any(command == _static_verify_command(path) for path in declared)
     except (ImportError, TypeError, ValueError):

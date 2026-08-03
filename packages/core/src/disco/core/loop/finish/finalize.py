@@ -19,7 +19,7 @@ from .common import (
     ToolCall,
     VerifierVerdictEvent,
     _app_verify_command,
-    _FinishGateProto,
+    _FinishGateComponent,
     _static_verify_command,
     signals,
 )
@@ -72,7 +72,7 @@ def _unverified_release_active(events: list[Event]) -> bool:
     return active
 
 
-class _FinalizeMixin(_FinishGateProto):
+class _FinalizeService(_FinishGateComponent):
     async def resolve_verify_command(self, args: dict) -> _ResolvedVerify:
         verify_cmd = str(args.get("verify") or "").strip()
         # E4: a `static` directive verifies a static page WITHOUT a server
@@ -109,7 +109,7 @@ class _FinalizeMixin(_FinishGateProto):
                 # can be located, degrade to the server-free static check rather than
                 # asserting :8000 — a 404 on a guessed port is a FALSE failure that would
                 # spin the model into re-serve/re-verify loops.
-                _url = await self._detect_preview_url() or ""
+                _url = await self._coordinator._detect_preview_url() or ""
                 if not _url:
                     return _ResolvedVerify(command=_static_verify_command("index.html"))
             return _ResolvedVerify(command=_app_verify_command(_url))
@@ -159,8 +159,8 @@ class _FinalizeMixin(_FinishGateProto):
                 self._loop,
                 verify_cmd,
                 events,
-                finish_verify_passed=self.finish_verify_passed,
-                finish_dod_gate_passed=self.finish_dod_gate_passed,
+                finish_verify_passed=self._coordinator.finish_verify_passed,
+                finish_dod_gate_passed=self._coordinator.finish_dod_gate_passed,
             )
             if disp is not None:
                 return step, disp
@@ -179,7 +179,7 @@ class _FinalizeMixin(_FinishGateProto):
         # byte-identical). See `_finish_dod_gate_passed` for
         # the full algorithm + the byte-identical-no-spec
         # proof.
-        if not await self.finish_dod_gate_passed():
+        if not await self._coordinator.finish_dod_gate_passed():
             return step, Disp.CONTINUE
         summary = str(step.tool_call.arguments.get("summary") or "").strip()
         step = step.model_copy(
@@ -211,7 +211,7 @@ class _FinalizeMixin(_FinishGateProto):
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
         if await self._loop._stop_allowed(state, events):
-            if not await self.seal_gate_allows_finish():
+            if not await self._coordinator.seal_gate_allows_finish():
                 return Disp.CONTINUE
             unverified_release = _unverified_release_active(events)
             final_content = (
@@ -265,18 +265,18 @@ class _FinalizeMixin(_FinishGateProto):
     async def handle_finish_path(
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
-        disp = await self.gate_execution_nudge(step, events)
+        disp = await self._coordinator.gate_execution_nudge(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:
             return Disp.HALT
 
         events = await self._loop._events()
-        if not await self.dictated_content_gate_passed(events):
+        if not await self._coordinator.dictated_content_gate_passed(events):
             return Disp.CONTINUE
 
         events = await self._loop._events()
-        disp = await self.run_finish_verify_gates(step, events)
+        disp = await self._coordinator.run_finish_verify_gates(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:
