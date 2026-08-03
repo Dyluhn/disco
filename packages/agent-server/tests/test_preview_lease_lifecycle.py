@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -14,7 +15,7 @@ class _KillRuntime:
         self._store = store
         self._resulting_status = resulting_status
 
-    def sandbox_instance_ids(self, conversation_id: str) -> list[str]:
+    def _sandbox_instance_ids(self, conversation_id: str) -> list[str]:
         del conversation_id
         return []
 
@@ -23,6 +24,10 @@ class _KillRuntime:
             conversation_id,
             StatusEvent(status=self._resulting_status, detail="test kill"),
         )
+
+    @property
+    def lifecycle(self) -> SimpleNamespace:
+        return SimpleNamespace(sandbox_instance_ids=self._sandbox_instance_ids)
 
 
 def _app(store: SqliteEventStore, runtime: Any) -> FastAPI:

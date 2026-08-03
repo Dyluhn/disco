@@ -92,7 +92,7 @@ def _rt() -> ConversationRuntime:
 def _loop_for(rt, cid, *, artifact_mode: bool = False):
     """Compose the build loop for `cid`, optionally with artifact_mode on."""
     if artifact_mode:
-        rt.set_artifact_mode(cid, True)
+        rt.settings.set_artifact_mode(cid, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now", return_value=ProcessSandboxService()):
@@ -189,7 +189,7 @@ def test_artifact_mode_flag_round_trips_from_body(tmp_path):
     )
     assert resp.status_code == 200
     cid = resp.json()["conversation_id"]
-    assert rt._settings._effective_artifact_mode(cid) is True
+    assert rt.settings._effective_artifact_mode(cid) is True
 
     # artifact_mode=False (default) → flag NOT set
     resp2 = client.post(
@@ -198,7 +198,7 @@ def test_artifact_mode_flag_round_trips_from_body(tmp_path):
     )
     assert resp2.status_code == 200
     cid2 = resp2.json()["conversation_id"]
-    assert rt._settings._effective_artifact_mode(cid2) is False
+    assert rt.settings._effective_artifact_mode(cid2) is False
 
     # artifact_mode absent → defaults to False
     resp3 = client.post(
@@ -207,7 +207,7 @@ def test_artifact_mode_flag_round_trips_from_body(tmp_path):
     )
     assert resp3.status_code == 200
     cid3 = resp3.json()["conversation_id"]
-    assert rt._settings._effective_artifact_mode(cid3) is False
+    assert rt.settings._effective_artifact_mode(cid3) is False
 
 
 def test_artifact_mode_invalid_value_422():
@@ -238,10 +238,10 @@ def test_artifact_mode_invalid_value_422():
 def test_set_artifact_mode_and_effective(tmp_path):
     """set_artifact_mode / _effective_artifact_mode round-trip (no app needed)."""
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    assert rt._settings._effective_artifact_mode("c_new") is False  # default off
+    assert rt.settings._effective_artifact_mode("c_new") is False  # default off
 
-    rt.set_artifact_mode("c_on", True)
-    assert rt._settings._effective_artifact_mode("c_on") is True
+    rt.settings.set_artifact_mode("c_on", True)
+    assert rt.settings._effective_artifact_mode("c_on") is True
 
-    rt.set_artifact_mode("c_off", False)
-    assert rt._settings._effective_artifact_mode("c_off") is False
+    rt.settings.set_artifact_mode("c_off", False)
+    assert rt.settings._effective_artifact_mode("c_off") is False

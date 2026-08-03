@@ -30,8 +30,8 @@ def _compose(
     else:
         monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface(conversation_id, "agent")
-    runtime.set_appkit_mode(conversation_id, appkit)
+    runtime.settings._set_surface(conversation_id, "agent")
+    runtime.settings.set_appkit_mode(conversation_id, appkit)
     with mock.patch.object(runtime, "_sandbox_service_now"):
         loop = runtime._compose_build_loop(
             conversation_id,
@@ -97,7 +97,7 @@ def test_appkit_is_not_silently_routed_through_freeform_opt_in(monkeypatch) -> N
 def test_platform_resolution_failure_blocks_without_legacy_fallback(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_FREEFORM_PLATFORM_ROUTE", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface("blocked", "agent")
+    runtime.settings._set_surface("blocked", "agent")
     with (
         mock.patch.object(runtime, "_sandbox_service_now"),
         mock.patch(
@@ -119,8 +119,8 @@ def test_platform_resolution_failure_blocks_without_legacy_fallback(monkeypatch)
 def test_artifact_and_workflow_profiles_remain_outside_freeform_cutover(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_FREEFORM_PLATFORM_ROUTE", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface("artifact", "build")
-    runtime.set_artifact_mode("artifact", True)
+    runtime.settings._set_surface("artifact", "build")
+    runtime.settings.set_artifact_mode("artifact", True)
     with mock.patch.object(runtime, "_sandbox_service_now"):
         loop = runtime._compose_build_loop(
             "artifact",
@@ -178,7 +178,7 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
 
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     restarted = ConversationRuntime(runtime._store)
-    restarted.set_surface("durable", "agent")
+    restarted.settings._set_surface("durable", "agent")
     await restarted._build_platform.prepare_route_pin("durable")
     assert restarted._build_platform.route_pins["durable"] == "platform"
     with mock.patch.object(restarted, "_sandbox_service_now"):
@@ -219,7 +219,7 @@ async def test_legacy_park_is_pinned_but_terminal_run_releases_rollout_choice(mo
 
     monkeypatch.setenv("DISCO_FREEFORM_PLATFORM_ROUTE", "1")
     restarted = ConversationRuntime(runtime._store)
-    restarted.set_surface("legacy-pin", "agent")
+    restarted.settings._set_surface("legacy-pin", "agent")
     await restarted._build_platform.prepare_route_pin("legacy-pin")
     assert restarted._build_platform.route_pins["legacy-pin"] == "legacy"
     with mock.patch.object(restarted, "_sandbox_service_now"):

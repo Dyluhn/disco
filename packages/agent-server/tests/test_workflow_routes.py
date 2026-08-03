@@ -105,7 +105,7 @@ def _draft_model_json() -> str:
 def _quiet_startup(runtime: ConversationRuntime) -> None:
     rt = cast(Any, runtime)
     rt.mcp._start_mcp_pool = mock.AsyncMock()
-    rt.reconcile_orphaned_runs = mock.AsyncMock()
+    rt.lifecycle.reconcile_orphaned_runs = mock.AsyncMock()
     rt.drivers.prewarm_model_probe = mock.AsyncMock()
     rt.drivers.prewarm_vision_probe = mock.AsyncMock()
     rt._idle_sweeper.run = mock.AsyncMock()

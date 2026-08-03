@@ -54,10 +54,10 @@ class _Session:
 
 
 class _LiveRuntime:
-    def set_surface(self, cid: str, surface: object) -> None: ...
-    def set_model_override(self, cid: str, model: object) -> None: ...
+    def __set_surface(self, cid: str, surface: object) -> None: ...
+    def _set_model_override(self, cid: str, model: object) -> None: ...
     def set_depth(self, cid: str, tier: object) -> None: ...
-    def get_last_selected_model(self) -> str | None:
+    def _get_last_selected_model(self) -> str | None:
         return None
 
     def _backend_name(self) -> str | None:
@@ -67,6 +67,14 @@ class _LiveRuntime:
     def sandbox(self) -> SimpleNamespace:
         return SimpleNamespace(backend_name=self._backend_name)
 
+    @property
+    def settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            _set_surface=self.__set_surface,
+            set_model_override=self._set_model_override,
+            model_binding=SimpleNamespace(get_last_selected_model=self._get_last_selected_model),
+        )
+
 
 class _SnapshotRuntime:
     """No live session — exercises the ProjectStore fallback (finished run)."""
@@ -75,10 +83,10 @@ class _SnapshotRuntime:
         self._ps = ps
         _wire_live_runtime(self)
 
-    def set_surface(self, cid: str, surface: object) -> None: ...
-    def set_model_override(self, cid: str, model: object) -> None: ...
+    def __set_surface(self, cid: str, surface: object) -> None: ...
+    def _set_model_override(self, cid: str, model: object) -> None: ...
     def set_depth(self, cid: str, tier: object) -> None: ...
-    def get_last_selected_model(self) -> str | None:
+    def _get_last_selected_model(self) -> str | None:
         return None
 
     def _backend_name(self) -> str | None:
@@ -94,6 +102,14 @@ class _SnapshotRuntime:
     @property
     def sandbox(self) -> SimpleNamespace:
         return SimpleNamespace(backend_name=self._backend_name)
+
+    @property
+    def settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            _set_surface=self.__set_surface,
+            set_model_override=self._set_model_override,
+            model_binding=SimpleNamespace(get_last_selected_model=self._get_last_selected_model),
+        )
 
 
 def _declare_sheet(store: SqliteEventStore, cid: str, filename: str) -> None:

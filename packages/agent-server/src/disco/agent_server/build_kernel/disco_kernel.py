@@ -58,7 +58,7 @@ class DiscoKernel:
                 runtime.run_controller,
                 runtime._control,
                 runtime._loop_factory,
-                runtime._run_registry,
+                runtime.run_registry,
                 runtime._kernel_pin_store,
                 runtime._resume,
             )

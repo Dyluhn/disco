@@ -49,11 +49,11 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     rt = _runtime(store)
     # Seed per-conversation runtime state the way a live run would.
     rt._kernel_pin_store.set(CID, rt._disco_kernel)
-    rt._run_registry._generations[CID] = 3
+    rt.run_registry._generations[CID] = 3
     rt._run_recovery._post_terminal_rekick_seq[CID] = 7
     rt._run_ingress._claimed_user_seqs[CID] = 7
-    rt.set_surface(CID, "build")
-    rt.set_autonomous(CID, True)
+    rt.settings._set_surface(CID, "build")
+    rt.settings.set_autonomous(CID, True)
     rt._driver_preflight._proven.add((CID, ModelRole.AGENT_DRIVER, "m"))
     rt._driver_preflight._proven.add(("another-conversation", ModelRole.AGENT_DRIVER, "m"))
     rt._driver_preflight._ok["m"] = 123.0
@@ -61,11 +61,11 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     await rt.workspace.forget(CID)
 
     assert rt._kernel_pin_store.current(CID) is None  # the leak the finding cites
-    assert CID not in rt._run_registry._generations
+    assert CID not in rt.run_registry._generations
     assert CID not in rt._run_recovery._post_terminal_rekick_seq
     assert CID not in rt._run_ingress._claimed_user_seqs
-    assert rt._settings._surface_of(CID) != "build"
-    assert CID not in rt._settings._autonomous
+    assert rt.settings._surface_of(CID) != "build"
+    assert CID not in rt.settings._autonomous
     assert not any(proven[0] == CID for proven in rt._driver_preflight._proven)
     assert (
         "another-conversation",

@@ -237,7 +237,7 @@ async def test_finish_sealability_probe_judges_content_only(
         seen_destinations=seen_dests,
     )
     monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", snapshot)
-    result = await rt._lifecycle.probe_finish_sealability(cid)
+    result = await rt.lifecycle.probe_finish_sealability(cid)
     assert result.sealable is False
     assert result.blocking == ("dist: symlink excluded",)
     # Side-effect-free on durable storage: the probe never wrote into the
@@ -250,13 +250,13 @@ async def test_finish_sealability_probe_judges_content_only(
         reported_files={"index.html": 2},
     )
     monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", clean_snapshot)
-    result = await rt._lifecycle.probe_finish_sealability(cid)
+    result = await rt.lifecycle.probe_finish_sealability(cid)
     assert result.sealable is True
     assert result.blocking == ()
 
     # No live sandbox ⇒ sealable, "nothing to judge" (commit-time authority).
     rt._run_resources.pop_executor(cid)
-    result = await rt._lifecycle.probe_finish_sealability(cid)
+    result = await rt.lifecycle.probe_finish_sealability(cid)
     assert result.sealable is True
     assert "no live workspace" in result.detail
 
@@ -308,7 +308,7 @@ async def test_snapshot_journal_without_sqlite_checkpoint_remains_unsealed(
     _assert_no_versions(await event_store.get_events(cid))
 
     monkeypatch.setattr(projects, "cut_verified_version", real_cut)
-    assert await rt._lifecycle._recover_finalization_journals() == 0
+    assert await rt.lifecycle._recover_finalization_journals() == 0
     assert _journal_phase(projects, cid) == "snapshot"
     _assert_no_versions(await event_store.get_events(cid))
 
@@ -328,7 +328,7 @@ async def test_snapshot_journal_refuses_changed_mirror_bytes(
 
     projects.path_for(cid).joinpath("index.html").write_bytes(b"after")
     monkeypatch.setattr(projects, "cut_verified_version", real_cut)
-    assert await rt._lifecycle._recover_finalization_journals() == 0
+    assert await rt.lifecycle._recover_finalization_journals() == 0
 
     assert _journal_phase(projects, cid) == "snapshot"
     _assert_no_versions(await event_store.get_events(cid))
@@ -352,7 +352,7 @@ async def test_version_journal_recovers_after_event_append_interruption(
     assert version.pinned is True
 
     monkeypatch.setattr(event_store, "append", real_append)
-    assert await rt._lifecycle._recover_finalization_journals() == 1
+    assert await rt.lifecycle._recover_finalization_journals() == 1
 
     events = await event_store.get_events(cid)
     commits = _sealed_versions(events)
@@ -379,7 +379,7 @@ async def test_version_journal_refuses_live_workspace_drift_after_checkpoint(
 
     projects.path_for(cid).joinpath("index.html").write_bytes(b"changed after checkpoint")
     monkeypatch.setattr(event_store, "append", real_append)
-    assert await rt._lifecycle._recover_finalization_journals() == 0
+    assert await rt.lifecycle._recover_finalization_journals() == 0
 
     assert journal_path.is_file()
     assert not await _final_seals(event_store, cid)
@@ -421,7 +421,7 @@ async def test_recovery_refuses_older_version_without_matching_sqlite_checkpoint
         )
     )
 
-    assert await rt._lifecycle._recover_finalization_journals() == 0
+    assert await rt.lifecycle._recover_finalization_journals() == 0
     assert journal_path.is_file()
     assert not any(
         isinstance(event, WorkspaceVersionEvent)
@@ -536,7 +536,7 @@ async def test_shadow_fold_seals_winning_artifact_without_losing_view_output(
     cid = "conv-shadow-winning-view"
     monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
     rt, projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     await _seed_winning_shadow_views(event_store, cid)
     workspace = _Workspace(
         {
@@ -628,7 +628,7 @@ async def test_nonfinished_suspend_snapshot_serializes_with_host_mutation(
         "disco.agent_server.lifecycle.snapshot_workspace",
         _gated_snapshot(snapshot_workspace, capture_entered, release_capture),
     )
-    suspending = asyncio.create_task(rt._lifecycle._suspend(cid))
+    suspending = asyncio.create_task(rt.lifecycle._suspend(cid))
     await capture_entered.wait()
 
     mutation = asyncio.create_task(
@@ -778,7 +778,7 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
     await event_store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
     release_active = asyncio.Event()
     active = asyncio.create_task(release_active.wait())
-    rt._run_registry._tasks[cid] = active
+    rt.run_registry._tasks[cid] = active
     rt.workspace._fences._admitted_runs.add(cid)
     try:
         async with rt.workspace.lock(cid):
@@ -790,7 +790,7 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
         rt.workspace._fences._admitted_runs.discard(cid)
         release_active.set()
         await active
-        rt._run_registry._tasks.pop(cid, None)
+        rt.run_registry._tasks.pop(cid, None)
 
     events = await event_store.get_events(cid)
     _assert_no_final_seals(events)
@@ -804,7 +804,7 @@ async def test_retrying_exact_finished_event_never_writes_after_terminal(
     cid = "conv-finished-idempotent"
     monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
     rt, _projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     await _seed_idempotent_view(event_store, cid)
     workspace = _Workspace({"index.html": b"complete"})
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=workspace, sandbox=workspace))
@@ -813,9 +813,9 @@ async def test_retrying_exact_finished_event_never_writes_after_terminal(
         agent_view_id="view-idempotent",
     )
 
-    first = await rt._lifecycle.commit_finished_workspace(cid, terminal)
+    first = await rt.lifecycle.commit_finished_workspace(cid, terminal)
     before = await event_store.get_events(cid)
-    second = await rt._lifecycle.commit_finished_workspace(cid, terminal)
+    second = await rt.lifecycle.commit_finished_workspace(cid, terminal)
     after = await event_store.get_events(cid)
 
     assert second == first
@@ -843,7 +843,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     """A registered task waits for the host mutation fence before admission."""
     cid = "conv-run-admission-fence"
     rt, projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     await _seed_running(event_store, cid)
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"initial"})))
     await _finish(rt, cid)
@@ -855,7 +855,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     async with lock:
         task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
         await asyncio.sleep(0)
-        assert rt._run_registry._tasks[cid] is task
+        assert rt.run_registry._tasks[cid] is task
         assert not rt.workspace.has_admitted_run(cid)
         assert not run_started.is_set()
 
@@ -881,7 +881,7 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     release_run.set()
     assert await task == "done"
     assert not rt.workspace.has_admitted_run(cid)
-    rt._run_registry._tasks.pop(cid, None)
+    rt.run_registry._tasks.pop(cid, None)
 
 
 async def test_ingress_first_pending_run_blocks_already_queued_deploy(
@@ -893,7 +893,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
 
     cid = "conv-ingress-first-claim"
     rt, _projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     await _seed_running(event_store, cid)
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await _finish(rt, cid)
@@ -916,7 +916,7 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
     await asyncio.wait_for(run_started.wait(), timeout=1)
     release_run.set()
     assert await run == "done"
-    rt._run_registry._tasks.pop(cid, None)
+    rt.run_registry._tasks.pop(cid, None)
 
 
 async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
@@ -925,7 +925,7 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
 ) -> None:
     cid = "conv-cancel-before-run-entry"
     rt, _projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     lock = rt.workspace.lock(cid)
     await lock.acquire()
     same_lock = rt.workspace.lock(cid)
@@ -951,10 +951,10 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
     cid = "conv-cross-runtime-run-intent"
     rt_a, projects = _runtime(event_store, tmp_path)
     rt_b, _unused = _runtime(event_store, tmp_path / "other-runtime")
-    rt_a.set_surface(cid, "build")
-    rt_b.set_surface(cid, "build")
+    rt_a.settings._set_surface(cid, "build")
+    rt_b.settings._set_surface(cid, "build")
     rt_b.projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
-    rt_b._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt_b.lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     await _seed_running(event_store, cid)
     rt_a._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await _finish(rt_a, cid)
@@ -998,7 +998,7 @@ async def test_cancelled_process_fence_wait_leaves_no_partial_user_ingress(
 
     cid = "conv-cancelled-process-fence-wait"
     rt, projects = _runtime(event_store, tmp_path)
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     rt.run_controller.kick = MagicMock()
     monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "process-locks"))
     lock_path = workspace_process_lock_path(projects.path_for(cid))

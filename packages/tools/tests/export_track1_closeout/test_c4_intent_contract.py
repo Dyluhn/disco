@@ -130,7 +130,7 @@ async def test_persisted_intent_sidecar_carries_schema_version(
 
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     result = await runtime.execute_pi_tool(
         cid,
         ToolCall(

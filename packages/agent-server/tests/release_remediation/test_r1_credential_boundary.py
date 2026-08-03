@@ -178,7 +178,7 @@ async def _declare(
     runtime: ConversationRuntime, store: SqliteEventStore, cid: str, start_cmd: list[str]
 ) -> ToolResult:
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid,
         ToolCall(
@@ -327,7 +327,7 @@ async def test_release_declare_accepts_benign_and_declared_reference(
     cid = _uid("conv_r1ok")
     runtime, _app, _ps = _build(_store, tmp_path, monkeypatch)
     _store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     result = await runtime.execute_pi_tool(
         cid,
         ToolCall(tool_name="release_declare", arguments=arguments, call_id="closeout-r1ok"),
@@ -394,7 +394,7 @@ async def _declare_with_resources(
     runtime: ConversationRuntime, store: SqliteEventStore, cid: str, migrate_cmd: list[str]
 ) -> ToolResult:
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid,
         ToolCall(

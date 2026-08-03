@@ -242,14 +242,14 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime = mock.MagicMock()
     runtime.deep_research = SimpleNamespace(research_stream=research_stream)
     runtime.deep_research.research_stream = research_stream
-    runtime._settings = SimpleNamespace(
+    runtime.settings = SimpleNamespace(
         model_binding=SimpleNamespace(get_last_selected_model=mock.MagicMock(return_value=None))
     )
     runtime.mcp = SimpleNamespace(
         _start_mcp_pool=mock.AsyncMock(),
         _close_mcp_pool=mock.AsyncMock(),
     )
-    runtime._lifecycle = SimpleNamespace(
+    runtime.lifecycle = SimpleNamespace(
         reconcile_orphaned_runs=mock.AsyncMock(),
         _idle_sweep_loop=mock.AsyncMock(),
     )
@@ -262,7 +262,7 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime.live_sessions = _LiveSessions()
     runtime._config_store = ConfigStore()
     runtime._secret_store = SecretStore()
-    runtime.reconcile_orphaned_runs = mock.AsyncMock(return_value=0)
+    runtime.lifecycle.reconcile_orphaned_runs = mock.AsyncMock(return_value=0)
     runtime.drivers.prewarm_model_probe = mock.AsyncMock()
     runtime.drivers.prewarm_vision_probe = mock.AsyncMock()
     runtime.aclose = mock.AsyncMock()

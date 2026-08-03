@@ -22,13 +22,13 @@ def _runtime(tmp_path, monkeypatch) -> ConversationRuntime:
 
 def test_model_override_survives_a_restart(tmp_path, monkeypatch):
     rt = _runtime(tmp_path, monkeypatch)
-    rt.set_model_override("conv_abc", "or-deepseek-deepseek-v4-pro")
-    assert rt._settings._get_model_override("conv_abc") == "or-deepseek-deepseek-v4-pro"
+    rt.settings.set_model_override("conv_abc", "or-deepseek-deepseek-v4-pro")
+    assert rt.settings._get_model_override("conv_abc") == "or-deepseek-deepseek-v4-pro"
 
     # Simulate a server restart: a brand-new runtime over the SAME PMX_DB path.
     rt2 = _runtime(tmp_path, monkeypatch)
     assert (
-        rt2._settings._get_model_override("conv_abc") == "or-deepseek-deepseek-v4-pro"  # not lost
+        rt2.settings._get_model_override("conv_abc") == "or-deepseek-deepseek-v4-pro"  # not lost
     )
 
 
@@ -40,9 +40,9 @@ def test_no_db_path_stays_in_memory_only(tmp_path, monkeypatch):
         config_store=ConfigStore(tmp_path / "c.json"),
         secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
     )
-    rt.set_model_override("conv_x", "some-model")
-    assert rt._settings._get_model_override("conv_x") == "some-model"
-    assert rt._settings.model_binding._override_path == ""
+    rt.settings.set_model_override("conv_x", "some-model")
+    assert rt.settings._get_model_override("conv_x") == "some-model"
+    assert rt.settings.model_binding._override_path == ""
 
 
 class _FakeExecutor:
@@ -87,13 +87,13 @@ async def test_teardown_clears_rehydrate_flag_so_continuation_restores_files(tmp
     cid = "conv_build"
     # First run rehydrated once → the flag is set (and stays set within a live
     # session so each subsequent kick doesn't re-overwrite in-progress files).
-    await rt._lifecycle._maybe_rehydrate(cid)
-    assert cid in rt._lifecycle._rehydration._rehydrated
+    await rt.lifecycle._maybe_rehydrate(cid)
+    assert cid in rt.lifecycle._rehydration._rehydrated
     # FINISHED → the sandbox is torn down. The flag MUST clear, else the next run
     # skips rehydrate and the continuation builds on nothing.
     rt._run_resources.set_executor(cid, _FakeExecutor())
-    await rt._lifecycle._teardown_sandbox(cid)
-    assert cid not in rt._lifecycle._rehydration._rehydrated
+    await rt.lifecycle._teardown_sandbox(cid)
+    assert cid not in rt.lifecycle._rehydration._rehydrated
 
 
 async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monkeypatch):
@@ -127,7 +127,7 @@ async def test_reconcile_marks_orphaned_running_paused_and_notes(tmp_path, monke
     store.create_conversation("conv_done", surface="build")
     await store.append("conv_done", StatusEvent(status=ConversationStatus.FINISHED))
 
-    n = await rt.reconcile_orphaned_runs()
+    n = await rt.lifecycle.reconcile_orphaned_runs()
 
     assert n == 1
     assert (await store.get_state("conv_orphan")).execution_status is ConversationStatus.PAUSED
@@ -181,7 +181,7 @@ async def test_suspend_frees_idle_sandbox_but_not_a_running_one(tmp_path, monkey
     idle = _FakeExecutor()
     rt._run_resources.set_executor("conv_idle", idle)
     await _set_status(store, "conv_idle", ConversationStatus.FINISHED)
-    await rt._lifecycle._suspend("conv_idle")
+    await rt.lifecycle._suspend("conv_idle")
     assert idle.killed is True
     assert not rt._run_resources.has_executor("conv_idle")  # sandbox freed
 
@@ -189,7 +189,7 @@ async def test_suspend_frees_idle_sandbox_but_not_a_running_one(tmp_path, monkey
     running = _FakeExecutor()
     rt._run_resources.set_executor("conv_run", running)
     await _set_status(store, "conv_run", ConversationStatus.RUNNING)
-    await rt._lifecycle._suspend("conv_run")
+    await rt.lifecycle._suspend("conv_run")
     assert running.killed is False
     assert rt._run_resources.has_executor("conv_run")  # still live
 
@@ -207,7 +207,7 @@ async def test_suspend_is_a_noop_without_durable_storage(tmp_path, monkeypatch):
     ex = _FakeExecutor()
     rt._run_resources.set_executor("conv_x", ex)
     await _set_status(store, "conv_x", ConversationStatus.FINISHED)
-    await rt._lifecycle._suspend("conv_x")
+    await rt.lifecycle._suspend("conv_x")
     assert ex.killed is False
     assert rt._run_resources.has_executor("conv_x")  # kept — nothing to restore from
 

@@ -86,7 +86,7 @@ def _resolve_model(
     why it fell back to the default."""
     if body_model_override:
         return body_model_override, None
-    last = runtime.get_last_selected_model()
+    last = runtime.settings.model_binding.get_last_selected_model()
     if last:
         cfg = runtime._config_store.load()
         if last in cfg.models:
@@ -96,7 +96,7 @@ def _resolve_model(
             f"using the default '{cfg.default_model}'"
         )
         _LOG.warning(note)
-        runtime.set_last_selected_model(None)
+        runtime.settings.model_binding.set_last_selected_model(None)
         return None, f"⚠ {note}"
     return None, None
 
@@ -153,8 +153,8 @@ async def _create_conversation_response(
     # Select surface and pin the driver model if the picker chose one.
     if runtime is not None:
         model_override, model_note = _resolve_model(body.model_override, runtime)
-        runtime.set_surface(conversation_id, body.surface)
-        runtime.set_model_override(conversation_id, model_override)
+        runtime.settings._set_surface(conversation_id, body.surface)
+        runtime.settings.set_model_override(conversation_id, model_override)
         if model_note is not None:
             await store.append(
                 conversation_id,
@@ -202,13 +202,13 @@ def _apply_create_runtime_settings(
 ) -> None:
     """Apply the per-conversation runtime settings from the create body."""
     if body.autonomous:
-        runtime.set_autonomous(conversation_id, True)
+        runtime.settings.set_autonomous(conversation_id, True)
     if body.quiet:
-        runtime.set_quiet(conversation_id, True)
+        runtime.settings.set_quiet(conversation_id, True)
     # Weak-model assist tier: None ⇒ leave the model-derived default;
     # True/False ⇒ explicit per-conversation override.
     if body.assist is not None:
-        runtime.set_assist(conversation_id, body.assist)
+        runtime.settings.set_assist(conversation_id, body.assist)
     # Deep Research depth tier (no-op for other surfaces). Was dropped before —
     # every DR run defaulted to standard_deep regardless of the UI picker.
     if body.depth_tier:
@@ -223,13 +223,13 @@ def _apply_create_runtime_settings(
     if validated_space_ids:
         runtime.spaces.set_space_ids(conversation_id, validated_space_ids)
     if body.sources:
-        runtime.set_research_sources(conversation_id, body.sources)
+        runtime.settings.set_research_sources(conversation_id, body.sources)
     # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
     if body.artifact_mode:
-        runtime.set_artifact_mode(conversation_id, True)
+        runtime.settings.set_artifact_mode(conversation_id, True)
     # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
     if body.appkit_mode:
-        runtime.set_appkit_mode(conversation_id, True)
+        runtime.settings.set_appkit_mode(conversation_id, True)
 
 
 async def _read_workspace_file(
@@ -331,7 +331,7 @@ async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> 
     deep_field_set = bool(deep_fields & body.model_fields_set)
     if not (model_field_set or body.assist is not None or deep_field_set):
         return
-    ok = await runtime.apply_settings_change(
+    ok = await runtime.settings.apply_settings_change(
         conversation_id,
         model_override=body.model_override,
         assist=body.assist,
@@ -351,9 +351,9 @@ async def _apply_gated_compose_settings(runtime, conversation_id: str, body) -> 
 def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
     """Apply the settings that are safe to change at any point in a run."""
     if body.autonomous is not None:
-        runtime.set_autonomous(conversation_id, body.autonomous)
+        runtime.settings.set_autonomous(conversation_id, body.autonomous)
     if body.quiet is not None:
-        runtime.set_quiet(conversation_id, body.quiet)
+        runtime.settings.set_quiet(conversation_id, body.quiet)
     if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
         runtime.deep_research.set_depth(conversation_id, body.depth_tier)
     if "iterative" in body.model_fields_set and body.iterative is not None:
@@ -361,7 +361,7 @@ def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
     if "recency_window" in body.model_fields_set:
         runtime.deep_research.set_recency(conversation_id, body.recency_window)
     if "sources" in body.model_fields_set and body.sources is not None:
-        runtime.set_research_sources(conversation_id, body.sources)
+        runtime.settings.set_research_sources(conversation_id, body.sources)
 
 
 async def _handle_post_message(
@@ -428,21 +428,21 @@ async def _handle_get_state(
     # surface (agentLive fallback, polling clients, the live specs) must
     # tell the same suspended/active story as the socket.
     if runtime is not None:
-        sstate = runtime.sandbox_state(conversation_id)
+        sstate = runtime.lifecycle.sandbox_state(conversation_id)
         if sstate is not None:
             state.extras["sandbox"] = sstate
-        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+        sandbox_ids = runtime.lifecycle.sandbox_instance_ids(conversation_id)
         if sandbox_ids:
             state.extras["sandbox_instance_ids"] = sandbox_ids
         # Surface the autonomous flag so the UI can badge the conversation.
-        if runtime.is_autonomous(conversation_id):
+        if runtime.settings.is_autonomous(conversation_id):
             state.extras["autonomous"] = True
-        if runtime.is_quiet(conversation_id):
+        if runtime.settings.is_quiet(conversation_id):
             state.extras["quiet"] = True
         # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
         # tier. Emitting it only-when-true let a switch to standard leave the
         # frontend's preserved-on-absent value stuck on "Assist".
-        state.extras["assist"] = runtime.is_assist(conversation_id)
+        state.extras["assist"] = runtime.settings.is_assist(conversation_id)
     result = state.model_dump(mode="json")
     # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
     if runtime is not None:
@@ -458,7 +458,7 @@ async def _handle_get_state(
     # a terminal-state model swap is verifiable. None ⇒ the conversation runs the
     # router default; the picker then falls back to last-selected/default.
     if runtime is not None:
-        result["model_override"] = runtime._settings._get_model_override(conversation_id)
+        result["model_override"] = runtime.settings._get_model_override(conversation_id)
     return result
 
 
@@ -487,7 +487,7 @@ async def _handle_update_settings(
     _apply_ungated_settings(runtime, conversation_id, body)
     return {
         "ok": True,
-        "model_override": runtime._settings._get_model_override(conversation_id),
+        "model_override": runtime.settings._get_model_override(conversation_id),
     }
 
 
@@ -528,7 +528,9 @@ async def _handle_kill(
     """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
     revoke its capabilities."""
     _revoke_host_tokens(host_token_store, conversation_id)
-    sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
+    sandbox_ids = (
+        runtime.lifecycle.sandbox_instance_ids(conversation_id) if runtime is not None else []
+    )
     if runtime is not None:
         await runtime.kill(conversation_id)
     state = await store.get_state(conversation_id)
@@ -556,7 +558,7 @@ async def _handle_resume(
 ) -> dict:
     """Resume a PAUSED or interrupted-with-unfinished-plan conversation."""
     _reject_if_imported(store, conversation_id)
-    await runtime._contract._fold_contract_from_history(conversation_id)
+    await runtime.contract._fold_contract_from_history(conversation_id)
     result = await runtime._resume.resume_conversation(conversation_id)
     if not result["ok"]:
         raise HTTPException(status_code=409, detail=result)

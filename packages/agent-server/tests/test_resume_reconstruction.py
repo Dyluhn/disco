@@ -161,7 +161,7 @@ def _upp(steps: list[dict]) -> ActionEvent:
 
 
 async def _cancel_task(rt: ConversationRuntime) -> None:
-    task = rt._run_registry.task(CID)
+    task = rt.run_registry.task(CID)
     if task is not None and not task.done():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -426,7 +426,7 @@ async def test_reconstruction_events_land_before_running_flip():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
 
     # Seed a dangling action followed by a PAUSED status
     action = _action("shell_exec", command="npm install")

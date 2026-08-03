@@ -165,7 +165,7 @@ async def _declare(
     ``ReleaseDeclareTool.run`` directly (plan §5 crit 9)."""
     if create:
         store.create_conversation(cid, owner_id=owner_id)
-        runtime.set_surface(cid, "build")
+        runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid,
         ToolCall(
@@ -342,7 +342,7 @@ async def test_release_endpoint_consumes_custom_root_sidecar(
     )
     ps = ProjectStore(str(configured_root))
     _store.create_conversation(cid, owner_id="local", title="svc", surface="build")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     _seed_workspace(ps, cid, title="svc")
 
     result = await _declare(
@@ -771,7 +771,7 @@ async def test_default_root_behavior_preserved_through_executor(
     runtime, _cfg_store = _runtime(_store, monkeypatch, projects_root="", data_dir=data_dir)
     ps = ProjectStore("")
     _store.create_conversation(cid, owner_id="local", title="svc", surface="build")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     _seed_workspace(ps, cid, title="svc")
 
     result = await _declare(

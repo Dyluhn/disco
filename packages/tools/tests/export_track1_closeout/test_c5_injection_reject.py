@@ -158,7 +158,7 @@ async def _declare(
     `ToolResult`."""
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid,
         ToolCall(tool_name="release_declare", arguments=dict(arguments), call_id="closeout-c5"),
@@ -223,7 +223,7 @@ async def _reject_resource(
     ``True``), so ``rejected`` is ``False`` and the assertion fires — the RED signal."""
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     call = ToolCall(tool_name="release_declare", arguments=dict(arguments), call_id="closeout-c5")
     try:
         result = await runtime.execute_pi_tool(cid, call)

@@ -450,7 +450,7 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     cid = "conv_adoption_test"
-    rt._settings._set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
 
     with mock.patch.object(rt.sandbox, "_sandbox_service_now"):
         session = rt.sessions.upload_session(cid)
@@ -472,7 +472,7 @@ def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
     cid = "conv_research_upload"
-    rt._settings._set_surface(cid, "research")
+    rt.settings._set_surface(cid, "research")
 
     with mock.patch.object(rt.sandbox, "_sandbox_service_now"):
         session = rt.sessions.upload_session(cid)
@@ -622,7 +622,7 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         upload_store = UploadStore(tmpdir)
         rt.uploads = upload_store
-        rt._lifecycle._rehydration._uploads._uploads = upload_store
+        rt.lifecycle._rehydration._uploads._uploads = upload_store
         data = b"post-restart data"
         rt.uploads.store(cid, "data.csv", data)
         assert rt.uploads.names(cid) == {"data.csv"}
@@ -670,7 +670,7 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
 
         # Trigger re-materialization — this is what _run_with_persistence does
         # after the chokepoint fix.
-        await rt._lifecycle._rematerialize_uploads(cid)
+        await rt.lifecycle._rematerialize_uploads(cid)
 
         # Assert the uploads were written into the sandbox.
         assert mock_files.get("uploads/data.csv") == data

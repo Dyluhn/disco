@@ -18,7 +18,7 @@ Structure:
   §3 — no-contamination: weak prompt doesn't mention withheld tools; weak scope
        doesn't advertise them.
   §4 — runtime threading: when the runtime composes a build conversation loop,
-       runtime.is_assist() / loop._model_policy / executor._model_policy all agree.
+       runtime.settings.is_assist() / loop._model_policy / executor._model_policy all agree.
   §5 — constructor sweep: no production AgentLoop / DefaultToolExecutor construction
        in the runtime compose path uses the legacy `assist=` kwarg.
 """
@@ -325,7 +325,7 @@ def test_no_contamination_non_anchored_standard_withholds_exact_replace() -> Non
 
 async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path) -> None:
     """When a weak conversation is composed, executor._model_policy.assist == True
-    and loop._model_policy.assist == True, both agreeing with runtime.is_assist()."""
+    and loop._model_policy.assist == True, both agreeing with runtime.settings.is_assist()."""
     from unittest.mock import patch
 
     from disco.agent_server.runtime import ConversationRuntime
@@ -377,9 +377,9 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         router = DefaultLLMRouter(cfg, {"fake": _FinishProvider()})
         rt = ConversationRuntime(store, router=router, sandbox_service=ProcessSandboxService())
         # Explicit weak override (don't rely on the heuristic in a test)
-        rt.set_assist(cid, True)
+        rt.settings.set_assist(cid, True)
         store.create_conversation(cid, owner_id="local")
-        rt.set_surface(cid, "build")
+        rt.settings._set_surface(cid, "build")
 
         # Drive the loop to compose (_compose_build_loop stores the executor)
         from disco.core import LLMMessage
@@ -408,14 +408,14 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
             await asyncio.sleep(0.05)
 
         # Badge source
-        assert rt.is_assist(cid) is True
+        assert rt.settings.is_assist(cid) is True
 
         # Executor threading (Order B): executor._model_policy is the resolved policy
         executor = rt._run_resources.executor(cid)
         assert executor is not None, "executor must be stored by _compose_build_loop"
         assert executor._model_policy.assist is True, (
             f"executor._model_policy.assist={executor._model_policy.assist!r} "
-            f"but runtime.is_assist={rt.is_assist(cid)!r} — policy not threaded"
+            f"but runtime.settings.is_assist={rt.settings.is_assist(cid)!r} — policy not threaded"
         )
 
         # Tool surface agrees: retired plan_step is absent and weak progress snapshots are hidden.
@@ -428,7 +428,8 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
         if loop is not None:
             assert loop._model_policy.assist is True, (
                 f"loop._model_policy.assist={loop._model_policy.assist!r} "
-                f"but runtime.is_assist={rt.is_assist(cid)!r} — policy not threaded"
+                f"but runtime.settings.is_assist={rt.settings.is_assist(cid)!r} — "
+                "policy not threaded"
             )
 
 
@@ -486,9 +487,9 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
         router = DefaultLLMRouter(cfg, {"fake": _FinishProvider()})
         rt = ConversationRuntime(store, router=router, sandbox_service=ProcessSandboxService())
         # Explicit standard override
-        rt.set_assist(cid, False)
+        rt.settings.set_assist(cid, False)
         store.create_conversation(cid, owner_id="local")
-        rt.set_surface(cid, "build")
+        rt.settings._set_surface(cid, "build")
 
         from disco.core import LLMMessage
         from disco.core import MessageEvent as CoreMessageEvent
@@ -514,7 +515,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
                 break
             await asyncio.sleep(0.05)
 
-        assert rt.is_assist(cid) is False
+        assert rt.settings.is_assist(cid) is False
         executor = rt._run_resources.executor(cid)
         assert executor is not None
         assert executor._model_policy.assist is False, (

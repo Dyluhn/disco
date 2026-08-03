@@ -137,7 +137,7 @@ test("clean finish suspends the sandbox (badge) → follow-up rehydrates and con
 
   // 4. Clean FINISH → snapshot + teardown → state overlay must report the
   //    sandbox suspended. Poll the HTTP state (the overlay is computed at
-  //    send time from runtime.sandbox_state, so it shows up on the next read).
+  //    send time from runtime.lifecycle.sandbox_state, so it shows up on the next read).
   const suspendDeadline = Date.now() + 120_000;
   let sandbox: string | undefined;
   while (Date.now() < suspendDeadline) {

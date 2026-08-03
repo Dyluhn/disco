@@ -483,7 +483,7 @@ async def test_deep_research_kick_blocks_on_dead_driver():
     (the old bug: decompose set RUNNING then failed with only a MessageEvent)."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)  # no injected router → preflight active
-    rt.set_surface("c1", "deep_research")
+    rt.settings._set_surface("c1", "deep_research")
 
     async def _dead(cid, **kw):
         return "Driver 'm' rejected the API key: invalid api key"
@@ -514,7 +514,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
     conversation to ERROR — NOT spin forever at RUNNING."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt.set_surface("c1", "deep_research")
+    rt.settings._set_surface("c1", "deep_research")
 
     async def _ok(cid, **kw):
         return None  # pre-flight passes
@@ -555,7 +555,7 @@ async def test_deep_research_kick_bounds_query_rewriter_role():
     """
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)  # no injected router → preflight path active
-    rt.set_surface("c1", "deep_research")
+    rt.settings._set_surface("c1", "deep_research")
 
     probed: list[ModelRole] = []
 
@@ -629,7 +629,7 @@ async def test_run_with_persistence_emits_error_and_skips_loop_on_dead_driver():
     with the named reason AND the loop never runs."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
-    rt.set_surface("c1", "build")
+    rt.settings._set_surface("c1", "build")
 
     async def _fail(cid, **kw):
         return "Driver 'm' unreachable: connection error: refused"

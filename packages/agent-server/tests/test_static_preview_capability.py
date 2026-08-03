@@ -497,7 +497,7 @@ async def test_sealed_dynamic_preview_restarts_from_immutable_bytes_and_rotates_
             sandbox_service=ProcessSandboxService(str(tmp_path / "sandbox-restarted")),
         )
         restarted.projects.current_project_store = MagicMock(return_value=projects)
-        restarted.set_surface(cid, "build")
+        restarted.settings._set_surface(cid, "build")
         # Reuse a live sandbox carrying a foreign top-level file. Sealed restart
         # must clear the workspace before restoring the verified version, not
         # merely overlay immutable files onto whatever happens to be present.

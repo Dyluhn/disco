@@ -73,7 +73,7 @@ def _runtime(
 
 
 async def _declare(runtime: ConversationRuntime, cid: str, arguments: dict[str, object]) -> Any:
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid, ToolCall(tool_name="release_declare", arguments=arguments, call_id=f"r2-{cid}")
     )

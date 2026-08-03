@@ -27,6 +27,6 @@ def make_models_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         localStorage). Returns {"model": "<key>" | null}."""
         if runtime is None:
             return {"model": None}
-        return {"model": runtime.get_last_selected_model()}
+        return {"model": runtime.settings.model_binding.get_last_selected_model()}
 
     return router

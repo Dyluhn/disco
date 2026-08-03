@@ -51,7 +51,7 @@ def _make_runtime(store: SqliteEventStore) -> MagicMock:
     not a raw append+kick. Modeled on test_schedule_e2e's `_runtime`."""
     rt = MagicMock()
     rt.run_controller.kick = MagicMock()
-    rt.set_model_override = MagicMock()
+    rt.settings.set_model_override = MagicMock()
     rt.deep_research.set_depth = MagicMock()
 
     async def _send(cid, text, *, context=None, steer=False):  # noqa: ANN001, ANN202

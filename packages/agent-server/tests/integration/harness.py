@@ -126,12 +126,12 @@ async def run_scripted(
 
     # Register the conversation.
     store.create_conversation(cid, owner_id="local", surface="build")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
 
     if artifact_mode:
-        runtime.set_artifact_mode(cid, True)
+        runtime.settings.set_artifact_mode(cid, True)
     if autonomous:
-        runtime.set_autonomous(cid, True)
+        runtime.settings.set_autonomous(cid, True)
 
     # Append the triggering user message that kicks the loop.
     await store.append(
@@ -144,7 +144,7 @@ async def run_scripted(
 
     # Kick the loop; wait for it to reach a terminal status.
     runtime.run_controller.kick(cid)
-    task = runtime._run_registry.task(cid)
+    task = runtime.run_registry.task(cid)
     if task is None:
         raise RuntimeError(
             "runtime.run_controller.kick() did not schedule a task — check surface wiring"

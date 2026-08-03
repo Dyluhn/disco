@@ -59,8 +59,8 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
 async def _kicked_conversation(store, runtime) -> tuple[str, int]:
     cid = f"sup-{uuid.uuid4().hex[:8]}"
     store.create_conversation(cid, owner_id="local", surface="build")
-    runtime._settings._set_surface(cid, "build")
-    runtime._settings.set_artifact_mode(cid, True)
+    runtime.settings._set_surface(cid, "build")
+    runtime.settings.set_artifact_mode(cid, True)
     stored = await store.append(
         cid,
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")),
@@ -94,7 +94,7 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
     )
 
     runtime.run_controller.kick(cid, claimed_user_seq=seq)
-    task = runtime._run_registry.task(cid)
+    task = runtime.run_registry.task(cid)
     assert task is not None
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
@@ -121,7 +121,7 @@ async def test_cancellation_is_not_reported_as_error(monkeypatch):
     )
 
     runtime.run_controller.kick(cid, claimed_user_seq=seq)
-    task = runtime._run_registry.task(cid)
+    task = runtime.run_registry.task(cid)
     assert task is not None
     await asyncio.sleep(0.1)
     task.cancel()
@@ -152,7 +152,7 @@ async def test_terminalize_is_idempotent(monkeypatch):
         lambda _cid, _snapshot: _FinishThenRaise(),
     )
     runtime.run_controller.kick(cid, claimed_user_seq=seq)
-    task = runtime._run_registry.task(cid)
+    task = runtime.run_registry.task(cid)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
     await asyncio.sleep(0.2)

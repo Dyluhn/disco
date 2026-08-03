@@ -250,7 +250,7 @@ async def _declare(
     ``ReleaseIntent`` / ``check_declaration_argv`` validators. Returns the
     ``ToolResult``."""
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     return await runtime.execute_pi_tool(
         cid,
         ToolCall(
