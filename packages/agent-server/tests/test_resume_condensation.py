@@ -228,7 +228,7 @@ async def test_integration_resume():
     await store.append(cid, StatusEvent(seq=12, status=ConversationStatus.PAUSED))
 
     # resume
-    res = await runtime.resume_conversation(cid)
+    res = await runtime.conversation_control.resume_conversation(cid)
     assert res["ok"] is True
 
     # Check store for tombstone

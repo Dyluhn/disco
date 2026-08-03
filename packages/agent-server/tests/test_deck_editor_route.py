@@ -125,10 +125,21 @@ class _FakeSandboxService:
 
 
 class _LiveSessions:
-    """Minimal stand-in for the LiveSessionDirectory named owner."""
+    """Minimal stand-in for the LiveSessionDirectory named owner.
+
+    13-B2: this is now the ONLY answer to "is there a live session", because
+    `runtime.live_session` is gone and consumers reach
+    `runtime.live_sessions.live_session`. The double therefore holds the
+    session itself, as the real directory does — previously this stand-in
+    always said None while the runtime double answered separately, a
+    disagreement the real object could never exhibit.
+    """
+
+    def __init__(self, session: _Session | None = None) -> None:
+        self._session = session
 
     def live_session(self, cid: str) -> _Session | None:
-        return None
+        return self._session
 
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         return None
@@ -163,7 +174,7 @@ class _LiveRuntime:
         self._sandbox_spec = object()
         self._sandbox = _Sandbox(self._sandbox_spec)
         self.finalized_host_changes: list[tuple[str, str]] = []
-        self._live_sessions = _LiveSessions()
+        self.live_sessions = _LiveSessions(session)
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 
@@ -179,9 +190,6 @@ class _LiveRuntime:
     def _sandbox_service_now(self) -> _FakeSandboxService:
         assert self._svc is not None, "no sandbox service injected"
         return self._svc
-
-    def live_session(self, cid: str) -> _Session | None:
-        return self._session
 
     def project_store(self) -> object:
         # No host snapshot by default — the live session is the only source.

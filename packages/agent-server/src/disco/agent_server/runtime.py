@@ -107,12 +107,11 @@ if TYPE_CHECKING:
 
     from disco.core import DEFAULT_OWNER_ID, ToolCall, ToolResult, WorkspaceMutationEvent
     from disco.core.llm import SandboxSettings
-    from disco.tools import SandboxSession
     from disco.tools.projects import VersionRecord
-    from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
     from .build_contract_service import BuildContractService
     from .build_loop_factory import BuildLoopFactory
+    from .connection_tracker import ConnectionTracker
     from .conversation_control_service import ConversationControlService
     from .deep_research_service import DeepResearchService
     from .driver_runtime import DriverPreflight, DriverRuntime
@@ -129,8 +128,10 @@ if TYPE_CHECKING:
         RunSupervisor,
     )
     from .runtime_settings import RuntimeSettings
+    from .sandbox_resource_reconciler import SandboxResourceReconciler
     from .sandbox_runtime_service import SandboxRuntimeService
     from .schedule_service import ScheduleService
+    from .sessions_service import SessionsService
     from .share_service import ShareService
     from .space_service import SpaceService
     from .suggestion_service import SuggestionService
@@ -199,10 +200,17 @@ class ConversationRuntime:
 
     if TYPE_CHECKING:
         # fmt: off
-        # The declared public collaborator seam (13-B1). Consumers reach
-        # the owning service by name instead of through a delegate.
+        # The declared public collaborator seam (13-B1, extended by 13-B2).
+        # Consumers reach the owning service by name instead of through a
+        # delegate.
+        connections: ConnectionTracker
+        conversation_control: ConversationControlService
+        drivers: DriverRuntime
+        live_sessions: LiveSessionDirectory
         run_sweep: RunStrandedSweep
+        sandbox_resources: SandboxResourceReconciler
         schedules: ScheduleService
+        sessions: SessionsService
         share: ShareService
         spaces: SpaceService
         suggestions: SuggestionService
@@ -211,13 +219,10 @@ class ConversationRuntime:
 
         _config_store: ConfigStore
         _contract: BuildContractService
-        _conversation_control: ConversationControlService
         _dr: DeepResearchService
         _driver_preflight: DriverPreflight
-        _drivers: DriverRuntime
         _idle_sweeper: LifecycleIdleSweeper
         _lifecycle: LifecycleManager
-        _live_sessions: LiveSessionDirectory
         _loop_factory: BuildLoopFactory
         _mcp: McpManager
         _projects: ProjectRuntimeService
@@ -234,8 +239,6 @@ class ConversationRuntime:
         def set_surface(self, conversation_id: str, surface: str) -> None: ...
         async def probe_active_sandbox(self) -> tuple[bool, str, str]: ...
         async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]: ...  # noqa: E501
-        async def prewarm_model_probe(self) -> None: ...
-        async def prewarm_vision_probe(self) -> None: ...
         def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
         def set_autonomous(self, conversation_id: str, value: bool=True) -> None: ...
         def is_autonomous(self, conversation_id: str) -> bool: ...
@@ -254,9 +257,7 @@ class ConversationRuntime:
         def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None: ...
         def get_last_selected_model(self) -> str | None: ...
         def set_last_selected_model(self, model_id: str | None) -> None: ...
-        def driver_models(self) -> dict[str, Any]: ...
         async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
-        def upload_session(self, conversation_id: str) -> SandboxSession: ...
         def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
         def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]: ...  # noqa: E501
         @contextlib.asynccontextmanager
@@ -274,12 +275,9 @@ class ConversationRuntime:
         def set_recency(self, conversation_id: str, window: str | None) -> None: ...
         def research_stream(self, query: str, *, model_override: str | None=None, drop_weak: bool=False, domains_deny: frozenset[str]=frozenset(), think: bool=False, conversation_id: str | None=None, space_ids: frozenset[str]=frozenset(), owner_id: str | None=None, include_unclaimed_legacy: bool=False, sources: list[str] | tuple[str, ...] | None=None) -> AsyncIterator[dict[str, Any]]: ...  # noqa: E501
         def kick(self, conversation_id: str, *, claimed_user_seq: int | None=None) -> None: ...
-        async def reconcile_sandbox_backend(self) -> int: ...
         async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
         async def reload_mcp_pool(self) -> dict[str, Any]: ...
         def mcp_approval_state(self) -> dict[str, dict]: ...
-        def on_connect(self, conversation_id: str) -> None: ...
-        def on_disconnect(self, conversation_id: str, *, grace_s: float=60.0) -> None: ...
         def sandbox_state(self, conversation_id: str) -> str | None: ...
         def sandbox_instance_ids(self, conversation_id: str) -> list[str]: ...
         async def sweep_idle_once(self) -> int: ...
@@ -287,22 +285,15 @@ class ConversationRuntime:
         def project_store(self) -> ProjectStore: ...
         async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict: ...
         async def export_report(self, conversation_id: str, fmt: str, *, owner_id: str=DEFAULT_OWNER_ID) -> tuple[bytes, str, str] | None: ...  # noqa: E501
-        def resolve_cid_prefix(self, cid8: str) -> str | None: ...
-        async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None: ...
         def preview_upstream(self, conversation_id: str) -> str | None: ...
         def preview_target_port(self, conversation_id: str) -> int | None: ...
         async def resolve_active_preview_projection(self, conversation_id: str, projection: Any) -> bool: ...  # noqa: E501
         async def resolve_finished_preview_runtime(self, conversation_id: str, contract: Any) -> dict[str, Any] | None: ...  # noqa: E501
         def port_upstream(self, conversation_id: str, port: int) -> str | None: ...
         async def wake_for_preview(self, cid8: str, port: int, *, owner_id: str=DEFAULT_OWNER_ID) -> str | None: ...  # noqa: E501
-        def live_session(self, conversation_id: str) -> SandboxSession | None: ...
         def sandbox_backend_name(self) -> str | None: ...
-        async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]: ...  # noqa: E501
-        async def sessions_list(self, conversation_id: str) -> list[SessionInfo]: ...
-        async def session_view(self, conversation_id: str, name: str, tail_chars: int) -> SessionView | None: ...  # noqa: E501
         async def preview(self, conversation_id: str) -> dict[str, Any]: ...
         async def ensure_preview(self, conversation_id: str) -> bool: ...
-        async def resume_conversation(self, conversation_id: str) -> dict: ...
         async def forget_conversation(self, conversation_id: str) -> None: ...
         def running_conversation_ids(self) -> set[str]: ...
         # fmt: on
@@ -367,7 +358,7 @@ class ConversationRuntime:
         conversation_id: str | None = None,
         appkit_mode: bool = False,
     ) -> DefaultLLMRouter:
-        return self._drivers.router(
+        return self.drivers.router(
             pick,
             enable_thinking=enable_thinking,
             surface=surface,
@@ -400,7 +391,7 @@ class ConversationRuntime:
         self,
         conversation_id: str,
     ) -> ResolvedDriverContext:
-        return await self._drivers.resolve_context(conversation_id)
+        return await self.drivers.resolve_context(conversation_id)
 
     async def _preflight_driver(
         self,
@@ -480,7 +471,7 @@ class ConversationRuntime:
         await self._lifecycle._teardown_sandbox(conversation_id)
 
     def start(self, conversation_id: str) -> None:
-        self._conversation_control.start(conversation_id)
+        self.conversation_control.start(conversation_id)
 
     async def send_user_turn(
         self,
@@ -492,7 +483,7 @@ class ConversationRuntime:
         verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
-        return await self._conversation_control.send_user_turn(
+        return await self.conversation_control.send_user_turn(
             conversation_id,
             text,
             context=context,
@@ -502,35 +493,35 @@ class ConversationRuntime:
         )
 
     async def confirm(self, conversation_id: str) -> None:
-        await self._conversation_control.confirm(conversation_id)
+        await self.conversation_control.confirm(conversation_id)
 
     async def reject(
         self,
         conversation_id: str,
         reason: str = "rejected by user",
     ) -> None:
-        await self._conversation_control.reject(conversation_id, reason)
+        await self.conversation_control.reject(conversation_id, reason)
 
     async def approve_plan(self, conversation_id: str) -> None:
-        await self._conversation_control.approve_plan(conversation_id)
+        await self.conversation_control.approve_plan(conversation_id)
 
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
-        await self._conversation_control.request_plan(conversation_id, text)
+        await self.conversation_control.request_plan(conversation_id, text)
 
     async def pick_alternative(self, conversation_id: str, option_id: str) -> None:
-        await self._conversation_control.pick_alternative(conversation_id, option_id)
+        await self.conversation_control.pick_alternative(conversation_id, option_id)
 
     async def pause(self, conversation_id: str) -> None:
-        await self._conversation_control.pause(conversation_id)
+        await self.conversation_control.pause(conversation_id)
 
     async def cancel(self, conversation_id: str) -> None:
-        await self._conversation_control.cancel(conversation_id)
+        await self.conversation_control.cancel(conversation_id)
 
     async def resume(self, conversation_id: str) -> None:
-        await self._conversation_control.resume(conversation_id)
+        await self.conversation_control.resume(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
-        await self._conversation_control.kill(conversation_id)
+        await self.conversation_control.kill(conversation_id)
 
     async def aclose(self) -> None:
         await self._run_supervisor.cancel_runs()

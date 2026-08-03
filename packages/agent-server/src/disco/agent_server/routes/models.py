@@ -17,7 +17,7 @@ def make_models_router(store: SqliteEventStore, runtime: ConversationRuntime | N
         Sourced from the live router config so it reflects Settings assignments."""
         if runtime is None:
             return {"models": [], "default": None}
-        return runtime.driver_models()
+        return runtime.drivers.catalog()
 
     @router.get("/models/last-selected")
     async def get_last_selected_model() -> dict:

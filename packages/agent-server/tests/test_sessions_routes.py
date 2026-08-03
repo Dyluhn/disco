@@ -50,9 +50,9 @@ def _make_fake_runtime(sessions: list[SessionInfo] | None = None) -> MagicMock:
                 return SessionView(running=s.busy, output=f"output of {name}")
         return None
 
-    rt.sessions_list = AsyncMock(side_effect=_sessions_list)
-    rt.sessions_snapshot = AsyncMock(side_effect=_sessions_snapshot)
-    rt.session_view = AsyncMock(side_effect=_session_view)
+    rt.sessions.sessions_snapshot = AsyncMock(side_effect=_sessions_list)
+    rt.sessions.sessions_snapshot = AsyncMock(side_effect=_sessions_snapshot)
+    rt.sessions.session_view = AsyncMock(side_effect=_session_view)
     return rt
 
 
@@ -237,8 +237,8 @@ def test_view_coalescing_single_exec() -> None:
     async def run():
         # Fire two concurrent view calls — they should coalesce.
         results = await asyncio.gather(
-            runtime._sessions.session_view(cid, "dev", 10_000),
-            runtime._sessions.session_view(cid, "dev", 10_000),
+            runtime.sessions.session_view(cid, "dev", 10_000),
+            runtime.sessions.session_view(cid, "dev", 10_000),
         )
         return results
 

@@ -270,7 +270,7 @@ async def test_connected_session_not_swept():
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock()
     rt._run_resources.set_executor(cid, fake_executor)
-    rt._connections.on_connect(cid)
+    rt.connections.on_connect(cid)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
         count = await rt.sweep_idle_once()
@@ -400,7 +400,7 @@ async def test_build_session_wires_recreate_hook():
     workspace exactly as before."""
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
-    session = rt.upload_session("conv-hook-wired")
+    session = rt.sessions.upload_session("conv-hook-wired")
     assert session._on_recreate is not None
 
 
@@ -537,8 +537,8 @@ async def test_http_state_route_overlays_sandbox_state():
     rt._mcp._start_mcp_pool = AsyncMock()
     rt._mcp._close_mcp_pool = AsyncMock()
     rt.reconcile_orphaned_runs = AsyncMock()
-    rt.prewarm_model_probe = AsyncMock()
-    rt.prewarm_vision_probe = AsyncMock()
+    rt.drivers.prewarm_model_probe = AsyncMock()
+    rt.drivers.prewarm_vision_probe = AsyncMock()
 
     app = create_app(store, runtime=rt)
     transport = httpx.ASGITransport(app=app)

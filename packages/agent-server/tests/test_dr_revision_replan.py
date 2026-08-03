@@ -80,7 +80,7 @@ def _rt(store, monkeypatch) -> ConversationRuntime:
         return None
 
     monkeypatch.setattr(rt._driver_preflight, "check", _preflight_ok)
-    monkeypatch.setattr(rt._drivers, "router", lambda **kw: object())
+    monkeypatch.setattr(rt.drivers, "router", lambda **kw: object())
     return rt
 
 

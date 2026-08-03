@@ -157,7 +157,7 @@ async def _request_workflow_draft(
     description: str,
     max_tokens: int,
 ) -> str:
-    router = runtime._drivers.router()
+    router = runtime.drivers.router()
     resp = await router.complete(
         CompletionRequest(
             profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),

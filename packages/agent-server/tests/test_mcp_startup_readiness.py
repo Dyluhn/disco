@@ -24,8 +24,8 @@ async def test_mcp_connection_attempt_cannot_own_agent_readiness(tmp_path) -> No
 
     runtime._mcp._start_mcp_pool = blocked_mcp_start
     runtime.reconcile_orphaned_runs = AsyncMock(return_value=0)
-    runtime.prewarm_model_probe = AsyncMock()
-    runtime.prewarm_vision_probe = AsyncMock()
+    runtime.drivers.prewarm_model_probe = AsyncMock()
+    runtime.drivers.prewarm_vision_probe = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
     runtime.schedules._schedule_manager_loop = AsyncMock()
     runtime._mcp._close_mcp_pool = AsyncMock()

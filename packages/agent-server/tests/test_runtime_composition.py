@@ -41,8 +41,8 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
     assert runtime._run_kills._runs is runtime._run_registry
     assert runtime._run_kills._resources is runtime._run_resources
     assert runtime._control._controller is runtime._run_controller
-    assert runtime._conversation_control._pins is runtime._kernel_pins
-    assert runtime._conversation_control._runs is runtime._run_registry
+    assert runtime.conversation_control._pins is runtime._kernel_pins
+    assert runtime.conversation_control._runs is runtime._run_registry
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
     assert runtime.run_sweep._completion is runtime._run_finalizer
     assert runtime._dr._state is runtime._research_state
@@ -53,7 +53,7 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
         runtime._run_supervisor,
         runtime._run_kills,
         runtime._control,
-        runtime._conversation_control,
+        runtime.conversation_control,
         runtime._run_finalizer,
         runtime.run_sweep,
         runtime._run_execution,
@@ -94,9 +94,12 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # 13-B1 dissolved seven collaborator families (29 delegates): _share,
     # _spaces, _suggestion_service, _title_service, _schedule, _uploads and
     # _run_sweep are now the declared public seam share/spaces/suggestions/
-    # titles/schedules/uploads/run_sweep. This count is a ratchet: it falls as
-    # 13-B proceeds and must never rise.
-    assert len(compatibility) == 71
+    # titles/schedules/uploads/run_sweep. 13-B2 dissolved six more (14
+    # delegates): _sessions, _connections, _sandbox_resources, _live_sessions,
+    # _conversation_control and _drivers, now sessions/connections/
+    # sandbox_resources/live_sessions/conversation_control/drivers. This count
+    # is a ratchet: it falls as 13-B proceeds and must never rise.
+    assert len(compatibility) == 57
     assert public == active_ingress | compatibility
     assert all(
         getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
@@ -211,8 +214,8 @@ async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> N
     runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
     runtime.schedules._schedule_manager_loop = AsyncMock()
-    runtime._drivers.prewarm_model_probe = AsyncMock()
-    runtime._drivers.prewarm_vision_probe = AsyncMock()
+    runtime.drivers.prewarm_model_probe = AsyncMock()
+    runtime.drivers.prewarm_vision_probe = AsyncMock()
     runtime.aclose = AsyncMock()
 
     with pytest.raises(RuntimeError, match="request scope failed"):

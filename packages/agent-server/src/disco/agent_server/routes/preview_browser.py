@@ -298,7 +298,7 @@ async def _fetch_inside_response(
     if port == NOVNC_PORT:
         return None
     try:
-        session = runtime.live_session(conversation_id)
+        session = runtime.live_sessions.live_session(conversation_id)
         if session is None:
             return None
         got = await session.fetch_inside(port, rel_path)
@@ -400,7 +400,7 @@ def _live_browser_session(
     runtime: ConversationRuntime,
     conversation_id: str,
 ) -> tuple[Any | None, Response | None]:
-    session = runtime.live_session(conversation_id)
+    session = runtime.live_sessions.live_session(conversation_id)
     if session is None:
         return None, _json_error(
             "no_sandbox",
@@ -515,7 +515,7 @@ async def _browser_live_ready_response(
             return JSONResponse({"ready": False, "reason": "disabled"})
     except Exception:  # noqa: BLE001
         return JSONResponse({"ready": False, "reason": "config_unavailable"})
-    session = runtime.live_session(conversation_id)
+    session = runtime.live_sessions.live_session(conversation_id)
     if session is None:
         return JSONResponse({"ready": False, "reason": "no_sandbox"})
     if not getattr(session, "supports_live_view", False):
@@ -544,7 +544,7 @@ async def _best_effort_live_command(
 ) -> Response:
     if runtime is None:
         return JSONResponse({"ok": True, "note": no_runtime_note})
-    session = runtime.live_session(conversation_id)
+    session = runtime.live_sessions.live_session(conversation_id)
     if session is None:
         return JSONResponse({"ok": True, "note": no_session_note})
     try:

@@ -87,7 +87,7 @@ class _FakeRuntime:
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._upload_passages: dict[str, list[Any]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
-        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self.sessions = SimpleNamespace(upload_session=self.upload_session)
         self._workspace = SimpleNamespace(
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
@@ -101,7 +101,7 @@ class _FakeRuntime:
             add_upload_passages=self.add_upload_passages,
             get_upload_passages=self.get_upload_passages,
         )
-        self._live_sessions = _LiveSessions(self._executors)
+        self.live_sessions = _LiveSessions(self._executors)
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 
@@ -252,18 +252,18 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
         reconcile_orphaned_runs=mock.AsyncMock(),
         _idle_sweep_loop=mock.AsyncMock(),
     )
-    runtime._drivers = SimpleNamespace(
+    runtime.drivers = SimpleNamespace(
         prewarm_model_probe=mock.AsyncMock(),
         prewarm_vision_probe=mock.AsyncMock(),
     )
     runtime.schedules = SimpleNamespace(_schedule_manager_loop=mock.AsyncMock())
     runtime._idle_sweeper = SimpleNamespace(run=mock.AsyncMock())
-    runtime._live_sessions = _LiveSessions()
+    runtime.live_sessions = _LiveSessions()
     runtime._config_store = ConfigStore()
     runtime._secret_store = SecretStore()
     runtime.reconcile_orphaned_runs = mock.AsyncMock(return_value=0)
-    runtime.prewarm_model_probe = mock.AsyncMock()
-    runtime.prewarm_vision_probe = mock.AsyncMock()
+    runtime.drivers.prewarm_model_probe = mock.AsyncMock()
+    runtime.drivers.prewarm_vision_probe = mock.AsyncMock()
     runtime.aclose = mock.AsyncMock()
     runtime.project_store = lambda: _EmptyProjectStore()
     return runtime

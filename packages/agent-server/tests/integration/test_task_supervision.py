@@ -52,7 +52,7 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     )
     runtime.titles.schedule = MagicMock()
     runtime._build_platform.prepare_route_pin = AsyncMock()
-    runtime._drivers.resolve_context = AsyncMock(return_value=MagicMock())
+    runtime.drivers.resolve_context = AsyncMock(return_value=MagicMock())
     return runtime
 
 

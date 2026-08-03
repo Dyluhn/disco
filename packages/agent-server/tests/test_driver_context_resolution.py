@@ -430,11 +430,11 @@ class TestConversationRuntimeDriverContextSeams:
         def legacy_compose(_cid: str) -> object:
             raise AssertionError("legacy synchronous composition ran before resolution")
 
-        monkeypatch.setattr(rt._drivers, "resolve_context", resolve)
+        monkeypatch.setattr(rt.drivers, "resolve_context", resolve)
         monkeypatch.setattr(rt._loop_factory, "loop_for_resolved", compose)
         monkeypatch.setattr(rt, "_loop_for", legacy_compose)
         monkeypatch.setattr(rt._run_supervisor, "create_task", create_run_task)
-        monkeypatch.setattr(rt._sandbox_resources, "evict_stale", evict_stale_backend)
+        monkeypatch.setattr(rt.sandbox_resources, "evict_stale", evict_stale_backend)
         monkeypatch.setattr(rt._workspace, "run_after_admission", admit)
 
         rt.kick(cid, claimed_user_seq=user_seq)
@@ -466,11 +466,11 @@ class TestConversationRuntimeDriverContextSeams:
     @pytest.mark.asyncio
     async def test_invalid_driver_config_is_normalized_to_resolution_error(self) -> None:
         rt = _runtime("ok", model_key="configured", context_window=12288)
-        assert rt._drivers._injected_router is not None
-        broken = rt._drivers._injected_router._config.model_copy(
+        assert rt.drivers._injected_router is not None
+        broken = rt.drivers._injected_router._config.model_copy(
             update={"default_model": "missing", "assignments": {}}
         )
-        rt._drivers._injected_router._config = broken
+        rt.drivers._injected_router._config = broken
         with pytest.raises(DriverContextResolutionError, match="invalid driver configuration"):
             await rt._resolve_driver_context("invalid-config")
 
@@ -516,13 +516,13 @@ class TestConversationRuntimeDriverContextSeams:
             resolved_at=datetime.now(UTC),
         )
         seen_picks: list[str | None] = []
-        original_router = rt._drivers.router
+        original_router = rt.drivers.router
 
         def router(pick: str | None = None, **kwargs: Any) -> DefaultLLMRouter:
             seen_picks.append(pick)
             return original_router(pick=pick, **kwargs)
 
-        monkeypatch.setattr(rt._drivers, "router", router)
+        monkeypatch.setattr(rt.drivers, "router", router)
         loop = rt._loop_factory.loop_for_resolved(cid, snapshot)
         assert seen_picks == ["resolved"]
         assert loop._driver_context_window_value == 16384

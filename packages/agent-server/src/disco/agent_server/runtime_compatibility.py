@@ -20,9 +20,7 @@ if TYPE_CHECKING:
     from disco.core import ToolCall, ToolResult, WorkspaceMutationEvent
     from disco.core.appkit import BuildBrief
     from disco.core.llm import SandboxSettings
-    from disco.tools import SandboxSession
     from disco.tools.projects import ProjectStore, VersionRecord
-    from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
     from .runtime import ConversationRuntime
     from .workspace_commit import CommittedWorkspaceView
@@ -41,16 +39,6 @@ async def probe_active_sandbox(self) -> tuple[bool, str, str]:
 async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]:
 
     return await self._sandbox.probe_sandbox_config(settings)
-
-
-async def prewarm_model_probe(self) -> None:
-
-    await self._drivers.prewarm_model_probe()
-
-
-async def prewarm_vision_probe(self) -> None:
-
-    await self._drivers.prewarm_vision_probe()
 
 
 def set_model_override(self, conversation_id: str, model_id: str | None) -> None:
@@ -152,11 +140,6 @@ def set_last_selected_model(self, model_id: str | None) -> None:
     self._settings.model_binding.set_last_selected_model(model_id)
 
 
-def driver_models(self) -> dict[str, Any]:
-
-    return self._drivers.catalog()
-
-
 async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult:
 
     executor = self._run_resources.executor(conversation_id)
@@ -184,11 +167,6 @@ async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> To
             ),
         )
     return result
-
-
-def upload_session(self, conversation_id: str) -> SandboxSession:
-
-    return self._sessions.upload_session(conversation_id)
 
 
 def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
@@ -310,11 +288,6 @@ def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> 
     self._run_controller.kick(conversation_id, claimed_user_seq=claimed_user_seq)
 
 
-async def reconcile_sandbox_backend(self) -> int:
-
-    return await self._sandbox_resources.reconcile()
-
-
 async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
 
     return await self._lifecycle.reconcile_orphaned_runs(owner_id=owner_id)
@@ -328,16 +301,6 @@ async def reload_mcp_pool(self) -> dict[str, Any]:
 def mcp_approval_state(self) -> dict[str, dict]:
 
     return self._mcp.mcp_approval_state()
-
-
-def on_connect(self, conversation_id: str) -> None:
-
-    self._connections.on_connect(conversation_id)
-
-
-def on_disconnect(self, conversation_id: str, *, grace_s: float = 60.0) -> None:
-
-    self._connections.on_disconnect(conversation_id, grace_s=grace_s)
 
 
 def sandbox_state(self, conversation_id: str) -> str | None:
@@ -381,16 +344,6 @@ async def export_report(
     return await self._dr.export_report(conversation_id, fmt, owner_id=owner_id)
 
 
-def resolve_cid_prefix(self, cid8: str) -> str | None:
-
-    return self._live_sessions.resolve_cid_prefix(cid8)
-
-
-async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
-
-    return await self._live_sessions.resolve_owned_cid_prefix(cid8, owner_id)
-
-
 def preview_upstream(self, conversation_id: str) -> str | None:
 
     port = self._preview.preview_target_port(conversation_id)
@@ -432,31 +385,9 @@ async def wake_for_preview(
     return await self._preview.wake_for_preview(cid8, port, owner_id=owner_id)
 
 
-def live_session(self, conversation_id: str) -> SandboxSession | None:
-
-    return self._live_sessions.live_session(conversation_id)
-
-
 def sandbox_backend_name(self) -> str | None:
 
     return self._sandbox.backend_name()
-
-
-async def sessions_snapshot(self, conversation_id: str) -> tuple[list[SessionInfo], bool]:
-
-    return await self._sessions.sessions_snapshot(conversation_id)
-
-
-async def sessions_list(self, conversation_id: str) -> list[SessionInfo]:
-
-    return (await self._sessions.sessions_snapshot(conversation_id))[0]
-
-
-async def session_view(
-    self, conversation_id: str, name: str, tail_chars: int
-) -> SessionView | None:
-
-    return await self._sessions.session_view(conversation_id, name, tail_chars)
 
 
 async def preview(self, conversation_id: str) -> dict[str, Any]:
@@ -467,14 +398,6 @@ async def preview(self, conversation_id: str) -> dict[str, Any]:
 async def ensure_preview(self, conversation_id: str) -> bool:
 
     return await self._preview.ensure_preview(conversation_id)
-
-
-async def resume_conversation(self, conversation_id: str) -> dict:
-    # CONTRACT-DURABILITY: a resume after an agent-server restart is exactly
-    # the path that used to lose the contract — fold BEFORE the resume seam
-    # composes a loop so the executor bakes contract-derived state.
-
-    return await self._conversation_control.resume_conversation(conversation_id)
 
 
 async def forget_conversation(self, conversation_id: str) -> None:
@@ -500,10 +423,6 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
     runtime_cls.probe_active_sandbox = probe_active_sandbox
 
     runtime_cls.probe_sandbox_config = probe_sandbox_config
-
-    runtime_cls.prewarm_model_probe = prewarm_model_probe
-
-    runtime_cls.prewarm_vision_probe = prewarm_vision_probe
 
     runtime_cls.set_model_override = set_model_override
 
@@ -541,11 +460,7 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.set_last_selected_model = set_last_selected_model
 
-    runtime_cls.driver_models = driver_models
-
     runtime_cls.execute_pi_tool = execute_pi_tool
-
-    runtime_cls.upload_session = upload_session
 
     runtime_cls.workspace_lock = workspace_lock
 
@@ -575,17 +490,11 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.kick = kick
 
-    runtime_cls.reconcile_sandbox_backend = reconcile_sandbox_backend
-
     runtime_cls.reconcile_orphaned_runs = reconcile_orphaned_runs
 
     runtime_cls.reload_mcp_pool = reload_mcp_pool
 
     runtime_cls.mcp_approval_state = mcp_approval_state
-
-    runtime_cls.on_connect = on_connect
-
-    runtime_cls.on_disconnect = on_disconnect
 
     runtime_cls.sandbox_state = sandbox_state
 
@@ -601,10 +510,6 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.export_report = export_report
 
-    runtime_cls.resolve_cid_prefix = resolve_cid_prefix
-
-    runtime_cls.resolve_owned_cid_prefix = resolve_owned_cid_prefix
-
     runtime_cls.preview_upstream = preview_upstream
 
     runtime_cls.preview_target_port = preview_target_port
@@ -617,21 +522,11 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.wake_for_preview = wake_for_preview
 
-    runtime_cls.live_session = live_session
-
     runtime_cls.sandbox_backend_name = sandbox_backend_name
-
-    runtime_cls.sessions_snapshot = sessions_snapshot
-
-    runtime_cls.sessions_list = sessions_list
-
-    runtime_cls.session_view = session_view
 
     runtime_cls.preview = preview
 
     runtime_cls.ensure_preview = ensure_preview
-
-    runtime_cls.resume_conversation = resume_conversation
 
     runtime_cls.forget_conversation = forget_conversation
 

@@ -62,9 +62,6 @@ class _LiveRuntime:
     def sandbox_backend_name(self) -> str | None:
         return "process"
 
-    def live_session(self, cid: str) -> _Session:
-        return _Session()
-
 
 class _SnapshotRuntime:
     """No live session — exercises the ProjectStore fallback (finished run)."""
@@ -81,9 +78,6 @@ class _SnapshotRuntime:
 
     def sandbox_backend_name(self) -> str | None:
         return "process"
-
-    def live_session(self, cid: str) -> None:
-        return None
 
     def project_store(self) -> ProjectStore:
         return self._ps
@@ -219,17 +213,25 @@ def _seal_finished_workspace(store: SqliteEventStore, projects: ProjectStore, ci
 def live_client() -> TestClient:
     store = SqliteEventStore(":memory:")
     runtime = _LiveRuntime()
-    _wire_live_runtime(runtime)
+    _wire_live_runtime(runtime, _Session())
     client = TestClient(create_app(store, runtime=runtime))  # type: ignore[arg-type]
     client._store = store  # type: ignore[attr-defined]
     return client
 
 
 class _LiveSessions:
-    """Minimal stand-in for the LiveSessionDirectory named owner."""
+    """Minimal stand-in for the LiveSessionDirectory named owner.
+
+    13-B2: the directory is the only answer to "is there a live session" now
+    that `runtime.live_session` is gone, so it holds the session rather than
+    always reporting None beside a runtime double that answered differently.
+    """
+
+    def __init__(self, session: _Session | None = None) -> None:
+        self._session = session
 
     def live_session(self, cid: str) -> _Session | None:
-        return None
+        return self._session
 
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         return None
@@ -238,10 +240,10 @@ class _LiveSessions:
         return None
 
 
-def _wire_live_runtime(runtime: object) -> None:
+def _wire_live_runtime(runtime: object, session: _Session | None = None) -> None:
     from disco.core.llm import ConfigStore, SecretStore
 
-    runtime._live_sessions = _LiveSessions()  # type: ignore[attr-defined]
+    runtime.live_sessions = _LiveSessions(session)  # type: ignore[attr-defined]
     runtime._config_store = ConfigStore()  # type: ignore[attr-defined]
     runtime._secret_store = SecretStore()  # type: ignore[attr-defined]
 

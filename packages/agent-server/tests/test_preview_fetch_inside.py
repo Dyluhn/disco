@@ -42,6 +42,8 @@ class _FakeRuntime:
         self._preview = self
         self._target_port = target_port
         self.wake_calls: list[tuple[str, int]] = []
+        # 13-B2: consumers reach the directory by name, not through a delegate.
+        self.live_sessions = self
 
     def preview_target_port(self, conversation_id: str) -> int:
         return self._target_port

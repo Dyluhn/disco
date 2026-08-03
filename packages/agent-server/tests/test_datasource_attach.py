@@ -80,7 +80,7 @@ class _FakeRuntime:
         self._pending_sessions: dict[str, _FakeSession] = {}
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
-        self._sessions = SimpleNamespace(upload_session=self.upload_session)
+        self.sessions = SimpleNamespace(upload_session=self.upload_session)
         self._workspace = SimpleNamespace(
             fence=self.workspace_fence,
             record_mutation_locked=self.record_workspace_mutation_locked,
@@ -91,7 +91,7 @@ class _FakeRuntime:
             size=self.get_upload_size,
         )
         self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
-        self._live_sessions = _LiveSessions()
+        self.live_sessions = _LiveSessions()
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 

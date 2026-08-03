@@ -18,12 +18,20 @@ class _Session:
         return self._files[path]
 
 
-class _Runtime:
+class _LiveSessions:
+    """The LiveSessionDirectory named owner (13-B2)."""
+
     def __init__(self, session: _Session | None) -> None:
         self._session = session
 
     def live_session(self, conversation_id: str) -> _Session | None:
         return self._session
+
+
+class _Runtime:
+    def __init__(self, session: _Session | None) -> None:
+        self._session = session
+        self.live_sessions = _LiveSessions(session)
 
     def project_store(self) -> None:
         return None

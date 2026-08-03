@@ -1,7 +1,7 @@
 """V2/V4 (§2) — the runtime vision-probe activation seam.
 
-`ConversationRuntime.prewarm_vision_probe` runs the async network probe ONCE at
-agent-server startup (wired into the lifespan in app.py) and installs the result
+`ConversationRuntime.drivers.prewarm_vision_probe` runs the async network probe
+ONCE at agent-server startup (wired into the lifespan in app.py) and installs the result
 as a process-lifetime overlay on the shared ConfigStore, so every per-request
 config load reflects a model server's REAL vision modality (llama.cpp
 `/props.modalities.vision`, OpenRouter `input_modalities`) over the static table.
@@ -63,7 +63,7 @@ async def test_prewarm_runs_probe_and_overlays_vision(tmp_path, monkeypatch):
         return {"driver-local": True}
 
     monkeypatch.setattr(driver_runtime_mod, "probe_all_vision_with_approvals", _fake_probe)
-    await rt.prewarm_vision_probe()
+    await rt.drivers.prewarm_vision_probe()
 
     assert "config" in called  # the probe was actually invoked at startup
     assert _driver_has_vision(rt) is True  # probe overrode the static table
@@ -81,7 +81,7 @@ async def test_prewarm_is_fail_soft_on_probe_error(tmp_path, monkeypatch):
         raise RuntimeError("probe endpoint exploded")
 
     monkeypatch.setattr(driver_runtime_mod, "probe_all_vision_with_approvals", _boom)
-    await rt.prewarm_vision_probe()  # must not raise
+    await rt.drivers.prewarm_vision_probe()  # must not raise
 
     # still loadable, still table-only (no overlay installed)
     assert _driver_has_vision(rt) is False

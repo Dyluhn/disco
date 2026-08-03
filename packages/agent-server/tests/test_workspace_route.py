@@ -29,8 +29,19 @@ class _StubSession:
         return PNG_MAGIC + b"stub"
 
 
+class _StubLiveSessions:
+    """The LiveSessionDirectory named owner (13-B2): the stub reaches the live
+    session through `runtime.live_sessions`, not through a runtime delegate."""
+
+    def live_session(self, cid: str) -> _StubSession:
+        return _StubSession()
+
+
 class _StubRuntime:
     """Just enough surface for create_conversation + the workspace route."""
+
+    def __init__(self) -> None:
+        self.live_sessions = _StubLiveSessions()
 
     def set_surface(self, cid: str, surface: object) -> None: ...
 
@@ -43,9 +54,6 @@ class _StubRuntime:
 
     def sandbox_backend_name(self) -> str | None:
         return "gvisor"
-
-    def live_session(self, cid: str) -> _StubSession:
-        return _StubSession()
 
 
 @pytest.fixture

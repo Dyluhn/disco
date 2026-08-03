@@ -100,7 +100,7 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                 "sandbox_backend": runtime.sandbox_backend_name(),
                 "sandbox_state": runtime.sandbox_state(conversation_id),
                 "sandbox_instance_ids": runtime.sandbox_instance_ids(conversation_id),
-                "live_session": runtime.live_session(conversation_id) is not None,
+                "live_session": runtime.live_sessions.live_session(conversation_id) is not None,
                 "mcp_retrieval_searches": [
                     str(getattr(provider, "name", type(provider).__name__))
                     for provider in runtime._mcp._retrieval_searches

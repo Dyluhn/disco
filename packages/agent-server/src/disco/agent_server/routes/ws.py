@@ -110,23 +110,23 @@ async def _handle_control_frame(
     """Dispatch a control frame (confirm/reject/approve_plan/request_plan/
     pick_alternative/pause/cancel/resume) to the runtime."""
     if frame.type == "confirm":
-        await runtime._conversation_control.confirm(conversation_id)
+        await runtime.conversation_control.confirm(conversation_id)
     elif frame.type == "reject":
-        await runtime._conversation_control.reject(conversation_id)
+        await runtime.conversation_control.reject(conversation_id)
     elif frame.type == "approve_plan":
-        await runtime._conversation_control.approve_plan(conversation_id)
+        await runtime.conversation_control.approve_plan(conversation_id)
     elif frame.type == "request_plan":
-        await runtime._conversation_control.request_plan(
+        await runtime.conversation_control.request_plan(
             conversation_id,
             frame.content or "",
         )
     elif frame.type == "pick_alternative" and frame.option_id is not None:
-        await runtime._conversation_control.pick_alternative(
+        await runtime.conversation_control.pick_alternative(
             conversation_id,
             frame.option_id,
         )
     elif frame.type == "pause":
-        await runtime._conversation_control.pause(conversation_id)
+        await runtime.conversation_control.pause(conversation_id)
     elif frame.type == "cancel":
         await runtime.cancel(conversation_id)
     elif frame.type == "resume":
@@ -428,7 +428,7 @@ async def _run_conversation_ws(
         # Last viewer left → after a grace window, free an idle sandbox
         # (an in-flight RUNNING loop is left alone; see runtime._suspend).
         if runtime is not None:
-            runtime.on_disconnect(conversation_id)
+            runtime.connections.on_disconnect(conversation_id)
 
 
 async def _ws_frame_loop(
@@ -610,7 +610,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             return
         await websocket.accept()
         if runtime is not None:
-            runtime.on_connect(conversation_id)
+            runtime.connections.on_connect(conversation_id)
         await _run_conversation_ws(store, runtime, websocket, conversation_id, last_seq)
 
     @router.websocket("/ws/research")
