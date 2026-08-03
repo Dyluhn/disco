@@ -45,13 +45,13 @@ class _StubRuntime:
     def __init__(self) -> None:
         self.live_sessions = _StubLiveSessions()
 
-    def set_surface(self, cid: str, surface: object) -> None: ...
+    def __set_surface(self, cid: str, surface: object) -> None: ...
 
-    def set_model_override(self, cid: str, model: object) -> None: ...
+    def _set_model_override(self, cid: str, model: object) -> None: ...
 
     def set_depth(self, cid: str, tier: object) -> None: ...
 
-    def get_last_selected_model(self) -> str | None:
+    def _get_last_selected_model(self) -> str | None:
         return None  # no last pick in the stub
 
     def _backend_name(self) -> str | None:
@@ -60,6 +60,14 @@ class _StubRuntime:
     @property
     def sandbox(self) -> SimpleNamespace:
         return SimpleNamespace(backend_name=self._backend_name)
+
+    @property
+    def settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            _set_surface=self.__set_surface,
+            set_model_override=self._set_model_override,
+            model_binding=SimpleNamespace(get_last_selected_model=self._get_last_selected_model),
+        )
 
 
 @pytest.fixture

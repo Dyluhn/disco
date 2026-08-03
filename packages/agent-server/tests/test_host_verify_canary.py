@@ -78,22 +78,22 @@ async def test_host_verify_canary_flag_off_installs_no_hook(
     monkeypatch.delenv("PMX_HOST_VERIFY_AUTHORITATIVE", raising=False)
     rt = _runtime()
     cid = "conv_canary_off"
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     fs = MemFS()
     _inject_executor(rt, cid, fs)
 
     # REL-1e default: authoritative ON → verdict bookkeeping hook installed.
     assert (
-        rt._contract._host_verify_canary_hook_for(cid, rt._contract.note_build_verify_result)
+        rt.contract._host_verify_canary_hook_for(cid, rt.contract.note_build_verify_result)
         is not None
     )
 
     monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", "off")
     assert (
-        rt._contract._host_verify_canary_hook_for(cid, rt._contract.note_build_verify_result)
+        rt.contract._host_verify_canary_hook_for(cid, rt.contract.note_build_verify_result)
         is None
     )
-    assert cid not in rt._contract._build_trackers
+    assert cid not in rt.contract._build_trackers
     assert await ArtifactMemoryStore(fs).read_artifacts() == ()
 
 
@@ -104,8 +104,8 @@ async def test_host_verify_canary_on_default_build_updates_phase_and_manifest(
     monkeypatch.setenv("DISCO_HOST_VERIFY_CANARY", "1")
     rt = _runtime()
     cid = "conv_canary_default_build"
-    rt.set_surface(cid, "build")
-    assert rt._contract._finalizer_alias_for(cid) is None
+    rt.settings._set_surface(cid, "build")
+    assert rt.contract._finalizer_alias_for(cid) is None
 
     fs = MemFS()
     _inject_executor(rt, cid, fs)
@@ -114,20 +114,20 @@ async def test_host_verify_canary_on_default_build_updates_phase_and_manifest(
     )
 
     calls: list[tuple[str, bool]] = []
-    original_note = rt._contract.note_build_verify_result
+    original_note = rt.contract.note_build_verify_result
 
     def spy_note(conversation_id: str, *, passed: bool) -> None:
         calls.append((conversation_id, passed))
         original_note(conversation_id, passed=passed)
 
-    rt._contract.note_build_verify_result = spy_note  # type: ignore[method-assign]
-    hook = rt._contract._host_verify_canary_hook_for(cid, rt._contract.note_build_verify_result)
+    rt.contract.note_build_verify_result = spy_note  # type: ignore[method-assign]
+    hook = rt.contract._host_verify_canary_hook_for(cid, rt.contract.note_build_verify_result)
     assert hook is not None
 
     await hook(_verdict_event())
 
     assert calls == [(cid, True)]
-    contract, tracker = rt._contract._build_trackers[cid]
+    contract, tracker = rt.contract._build_trackers[cid]
     assert contract.kind is ContractKind.CUSTOM
     assert tracker.current() is Phase.EXPORT
 

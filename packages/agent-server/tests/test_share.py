@@ -434,7 +434,7 @@ def test_share_export_includes_surface_in_bundle() -> None:
     rt = CR(store)
     cid = "conv_build"
     store.create_conversation(cid, owner_id="local", surface="build")
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
 
     import asyncio
 

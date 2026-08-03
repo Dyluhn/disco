@@ -202,4 +202,4 @@ def test_create_conversation_applies_research_sources():
         },
     ).json()["conversation_id"]
 
-    assert runtime._settings.get_research_sources(cid) == ("news", "arxiv", "ddgs")
+    assert runtime.settings.get_research_sources(cid) == ("news", "arxiv", "ddgs")

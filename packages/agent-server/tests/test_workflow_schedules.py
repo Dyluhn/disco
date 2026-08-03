@@ -607,7 +607,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
         fire = asyncio.create_task(manager.fire_now(row.schedule_id))
         await asyncio.wait_for(append_started.wait(), timeout=10)
         cid = conversation[0]
-        exact_task = runtime._run_registry.task(cid)
+        exact_task = runtime.run_registry.task(cid)
         assert exact_task is not None
         assert runtime.workspace.has_run_claim(cid)
         assert not run_started.is_set()
@@ -615,7 +615,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
         # An ordinary kick during the blocked atomic append must observe the
         # registered claim/task and leave the sealed task intact.
         runtime.run_controller.kick(cid)
-        assert runtime._run_registry.task(cid) is exact_task
+        assert runtime.run_registry.task(cid) is exact_task
         assert not run_started.is_set()
 
         release_append.set()
@@ -652,13 +652,13 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
         assert setup.failure is None
 
         incumbent = asyncio.create_task(release_incumbent.wait())
-        runtime._run_registry.register_task(cid, cast(Any, incumbent))
+        runtime.run_registry.register_task(cid, cast(Any, incumbent))
         prior_loop = cast(Any, object())
         runtime._loop_registry.bind(cid, prior_loop)
 
         with pytest.raises(RuntimeError, match="already has a live run task"):
             _workflow_run_control(runtime)._create_run_task(cid, cast(Any, object()))
-        assert runtime._run_registry.task(cid) is incumbent
+        assert runtime.run_registry.task(cid) is incumbent
 
         result = await workflow_service._execution.execute(
             schedule_id="sched_incumbent",
@@ -672,14 +672,14 @@ async def test_sealed_schedule_and_task_factory_never_overwrite_live_task() -> N
         )
         assert isinstance(result, WorkflowScheduleRunRecord)
         assert result.terminal_state == ConversationStatus.ERROR.value
-        assert runtime._run_registry.task(cid) is incumbent
+        assert runtime.run_registry.task(cid) is incumbent
         assert runtime._loop_registry.loop(cid) is prior_loop
         assert await runtime._store.get_events(cid) == []
     finally:
         release_incumbent.set()
         if incumbent is not None:
             await asyncio.gather(incumbent, return_exceptions=True)
-            runtime._run_registry.detach_task_if_owned(cid, cast(Any, incumbent))
+            runtime.run_registry.detach_task_if_owned(cid, cast(Any, incumbent))
         await runtime.aclose()
 
 
@@ -736,7 +736,7 @@ async def test_sealed_schedule_refuses_a_newer_durable_head(
         assert isinstance(result, WorkflowScheduleRunRecord)
         assert "lost pristine ingress authority" in (result.error or "")
         run.assert_not_awaited()
-        assert runtime._run_registry.task(cid) is None
+        assert runtime.run_registry.task(cid) is None
         assert runtime._loop_registry.loop(cid) is None
         events = await runtime._store.get_events(cid)
         assert events == [ahead.model_copy(update={"seq": 1})]
@@ -770,7 +770,7 @@ async def test_sealed_schedule_append_failure_cleans_exact_registration(
         assert record.terminal_state == ConversationStatus.ERROR.value
         assert record.error == "injected schedule append failure"
         assert claim_was_visible
-        assert runtime._run_registry.task(record.run_cid) is None
+        assert runtime.run_registry.task(record.run_cid) is None
         assert runtime._loop_registry.loop(record.run_cid) is None
         assert not runtime._run_resources.has_executor(record.run_cid)
         assert not runtime.workspace.has_run_claim(record.run_cid)
@@ -977,7 +977,7 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
             session.conversation_id,
             StatusEvent(status=ConversationStatus.IDLE, detail="test idle race"),
         )
-        assert await runtime.sweep_idle_once() == 0
+        assert await runtime.lifecycle.sweep_idle_once() == 0
         assert session.destroy_calls == 0
 
         release_write.set()

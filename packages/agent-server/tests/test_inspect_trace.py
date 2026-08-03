@@ -124,12 +124,12 @@ def _inspect_runtime(store: SqliteEventStore) -> ConversationRuntime:
 
 async def _drive_build_to_finish(runtime: ConversationRuntime) -> None:
     runtime.run_controller.kick(CID)
-    task = runtime._run_registry.task(CID)
+    task = runtime.run_registry.task(CID)
     if task is not None:
         await task
     # past the plan-approval gate → run the build to completion
     await runtime.approve_plan(CID)
-    task = runtime._run_registry.task(CID)
+    task = runtime.run_registry.task(CID)
     if task is not None:
         await task
 
@@ -185,7 +185,7 @@ async def test_build_conversation_is_traced_and_readable_over_rest(monkeypatch):
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     runtime = _inspect_runtime(store)  # __init__ installs the span handler
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     await store.append(CID, _user("write hello.txt"))
 
     await _drive_build_to_finish(runtime)

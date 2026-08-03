@@ -128,7 +128,7 @@ async def test_run_with_persistence_emits_typed_error_and_skips_loop():
     with the named reason AND the loop never runs."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store, sandbox_service=_FakeService(name="process"))
-    rt.set_surface("c1", "build")
+    rt.settings._set_surface("c1", "build")
 
     async def _ok_driver(cid, **kw):
         return None
@@ -202,7 +202,7 @@ async def test_reconcile_skips_live_running_conversation():
         await asyncio.sleep(5)
 
     task = asyncio.create_task(_running())
-    rt._run_registry.register_task("c1", task)  # type: ignore[arg-type]
+    rt.run_registry.register_task("c1", task)  # type: ignore[arg-type]
     try:
         n = await rt.sandbox_resources.reconcile()
         assert n == 0
@@ -421,7 +421,7 @@ async def test_evict_stale_backend_clears_rehydrated_marker():
     stale = _FakeSession("gvisor")
     rt._run_resources.set_executor("c1", _fake_executor(stale))
     rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
-    rt._lifecycle._rehydration._rehydrated.add("c1")  # marker set by a prior rehydrate
+    rt.lifecycle._rehydration._rehydrated.add("c1")  # marker set by a prior rehydrate
     rt._connection_state._wake_locks["c1"] = asyncio.Lock()
     rt._connection_state._last_sessions["c1"] = [object()]  # type: ignore[list-item]
 
@@ -429,7 +429,7 @@ async def test_evict_stale_backend_clears_rehydrated_marker():
     await asyncio.sleep(0)
 
     assert (
-        "c1" not in rt._lifecycle._rehydration._rehydrated
+        "c1" not in rt.lifecycle._rehydration._rehydrated
     )  # marker cleared — next run rehydrates
     assert "c1" not in rt._connection_state._wake_locks  # sibling per-session markers cleared too
     assert "c1" not in rt._connection_state._last_sessions
@@ -444,8 +444,8 @@ async def test_reconcile_clears_rehydrated_marker():
     stale = _FakeSession("gvisor")
     rt._run_resources.set_executor("c1", _fake_executor(stale))
     rt._loop_registry.bind("c1", object())  # type: ignore[arg-type]
-    rt._lifecycle._rehydration._rehydrated.add("c1")
+    rt.lifecycle._rehydration._rehydrated.add("c1")
 
     await rt.sandbox_resources.reconcile()
 
-    assert "c1" not in rt._lifecycle._rehydration._rehydrated
+    assert "c1" not in rt.lifecycle._rehydration._rehydrated

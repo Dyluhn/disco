@@ -80,7 +80,7 @@ async def test_build_run_ends_finished_no_immediate_reap(tmp_path):
     rt._run_resources.set_executor(cid, fake_executor)
 
     # mock _surface_of
-    rt._settings._surface_of = MagicMock(return_value="build")  # type: ignore[method-assign]
+    rt.settings._surface_of = MagicMock(return_value="build")  # type: ignore[method-assign]
 
     await rt._run_execution.run(cid, fake_loop)
 
@@ -102,7 +102,7 @@ async def test_sweep_idle_once_suspends_past_ttl(tmp_path):
 
     # configure TTL so it sweeps
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
 
     assert count == 1
     assert not rt._run_resources.has_executor(cid)
@@ -141,7 +141,7 @@ async def test_ttl_precedence(tmp_path):
     cid = await fresh_conv()
     cfg.sandbox.idle_ttl_s = 10**9
     with patch.dict(os.environ, {"PMX_IDLE_SUSPEND_S": "0"}):
-        assert await rt.sweep_idle_once() == 1
+        assert await rt.lifecycle.sweep_idle_once() == 1
     assert not rt._run_resources.has_executor(cid)
 
     # 2) config wins over default: no env; config 0 sweeps a fresh conversation
@@ -150,7 +150,7 @@ async def test_ttl_precedence(tmp_path):
     cfg.sandbox.idle_ttl_s = 0
     with patch.dict(os.environ):
         os.environ.pop("PMX_IDLE_SUSPEND_S", None)
-        assert await rt.sweep_idle_once() == 1
+        assert await rt.lifecycle.sweep_idle_once() == 1
     assert not rt._run_resources.has_executor(cid)
 
     # 3) a large config TTL is respected: nothing swept, executor stays.
@@ -158,7 +158,7 @@ async def test_ttl_precedence(tmp_path):
     cfg.sandbox.idle_ttl_s = 10**9
     with patch.dict(os.environ):
         os.environ.pop("PMX_IDLE_SUSPEND_S", None)
-        assert await rt.sweep_idle_once() == 0
+        assert await rt.lifecycle.sweep_idle_once() == 0
     assert rt._run_resources.has_executor(cid)
 
 

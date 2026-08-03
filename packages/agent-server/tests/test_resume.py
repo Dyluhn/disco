@@ -107,7 +107,7 @@ def _user(content: str) -> MessageEvent:
 
 async def _cancel_task(rt: ConversationRuntime) -> None:
     """Cancel the live loop task so tests don't hang after kicking."""
-    task = rt._run_registry.task(CID)
+    task = rt.run_registry.task(CID)
     if task is not None and not task.done():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -123,7 +123,7 @@ async def test_resume_from_paused_is_legal():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
 
@@ -144,7 +144,7 @@ async def test_resume_running_flip_waits_for_workspace_mutation_fence(monkeypatc
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
@@ -198,7 +198,7 @@ async def test_resume_pins_the_kernel_via_start(monkeypatch):
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     # Stub kick so the resume does not spawn a real run (whose finalize could clear the
@@ -221,7 +221,7 @@ async def test_resume_routes_to_the_pinned_selected_kernel_not_silently_disco():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     sentinel = MagicMock()  # the SELECTED kernel pinned to this paused run
@@ -240,7 +240,7 @@ async def test_resume_from_idle_with_plan_is_legal():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.IDLE))
@@ -257,7 +257,7 @@ async def test_resume_from_idle_without_plan_is_illegal():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     # No plan event — conversation was never started.
 
     result = await rt._resume.resume_conversation(CID)
@@ -271,7 +271,7 @@ async def test_resume_from_running_is_409():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
 
@@ -286,7 +286,7 @@ async def test_resume_from_finished_is_409():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
 
@@ -335,8 +335,8 @@ async def test_actionless_auto_resume_once_only_for_autonomous_build(monkeypatch
     rt = _runtime(store)
     auto_cid = f"{CID}-auto"
     await _seed_first_actionless_pause(store, auto_cid)
-    rt._settings._set_surface(auto_cid, "build")
-    rt._settings.set_autonomous(auto_cid, True)
+    rt.settings._set_surface(auto_cid, "build")
+    rt.settings.set_autonomous(auto_cid, True)
     resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
     monkeypatch.setattr(rt._resume, "resume_conversation", resume)
 
@@ -357,7 +357,7 @@ async def test_actionless_auto_resume_once_only_for_autonomous_build(monkeypatch
 
     manual_cid = f"{CID}-manual"
     await _seed_first_actionless_pause(store, manual_cid)
-    rt._settings._set_surface(manual_cid, "build")
+    rt.settings._set_surface(manual_cid, "build")
 
     await rt._run_finalizer.finalize_clean(manual_cid)
 
@@ -397,8 +397,8 @@ async def test_second_actionless_pause_reenters_resume_endpoint_for_synthetic_fi
         cid,
         StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"),
     )
-    rt._settings._set_surface(cid, "build")
-    rt._settings.set_autonomous(cid, True)
+    rt.settings._set_surface(cid, "build")
+    rt.settings.set_autonomous(cid, True)
     resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
     monkeypatch.setattr(rt._resume, "resume_conversation", resume)
 
@@ -426,7 +426,7 @@ async def test_resume_from_error_is_legal_and_preserves_history():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
@@ -459,7 +459,7 @@ async def test_resume_from_stuck_is_legal_and_preserves_history():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.STUCK))
@@ -483,24 +483,24 @@ async def test_resume_from_error_rehydrates_build_workspace(monkeypatch):
     # A plan-then-park script so the loop reaches the rehydrate hook then parks
     # cleanly at AWAITING_PLAN_APPROVAL (no live sandbox work needed).
     rt = _runtime(store, steps=[("plan", [_plan(["do it"])])])
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
 
     calls: list[str] = []
-    orig = rt._lifecycle._maybe_rehydrate
+    orig = rt.lifecycle._maybe_rehydrate
 
     async def _spy(cid: str) -> None:
         calls.append(cid)
         return await orig(cid)
 
-    monkeypatch.setattr(rt._lifecycle, "_maybe_rehydrate", _spy)
+    monkeypatch.setattr(rt.lifecycle, "_maybe_rehydrate", _spy)
 
     result = await rt._resume.resume_conversation(CID)
     assert result["ok"] is True
 
-    task = rt._run_registry.task(CID)
+    task = rt.run_registry.task(CID)
     if task is not None:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
@@ -516,7 +516,7 @@ async def test_resume_from_error_is_illegal_for_deep_research():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "deep_research")
+    rt.settings._set_surface(CID, "deep_research")
     await store.append(CID, _user("research it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.ERROR))
 
@@ -534,7 +534,7 @@ async def test_resume_appends_environment_message_exactly_once():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
 
@@ -568,7 +568,7 @@ async def test_resume_append_failure_preserves_volatile_pause_flags(monkeypatch)
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
@@ -608,7 +608,7 @@ async def test_double_resume_second_call_is_409():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
 
@@ -640,7 +640,7 @@ async def test_resume_drains_lingering_task_then_rekicks(monkeypatch):
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
@@ -653,14 +653,14 @@ async def test_resume_drains_lingering_task_then_rekicks(monkeypatch):
         await blocker.wait()
 
     lingering = asyncio.create_task(_wedged())
-    rt._run_registry._tasks[CID] = lingering
+    rt.run_registry._tasks[CID] = lingering
 
     result = await rt._resume.resume_conversation(CID)
     assert result["ok"] is True
     # The lingering task was drained (hard-cancelled after the patched timeout)…
     assert lingering.done()
     # …and a FRESH task was spawned — resume actually re-kicked the loop.
-    new_task = rt._run_registry.task(CID)
+    new_task = rt.run_registry.task(CID)
     assert new_task is not None and new_task is not lingering
 
     await _cancel_task(rt)
@@ -681,7 +681,7 @@ async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
@@ -692,13 +692,13 @@ async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
         await old_release.wait()
 
     old_task = asyncio.create_task(_old_tail())
-    rt._run_registry._generations[CID] = 1
-    rt._run_registry._tasks[CID] = old_task
+    rt.run_registry._generations[CID] = 1
+    rt.run_registry._tasks[CID] = old_task
 
     resuming = asyncio.create_task(rt._resume.resume_conversation(CID))
 
     async def _wait_until_detached() -> None:
-        while rt._run_registry.task(CID) is old_task:
+        while rt.run_registry.task(CID) is old_task:
             await asyncio.sleep(0)
 
     await asyncio.wait_for(_wait_until_detached(), timeout=1)
@@ -711,14 +711,14 @@ async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
     newer_task = asyncio.create_task(_newer_run())
     async with rt.workspace.lock(CID):
         async with rt.workspace.interprocess_mutation_fence(CID):
-            rt._run_registry._generations[CID] = 2
-            rt._run_registry._tasks[CID] = newer_task
+            rt.run_registry._generations[CID] = 2
+            rt.run_registry._tasks[CID] = newer_task
 
     result = await asyncio.wait_for(resuming, timeout=1)
     assert result == {"ok": False, "reason": "resume_superseded"}
     assert old_task.done() and old_task.cancelled()
     assert not newer_task.done()
-    assert rt._run_registry.task(CID) is newer_task
+    assert rt.run_registry.task(CID) is newer_task
     rt._resume._run_start.start.assert_not_called()
     events = await store.get_events(CID)
     assert not any(
@@ -730,7 +730,7 @@ async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
 
     newer_release.set()
     await newer_task
-    rt._run_registry._tasks.pop(CID, None)
+    rt.run_registry._tasks.pop(CID, None)
 
 
 async def test_resume_reconstructs_from_fresh_post_drain_history(monkeypatch):
@@ -743,7 +743,7 @@ async def test_resume_reconstructs_from_fresh_post_drain_history(monkeypatch):
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
@@ -798,7 +798,7 @@ async def test_resume_does_not_start_beside_cancellation_resistant_old_task(monk
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
@@ -812,18 +812,18 @@ async def test_resume_does_not_start_beside_cancellation_resistant_old_task(monk
             await release.wait()
 
     old_task = asyncio.create_task(_resists_one_cancel())
-    rt._run_registry._generations[CID] = 1
-    rt._run_registry._tasks[CID] = old_task
+    rt.run_registry._generations[CID] = 1
+    rt.run_registry._tasks[CID] = old_task
 
     result = await asyncio.wait_for(rt._resume.resume_conversation(CID), timeout=1)
     assert result == {"ok": False, "reason": "resume_drain_timeout"}
-    assert rt._run_registry.task(CID) is old_task
+    assert rt.run_registry.task(CID) is old_task
     assert not old_task.done()
     rt._resume._run_start.start.assert_not_called()
 
     release.set()
     await old_task
-    rt._run_registry._tasks.pop(CID, None)
+    rt.run_registry._tasks.pop(CID, None)
 
 
 # ---- HTTP route (via TestClient) ---------------------------------------------
@@ -841,7 +841,7 @@ async def test_http_resume_paused_returns_ok():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, _user("build it"))
     await store.append(CID, _plan_event())
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
@@ -861,7 +861,7 @@ async def test_http_resume_running_returns_409():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
 
     async with await _async_client(store, rt) as client:
@@ -878,7 +878,7 @@ async def test_http_resume_finished_returns_409():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
 
     async with await _async_client(store, rt) as client:
@@ -917,8 +917,8 @@ async def test_auto_resume_fires_again_after_productive_work_between_pauses(monk
     rt = _runtime(store)
     cid = f"{CID}-rewindow"
     await _seed_first_actionless_pause(store, cid)
-    rt._settings._set_surface(cid, "build")
-    rt._settings.set_autonomous(cid, True)
+    rt.settings._set_surface(cid, "build")
+    rt.settings.set_autonomous(cid, True)
     resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
     monkeypatch.setattr(rt._resume, "resume_conversation", resume)
 
@@ -967,7 +967,7 @@ async def test_resume_legacy_build_mints_v1_run_intent():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     # Legacy Build events — no run_protocol_version
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
@@ -1000,7 +1000,7 @@ async def test_resume_sealed_workflow_mints_v1_run_intent():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     # Sealed but with an approved unfinished PlanEvent
     await store.append(CID, _user("build it"))
     await store.append(CID, PlanEvent(summary="plan", steps=[PlanStep(title="step 1")], revision=1))

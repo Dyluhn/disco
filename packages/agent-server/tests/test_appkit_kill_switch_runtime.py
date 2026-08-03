@@ -21,8 +21,8 @@ def _rt() -> ConversationRuntime:
 
 
 def _loop_for(rt: ConversationRuntime, cid: str):
-    rt.set_surface(cid, "agent")
-    rt.set_appkit_mode(cid, True)
+    rt.settings._set_surface(cid, "agent")
+    rt.settings.set_appkit_mode(cid, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):
@@ -33,13 +33,13 @@ def _loop_for(rt: ConversationRuntime, cid: str):
 
 def test_effective_appkit_mode_gated_by_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     rt = _rt()
-    rt.set_appkit_mode("c1", True)
+    rt.settings.set_appkit_mode("c1", True)
     monkeypatch.setenv(APPKIT_ENABLED_ENV, "0")
     with pytest.raises(RuntimeError, match="was not opened as Freeform"):
-        rt._settings._effective_appkit_mode("c1")
+        rt.settings._effective_appkit_mode("c1")
     # Re-enable: the stored per-conversation flag was never touched.
     monkeypatch.delenv(APPKIT_ENABLED_ENV, raising=False)
-    assert rt._settings._effective_appkit_mode("c1") is True
+    assert rt.settings._effective_appkit_mode("c1") is True
 
 
 def test_effective_appkit_mode_recovers_from_store_not_runtime_cache(
@@ -49,21 +49,21 @@ def test_effective_appkit_mode_recovers_from_store_not_runtime_cache(
     store = SqliteEventStore(":memory:")
     store.create_conversation("persisted", appkit_mode=True)
     rt = ConversationRuntime(store)
-    rt._settings._mode_settings._appkit_mode.clear()
-    assert rt._settings._effective_appkit_mode("persisted") is True
+    rt.settings._mode_settings._appkit_mode.clear()
+    assert rt.settings._effective_appkit_mode("persisted") is True
     with pytest.raises(ValueError, match="immutable"):
-        rt.set_appkit_mode("persisted", False)
+        rt.settings.set_appkit_mode("persisted", False)
 
 
 def test_runtime_rejects_artifact_appkit_identity_collision() -> None:
     rt = _rt()
-    rt.set_appkit_mode("appkit", True)
+    rt.settings.set_appkit_mode("appkit", True)
     with pytest.raises(ValueError, match="mutually exclusive"):
-        rt.set_artifact_mode("appkit", True)
+        rt.settings.set_artifact_mode("appkit", True)
 
-    rt.set_artifact_mode("artifact", True)
+    rt.settings.set_artifact_mode("artifact", True)
     with pytest.raises(ValueError, match="mutually exclusive"):
-        rt.set_appkit_mode("artifact", True)
+        rt.settings.set_appkit_mode("artifact", True)
 
 
 def test_disabled_flag_blocks_existing_appkit_without_freeform_fallback(
