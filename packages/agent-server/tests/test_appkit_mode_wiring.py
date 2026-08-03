@@ -53,9 +53,9 @@ def _rt() -> ConversationRuntime:
 
 
 def _loop_for(rt: ConversationRuntime, cid: str, *, appkit_mode: bool = False):
-    rt.set_surface(cid, "agent")
+    rt.settings._set_surface(cid, "agent")
     if appkit_mode:
-        rt.set_appkit_mode(cid, True)
+        rt.settings.set_appkit_mode(cid, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):
@@ -143,8 +143,8 @@ def test_appkit_done_condition_profile_tracks_custom_build_widening() -> None:
 def test_loop_for_selects_strict_appkit_prompt_profile() -> None:
     rt = _rt()
     cid = "ak-prompt"
-    rt.set_surface(cid, "agent")
-    rt.set_appkit_mode(cid, True)
+    rt.settings._set_surface(cid, "agent")
+    rt.settings.set_appkit_mode(cid, True)
     with mock.patch.object(rt.drivers, "router", wraps=rt.drivers.router) as router_now:
         with mock.patch.object(rt, "_sandbox_service_now"):
             rt._loop_for(cid)
@@ -198,7 +198,7 @@ def test_appkit_keeps_blast_radius_gate_and_high_risk_hatch() -> None:
 
 def test_appkit_autonomous_drops_escape_hatch() -> None:
     rt = _rt()
-    rt.set_autonomous("ak4", True)
+    rt.settings.set_autonomous("ak4", True)
     loop = _loop_for(rt, "ak4", appkit_mode=True)
     assert "request_custom_build" not in loop.executor.callable_tool_names()
 
@@ -241,8 +241,8 @@ def test_ordinary_build_execution_retains_prompt_directed_reads_but_not_submit_p
 async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> None:
     rt = _rt()
     cid = "ak-cross-layer"
-    rt.set_surface(cid, "agent")
-    rt.set_appkit_mode(cid, True)
+    rt.settings._set_surface(cid, "agent")
+    rt.settings.set_appkit_mode(cid, True)
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._loop_for(cid)
     driver = Driver(loop)
@@ -369,7 +369,7 @@ async def test_appkit_prompt_offered_and_allowed_agree_through_widening() -> Non
 
 def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
     rt = _rt()
-    rt.set_appkit_mode("ak5", True)
+    rt.settings.set_appkit_mode("ak5", True)
 
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
@@ -391,19 +391,19 @@ def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
 
 def test_set_appkit_mode_and_effective() -> None:
     rt = _rt()
-    assert rt._settings._effective_appkit_mode("c_new") is False
-    rt.set_appkit_mode("c_on", True)
-    assert rt._settings._effective_appkit_mode("c_on") is True
-    rt.set_appkit_mode("c_off", False)
-    assert rt._settings._effective_appkit_mode("c_off") is False
+    assert rt.settings._effective_appkit_mode("c_new") is False
+    rt.settings.set_appkit_mode("c_on", True)
+    assert rt.settings._effective_appkit_mode("c_on") is True
+    rt.settings.set_appkit_mode("c_off", False)
+    assert rt.settings._effective_appkit_mode("c_off") is False
 
 
 def test_effective_appkit_mode_reads_live_ejection_state() -> None:
     rt = _rt()
-    rt.set_appkit_mode("c_ejected", True)
+    rt.settings.set_appkit_mode("c_ejected", True)
 
     with mock.patch.object(rt._appkit_ejections, "is_appkit_ejected", return_value=True):
-        assert rt._settings._effective_appkit_mode("c_ejected") is False
+        assert rt.settings._effective_appkit_mode("c_ejected") is False
 
 
 def test_appkit_mode_flag_round_trips_from_body() -> None:
@@ -419,8 +419,8 @@ def test_appkit_mode_flag_round_trips_from_body() -> None:
 
     resp = asyncio.run(route.endpoint(CreateConversationBody(surface="agent", appkit_mode=True)))
     cid = resp["conversation_id"]
-    assert rt._settings._effective_appkit_mode(cid) is True
+    assert rt.settings._effective_appkit_mode(cid) is True
 
     resp2 = asyncio.run(route.endpoint(CreateConversationBody(surface="agent")))
     cid2 = resp2["conversation_id"]
-    assert rt._settings._effective_appkit_mode(cid2) is False
+    assert rt.settings._effective_appkit_mode(cid2) is False

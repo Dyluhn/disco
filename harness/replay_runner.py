@@ -137,7 +137,7 @@ async def replay_conversation(
     # kick MUST be the same object (a throwaway would kick with the default surface).
     runtime = build_runtime(store)
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, surface)
+    runtime.settings._set_surface(cid, surface)
     for msg in inputs:
         await store.append(cid, msg)
 

@@ -234,7 +234,7 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
     session = _MemorySession({"index.html": b"new"})
     rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
-    await rt._lifecycle.commit_finished_workspace(
+    await rt.lifecycle.commit_finished_workspace(
         CID,
         StatusEvent(status=ConversationStatus.FINISHED),
     )

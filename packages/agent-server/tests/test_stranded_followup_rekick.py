@@ -102,10 +102,10 @@ async def test_newer_user_turn_after_run_claim_is_rekicked_exactly_once(tmp_path
     rt._run_ingress.claim_user_seq(CID, 1)
     await rt._store.append(CID, _user("now also add a footer"))  # seq 5
     blocker = asyncio.create_task(asyncio.Event().wait())
-    rt._run_registry.register_task(CID, cast(Any, blocker))
+    rt.run_registry.register_task(CID, cast(Any, blocker))
     rt.run_controller.kick(CID, claimed_user_seq=5)
     assert rt._run_ingress.claimed_user_seq(CID) == 1
-    assert rt._run_registry.detach_task_if_owned(CID, cast(Any, blocker))
+    assert rt.run_registry.detach_task_if_owned(CID, cast(Any, blocker))
     blocker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await blocker
@@ -144,7 +144,7 @@ async def test_deterministic_preflight_error_does_not_retry_original_user_turn(
 ):
     """A terminal configuration verdict claims the turn; it is not a follow-up."""
     rt = _rt(tmp_path, monkeypatch)
-    rt.set_surface(CID, "agent")
+    rt.settings._set_surface(CID, "agent")
     rt._store.create_conversation(CID, owner_id="local")
     initial = await rt._store.append(CID, _user("complete the task"))
 

@@ -105,11 +105,11 @@ async def test_kill_cleanup_publish_order_and_repeat_are_idempotent(
     await _seed_running(store)
     await _admit_view(store, "view-trace")
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
-    rt._run_registry._generations[CID] = 1
+    rt.settings._set_surface(CID, "build")
+    rt.run_registry._generations[CID] = 1
 
     trace: list[str] = []
-    rt._run_registry._tasks[CID] = _LiveTask(trace)  # type: ignore[arg-type]
+    rt.run_registry._tasks[CID] = _LiveTask(trace)  # type: ignore[arg-type]
     executor = MagicMock()
     executor.kill = AsyncMock(side_effect=lambda: trace.append("executor.kill"))
     pending = MagicMock()
@@ -173,7 +173,7 @@ async def test_direct_locked_status_append_without_fence_is_rejected() -> None:
     store = SqliteEventStore(":memory:")
     await _seed_running(store)
     rt = _runtime(store)
-    rt.set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
 
     with pytest.raises(
         RuntimeError,

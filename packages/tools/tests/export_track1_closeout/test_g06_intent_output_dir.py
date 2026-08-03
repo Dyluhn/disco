@@ -137,7 +137,7 @@ async def test_declared_static_output_dir_round_trips_into_sidecar(
 
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
-    runtime.set_surface(cid, "build")
+    runtime.settings._set_surface(cid, "build")
     result = await runtime.execute_pi_tool(
         cid,
         ToolCall(

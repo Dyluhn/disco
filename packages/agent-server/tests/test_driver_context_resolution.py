@@ -60,7 +60,7 @@ def _runtime(
 
 async def _seed_conversation(rt: ConversationRuntime, cid: str) -> int:
     rt._store.create_conversation(cid, owner_id="local", surface="build")
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     stored = await rt._store.append(
         cid,
         MessageEvent(
@@ -406,7 +406,7 @@ class TestConversationRuntimeDriverContextSeams:
         def evict_stale_backend(requested_cid: str) -> None:
             nonlocal stale_backend_checked
             assert requested_cid == cid
-            assert rt._run_registry.task(requested_cid) is None
+            assert rt.run_registry.task(requested_cid) is None
             stale_backend_checked = True
 
         async def resolve(requested_cid: str) -> ResolvedDriverContext:
@@ -438,7 +438,7 @@ class TestConversationRuntimeDriverContextSeams:
         monkeypatch.setattr(rt.workspace, "run_after_admission", admit)
 
         rt.run_controller.kick(cid, claimed_user_seq=user_seq)
-        task = rt._run_registry.task(cid)
+        task = rt.run_registry.task(cid)
         assert task is not None
         await asyncio.wait_for(resolve_entered.wait(), timeout=1.0)
         assert create_run_task_calls == 1
@@ -491,7 +491,7 @@ class TestConversationRuntimeDriverContextSeams:
         rt = _runtime("ok", model_key="resolved", context_window=32768)
         cid = "deep-research-context"
         await _seed_conversation(rt, cid)
-        rt.set_surface(cid, "deep_research")
+        rt.settings._set_surface(cid, "deep_research")
         snapshot = await rt._resolve_driver_context(cid)
 
         loop = rt._loop_factory.loop_for_resolved(cid, snapshot)
@@ -506,7 +506,7 @@ class TestConversationRuntimeDriverContextSeams:
         rt = _runtime("ok", model_key="resolved", context_window=8192)
         cid = "snapshot-model"
         await _seed_conversation(rt, cid)
-        rt._settings.set_model_override(cid, "stale-or-concurrently-changed")
+        rt.settings.set_model_override(cid, "stale-or-concurrently-changed")
         snapshot = ResolvedDriverContext(
             model_key="resolved",
             provider="fake",

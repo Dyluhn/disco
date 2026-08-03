@@ -17,9 +17,9 @@ def _compose(
 ) -> tuple[ConversationRuntime, object]:
     monkeypatch.setenv("DISCO_BUILD_PLATFORM_SHADOW", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface(conversation_id, "agent")
+    runtime.settings._set_surface(conversation_id, "agent")
     if appkit:
-        runtime.set_appkit_mode(conversation_id, True)
+        runtime.settings.set_appkit_mode(conversation_id, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(runtime, "_sandbox_service_now"):
@@ -57,7 +57,7 @@ def test_runtime_records_appkit_shadow_and_keeps_strict_executor(monkeypatch) ->
 def test_shadow_disabled_has_zero_runtime_observation(monkeypatch) -> None:
     monkeypatch.delenv("DISCO_BUILD_PLATFORM_SHADOW", raising=False)
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface("shadow-off", "agent")
+    runtime.settings._set_surface("shadow-off", "agent")
     with mock.patch.object(runtime, "_sandbox_service_now"):
         loop = runtime._compose_build_loop(
             "shadow-off",
@@ -71,7 +71,7 @@ def test_shadow_disabled_has_zero_runtime_observation(monkeypatch) -> None:
 def test_broken_observer_cannot_break_legacy_loop_composition(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_BUILD_PLATFORM_SHADOW", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface("shadow-broken", "agent")
+    runtime.settings._set_surface("shadow-broken", "agent")
     with (
         mock.patch.object(runtime, "_sandbox_service_now"),
         mock.patch(

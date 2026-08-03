@@ -74,7 +74,7 @@ async def _seed_revision_state(store, cid: str, *, planning_marker: bool) -> Non
 
 def _rt(store, monkeypatch) -> ConversationRuntime:
     rt = ConversationRuntime(store)
-    rt._settings._set_surface("c1", "deep_research")
+    rt.settings._set_surface("c1", "deep_research")
 
     async def _preflight_ok(cid, **kw):
         return None

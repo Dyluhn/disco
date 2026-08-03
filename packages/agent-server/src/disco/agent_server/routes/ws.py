@@ -130,7 +130,7 @@ async def _handle_control_frame(
     elif frame.type == "cancel":
         await runtime.cancel(conversation_id)
     elif frame.type == "resume":
-        await runtime._contract._fold_contract_from_history(conversation_id)
+        await runtime.contract._fold_contract_from_history(conversation_id)
         await runtime._resume.resume_conversation(conversation_id)
 
 
@@ -332,19 +332,19 @@ async def _send_conversation_state_frame(
     state = await store.get_state(conversation_id)
     # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
     if runtime is not None:
-        sstate = runtime.sandbox_state(conversation_id)
+        sstate = runtime.lifecycle.sandbox_state(conversation_id)
         if sstate is not None:
             state.extras["sandbox"] = sstate
-        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+        sandbox_ids = runtime.lifecycle.sandbox_instance_ids(conversation_id)
         if sandbox_ids:
             state.extras["sandbox_instance_ids"] = sandbox_ids
-        if runtime.is_autonomous(conversation_id):
+        if runtime.settings.is_autonomous(conversation_id):
             state.extras["autonomous"] = True
-        if runtime.is_quiet(conversation_id):
+        if runtime.settings.is_quiet(conversation_id):
             state.extras["quiet"] = True
         # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
         # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
-        state.extras["assist"] = runtime.is_assist(conversation_id)
+        state.extras["assist"] = runtime.settings.is_assist(conversation_id)
     # BP-15: mirror the HTTP /state sandbox_backend overlay.
     state_dict = state.model_dump(mode="json")
     if runtime is not None:
@@ -471,7 +471,7 @@ def _parse_research_request(
     # P3: seed from last-selected when no explicit override is given.
     model_override = body.get("model_override") or None
     if not model_override and runtime is not None:
-        model_override = runtime.get_last_selected_model()
+        model_override = runtime.settings.model_binding.get_last_selected_model()
     drop_weak = bool(body.get("drop_weak"))
     think = bool(body.get("think"))
     domains = body.get("domains_deny") or []

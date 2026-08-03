@@ -216,7 +216,7 @@ async def test_preview_is_backend_aware_and_honest():
     # remain in the honest Preparing state instead of guessing the retired auto-preview.
     owned = _FakeSession("local", None)
     owned._auto_preview_disabled = True
-    rt.set_surface("owned", "build")
+    rt.settings._set_surface("owned", "build")
     rt._run_resources.set_executor("owned", _FakeExecutor(owned))
     with unittest.mock.patch("disco.agent_server.preview_service.port_owners", return_value={}):
         preparing = await rt.preview.preview("owned")
@@ -526,7 +526,7 @@ async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
     from disco.tools.projects.store import StorageStatus
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    rt.set_surface("fin", "research")
+    rt.settings._set_surface("fin", "research")
 
     session = _FakeSession("local", None)
     session.preview_started = False
@@ -560,7 +560,7 @@ async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
     async def _fake_rehydrate(cid):
         calls.append("rehydrate")
 
-    rt._lifecycle._maybe_rehydrate = _fake_rehydrate
+    rt.lifecycle._maybe_rehydrate = _fake_rehydrate
 
     # no executor + no snapshot record → False, and NO re-materialization
     assert await rt.preview.ensure_preview("missing") is False
@@ -581,7 +581,7 @@ async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
 @pytest.mark.asyncio
 async def test_restart_preview_uses_managed_intent_and_never_legacy_static() -> None:
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    rt.set_surface("managed-restart", "build")
+    rt.settings._set_surface("managed-restart", "build")
     session = _FakeSession("local", None)
     legacy_calls = 0
 
@@ -606,7 +606,7 @@ async def test_restart_preview_uses_managed_intent_and_never_legacy_static() -> 
 @pytest.mark.asyncio
 async def test_build_restart_without_managed_intent_never_fabricates_static_preview() -> None:
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    rt.set_surface("no-intent", "build")
+    rt.settings._set_surface("no-intent", "build")
     session = _FakeSession("local", None)
     legacy_calls = 0
 
@@ -682,8 +682,8 @@ async def test_agent_artifact_mode_keeps_finite_build_egress():
     from disco.tools import REGISTRY_EGRESS_ALLOW
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    rt.set_surface("artifact-agent", "agent")
-    rt.set_artifact_mode("artifact-agent", True)
+    rt.settings._set_surface("artifact-agent", "agent")
+    rt.settings.set_artifact_mode("artifact-agent", True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
 

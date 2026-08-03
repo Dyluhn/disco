@@ -27,7 +27,7 @@ def make_activity_router(store: SqliteEventStore, runtime: ConversationRuntime |
             return {"running": [], "recent_runs": [], "counts": {"running": 0}}
 
         owner_id = current_owner_id(request)
-        live = set(runtime._run_registry.active_conversation_ids())
+        live = set(runtime.run_registry.active_conversation_ids())
         running: list[dict] = []
         if live:
             summaries = await store.list_conversation_summaries(

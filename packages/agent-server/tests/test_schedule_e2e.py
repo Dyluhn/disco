@@ -477,7 +477,7 @@ async def test_scheduled_rerun_routes_through_pinned_send_path():
 
     rt = MagicMock()
     rt.run_controller.kick = MagicMock()
-    rt.set_model_override = MagicMock()
+    rt.settings.set_model_override = MagicMock()
     rt.set_depth = MagicMock()
     rt.send_user_turn = AsyncMock()  # pure spy — does NOT append/kick
     mgr, _ = _manager(store, clock, rt=rt)
@@ -514,7 +514,7 @@ async def test_failing_send_leaves_no_orphan_schedule_run_row():
 
     rt = MagicMock()
     rt.run_controller.kick = MagicMock()
-    rt.set_model_override = MagicMock()
+    rt.settings.set_model_override = MagicMock()
     rt.set_depth = MagicMock()
     rt.send_user_turn = AsyncMock(side_effect=RuntimeError("append failed"))
     mgr, _ = _manager(store, clock, rt=rt)

@@ -50,7 +50,7 @@ async def _main() -> None:
         secret_store=SecretStore("/tmp/pmx-live-secrets.json"),
     )
     store.create_conversation(CID, owner_id="local")
-    rt.set_surface(CID, "deep_research")
+    rt.settings._set_surface(CID, "deep_research")
     await store.append(
         CID,
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=_QUERY)),

@@ -160,7 +160,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     agent = MagicMock(spec=RouterAgent)
     with (
         mock.patch.object(runtime.sandbox, "_sandbox_service_now"),
-        mock.patch.object(runtime._settings, "_effective_driver_endpoint", return_value=None),
+        mock.patch.object(runtime.settings, "_effective_driver_endpoint", return_value=None),
     ):
         loop = runtime._compose_build_loop(
             conversation_id,
@@ -258,7 +258,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert admission.supersedes_admission_id == initial_admission.id
     assert admission.composition_digest != initial_admission.composition_digest
     assert admission.run_identity != initial_admission.run_identity
-    assert runtime._settings._effective_appkit_mode(conversation_id) is False
+    assert runtime.settings._effective_appkit_mode(conversation_id) is False
 
     app = FastAPI()
     app.include_router(make_preview_router(store, cast(Any, _PreviewRuntime(projects))))
@@ -277,5 +277,5 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
 
     restarted = _runtime(store, tmp_path)
     await restarted._build_platform.prepare_route_pin(conversation_id)
-    assert restarted._settings._effective_appkit_mode(conversation_id) is False
+    assert restarted.settings._effective_appkit_mode(conversation_id) is False
     assert restarted._build_platform.route_pins[conversation_id] == "platform"
