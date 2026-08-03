@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "f666d6f7e2299089aa59c8b67e037733c11916a4",
+  "source_identity": "e7a774c4350ecf458637f07b7137ae6ceca3f90d",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -11927,12 +11927,18 @@
         "_browser_content_meaningful",
         "_browser_verified",
         "_is_web_deliverable",
+        "_is_web_deliverable",
         "_last_productive_seq",
+        "_last_productive_seq",
+        "_last_verification_authority_seq",
+        "_latest_app_deliverable_event",
         "_latest_browser_error",
         "_latest_browser_structured",
         "_latest_verify_verdict",
+        "_plan_file_exists_paths",
         "_preview_key",
         "_prior_verify_marker_fp",
+        "_safe_deliverable_file_path",
         "_static_verify_command",
         "_url_targets_preview",
         "host_verify_authoritative_enabled"
@@ -11950,12 +11956,18 @@
         "_browser_content_meaningful",
         "_browser_verified",
         "_is_web_deliverable",
+        "_is_web_deliverable",
         "_last_productive_seq",
+        "_last_productive_seq",
+        "_last_verification_authority_seq",
+        "_latest_app_deliverable_event",
         "_latest_browser_error",
         "_latest_browser_structured",
         "_latest_verify_verdict",
+        "_plan_file_exists_paths",
         "_preview_key",
         "_prior_verify_marker_fp",
+        "_safe_deliverable_file_path",
         "_static_verify_command",
         "_url_targets_preview",
         "host_verify_authoritative_enabled"
@@ -11973,8 +11985,24 @@
       "public_signatures": {
         "FinishGate": {
           "kind": "class",
-          "signature": "class FinishGate(_FinalizeMixin, _ContentGateMixin, _FinishVerifyMixin, _HostVerifyGateMixin, _BrowserVerifyGateMixin, _ExportRenderGateMixin, _RenderVerifyGateMixin)",
+          "signature": "class FinishGate()",
           "members": [
+            "async def build_dod_evaluator(self)",
+            "async def dictated_content_gate_passed(self, events)",
+            "async def finalize_finish(self, step, state, events)",
+            "async def finish_dod_gate_passed(self)",
+            "async def finish_verify_passed(self, command)",
+            "async def gate_browser_verify(self, step, events, **kwargs)",
+            "async def gate_execution_nudge(self, step, events)",
+            "async def gate_export_render(self, step, events)",
+            "async def gate_host_verify(self, step, events, **kwargs)",
+            "async def gate_workflow_output_contract(self, step, events)",
+            "async def handle_finish_path(self, step, state, events)",
+            "async def maybe_honest_unverifiable_static_actionless_finish(self, events)",
+            "async def normalize_finish_step(self, step, events)",
+            "async def run_finish_verify_gates(self, step, events)",
+            "async def seal_gate_allows_finish(self)",
+            "async def synthetic_finish_after_actionless_pauses(self, state, events)",
             "def __init__(self, loop: AgentLoop) -> None"
           ],
           "fields": []
@@ -12027,6 +12055,14 @@
           "kind": "unresolved",
           "signature": "_last_productive_seq"
         },
+        "_last_verification_authority_seq": {
+          "kind": "unresolved",
+          "signature": "_last_verification_authority_seq"
+        },
+        "_latest_app_deliverable_event": {
+          "kind": "unresolved",
+          "signature": "_latest_app_deliverable_event"
+        },
         "_latest_browser_error": {
           "kind": "unresolved",
           "signature": "_latest_browser_error"
@@ -12039,6 +12075,10 @@
           "kind": "unresolved",
           "signature": "_latest_verify_verdict"
         },
+        "_plan_file_exists_paths": {
+          "kind": "unresolved",
+          "signature": "_plan_file_exists_paths"
+        },
         "_preview_key": {
           "kind": "unresolved",
           "signature": "_preview_key"
@@ -12046,6 +12086,10 @@
         "_prior_verify_marker_fp": {
           "kind": "unresolved",
           "signature": "_prior_verify_marker_fp"
+        },
+        "_safe_deliverable_file_path": {
+          "kind": "unresolved",
+          "signature": "_safe_deliverable_file_path"
         },
         "_static_verify_command": {
           "kind": "unresolved",
@@ -29174,6 +29218,62 @@
       "target_sha256": "8662d024a3711c72150a46ccf394a08efc3d9d2a0103472880894be6c851ff6a",
       "owner_package": "PKG-13-FACADES",
       "reason": "Epic 13-B6: removed the deprecated Pi-named tool binding and retained the one-tool orchestration under the Disclaude-owned execute_disco_tool name."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "FinishGate",
+      "target_sha256": "cfabea4badc9f3a4a543645c840d50eca25e4d2369239b8e0e104f03deb3d11e",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_is_web_deliverable",
+      "target_sha256": "4f8720e05fcb295794bbcc4d78a66d1e64083111fa709b53ab1c384bada3dfa0",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_last_productive_seq",
+      "target_sha256": "95aa73975ff0e6f42294083825f92cfe3874a74f17d320119a09dd5b5b445f2d",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_last_verification_authority_seq",
+      "target_sha256": "eecec38230f3e3f2ae1af638cd31e8ce88d9353349508653e568a394a574f822",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_latest_app_deliverable_event",
+      "target_sha256": "337c1fb9a806dcdc4f6d6faf9dd1b354d561bf36a1224419bca0e12c491474fa",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_plan_file_exists_paths",
+      "target_sha256": "9524a3b90500876fcbf0b3fa71a330e8e078f2ee865c86eedacaed43458a565d",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "_safe_deliverable_file_path",
+      "target_sha256": "3fc95ecee6760bccc1e70ca465ac74c51c0cd7976e6de56b17962f365a3e86fc",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
     }
   ],
   "compatibility_bridges": [],
@@ -29361,6 +29461,36 @@
       "owner_package": "PKG-13-FACADES",
       "accepting_commit": "bea3945c73bcfefcee45d5860639d3b543cb404b",
       "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13B6-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "FinishGate",
+      "origin": null,
+      "removed_members": [],
+      "added_members": [
+        "async def build_dod_evaluator(self)",
+        "async def dictated_content_gate_passed(self, events)",
+        "async def finalize_finish(self, step, state, events)",
+        "async def finish_dod_gate_passed(self)",
+        "async def finish_verify_passed(self, command)",
+        "async def gate_browser_verify(self, step, events, **kwargs)",
+        "async def gate_execution_nudge(self, step, events)",
+        "async def gate_export_render(self, step, events)",
+        "async def gate_host_verify(self, step, events, **kwargs)",
+        "async def gate_workflow_output_contract(self, step, events)",
+        "async def handle_finish_path(self, step, state, events)",
+        "async def maybe_honest_unverifiable_static_actionless_finish(self, events)",
+        "async def normalize_finish_step(self, step, events)",
+        "async def run_finish_verify_gates(self, step, events)",
+        "async def seal_gate_allows_finish(self)",
+        "async def synthetic_finish_after_actionless_pauses(self, state, events)"
+      ],
+      "old_signature_sha256": "3f127768a61e296ad72d65fc2a220c11736e06a83793c2825b7d658942cd1550",
+      "new_signature_sha256": "d92c210c32e4d89005b60cf453af43a8c8e9b5bd6fcafe833a89089c2c927af1",
+      "owner_package": "PKG-13-FACADES",
+      "accepting_commit": "e7a774c4350ecf458637f07b7137ae6ceca3f90d",
+      "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13C-ACCEPTANCE-RECEIPT.md"
     }
   ],
   "frontend_declaration_transitions": [

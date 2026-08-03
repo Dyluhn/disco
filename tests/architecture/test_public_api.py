@@ -963,8 +963,10 @@ class TestFrontendPublicApi:
         # width no parts extraction could reduce (a thin delegator still counts
         # toward service_public_methods, and a mixin is evasion). 7 after Epic
         # 13-B1 deleted 29 ConversationRuntime delegates at an unchanged origin
-        # — the same case, on the class the facade was installed onto.
-        assert len(baseline["member_transitions"]) == 7
+        # — the same case, on the class the facade was installed onto. 8 after
+        # 13-C records FinishGate's explicit typed-service methods without
+        # asserting a false relocation origin.
+        assert len(baseline["member_transitions"]) == 8
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
