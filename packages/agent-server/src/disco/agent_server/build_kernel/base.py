@@ -2,7 +2,7 @@
 
 Build kernel protocol. The point of this module is a thin,
 behavior-preserving seam: today the agent-server drives ONE Build loop (Disco's
-`AgentLoop`, scheduled by `ConversationRuntime.kick`, gated by `ControlOps`,
+`AgentLoop`, scheduled by `ConversationRuntime.run_controller.kick`, gated by `ControlOps`,
 streamed through the event store).
 
 Design note (per the codex SEAM EVAL of the real code): the current architecture
@@ -11,7 +11,7 @@ events. The runtime schedules `AgentLoop.run()` as a background task; the loop
 appends events to the store; the UI/WS subscribe to the store. So `BuildKernel`
 is an adapter over the EXISTING entry points —
 
-  * start / send_user_turn          → `ConversationRuntime.kick` (+ store append)
+  * start / send_user_turn          → `ConversationRuntime.run_controller.kick` (+ store append)
   * approve_plan / reject_plan /
     confirm / reject / request_plan  → `ControlOps` (the plan/action gate)
   * pick_alternative / pause /

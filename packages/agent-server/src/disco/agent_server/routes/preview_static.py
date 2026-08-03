@@ -453,7 +453,7 @@ async def _serve_active_finished_projection(
     capability_port: int | None,
     inject_selection: bool = False,
 ) -> Response | None:
-    resolved = await runtime.resolve_finished_preview_runtime(
+    resolved = await runtime.preview.resolve_finished_preview_runtime(
         conversation_id,
         contract,
     )
@@ -468,7 +468,7 @@ async def _serve_active_finished_projection(
         return None
     if capability_port is not None and capability_port != port:
         return None
-    upstream = runtime.port_upstream(conversation_id, port)
+    upstream = runtime.preview.port_upstream(conversation_id, port)
     if upstream is None:
         return await _fetch_inside_response(
             runtime,

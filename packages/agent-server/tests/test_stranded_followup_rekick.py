@@ -84,7 +84,7 @@ async def test_clean_finalize_rekicks_stranded_followup(tmp_path, monkeypatch):
     # Follow-up lands during the finalization window (after the terminal marker).
     await rt._store.append(CID, _user("now also add a footer"))
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     await rt._run_finalizer.finalize_clean(CID)
 
@@ -103,14 +103,14 @@ async def test_newer_user_turn_after_run_claim_is_rekicked_exactly_once(tmp_path
     await rt._store.append(CID, _user("now also add a footer"))  # seq 5
     blocker = asyncio.create_task(asyncio.Event().wait())
     rt._run_registry.register_task(CID, cast(Any, blocker))
-    rt._run_controller.kick(CID, claimed_user_seq=5)
+    rt.run_controller.kick(CID, claimed_user_seq=5)
     assert rt._run_ingress.claimed_user_seq(CID) == 1
     assert rt._run_registry.detach_task_if_owned(CID, cast(Any, blocker))
     blocker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await blocker
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     await rt._run_finalizer.finalize_clean(CID)
     await rt._run_finalizer.finalize_clean(CID)
@@ -128,7 +128,7 @@ async def test_crash_terminalize_rekicks_stranded_followup(tmp_path, monkeypatch
     await _seed_build(rt, terminal=None)  # no terminal marker yet → not concluded
     await rt._store.append(CID, _user("change the headline copy"))
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     await rt._run_finalizer.terminalize_crash(CID, RuntimeError("boom"), None)
 
@@ -174,7 +174,7 @@ async def test_deterministic_preflight_error_does_not_retry_original_user_turn(
         return cast(Any, _Loop())
 
     monkeypatch.setattr(rt._driver_preflight, "check", _misconfigured_preflight)
-    rt._run_controller.create_task(
+    rt.run_controller.create_task(
         CID,
         loop_factory=_loop_factory,
         claimed_user_seq=initial.seq,
@@ -219,7 +219,7 @@ async def test_stuck_wedge_rekicks_stranded_followup(tmp_path, monkeypatch):
     for _ in range(_MAX_NONTERMINAL_REKICKS):
         rt._run_recovery.increment_stall(CID)
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     await rt._run_finalizer.finalize_clean(CID)
 
@@ -241,7 +241,7 @@ async def test_progressing_run_never_stucks(tmp_path, monkeypatch):
     await rt._store.append(CID, _user("build me a landing page"))
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     boundaries = _MAX_NONTERMINAL_REKICKS + 5
     for i in range(boundaries):
@@ -273,7 +273,7 @@ async def test_no_progress_run_still_stucks(tmp_path, monkeypatch):
     rt._store.create_conversation(CID, owner_id="local")
     await rt._store.append(CID, _user("build me a landing page"))
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
-    monkeypatch.setattr(rt._run_controller, "kick", MagicMock())
+    monkeypatch.setattr(rt.run_controller, "kick", MagicMock())
 
     stuck = False
     for _ in range(_MAX_NONTERMINAL_REKICKS + 2):
@@ -292,7 +292,7 @@ async def test_no_followup_does_not_rekick(tmp_path, monkeypatch):
     rt = _rt(tmp_path, monkeypatch)
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)  # no follow-up
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     await rt._run_finalizer.finalize_clean(CID)
 
@@ -309,7 +309,7 @@ async def test_same_seq_does_not_loop_but_newer_seq_recovers(tmp_path, monkeypat
     await _seed_build(rt, terminal=ConversationStatus.FINISHED)
     await rt._store.append(CID, _user("add a footer"))  # seq 5
     kick = MagicMock()
-    monkeypatch.setattr(rt._run_controller, "kick", kick)
+    monkeypatch.setattr(rt.run_controller, "kick", kick)
 
     # First conclusion → re-kicks for the follow-up once.
     await rt._run_finalizer.finalize_clean(CID)

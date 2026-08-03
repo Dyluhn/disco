@@ -90,7 +90,7 @@ class _FakeRuntime:
             names=self.get_upload_names,
             size=self.get_upload_size,
         )
-        self._dr = SimpleNamespace(add_upload_passages=self.add_upload_passages)
+        self.deep_research = SimpleNamespace(add_upload_passages=self.add_upload_passages)
         self.live_sessions = _LiveSessions()
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()

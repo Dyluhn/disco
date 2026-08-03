@@ -106,7 +106,7 @@ async def run_phase(service: DeepResearchService, conversation_id: str) -> None:
     Failures surface as ErrorEvent on the log — never raise out of the
     background task. Every call below is on ``service`` (an instance
     attribute lookup), so instance-level test monkeypatches
-    (``monkeypatch.setattr(rt._dr, "_execute_deep_research", ...)``) keep
+    (``monkeypatch.setattr(rt.deep_research, "_execute_deep_research", ...)``) keep
     resolving correctly regardless of this module boundary."""
     events = await service._store.get_events(conversation_id)
     state = await service._store.get_state(conversation_id)

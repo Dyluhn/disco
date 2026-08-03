@@ -57,7 +57,7 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
     runtime._workspace.interprocess_mutation_fence = process_fence
     runtime._workspace.append_run_ingress_locked = append_run_ingress
     runtime._workspace.claim_registered_run_locked = MagicMock()
-    runtime._run_controller.kick = MagicMock()
+    runtime.run_controller.kick = MagicMock()
     runtime._control.confirm = AsyncMock()
     runtime._control.approve_plan = AsyncMock()
     runtime._control.reject = AsyncMock()
@@ -89,7 +89,7 @@ async def test_send_user_turn_appends_and_kicks_and_returns_stored(
     assert context.message.content == "big ctx"
     assert user.source == EventSource.USER
     assert user.message.content == "build a site"
-    runtime._run_controller.kick.assert_called_once_with(CID, claimed_user_seq=user.seq)
+    runtime.run_controller.kick.assert_called_once_with(CID, claimed_user_seq=user.seq)
     assert stored.id == user.id and stored.seq == user.seq
     assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
 
@@ -97,7 +97,7 @@ async def test_send_user_turn_appends_and_kicks_and_returns_stored(
 def test_start_routes_to_kick_and_pins(store: SqliteEventStore) -> None:
     runtime = _runtime(store)
     runtime.start(CID)
-    runtime._run_controller.kick.assert_called_once_with(CID)
+    runtime.run_controller.kick.assert_called_once_with(CID)
     assert runtime._kernel_pins.current(CID) is runtime._disco_kernel
 
 

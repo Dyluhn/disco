@@ -485,7 +485,7 @@ the loop resumed executing the OLD plan and wrote files WITHOUT a revised plan
 (`write_before_revised_plan_approval=true`, `latest_plan_revision_after_followup` unchanged).
 
 **Root cause:** the Build follow-up paths (WS `send_message`/`steer`, REST `/messages`/`followup`)
-append a USER message and call `runtime.kick()` — they do NOT call `request_plan()`, the only op
+append a USER message and call `runtime.run_controller.kick()` — they do NOT call `request_plan()`, the only op
 wired to `enter_planning()`. So on a follow-up the loop never set the `planning` mode marker; the
 just-merged planning gate (`engine.py` `_gate_planning_mode`) is a no-op unless `self.mode ==
 PLANNING`, so the model wrote freely against the stale approved plan. `signals.in_planning_for_revision`

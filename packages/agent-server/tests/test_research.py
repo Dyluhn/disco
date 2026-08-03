@@ -189,7 +189,7 @@ async def test_research_stream_sources_builds_override_and_bypasses_cached_globa
     )
     cached_search = _FakeSearch()
     override_search = _FakeSearch()
-    rt._dr._research_providers = {
+    rt.deep_research._research_providers = {
         "search": cached_search,
         "extraction": _FakeExtraction(),
         "reranker": _FakeReranker(),
@@ -219,7 +219,7 @@ async def test_research_stream_sources_builds_override_and_bypasses_cached_globa
 
     frames = [
         frame
-        async for frame in rt._dr.research_stream(
+        async for frame in rt.deep_research.research_stream(
             "capital?",
             sources=["arxiv", "ddgs"],
         )
@@ -323,8 +323,10 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     rt._settings._set_surface(cid, "deep_research")
     rt.set_autonomous(cid, True)
     exec_mock = AsyncMock()
-    monkeypatch.setattr(rt._dr, "_execute_deep_research", exec_mock)
-    asyncio.run(rt._dr._propose_deep_research_plan(cid, asyncio.run(store.get_events(cid))))
+    monkeypatch.setattr(rt.deep_research, "_execute_deep_research", exec_mock)
+    asyncio.run(
+        rt.deep_research._propose_deep_research_plan(cid, asyncio.run(store.get_events(cid)))
+    )
     details = _details(asyncio.run(store.get_events(cid)))
     assert "plan_approved" in details, details
     assert "AWAITING_PLAN_APPROVAL" not in [str(d) for d in details]
@@ -345,8 +347,12 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
     )
     rt2.set_surface(cid2, "deep_research")  # autonomous NOT set
     exec_mock2 = AsyncMock()
-    monkeypatch.setattr(rt2._dr, "_execute_deep_research", exec_mock2)
-    asyncio.run(rt2._dr._propose_deep_research_plan(cid2, asyncio.run(store2.get_events(cid2))))
+    monkeypatch.setattr(rt2.deep_research, "_execute_deep_research", exec_mock2)
+    asyncio.run(
+        rt2.deep_research._propose_deep_research_plan(
+            cid2, asyncio.run(store2.get_events(cid2))
+        )
+    )
     statuses2 = [e for e in asyncio.run(store2.get_events(cid2)) if isinstance(e, StatusEvent)]
     assert any(e.status == ConversationStatus.AWAITING_PLAN_APPROVAL for e in statuses2)
     assert exec_mock2.await_count == 0

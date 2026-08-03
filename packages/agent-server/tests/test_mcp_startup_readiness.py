@@ -22,13 +22,13 @@ async def test_mcp_connection_attempt_cannot_own_agent_readiness(tmp_path) -> No
         entered.set()
         await release.wait()
 
-    runtime._mcp._start_mcp_pool = blocked_mcp_start
+    runtime.mcp._start_mcp_pool = blocked_mcp_start
     runtime.reconcile_orphaned_runs = AsyncMock(return_value=0)
     runtime.drivers.prewarm_model_probe = AsyncMock()
     runtime.drivers.prewarm_vision_probe = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
     runtime.schedules._schedule_manager_loop = AsyncMock()
-    runtime._mcp._close_mcp_pool = AsyncMock()
+    runtime.mcp._close_mcp_pool = AsyncMock()
     app = create_app(store, runtime=runtime)
 
     lifespan = app.router.lifespan_context(app)
@@ -39,5 +39,5 @@ async def test_mcp_connection_attempt_cannot_own_agent_readiness(tmp_path) -> No
         release.set()
         await lifespan.__aexit__(None, None, None)
 
-    runtime._mcp._close_mcp_pool.assert_awaited_once_with()
+    runtime.mcp._close_mcp_pool.assert_awaited_once_with()
     store.close()

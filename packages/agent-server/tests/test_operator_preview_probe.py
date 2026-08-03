@@ -4,7 +4,7 @@ A shell-served site (`python3 -m http.server`) writes no index.html OBSERVATION 
 emits no app-deliverable, so the operator's old gate (files[index.html] OR an
 app-deliverable) left it invisible — `operator view` reported no preview even though
 a live page existed. The widened gate ALSO probes when GET /preview reports a live
-port (runtime.preview() owners → available/ports). These tests drive the OperatorClient
+port (runtime.preview.preview() owners → available/ports). These tests drive the OperatorClient
 against a tiny threaded HTTP stub of the agent-server endpoints view() touches.
 """
 

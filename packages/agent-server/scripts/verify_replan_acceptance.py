@@ -75,7 +75,7 @@ async def _drive(runtime: ConversationRuntime, store, *, max_rounds: int, label:
     the seq boundary (len events) at the end of this phase."""
     shown = len(await store.get_events(CID))
     for _r in range(max_rounds):
-        runtime.kick(CID)
+        runtime.run_controller.kick(CID)
         task = runtime._run_registry.task(CID)
         if task is not None:
             try:

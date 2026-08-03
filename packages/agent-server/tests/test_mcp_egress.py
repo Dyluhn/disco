@@ -148,9 +148,9 @@ def test_runtime_mcp_egress_hosts_method():
         enabled=True,
     )
     client = McpHttpClient(server=config, call_timeout_s=5.0)
-    runtime._mcp._http_clients["test_srv"] = client
+    runtime.mcp._http_clients["test_srv"] = client
 
-    hosts = runtime._mcp._mcp_egress_hosts()
+    hosts = runtime.mcp._mcp_egress_hosts()
 
     assert "test-mcp.example.com:8443" in hosts
     assert "cdn.test.example.com" in hosts
@@ -180,10 +180,10 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
         risk_tier=SecurityRisk.MEDIUM,
         enabled=True,
     )
-    runtime._mcp._http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
+    runtime.mcp._http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=runtime._mcp._mcp_egress_hosts())
+    spec = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=runtime.mcp._mcp_egress_hosts())
 
     allow = set(spec.egress_allow)
     # Registry hosts survive (a REPLACEMENT would have dropped these).

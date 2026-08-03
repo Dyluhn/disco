@@ -170,7 +170,7 @@ async def _resolve_export_payload(
             raise HTTPException(status_code=400, detail=f"Unknown template {theme!r}/{mode!r}")
 
     # Both formats serialize inline so theme/mode, follow-ups, AND the generated
-    # TITLE (W-10) are honored.  The runtime.export_report path threads none of
+    # TITLE (W-10) are honored.  The runtime.deep_research.export_report path threads none of
     # these, so we no longer route through it.
     from ..report_export import (
         EXTENSIONS,

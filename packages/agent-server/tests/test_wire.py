@@ -333,7 +333,7 @@ def test_research_stream_frames_are_redacted_on_live_ws_path():
         yield {"type": "final", "answer": {"markdown": secret}}
 
     fake_runtime = mock.MagicMock()
-    fake_runtime.research_stream = mock.MagicMock(side_effect=fake_stream)
+    fake_runtime.deep_research.research_stream = mock.MagicMock(side_effect=fake_stream)
     fake_runtime.get_last_selected_model = mock.MagicMock(return_value=None)
     client = TestClient(create_app(store, runtime=fake_runtime))
 

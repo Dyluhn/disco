@@ -96,7 +96,7 @@ class _RuntimeWiringSchema:
     drivers: DriverRuntime
     _driver_preflight: DriverPreflight
     _cancellations: CancellationRegistry
-    _mcp: McpManager
+    mcp: McpManager
     _kernel_pin_store: KernelPinStore
     _connection_state: ConnectionState
     _lifecycle_idle: LifecycleIdleSweepDeps
@@ -117,7 +117,7 @@ class _RuntimeWiringSchema:
     _appkit_ejection: AppKitEjectionService
     _research_state: DeepResearchState
     _research_live_state: DeepResearchLiveState
-    _dr: DeepResearchService
+    deep_research: DeepResearchService
     spaces: SpaceService
     _build_retrieval: BuildRetrievalCapabilities
     _build_shadows: BuildShadowLedger
@@ -126,10 +126,10 @@ class _RuntimeWiringSchema:
     schedules: ScheduleService
     sessions: SessionsService
     live_sessions: LiveSessionDirectory
-    _preview: PreviewService
+    preview: PreviewService
     sandbox_resources: SandboxResourceReconciler
     _run_supervisor: RunSupervisor
-    _run_controller: RunController
+    run_controller: RunController
     _run_kills: RunKillService
     _control: ControlOps
     _disco_kernel: DiscoKernel

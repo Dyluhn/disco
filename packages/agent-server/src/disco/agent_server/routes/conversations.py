@@ -212,14 +212,14 @@ def _apply_create_runtime_settings(
     # Deep Research depth tier (no-op for other surfaces). Was dropped before —
     # every DR run defaulted to standard_deep regardless of the UI picker.
     if body.depth_tier:
-        runtime.set_depth(conversation_id, body.depth_tier)
+        runtime.deep_research.set_depth(conversation_id, body.depth_tier)
     # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
     # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
     if body.iterative:
-        runtime.set_iterative(conversation_id, True)
+        runtime.deep_research.set_iterative(conversation_id, True)
     # DR-3 E2: recency window for time-filtered search + prompt injection.
     if body.recency_window is not None:
-        runtime.set_recency(conversation_id, body.recency_window)
+        runtime.deep_research.set_recency(conversation_id, body.recency_window)
     if validated_space_ids:
         runtime.spaces.set_space_ids(conversation_id, validated_space_ids)
     if body.sources:
@@ -355,11 +355,11 @@ def _apply_ungated_settings(runtime, conversation_id: str, body) -> None:
     if body.quiet is not None:
         runtime.set_quiet(conversation_id, body.quiet)
     if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
-        runtime.set_depth(conversation_id, body.depth_tier)
+        runtime.deep_research.set_depth(conversation_id, body.depth_tier)
     if "iterative" in body.model_fields_set and body.iterative is not None:
-        runtime.set_iterative(conversation_id, body.iterative)
+        runtime.deep_research.set_iterative(conversation_id, body.iterative)
     if "recency_window" in body.model_fields_set:
-        runtime.set_recency(conversation_id, body.recency_window)
+        runtime.deep_research.set_recency(conversation_id, body.recency_window)
     if "sources" in body.model_fields_set and body.sources is not None:
         runtime.set_research_sources(conversation_id, body.sources)
 

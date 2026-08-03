@@ -8,17 +8,28 @@ from disco.core import ConversationStatus, SqliteEventStore, StatusEvent
 from fastapi import FastAPI
 
 
+class _FakePreviewService:
+    """13-B3: `wake_for_preview` / `preview_target_port` are owned by
+    `PreviewService` and reached as `runtime.preview.<method>`, so the double
+    doubles the COLLABORATOR. Calls are recorded on the owning runtime double so
+    every `runtime.wake_calls` assertion below is unchanged."""
+
+    def __init__(self, runtime: "_FakeRuntime") -> None:
+        self._runtime = runtime
+
+    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
+        self._runtime.wake_calls.append((cid8, port))
+        return self._runtime.wake_result
+
+    preview_target_port = staticmethod(lambda _conversation_id: 8000)
+
+
 class _FakeRuntime:
     def __init__(self, wake_result: str | None) -> None:
         self.wake_result = wake_result
         self.wake_calls: list[tuple[str, int]] = []
         self.project_store_called = False
-
-    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
-        self.wake_calls.append((cid8, port))
-        return self.wake_result
-
-    preview_target_port = staticmethod(lambda _conversation_id: 8000)
+        self.preview = _FakePreviewService(self)
 
     def project_store(self):
         self.project_store_called = True

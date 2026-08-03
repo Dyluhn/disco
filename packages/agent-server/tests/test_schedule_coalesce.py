@@ -50,16 +50,16 @@ def _make_runtime(store: SqliteEventStore) -> MagicMock:
     send path (append the USER message + kick) — a scheduled rerun routes through it,
     not a raw append+kick. Modeled on test_schedule_e2e's `_runtime`."""
     rt = MagicMock()
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     rt.set_model_override = MagicMock()
-    rt.set_depth = MagicMock()
+    rt.deep_research.set_depth = MagicMock()
 
     async def _send(cid, text, *, context=None, steer=False):  # noqa: ANN001, ANN202
         stored = await store.append(
             cid,
             MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=text)),
         )
-        rt.kick(cid)
+        rt.run_controller.kick(cid)
         return stored
 
     rt.send_user_turn = _send

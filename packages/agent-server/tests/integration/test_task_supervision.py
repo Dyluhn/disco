@@ -93,7 +93,7 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
         lambda _cid, _snapshot: _BoomLoop(),
     )
 
-    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
     task = runtime._run_registry.task(cid)
     assert task is not None
     with contextlib.suppress(Exception):
@@ -120,7 +120,7 @@ async def test_cancellation_is_not_reported_as_error(monkeypatch):
         lambda _cid, _snapshot: _CancelLoop(),
     )
 
-    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
     task = runtime._run_registry.task(cid)
     assert task is not None
     await asyncio.sleep(0.1)
@@ -151,7 +151,7 @@ async def test_terminalize_is_idempotent(monkeypatch):
         "loop_for_resolved",
         lambda _cid, _snapshot: _FinishThenRaise(),
     )
-    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
     task = runtime._run_registry.task(cid)
     with contextlib.suppress(Exception):
         await asyncio.wait_for(asyncio.shield(task), timeout=10)
@@ -200,7 +200,7 @@ async def test_clean_return_at_running_recovers_then_stucks(monkeypatch):
         lambda _cid, _snapshot: _ReturnAtRunning(),
     )
 
-    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
     state = await _drain_until(store, cid, lambda s: s.execution_status == ConversationStatus.STUCK)
 
     assert state.execution_status == ConversationStatus.STUCK, (
@@ -237,7 +237,7 @@ async def test_clean_return_at_running_transient_recovers_without_stuck(monkeypa
         lambda _cid, _snapshot: _TransientStall(),
     )
 
-    runtime._run_controller.kick(cid, claimed_user_seq=user_seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=user_seq)
     state = await _drain_until(
         store, cid, lambda s: s.execution_status == ConversationStatus.FINISHED
     )
@@ -269,7 +269,7 @@ async def test_clean_return_at_paused_is_left_alone(monkeypatch):
         lambda _cid, _snapshot: _Park(),
     )
 
-    runtime._run_controller.kick(cid, claimed_user_seq=seq)
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
     await asyncio.sleep(0.4)
 
     state = await store.get_state(cid)

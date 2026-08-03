@@ -364,23 +364,23 @@ async def test_mcp_proxy_env_follows_build_egress_posture(monkeypatch):
     # BP-G10 flipped the DEFAULT build egress to "filtered", so an unset
     # PMX_BUILD_EGRESS now means filtered → a real proxy env (NOT direct).
     monkeypatch.delenv("PMX_BUILD_EGRESS", raising=False)
-    assert runtime._mcp._mcp_proxy_env() is not None  # default is now filtered → proxied
+    assert runtime.mcp._mcp_proxy_env() is not None  # default is now filtered → proxied
 
     # The direct (None) posture requires an EXPLICIT open.
     monkeypatch.setenv("PMX_BUILD_EGRESS", "open")
-    assert runtime._mcp._mcp_proxy_env() is None  # explicit open posture → direct
+    assert runtime.mcp._mcp_proxy_env() is None  # explicit open posture → direct
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
     monkeypatch.setenv("PMX_MCP_EGRESS_PROXY_HOST", "10.0.0.5")
-    env = runtime._mcp._mcp_proxy_env()
+    env = runtime.mcp._mcp_proxy_env()
     assert env is not None
     assert env["HTTP_PROXY"] == f"http://10.0.0.5:{EGRESS_PROXY_PORT}"
     assert env["https_proxy"] == f"http://10.0.0.5:{EGRESS_PROXY_PORT}"
-    assert runtime._mcp._mcp_proxy_env("http://localhost:9123/mcp") is None
-    assert runtime._mcp._mcp_proxy_env("http://127.0.0.9:9123/mcp") is None
-    assert runtime._mcp._mcp_proxy_env("http://[::1]:9123/mcp") is None
-    assert runtime._mcp._mcp_proxy_env("http://10.0.0.9:9123/mcp") is not None
-    assert runtime._mcp._mcp_proxy_env("https://remote.example/mcp") is not None
+    assert runtime.mcp._mcp_proxy_env("http://localhost:9123/mcp") is None
+    assert runtime.mcp._mcp_proxy_env("http://127.0.0.9:9123/mcp") is None
+    assert runtime.mcp._mcp_proxy_env("http://[::1]:9123/mcp") is None
+    assert runtime.mcp._mcp_proxy_env("http://10.0.0.9:9123/mcp") is not None
+    assert runtime.mcp._mcp_proxy_env("https://remote.example/mcp") is not None
     store.close()
 
 
@@ -418,11 +418,11 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     runtime = ConversationRuntime(store)
     # Register the client WITHOUT a live connect — _mcp_egress_hosts only reads
     # client._url / client.allowed_hosts, which exist at construction.
-    runtime._mcp._http_clients["sec_srv"] = client
+    runtime.mcp._http_clients["sec_srv"] = client
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
     spec = runtime._sandbox._build_sandbox_spec(
-        mcp_egress_hosts=runtime._mcp._mcp_egress_hosts()
+        mcp_egress_hosts=runtime.mcp._mcp_egress_hosts()
     )
 
     blob = spec.model_dump_json()

@@ -93,7 +93,7 @@ async def test_revision_via_request_plan_reproposes(monkeypatch):
     rt = _rt(store, monkeypatch)
     await _seed_revision_state(store, "c1", planning_marker=True)
 
-    await rt._dr._maybe_run_deep_research("c1")
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     plans = [e for e in events if isinstance(e, PlanEvent)]
@@ -117,7 +117,7 @@ async def test_revision_via_plain_message_while_awaiting(monkeypatch):
     rt = _rt(store, monkeypatch)
     await _seed_revision_state(store, "c1", planning_marker=False)
 
-    await rt._dr._maybe_run_deep_research("c1")
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     plans = [e for e in events if isinstance(e, PlanEvent)]
@@ -147,7 +147,7 @@ async def test_awaiting_approval_without_new_message_stays_parked(monkeypatch):
     )
     before = len(await store.get_events("c1"))
 
-    await rt._dr._maybe_run_deep_research("c1")
+    await rt.deep_research._maybe_run_deep_research("c1")
 
     events = await store.get_events("c1")
     assert len(events) == before, "dispatcher must not emit anything"

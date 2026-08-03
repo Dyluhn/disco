@@ -591,7 +591,7 @@ async def _finished_websocket_upstream(
         else None
     )
     resolved = (
-        await runtime.resolve_finished_preview_runtime(
+        await runtime.preview.resolve_finished_preview_runtime(
             identity.conversation_id,
             contract,
         )
@@ -601,7 +601,7 @@ async def _finished_websocket_upstream(
     runtime_port = resolved.get("port") if isinstance(resolved, dict) else None
     if contract is None or type(runtime_port) is not int or identity.target_port != runtime_port:
         return None
-    return runtime.port_upstream(
+    return runtime.preview.port_upstream(
         identity.conversation_id,
         runtime_port,
     )

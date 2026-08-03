@@ -8,7 +8,7 @@ and the run/cleanup lifecycle — each get their own narrow collaborator here.
 ``run_execute`` is the sequencing of these steps, not a relocated copy of the
 original body. Every step takes ``service`` and resolves collaborators off
 it at call time, so instance-level test monkeypatches
-(``monkeypatch.setattr(rt._dr, "_execute_deep_research", ...)``) keep
+(``monkeypatch.setattr(rt.deep_research, "_execute_deep_research", ...)``) keep
 resolving correctly regardless of this module boundary.
 """
 

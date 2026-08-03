@@ -614,7 +614,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
 
         # An ordinary kick during the blocked atomic append must observe the
         # registered claim/task and leave the sealed task intact.
-        runtime.kick(cid)
+        runtime.run_controller.kick(cid)
         assert runtime._run_registry.task(cid) is exact_task
         assert not run_started.is_set()
 

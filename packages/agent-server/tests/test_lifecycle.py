@@ -534,8 +534,8 @@ async def test_http_state_route_overlays_sandbox_state():
     rt = _runtime(store)
     cid = await _make_conversation(store, ConversationStatus.FINISHED)
     rt._run_resources.set_executor(cid, MagicMock())  # live executor → sandbox_state == "active"
-    rt._mcp._start_mcp_pool = AsyncMock()
-    rt._mcp._close_mcp_pool = AsyncMock()
+    rt.mcp._start_mcp_pool = AsyncMock()
+    rt.mcp._close_mcp_pool = AsyncMock()
     rt.reconcile_orphaned_runs = AsyncMock()
     rt.drivers.prewarm_model_probe = AsyncMock()
     rt.drivers.prewarm_vision_probe = AsyncMock()

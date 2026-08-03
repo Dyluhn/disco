@@ -97,7 +97,7 @@ class _FakeRuntime:
             names=self.get_upload_names,
             size=self.get_upload_size,
         )
-        self._dr = SimpleNamespace(
+        self.deep_research = SimpleNamespace(
             add_upload_passages=self.add_upload_passages,
             get_upload_passages=self.get_upload_passages,
         )
@@ -178,7 +178,7 @@ def test_md_upload_populates_corpus() -> None:
     assert r.status_code == 200
     assert r.json()["saved"][0]["name"] == "notes.md"
     # Corpus should have passages
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     assert len(passages) >= 1
     # All passages have the right source_url
     for p in passages:
@@ -190,7 +190,7 @@ def test_txt_upload_populates_corpus() -> None:
     client, cid, _, rt = _make_client()
     r = _upload(client, cid, [("files", b"Hello world.\n\nSecond para.", "data.txt")])
     assert r.status_code == 200
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     assert len(passages) >= 1
 
 
@@ -200,7 +200,7 @@ def test_csv_upload_populates_corpus() -> None:
     csv_bytes = b"name,value\nalpha,1\nbeta,2\n"
     r = _upload(client, cid, [("files", csv_bytes, "data.csv")])
     assert r.status_code == 200
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     assert len(passages) == 2
 
 
@@ -211,7 +211,7 @@ def test_pdf_upload_does_not_populate_corpus() -> None:
     assert r.status_code == 200
     assert r.json()["saved"][0]["name"] == "report.pdf"
     # Corpus should be empty for this cid
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     assert passages == []
 
 
@@ -220,7 +220,7 @@ def test_binary_upload_does_not_populate_corpus() -> None:
     client, cid, _, rt = _make_client()
     r = _upload(client, cid, [("files", b"\x00\x01\x02binary", "model.bin")])
     assert r.status_code == 200
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     assert passages == []
 
 
@@ -229,7 +229,7 @@ def test_corpus_accumulates_multiple_uploads() -> None:
     client, cid, _, rt = _make_client()
     _upload(client, cid, [("files", b"First file content.", "a.txt")])
     _upload(client, cid, [("files", b"Second file content.\n\nMore.", "b.md")])
-    passages = rt._dr.get_upload_passages(cid)
+    passages = rt.deep_research.get_upload_passages(cid)
     # At least one passage from each file
     assert len(passages) >= 2
 
@@ -239,12 +239,12 @@ def test_corpus_accumulates_multiple_uploads() -> None:
 
 def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime = mock.MagicMock()
-    runtime._dr = SimpleNamespace(research_stream=research_stream)
-    runtime.research_stream = research_stream
+    runtime.deep_research = SimpleNamespace(research_stream=research_stream)
+    runtime.deep_research.research_stream = research_stream
     runtime._settings = SimpleNamespace(
         model_binding=SimpleNamespace(get_last_selected_model=mock.MagicMock(return_value=None))
     )
-    runtime._mcp = SimpleNamespace(
+    runtime.mcp = SimpleNamespace(
         _start_mcp_pool=mock.AsyncMock(),
         _close_mcp_pool=mock.AsyncMock(),
     )
@@ -272,7 +272,7 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
 @pytest.mark.asyncio
 async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
     """The /ws/research WS endpoint passes conversation_id from the frame body
-    to runtime.research_stream so seed_passages can be loaded."""
+    to runtime.deep_research.research_stream so seed_passages can be loaded."""
     from disco.core import SqliteEventStore
 
     store = SqliteEventStore(":memory:")

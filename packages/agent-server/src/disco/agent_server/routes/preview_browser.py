@@ -272,7 +272,7 @@ def _canonical_preview_port(
     conversation_id: str,
 ) -> int | None:
     try:
-        port = runtime.preview_target_port(conversation_id)
+        port = runtime.preview.preview_target_port(conversation_id)
     except Exception:  # noqa: BLE001 — corrupt selection cannot choose an upstream
         return None
     if port is None:
@@ -360,13 +360,13 @@ async def _wake_for_preview(
     owner_id: str,
 ) -> str | None:
     try:
-        return await runtime.wake_for_preview(
+        return await runtime.preview.wake_for_preview(
             cid8,
             port,
             owner_id=owner_id,
         )
     except TypeError:
-        return await runtime.wake_for_preview(cid8, port)
+        return await runtime.preview.wake_for_preview(cid8, port)
 
 
 def _json_error(reason: str, message: str) -> Response:
@@ -659,7 +659,7 @@ def _register_preview_meta_routes(
         )
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
-        return await runtime.preview(conversation_id)
+        return await runtime.preview.preview(conversation_id)
 
     @router.post("/conversations/{conversation_id}/preview/restart")
     async def ensure_preview(
@@ -673,4 +673,4 @@ def _register_preview_meta_routes(
         )
         if runtime is None:
             return {"ok": False}
-        return {"ok": await runtime.ensure_preview(conversation_id)}
+        return {"ok": await runtime.preview.ensure_preview(conversation_id)}

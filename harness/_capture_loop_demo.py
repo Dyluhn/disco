@@ -34,7 +34,7 @@ _QUERY = "What is the capital of France and roughly its population?"
 
 
 async def _kick_and_wait(rt, cid: str) -> None:
-    rt.kick(cid)
+    rt.run_controller.kick(cid)
     task = rt._tasks.get(cid)
     if task is not None:
         await task

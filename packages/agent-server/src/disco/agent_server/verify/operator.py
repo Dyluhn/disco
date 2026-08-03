@@ -134,7 +134,7 @@ class OperatorClient:
     async def _has_live_preview_port(self, cid: str) -> bool:
         """Fix 2 (B-H.2): True iff the backend reports a live preview port for this
         conversation (a dev/http server is bound inside the sandbox). Hits the same
-        GET /preview the UI polls (runtime.preview() → available/ports). Best-effort:
+        GET /preview the UI polls (runtime.preview.preview() → available/ports). Best-effort:
         any failure ⇒ False (the probe is additive, never a hard gate)."""
         try:
             r = await self._auth_client.auth.authenticated_request(
@@ -161,7 +161,7 @@ class OperatorClient:
         # Fix 2 (B-H.2): ALSO probe when a live preview port is detected — a
         # shell-served site (`python3 -m http.server`) writes no index.html observation
         # and emits no app-deliverable, so the old gate left it invisible. The live
-        # port (runtime.preview() owners → available/ports) is the real signal that
+        # port (runtime.preview.preview() owners → available/ports) is the real signal that
         # there IS something to view.
         if (
             view["files"].get("index.html")

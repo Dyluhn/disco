@@ -156,7 +156,7 @@ async def _drive(
     actions, and return counters about what happened. Returns (shown, stats)."""
     stats = {"actions": 0, "plan_gates": 0, "action_gates": 0, "planning_reads": 0}
     for _round in range(60):
-        runtime.kick(CID)
+        runtime.run_controller.kick(CID)
         task = runtime._run_registry.task(CID)
         if task is not None:
             try:

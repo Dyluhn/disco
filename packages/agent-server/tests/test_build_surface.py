@@ -160,7 +160,7 @@ def _runtime(store: SqliteEventStore, steps) -> ConversationRuntime:
     # go straight to the canonical refusal; using one here would test obsolete
     # gate order instead of confirmation semantics.
     if any(tc.tool_name == _PUBLISH_TOOL for _, tool_calls in steps for tc in tool_calls):
-        runtime._mcp._http_tools[_PUBLISH_TOOL] = ToolDef(
+        runtime.mcp._http_tools[_PUBLISH_TOOL] = ToolDef(
             name=_PUBLISH_TOOL,
             description="Publish a test site through an approved MCP server",
             args_model=_NoArgs,
@@ -169,7 +169,7 @@ def _runtime(store: SqliteEventStore, steps) -> ConversationRuntime:
             read_only=False,
             behavior=OPAQUE_MCP_BEHAVIOR,
         )
-        runtime._mcp._http_clients["publish_srv"] = _PublishMcpClient()
+        runtime.mcp._http_clients["publish_srv"] = _PublishMcpClient()
     return runtime
 
 
@@ -179,7 +179,7 @@ def _user(content: str) -> MessageEvent:
 
 async def _run_to_rest(runtime: ConversationRuntime) -> None:
     """Kick the loop and await it to a terminal-for-now status (WAITING/FINISHED)."""
-    runtime.kick(CID)
+    runtime.run_controller.kick(CID)
     task = runtime._run_registry.task(CID)
     if task is not None:
         await task
@@ -355,7 +355,7 @@ async def test_publish_action_pauses_and_confirm_executes_exactly_it():
         if isinstance(e, ObservationEvent) and e.tool_result.tool_name == _PUBLISH_TOOL
     ]
     assert len(executions) == 1
-    assert runtime._mcp._http_clients["publish_srv"].calls == 1
+    assert runtime.mcp._http_clients["publish_srv"].calls == 1
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
 
 
@@ -380,7 +380,7 @@ async def test_reject_denies_without_executing():
 
     events = await store.get_events(CID)
     # The deploy action must NEVER have reached the registered MCP client.
-    assert runtime._mcp._http_clients["publish_srv"].calls == 0
+    assert runtime.mcp._http_clients["publish_srv"].calls == 0
     rejection = next(e for e in events if isinstance(e, AgentErrorEvent))
     # Rejection is framed as an implicit system-reminder, not a user-tone error.
     assert "<system-reminder>" in rejection.error

@@ -116,7 +116,7 @@ async def _sealed_preview_authority(
     contract: SealedPreviewRuntimeContract,
     entry: str,
 ) -> str | None:
-    resolved = await runtime.resolve_finished_preview_runtime(
+    resolved = await runtime.preview.resolve_finished_preview_runtime(
         conversation_id,
         contract,
     )
@@ -199,7 +199,7 @@ async def _live_preview_authority(
     selected_port: int,
 ) -> str | None:
     try:
-        metadata = await runtime.preview(conversation_id)
+        metadata = await runtime.preview.preview(conversation_id)
     except Exception:  # noqa: BLE001 — lifecycle authority cannot be guessed
         return None
     generation = metadata.get("generation") if isinstance(metadata, dict) else None
@@ -363,7 +363,7 @@ async def _selected_capability_port(
         _canonical_preview_port(runtime, conversation_id) if runtime is not None else PREVIEW_PORT
     )
     if selected_port is None and body.transport == "canonical" and runtime is not None:
-        await runtime.ensure_preview(conversation_id)
+        await runtime.preview.ensure_preview(conversation_id)
         selected_port = _canonical_preview_port(runtime, conversation_id)
     if (
         selected_port is None

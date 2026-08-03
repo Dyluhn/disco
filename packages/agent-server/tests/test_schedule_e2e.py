@@ -3,7 +3,7 @@
 Drives the manager through the two key scenarios:
 
 1. A 2-fire schedule runs twice → two ScheduleRunEvents appended to the SAME
-   conversation; runtime.kick() is called for each run.
+   conversation; runtime.run_controller.kick() is called for each run.
 
 2. Kill+restart between fires: the first fire happens, then the "server" is
    killed (manager destroyed). A new manager is created with the same store;
@@ -87,8 +87,12 @@ def _runtime(store: SqliteEventStore) -> MagicMock:
     else the engine work-gate never opens. `kick` is still observable for the
     once-per-fire assertions."""
     rt = MagicMock()
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     rt.set_model_override = MagicMock()
+    # `rt` stands in for the `ScheduleRuntime` PROTOCOL (schedule.py:42), not for
+    # ConversationRuntime. The protocol still declares `set_depth` at its top
+    # level and is satisfied in production by `_ScheduleRuntimeAdapter`, so
+    # 13-B3's `_dr` -> `deep_research` promotion does not reach this name.
     rt.set_depth = MagicMock()
 
     async def _send(cid, text, *, context=None, steer=False):
@@ -96,7 +100,7 @@ def _runtime(store: SqliteEventStore) -> MagicMock:
             cid,
             MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=text)),
         )
-        rt.kick(cid)
+        rt.run_controller.kick(cid)
         return stored
 
     rt.send_user_turn = _send
@@ -147,7 +151,7 @@ async def test_two_fire_schedule_appends_two_events_same_conversation():
 
     Event stream asserted:
         [ScheduleRunEvent(coalesced=False), ScheduleRunEvent(coalesced=False)]
-    and runtime.kick is called twice with the same conversation_id.
+    and runtime.run_controller.kick is called twice with the same conversation_id.
     """
     store = _store()
     t0 = datetime(2024, 6, 1, 10, 0, tzinfo=UTC)
@@ -177,7 +181,7 @@ async def test_two_fire_schedule_appends_two_events_same_conversation():
     assert len(ev1) == 1, f"expected 1 event after first fire, got {len(ev1)}"
     assert ev1[0].schedule_id == sched.schedule_id
     assert not ev1[0].coalesced, "first scheduled run should not be coalesced"
-    rt.kick.assert_called_with(cid)
+    rt.run_controller.kick.assert_called_with(cid)
 
     # --- fire 2: advance past second fire ---
     clock[0] = t0 + timedelta(minutes=4, seconds=30)
@@ -190,9 +194,9 @@ async def test_two_fire_schedule_appends_two_events_same_conversation():
     convo_ids = {ev.schedule_id for ev in ev2}
     assert convo_ids == {sched.schedule_id}, "all run events must reference the same schedule"
 
-    # runtime.kick was called once per fire, each time with the conversation id.
-    assert rt.kick.call_count == 2
-    for call in rt.kick.call_args_list:
+    # runtime.run_controller.kick was called once per fire, each time with the conversation id.
+    assert rt.run_controller.kick.call_count == 2
+    for call in rt.run_controller.kick.call_args_list:
         assert call.args[0] == cid
 
     # Audit log matches
@@ -398,7 +402,7 @@ async def test_scheduled_fire_re_runs_query_and_opens_engine_work_gate():
     rt.set_model_override.assert_called_with(cid, "anthropic:claude-opus-4-8")
     rt.set_depth.assert_called_with(cid, "deep")
     # (c) the loop was kicked.
-    rt.kick.assert_called_with(cid)
+    rt.run_controller.kick.assert_called_with(cid)
 
 
 @pytest.mark.asyncio
@@ -447,7 +451,7 @@ async def test_fire_now_runs_schedule_immediately_and_returns_true():
     runs = await _run_events(store, cid)
     assert len(runs) == 1
     assert runs[0].coalesced is False  # a manual fire is always intentional
-    rt.kick.assert_called_once_with(cid)
+    rt.run_controller.kick.assert_called_once_with(cid)
 
     # unknown schedule id -> False (the route turns this into a 404)
     assert await mgr.fire_now("does-not-exist", owner_id="local") is False
@@ -460,7 +464,8 @@ async def test_fire_now_runs_schedule_immediately_and_returns_true():
 async def test_scheduled_rerun_routes_through_pinned_send_path():
     """Finding #1: a scheduled fire must trigger the rerun via runtime.send_user_turn —
     the SAME pinned kernel start/send path conversations.py/ws.py use — so the run is
-    PINNED before the first append/kick. A raw store-append + runtime.kick would create
+    PINNED before the first append/kick. A raw store-append plus
+    runtime.run_controller.kick would create
     an UNPINNED run whose later control op could re-resolve to a different kernel. Here
     send_user_turn is a pure spy: it must be awaited with the original query, and the
     schedule must NOT bypass it with a direct kick."""
@@ -471,7 +476,7 @@ async def test_scheduled_rerun_routes_through_pinned_send_path():
     await _seed_query(store, cid, text="What's new in AI?")
 
     rt = MagicMock()
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     rt.set_model_override = MagicMock()
     rt.set_depth = MagicMock()
     rt.send_user_turn = AsyncMock()  # pure spy — does NOT append/kick
@@ -490,7 +495,7 @@ async def test_scheduled_rerun_routes_through_pinned_send_path():
     # The rerun trigger went through the pinned send path with the original query.
     rt.send_user_turn.assert_awaited_once_with(cid, "What's new in AI?")
     # And NOT via a raw kick that would bypass _ensure_kernel_pinned.
-    rt.kick.assert_not_called()
+    rt.run_controller.kick.assert_not_called()
     # The audit marker + row are still emitted exactly once.
     assert len(await _run_events(store, cid)) == 1
     assert len(store.list_schedule_runs(sched.schedule_id)) == 1
@@ -508,7 +513,7 @@ async def test_failing_send_leaves_no_orphan_schedule_run_row():
     await _seed_query(store, cid, text="What's new in AI?")
 
     rt = MagicMock()
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     rt.set_model_override = MagicMock()
     rt.set_depth = MagicMock()
     rt.send_user_turn = AsyncMock(side_effect=RuntimeError("append failed"))

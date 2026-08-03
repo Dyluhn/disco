@@ -200,7 +200,10 @@ async def test_finished_runtime_accepts_the_exact_still_live_generation() -> Non
             ),
         }
     )
-    runtime = PreviewRuntimeProjection(
+    # NOT a ConversationRuntime: `PreviewRuntimeProjection` is a peer service that
+    # owns methods of the same names (inventory §10.4). Named `projection` so the
+    # next receiver-name-driven rewrite cannot mistake it for the runtime.
+    projection = PreviewRuntimeProjection(
         SimpleNamespace(live_session=lambda _cid: SimpleNamespace(_preview_manager=manager)),
         SimpleNamespace(),
         SimpleNamespace(),
@@ -210,7 +213,9 @@ async def test_finished_runtime_accepts_the_exact_still_live_generation() -> Non
     try:
         assert await manager.resolve_sealed_contract(contract) is None
         assert (
-            await runtime.resolve_finished_preview_runtime(contract.conversation_id, contract)
+            await projection.resolve_finished_preview_runtime(
+                contract.conversation_id, contract
+            )
             == current
         )
     finally:

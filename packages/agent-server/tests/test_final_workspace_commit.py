@@ -765,7 +765,7 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
         await rt.finalize_host_mirror_change_locked(cid, "host-write")
 
     await _seed_running(event_store, cid)
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     async with rt._workspace.lock(cid):
         await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
         # record_workspace_mutation_locked on a RUNNING head publishes a run
@@ -958,8 +958,8 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
     await _seed_running(event_store, cid)
     rt_a._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
     await _finish(rt_a, cid)
-    rt_a.kick = MagicMock()
-    rt_b.kick = MagicMock()
+    rt_a.run_controller.kick = MagicMock()
+    rt_b.run_controller.kick = MagicMock()
 
     await rt_a._disco_kernel.send_user_turn(cid, "change the headline")
 
@@ -999,7 +999,7 @@ async def test_cancelled_process_fence_wait_leaves_no_partial_user_ingress(
     cid = "conv-cancelled-process-fence-wait"
     rt, projects = _runtime(event_store, tmp_path)
     rt.set_surface(cid, "build")
-    rt.kick = MagicMock()
+    rt.run_controller.kick = MagicMock()
     monkeypatch.setenv("DISCO_DEPLOY_LOCK_DIR", str(tmp_path / "process-locks"))
     lock_path = workspace_process_lock_path(projects.path_for(cid))
     holder = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -1012,7 +1012,7 @@ async def test_cancelled_process_fence_wait_leaves_no_partial_user_ingress(
         with pytest.raises(asyncio.CancelledError, match="owner disconnected"):
             await sending
         assert await event_store.get_events(cid) == []
-        rt.kick.assert_not_called()
+        rt.run_controller.kick.assert_not_called()
     finally:
         fcntl.flock(holder, fcntl.LOCK_UN)
         os.close(holder)

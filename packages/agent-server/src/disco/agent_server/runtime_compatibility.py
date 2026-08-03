@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -229,78 +229,9 @@ async def require_committed_host_mirror_locked(
     return await self._workspace.require_committed_host_mirror_locked(conversation_id)
 
 
-def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None:
-
-    self._dr.add_upload_passages(conversation_id, passages)
-
-
-def get_upload_passages(self, conversation_id: str) -> list[Any]:
-
-    return self._dr.get_upload_passages(conversation_id)
-
-
-def set_depth(self, conversation_id: str, tier: str | None) -> None:
-
-    self._dr.set_depth(conversation_id, tier)
-
-
-def set_iterative(self, conversation_id: str, enabled: bool) -> None:
-
-    self._dr.set_iterative(conversation_id, enabled)
-
-
-def set_recency(self, conversation_id: str, window: str | None) -> None:
-
-    self._dr.set_recency(conversation_id, window)
-
-
-def research_stream(
-    self,
-    query: str,
-    *,
-    model_override: str | None = None,
-    drop_weak: bool = False,
-    domains_deny: frozenset[str] = frozenset(),
-    think: bool = False,
-    conversation_id: str | None = None,
-    space_ids: frozenset[str] = frozenset(),
-    owner_id: str | None = None,
-    include_unclaimed_legacy: bool = False,
-    sources: list[str] | tuple[str, ...] | None = None,
-) -> AsyncIterator[dict[str, Any]]:
-
-    return self._dr.research_stream(
-        query,
-        model_override=model_override,
-        drop_weak=drop_weak,
-        domains_deny=domains_deny,
-        think=think,
-        conversation_id=conversation_id,
-        space_ids=space_ids,
-        owner_id=owner_id,
-        include_unclaimed_legacy=include_unclaimed_legacy,
-        sources=sources,
-    )
-
-
-def kick(self, conversation_id: str, *, claimed_user_seq: int | None = None) -> None:
-
-    self._run_controller.kick(conversation_id, claimed_user_seq=claimed_user_seq)
-
-
 async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
 
     return await self._lifecycle.reconcile_orphaned_runs(owner_id=owner_id)
-
-
-async def reload_mcp_pool(self) -> dict[str, Any]:
-
-    return await self._mcp.reload()
-
-
-def mcp_approval_state(self) -> dict[str, dict]:
-
-    return self._mcp.mcp_approval_state()
 
 
 def sandbox_state(self, conversation_id: str) -> str | None:
@@ -333,71 +264,9 @@ async def restore_workspace_version(self, conversation_id: str, seq: int) -> dic
     return await self._workspace.restore_version(conversation_id, seq)
 
 
-async def export_report(
-    self,
-    conversation_id: str,
-    fmt: str,
-    *,
-    owner_id: str = DEFAULT_OWNER_ID,
-) -> tuple[bytes, str, str] | None:
-
-    return await self._dr.export_report(conversation_id, fmt, owner_id=owner_id)
-
-
-def preview_upstream(self, conversation_id: str) -> str | None:
-
-    port = self._preview.preview_target_port(conversation_id)
-    return self._preview.port_upstream(conversation_id, port) if port is not None else None
-
-
-def preview_target_port(self, conversation_id: str) -> int | None:
-
-    return self._preview.preview_target_port(conversation_id)
-
-
-async def resolve_active_preview_projection(
-    self,
-    conversation_id: str,
-    projection: Any,
-) -> bool:
-
-    return await self._preview.resolve_active_preview_projection(conversation_id, projection)
-
-
-async def resolve_finished_preview_runtime(
-    self,
-    conversation_id: str,
-    contract: Any,
-) -> dict[str, Any] | None:
-
-    return await self._preview.resolve_finished_preview_runtime(conversation_id, contract)
-
-
-def port_upstream(self, conversation_id: str, port: int) -> str | None:
-
-    return self._preview.port_upstream(conversation_id, port)
-
-
-async def wake_for_preview(
-    self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID
-) -> str | None:
-
-    return await self._preview.wake_for_preview(cid8, port, owner_id=owner_id)
-
-
 def sandbox_backend_name(self) -> str | None:
 
     return self._sandbox.backend_name()
-
-
-async def preview(self, conversation_id: str) -> dict[str, Any]:
-
-    return await self._preview.preview(conversation_id)
-
-
-async def ensure_preview(self, conversation_id: str) -> bool:
-
-    return await self._preview.ensure_preview(conversation_id)
 
 
 async def forget_conversation(self, conversation_id: str) -> None:
@@ -476,25 +345,7 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.require_committed_host_mirror_locked = require_committed_host_mirror_locked
 
-    runtime_cls.add_upload_passages = add_upload_passages
-
-    runtime_cls.get_upload_passages = get_upload_passages
-
-    runtime_cls.set_depth = set_depth
-
-    runtime_cls.set_iterative = set_iterative
-
-    runtime_cls.set_recency = set_recency
-
-    runtime_cls.research_stream = research_stream
-
-    runtime_cls.kick = kick
-
     runtime_cls.reconcile_orphaned_runs = reconcile_orphaned_runs
-
-    runtime_cls.reload_mcp_pool = reload_mcp_pool
-
-    runtime_cls.mcp_approval_state = mcp_approval_state
 
     runtime_cls.sandbox_state = sandbox_state
 
@@ -508,25 +359,7 @@ def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> Non
 
     runtime_cls.restore_workspace_version = restore_workspace_version
 
-    runtime_cls.export_report = export_report
-
-    runtime_cls.preview_upstream = preview_upstream
-
-    runtime_cls.preview_target_port = preview_target_port
-
-    runtime_cls.resolve_active_preview_projection = resolve_active_preview_projection
-
-    runtime_cls.resolve_finished_preview_runtime = resolve_finished_preview_runtime
-
-    runtime_cls.port_upstream = port_upstream
-
-    runtime_cls.wake_for_preview = wake_for_preview
-
     runtime_cls.sandbox_backend_name = sandbox_backend_name
-
-    runtime_cls.preview = preview
-
-    runtime_cls.ensure_preview = ensure_preview
 
     runtime_cls.forget_conversation = forget_conversation
 
