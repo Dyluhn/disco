@@ -400,14 +400,19 @@ def test_route_revalidates_committed_head_at_first_mutation(tmp_path: Path, monk
             super().__init__(ps)
             self._require_calls = 0
 
-        async def require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
+        # 13-B4: the delegate moved onto the `workspace` collaborator, so this
+        # override follows it to the private the parent's `workspace` property
+        # points at. It deliberately does NOT redeclare `workspace` — a property
+        # on the subclass would SHADOW the parent's and narrow the collaborator
+        # from four methods to one.
+        async def _require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
             self._require_calls += 1
             if self._require_calls == 3:
                 (self._ps.path_for(conversation_id) / "late-drift.txt").write_text(
                     "not part of the committed deploy head",
                     encoding="utf-8",
                 )
-            return await super().require_committed_host_mirror_locked(conversation_id)
+            return await super()._require_committed_host_mirror_locked(conversation_id)
 
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))

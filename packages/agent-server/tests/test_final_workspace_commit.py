@@ -591,15 +591,15 @@ async def test_host_mirror_finalizer_never_folds_sandbox_manifest(
     monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
     fold = AsyncMock()
     monkeypatch.setattr(rt._artifact_manifest_shadow, "fold", fold)
-    async with rt._workspace.lock(cid):
-        async with rt._workspace.interprocess_mutation_fence(cid):
-            await rt.record_workspace_mutation_locked(
+    async with rt.workspace.lock(cid):
+        async with rt.workspace.interprocess_mutation_fence(cid):
+            await rt.workspace.record_mutation_locked(
                 cid,
                 "host-write",
                 paths=("index.html",),
             )
             (projects.path_for(cid) / "index.html").write_bytes(b"host edit")
-        await rt.finalize_host_mirror_change_locked(cid, "host-write")
+        await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
 
     fold.assert_not_awaited()
     assert not any(
@@ -653,11 +653,11 @@ async def test_forget_and_recreate_preserve_workspace_lock_identity(
 ) -> None:
     cid = "conv-workspace-lock-aba"
     rt, _projects = _runtime(event_store, tmp_path)
-    original = rt._workspace.lock(cid)
+    original = rt.workspace.lock(cid)
 
-    await rt.forget_conversation(cid)
+    await rt.workspace.forget(cid)
 
-    assert rt._workspace.lock(cid) is original
+    assert rt.workspace.lock(cid) is original
 
 
 async def test_inactive_finished_host_edit_gets_a_fresh_committed_revision(
@@ -671,9 +671,9 @@ async def test_inactive_finished_host_edit_gets_a_fresh_committed_revision(
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
     await _finish(rt, cid)
 
-    async with rt.workspace_mutation(cid, "deck.patch", paths=("index.html",)):
+    async with rt.workspace.mutation(cid, "deck.patch", paths=("index.html",)):
         sandbox.files["index.html"] = b"after"
-    committed = await rt.finalize_host_workspace_change(cid, "deck.patch")
+    committed = await rt.workspace.finalize_sandbox_change(cid, "deck.patch")
 
     events = await event_store.get_events(cid)
     seals = _sealed_versions(events)
@@ -698,8 +698,8 @@ async def test_locked_host_mirror_finalizer_seals_mirror_not_stale_sandbox(
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=sandbox))
     await _finish(rt, cid)
 
-    async with rt._workspace.lock(cid):
-        await rt.record_workspace_mutation_locked(
+    async with rt.workspace.lock(cid):
+        await rt.workspace.record_mutation_locked(
             cid,
             "cloudflare.deploy-record",
             paths=(".disco/cloudflare/deployments/abc.json",),
@@ -710,7 +710,7 @@ async def test_locked_host_mirror_finalizer_seals_mirror_not_stale_sandbox(
         # A sandbox recapture would publish this value and erase the host-only
         # record. The dedicated finalizer must consume the mirror directly.
         sandbox.files["index.html"] = b"stale-sandbox-copy"
-        committed = await rt.finalize_host_mirror_change_locked(
+        committed = await rt.workspace.finalize_host_mirror_change_locked(
             cid,
             "cloudflare.deploy-record",
         )
@@ -744,12 +744,12 @@ async def test_committed_host_mirror_guard_rejects_unsealed_drift(
     rt, projects = await _running_runtime(event_store, tmp_path, cid, {"index.html": b"sealed"})
     await _finish(rt, cid)
 
-    async with rt._workspace.lock(cid):
-        committed = await rt.require_committed_host_mirror_locked(cid)
+    async with rt.workspace.lock(cid):
+        committed = await rt.workspace.require_committed_host_mirror_locked(cid)
         assert committed.record.tree_digest == projects.inspect_workspace(cid).tree_digest
         (projects.path_for(cid) / "index.html").write_bytes(b"drifted")
         with pytest.raises(WorkspaceCommitUnavailable, match="drifted"):
-            await rt.require_committed_host_mirror_locked(cid)
+            await rt.workspace.require_committed_host_mirror_locked(cid)
 
 
 async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
@@ -762,32 +762,32 @@ async def test_host_mirror_finalizer_requires_lock_and_inactive_finished_head(
     (projects.path_for(cid) / "index.html").write_bytes(b"host")
 
     with pytest.raises(RuntimeError, match="requires the conversation lock"):
-        await rt.finalize_host_mirror_change_locked(cid, "host-write")
+        await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
 
     await _seed_running(event_store, cid)
     rt.run_controller.kick = MagicMock()
-    async with rt._workspace.lock(cid):
-        await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
+    async with rt.workspace.lock(cid):
+        await rt.workspace.record_mutation_locked(cid, "host-write", paths=("index.html",))
         # record_workspace_mutation_locked on a RUNNING head publishes a run
         # claim; clear it so the finalizer's inactive-FINISHED-head guard is the
         # one that fires (not the run-claim guard).
-        rt._workspace.clear_run_claim(cid)
+        rt.workspace.clear_run_claim(cid)
         with pytest.raises(RuntimeError, match="inactive FINISHED head"):
-            await rt.finalize_host_mirror_change_locked(cid, "host-write")
+            await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
 
     await event_store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
     release_active = asyncio.Event()
     active = asyncio.create_task(release_active.wait())
     rt._run_registry._tasks[cid] = active
-    rt._workspace._fences._admitted_runs.add(cid)
+    rt.workspace._fences._admitted_runs.add(cid)
     try:
-        async with rt._workspace.lock(cid):
-            await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
+        async with rt.workspace.lock(cid):
+            await rt.workspace.record_mutation_locked(cid, "host-write", paths=("index.html",))
             (projects.path_for(cid) / "index.html").write_bytes(b"host-edit")
             with pytest.raises(RuntimeError, match="agent run is active"):
-                await rt.finalize_host_mirror_change_locked(cid, "host-write")
+                await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
     finally:
-        rt._workspace._fences._admitted_runs.discard(cid)
+        rt.workspace._fences._admitted_runs.discard(cid)
         release_active.set()
         await active
         rt._run_registry._tasks.pop(cid, None)
@@ -851,15 +851,15 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
     release_run = asyncio.Event()
 
     monkeypatch.setattr(rt._run_execution, "run", _blocked_run(run_started, release_run))
-    lock = rt._workspace.lock(cid)
+    lock = rt.workspace.lock(cid)
     async with lock:
         task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
         await asyncio.sleep(0)
         assert rt._run_registry._tasks[cid] is task
-        assert not rt._workspace.has_admitted_run(cid)
+        assert not rt.workspace.has_admitted_run(cid)
         assert not run_started.is_set()
 
-        await rt.record_workspace_mutation_locked(
+        await rt.workspace.record_mutation_locked(
             cid,
             "cloudflare.deploy-record",
             paths=(".disco/cloudflare/deployments/queued.json",),
@@ -867,20 +867,20 @@ async def test_registered_run_waiting_on_fence_cannot_race_host_reseal(
         record = projects.path_for(cid) / ".disco/cloudflare/deployments/queued.json"
         record.parent.mkdir(parents=True)
         record.write_bytes(b'{"status":"succeeded"}')
-        committed = await rt.finalize_host_mirror_change_locked(
+        committed = await rt.workspace.finalize_host_mirror_change_locked(
             cid,
             "cloudflare.deploy-record",
         )
 
     await asyncio.wait_for(run_started.wait(), timeout=1)
-    assert rt._workspace.has_admitted_run(cid)
+    assert rt.workspace.has_admitted_run(cid)
     with projects.open_verified_version(cid, committed.seq) as verified:
         assert verified.read_bytes(".disco/cloudflare/deployments/queued.json") == (
             b'{"status":"succeeded"}'
         )
     release_run.set()
     assert await task == "done"
-    assert not rt._workspace.has_admitted_run(cid)
+    assert not rt.workspace.has_admitted_run(cid)
     rt._run_registry._tasks.pop(cid, None)
 
 
@@ -901,14 +901,14 @@ async def test_ingress_first_pending_run_blocks_already_queued_deploy(
     release_run = asyncio.Event()
 
     monkeypatch.setattr(rt._run_execution, "run", _blocked_run(run_started, release_run))
-    lock = rt._workspace.lock(cid)
+    lock = rt.workspace.lock(cid)
     await lock.acquire()
 
     deploy = asyncio.create_task(_queued_committed_view(lock, rt, cid))
     await asyncio.sleep(0)  # place deploy first in the lock's waiter queue
     run, _generation = rt._run_supervisor.create_task(cid, _make_loop())
-    rt._workspace.claim_registered_run_locked(cid)
-    assert rt._workspace.has_run_claim(cid)
+    rt.workspace.claim_registered_run_locked(cid)
+    assert rt.workspace.has_run_claim(cid)
     lock.release()
 
     with pytest.raises(WorkspaceCommitUnavailable, match="agent run is active"):
@@ -926,22 +926,22 @@ async def test_forget_clears_claim_when_queued_run_is_cancelled_before_entry(
     cid = "conv-cancel-before-run-entry"
     rt, _projects = _runtime(event_store, tmp_path)
     rt.set_surface(cid, "build")
-    lock = rt._workspace.lock(cid)
+    lock = rt.workspace.lock(cid)
     await lock.acquire()
-    same_lock = rt._workspace.lock(cid)
+    same_lock = rt.workspace.lock(cid)
     task, _generation = rt._run_supervisor.create_task(cid, _make_loop())
-    rt._workspace.claim_registered_run_locked(cid)
-    assert rt._workspace.has_run_claim(cid)
+    rt.workspace.claim_registered_run_locked(cid)
+    assert rt.workspace.has_run_claim(cid)
 
-    forgetting = asyncio.create_task(rt._workspace.forget(cid))
+    forgetting = asyncio.create_task(rt.workspace.forget(cid))
     await asyncio.sleep(0)
     assert not forgetting.done()
     lock.release()
     await forgetting
 
     assert task.cancelled()
-    assert not rt._workspace.has_run_claim(cid)
-    assert rt._workspace.lock(cid) is same_lock
+    assert not rt.workspace.has_run_claim(cid)
+    assert rt.workspace.lock(cid) is same_lock
 
 
 async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
@@ -953,7 +953,7 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
     rt_b, _unused = _runtime(event_store, tmp_path / "other-runtime")
     rt_a.set_surface(cid, "build")
     rt_b.set_surface(cid, "build")
-    rt_b._projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt_b.projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     rt_b._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     await _seed_running(event_store, cid)
     rt_a._run_resources.set_executor(cid, MagicMock(_sandbox=_Workspace({"index.html": b"sealed"})))
@@ -969,21 +969,21 @@ async def test_durable_run_intent_blocks_a_second_runtime_from_old_seal(
         and event.operation == "agent.run-intent.user-turn"
         for event in events
     )
-    async with rt_b._workspace.lock(cid):
+    async with rt_b.workspace.lock(cid):
         with pytest.raises(WorkspaceCommitUnavailable):
-            await rt_b.require_committed_host_mirror_locked(cid)
+            await rt_b.workspace.require_committed_host_mirror_locked(cid)
         # Record a mutation first to establish authority, then confirm the
         # pending run intent blocks finalization.
-        await rt_b.record_workspace_mutation_locked(
+        await rt_b.workspace.record_mutation_locked(
             cid, "stale-host-finalizer", paths=("index.html",)
         )
         # The run-intent event reopens the workspace to RUNNING, so
         # record_workspace_mutation_locked publishes a run claim.  Clear it
         # so the inactive-FINISHED-head guard is the one that fires (not the
         # run-claim guard).
-        rt_b._workspace.clear_run_claim(cid)
+        rt_b.workspace.clear_run_claim(cid)
         with pytest.raises(RuntimeError, match="inactive FINISHED head"):
-            await rt_b.finalize_host_mirror_change_locked(cid, "stale-host-finalizer")
+            await rt_b.workspace.finalize_host_mirror_change_locked(cid, "stale-host-finalizer")
 
     seals = await _final_seals(event_store, cid)
     assert len(seals) == 1
@@ -1039,10 +1039,10 @@ async def test_locked_restore_helper_rejects_missing_local_or_process_fence(
     rt, _projects = _runtime(event_store, tmp_path)
 
     with pytest.raises(RuntimeError, match="conversation lock"):
-        await rt._workspace.restore_version_locked(cid, 1)
-    async with rt._workspace.lock(cid):
+        await rt.workspace.restore_version_locked(cid, 1)
+    async with rt.workspace.lock(cid):
         with pytest.raises(RuntimeError, match="process fence"):
-            await rt._workspace.restore_version_locked(cid, 1)
+            await rt.workspace.restore_version_locked(cid, 1)
 
 
 async def test_resolver_rejects_structurally_valid_seal_that_launders_run_intent(
@@ -1156,11 +1156,11 @@ async def test_host_mirror_finalizer_fails_closed_if_mirror_changes_during_cut(
             after=False,
         ),
     )
-    async with rt._workspace.lock(cid):
-        await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
+    async with rt.workspace.lock(cid):
+        await rt.workspace.record_mutation_locked(cid, "host-write", paths=("index.html",))
         (projects.path_for(cid) / "index.html").write_bytes(b"intended")
         with pytest.raises(WorkspaceCommitUnavailable):
-            await rt.finalize_host_mirror_change_locked(cid, "host-write")
+            await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
 
     seals = await _final_seals(event_store, cid)
     assert len(seals) == 1
@@ -1194,12 +1194,12 @@ async def test_host_mirror_finalizer_rejects_drift_after_version_cut_returns(
             after=True,
         ),
     )
-    async with rt._workspace.lock(cid):
-        async with rt._workspace.interprocess_mutation_fence(cid):
-            await rt.record_workspace_mutation_locked(cid, "host-write", paths=("index.html",))
+    async with rt.workspace.lock(cid):
+        async with rt.workspace.interprocess_mutation_fence(cid):
+            await rt.workspace.record_mutation_locked(cid, "host-write", paths=("index.html",))
             (projects.path_for(cid) / "index.html").write_bytes(b"intended-host-bytes")
             with pytest.raises(WorkspaceCommitUnavailable):
-                await rt.finalize_host_mirror_change_locked(cid, "host-write")
+                await rt.workspace.finalize_host_mirror_change_locked(cid, "host-write")
 
     after = await event_store.get_events(cid)
     assert (
@@ -1215,9 +1215,9 @@ async def test_host_mirror_finalizer_rejects_drift_after_version_cut_returns(
         )
         == before_checkpoints
     )
-    async with rt._workspace.lock(cid):
+    async with rt.workspace.lock(cid):
         with pytest.raises(WorkspaceCommitUnavailable):
-            await rt.require_committed_host_mirror_locked(cid)
+            await rt.workspace.require_committed_host_mirror_locked(cid)
 
 
 async def test_dry_deploy_plan_revalidates_durable_head_after_synchronous_planning(

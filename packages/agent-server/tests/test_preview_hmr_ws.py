@@ -1,5 +1,7 @@
+
 import asyncio
 import urllib.parse
+from types import SimpleNamespace
 
 import pytest
 from disco.agent_server.routes import preview as preview_routes
@@ -31,9 +33,13 @@ class _FakeRuntime:
         self.project_store_called = False
         self.preview = _FakePreviewService(self)
 
-    def project_store(self):
+    def _current_project_store(self):
         self.project_store_called = True
         return None
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 class _FakeUpstreamWebSocket:

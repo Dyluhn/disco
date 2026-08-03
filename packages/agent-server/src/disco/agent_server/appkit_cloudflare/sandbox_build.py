@@ -421,7 +421,7 @@ class SandboxBuildBackend:
         so a settings flip between this gate and the build cannot run on the host."""
         try:
             return _is_deploy_grade(
-                self._runtime.sandbox_backend_name(), allow_local=self._allow_local
+                self._runtime.sandbox.backend_name(), allow_local=self._allow_local
             )
         except Exception:  # noqa: BLE001 — any lookup failure → not isolating → refuse
             return False

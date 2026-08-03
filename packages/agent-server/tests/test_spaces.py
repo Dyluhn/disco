@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from disco.agent_server.auth import AgentAuthMiddleware
 from disco.agent_server.routes.conversations import make_conversation_library_router
@@ -19,11 +20,15 @@ class _FakeRuntime:
         self._vector_store = DiskVectorStore(JsonSpaceStore(root).vectors_dir)
         self.spaces = self
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._project_store
 
     def space_vector_store(self) -> DiskVectorStore:
         return self._vector_store
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, SqliteEventStore]:

@@ -8,6 +8,7 @@ fallback to ``workspace/index.html`` is immediately visible.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -40,8 +41,12 @@ class _RestartedRuntime:
     def live_session(self, conversation_id: str) -> None:
         return None
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._project_store
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 def _replace_workspace(ps: ProjectStore, cid: str, files: dict[str, bytes]) -> None:

@@ -435,7 +435,7 @@ class TestConversationRuntimeDriverContextSeams:
         monkeypatch.setattr(rt, "_loop_for", legacy_compose)
         monkeypatch.setattr(rt._run_supervisor, "create_task", create_run_task)
         monkeypatch.setattr(rt.sandbox_resources, "evict_stale", evict_stale_backend)
-        monkeypatch.setattr(rt._workspace, "run_after_admission", admit)
+        monkeypatch.setattr(rt.workspace, "run_after_admission", admit)
 
         rt.run_controller.kick(cid, claimed_user_seq=user_seq)
         task = rt._run_registry.task(cid)

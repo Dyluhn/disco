@@ -118,7 +118,7 @@ def _deck_pdf_capable(runtime: ConversationRuntime) -> bool:
     actually installed in the deployed image (a stale image predating the
     libreoffice-impress layer passes this but cannot convert). The real availability
     check is `_deck_pdf_available`, which probes ``command -v soffice`` in the box."""
-    name = runtime.sandbox_backend_name()
+    name = runtime.sandbox.backend_name()
     return name in _PDF_CAPABLE_BACKENDS
 
 
@@ -145,7 +145,7 @@ async def _probe_soffice_in_sandbox(runtime: ConversationRuntime, *, owner_id: s
     cid = f"probe-soffice-{_uuid.uuid4().hex[:12]}"
     try:
         instance = await svc.create(
-            runtime._sandbox.base_spec(),
+            runtime.sandbox.base_spec(),
             owner_id=owner_id,
             conversation_id=cid,
         )
@@ -195,7 +195,7 @@ async def _render_deck_pdf_in_sandbox(
     svc = runtime._sandbox_service_now()
     cid = f"export-deck-pdf-{_uuid.uuid4().hex[:12]}"
     instance = await svc.create(
-        runtime._sandbox.base_spec(),
+        runtime.sandbox.base_spec(),
         owner_id=owner_id,
         conversation_id=cid,
     )
@@ -405,7 +405,7 @@ async def _export_deck_with_template_response(
                     "Deck PDF export needs a container sandbox backend "
                     "(gVisor / local / podman) — LibreOffice ships in the sandbox "
                     "image, not on the host. The active backend is "
-                    f"{live_runtime.sandbox_backend_name() or 'none'}."
+                    f"{live_runtime.sandbox.backend_name() or 'none'}."
                 ),
             },
         )
@@ -474,7 +474,7 @@ async def _write_deck_targets_with_rollback(
 
     Split out of ``_patch_deck_response`` so the write+rollback mechanics read
     as one named unit; the caller still wraps this in
-    ``live_runtime.workspace_mutation`` for the mutation-boundary bookkeeping."""
+    ``live_runtime.workspace.mutation`` for the mutation-boundary bookkeeping."""
     prior: dict[str, bytes | None] = {
         rel: await _read_artifact_bytes(live_runtime, conversation_id, rel) for rel, _ in targets
     }
@@ -559,7 +559,7 @@ async def _patch_deck_response(
         (html_rel, html_str.encode()),
         (pptx_rel, pptx_bytes),
     ]
-    async with live_runtime.workspace_mutation(
+    async with live_runtime.workspace.mutation(
         conversation_id,
         "deck.patch",
         paths=tuple(sorted(rel for rel, _ in targets)),
@@ -568,7 +568,7 @@ async def _patch_deck_response(
 
     if was_finished:
         try:
-            await live_runtime.finalize_host_workspace_change(
+            await live_runtime.workspace.finalize_sandbox_change(
                 conversation_id,
                 "deck.patch",
             )

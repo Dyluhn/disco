@@ -8,6 +8,7 @@ route's OWN jail rejected the path before any read.
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from disco.agent_server import create_app
@@ -59,8 +60,12 @@ class _LiveRuntime:
     def get_last_selected_model(self) -> str | None:
         return None
 
-    def sandbox_backend_name(self) -> str | None:
+    def _backend_name(self) -> str | None:
         return "process"
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 class _SnapshotRuntime:
@@ -76,11 +81,19 @@ class _SnapshotRuntime:
     def get_last_selected_model(self) -> str | None:
         return None
 
-    def sandbox_backend_name(self) -> str | None:
+    def _backend_name(self) -> str | None:
         return "process"
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._ps
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 def _declare_sheet(store: SqliteEventStore, cid: str, filename: str) -> None:

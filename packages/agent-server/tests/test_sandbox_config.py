@@ -549,7 +549,7 @@ async def test_non_build_legacy_preview_can_rematerialize_after_teardown():
         def get(self, cid):
             return _Record() if cid == "fin" else None
 
-    rt._projects.current_project_store = lambda: _Store()
+    rt.projects.current_project_store = lambda: _Store()
 
     def _fake_loop_for(cid):
         calls.append("loop_for")
@@ -710,7 +710,7 @@ def test_surface_egress_defaults_and_unknown_values_fail_closed(monkeypatch):
     from disco.tools import REGISTRY_EGRESS_ALLOW, Capability, SandboxSpec
 
     rt = ConversationRuntime(SqliteEventStore(":memory:"))
-    rt._sandbox._sandbox_spec = SandboxSpec(
+    rt.sandbox._sandbox_spec = SandboxSpec(
         permitted=frozenset({Capability.NETWORK}),
         egress_allow=frozenset({"stale.example"}),
     )

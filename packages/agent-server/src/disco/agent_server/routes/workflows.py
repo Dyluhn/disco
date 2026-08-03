@@ -378,7 +378,7 @@ def _workflow_store(
     owner_id: str | None = None,
     include_unclaimed_legacy: bool = False,
 ) -> JsonDirWorkflowStore:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
@@ -663,7 +663,7 @@ def _delete_ephemeral_workflow_schedule(
     runtime: ConversationRuntime,
     schedule_id: str,
 ) -> None:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     root = project_store.root
     if root is None:
         return

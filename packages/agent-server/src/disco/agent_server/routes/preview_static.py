@@ -239,7 +239,7 @@ def _serve_static_from_snapshot(
     if is_runtime_secret_path(rel_path):
         return None
     try:
-        project_store = runtime.project_store()
+        project_store = runtime.projects.current_project_store()
         if project_store is None or project_store.status() != StorageStatus.OK:
             return None
         if version is not None:
@@ -351,7 +351,7 @@ async def _committed_static_capability_available(
     except Exception:  # noqa: BLE001 — missing evidence cannot authorize fallback
         return False
     if version is None:
-        project_store = runtime.project_store()
+        project_store = runtime.projects.current_project_store()
         if project_store is None or project_store.status() != StorageStatus.OK:
             return False
         try:
@@ -495,7 +495,7 @@ async def _finished_preview_response(
     events: list[Event],
     preview_cap: PreviewCapability | None,
 ) -> Response:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         return Response(
             "finished workspace is not sealed",

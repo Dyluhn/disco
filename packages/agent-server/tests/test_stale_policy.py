@@ -742,7 +742,7 @@ async def test_resume_after_swap_composes_new_model(tmp_path, monkeypatch):
         return await rt._store.get_state(conversation_id)
 
     monkeypatch.setattr(
-        rt._workspace,
+        rt.workspace,
         "run_after_admission",
         _noop_run_after_admission,
     )

@@ -183,7 +183,7 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
     runtime.mcp._http_clients["egress_srv"] = McpHttpClient(server=config, call_timeout_s=5.0)
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=runtime.mcp._mcp_egress_hosts())
+    spec = runtime.sandbox._build_sandbox_spec(mcp_egress_hosts=runtime.mcp._mcp_egress_hosts())
 
     allow = set(spec.egress_allow)
     # Registry hosts survive (a REPLACEMENT would have dropped these).
@@ -196,6 +196,6 @@ def test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow(monkeypatch):
 
     # CONTROL: with no MCP hosts, the spec is exactly the registry base — proves
     # the additions above came from the MCP union, not from the spec by default.
-    spec_bare = runtime._sandbox._build_sandbox_spec(mcp_egress_hosts=frozenset())
+    spec_bare = runtime.sandbox._build_sandbox_spec(mcp_egress_hosts=frozenset())
     assert set(spec_bare.egress_allow) == set(REGISTRY_EGRESS_ALLOW)
     store.close()

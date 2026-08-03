@@ -421,7 +421,7 @@ def test_secret_absent_from_build_sandbox_spec(monkeypatch):
     runtime.mcp._http_clients["sec_srv"] = client
 
     monkeypatch.setenv("PMX_BUILD_EGRESS", "filtered")
-    spec = runtime._sandbox._build_sandbox_spec(
+    spec = runtime.sandbox._build_sandbox_spec(
         mcp_egress_hosts=runtime.mcp._mcp_egress_hosts()
     )
 

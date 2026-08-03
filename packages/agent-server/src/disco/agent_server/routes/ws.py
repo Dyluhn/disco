@@ -348,7 +348,7 @@ async def _send_conversation_state_frame(
     # BP-15: mirror the HTTP /state sandbox_backend overlay.
     state_dict = state.model_dump(mode="json")
     if runtime is not None:
-        sbackend = runtime.sandbox_backend_name()
+        sbackend = runtime.sandbox.backend_name()
         if sbackend is not None:
             state_dict["sandbox_backend"] = sbackend
     await _send_json_redacted(websocket, {"type": "state", "state": state_dict})

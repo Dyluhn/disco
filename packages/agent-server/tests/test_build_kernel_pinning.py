@@ -54,9 +54,9 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
             [*events, WorkspaceMutationEvent(operation=f"agent.run-intent.{source}")],
         )
 
-    runtime._workspace.interprocess_mutation_fence = process_fence
-    runtime._workspace.append_run_ingress_locked = append_run_ingress
-    runtime._workspace.claim_registered_run_locked = MagicMock()
+    runtime.workspace.interprocess_mutation_fence = process_fence
+    runtime.workspace.append_run_ingress_locked = append_run_ingress
+    runtime.workspace.claim_registered_run_locked = MagicMock()
     runtime.run_controller.kick = MagicMock()
     runtime._control.confirm = AsyncMock()
     runtime._control.approve_plan = AsyncMock()

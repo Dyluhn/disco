@@ -81,7 +81,7 @@ def _runtime(store: SqliteEventStore, tmp_path: Path) -> tuple[ConversationRunti
         sandbox_service=ProcessSandboxService(),
     )
     projects = ProjectStore(str(tmp_path / "projects"))
-    rt._projects.current_project_store = MagicMock(return_value=projects)
+    rt.projects.current_project_store = MagicMock(return_value=projects)
     return rt, projects
 
 
@@ -157,7 +157,7 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
 
     # 2-4. land PAUSED, then the end-gate snapshot the product already performs
     paused = await event_store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
-    async with rt._workspace.lock(cid):  # the product's own fencing
+    async with rt.workspace.lock(cid):  # the product's own fencing
         await rt._lifecycle._maybe_snapshot(cid, trigger=ConversationStatus.PAUSED.value)
 
     versions = await _version_events(event_store, cid)

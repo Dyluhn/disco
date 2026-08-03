@@ -118,7 +118,7 @@ async def test_maybe_snapshot_cuts_version_after_manifest(monkeypatch, tmp_path)
     rt = _runtime(store)
     cid = "conv-snapshot-version"
     project_store = _VersionCutStore(tmp_path)
-    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt.projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
@@ -139,7 +139,7 @@ async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_pa
     cid = "conv-snapshot-commit"
     project_store = _VersionCutStore(tmp_path)
     project_store.next_version = SimpleNamespace(seq=2, tree_digest="tree-2")
-    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt.projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
@@ -167,7 +167,7 @@ async def test_maybe_snapshot_reemits_commit_for_unchanged_latest_version(monkey
     cid = "conv-snapshot-unchanged-commit"
     project_store = _VersionCutStore(tmp_path)
     project_store.versions = [SimpleNamespace(seq=4, tree_digest="same-tree")]
-    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt.projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
 
     async def _snapshot(session, dest):
@@ -193,7 +193,7 @@ async def test_maybe_snapshot_survives_cut_version_failure(monkeypatch, tmp_path
     rt = _runtime(store)
     cid = "conv-snapshot-cut-fails"
     project_store = _VersionCutStore(tmp_path, fail_cut=True)
-    rt._projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
+    rt.projects.current_project_store = MagicMock(return_value=project_store)  # type: ignore[method-assign]
     rt._persistence_notifier = MagicMock()
     rt._persistence_notifier.emit = AsyncMock()
     rt._run_resources.set_executor(cid, MagicMock(_sandbox=object()))
@@ -419,7 +419,7 @@ async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=[idle_cid, "conv-ghost-no-row"])
     svc.destroy_by_conversation = AsyncMock()
-    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 
@@ -440,7 +440,7 @@ async def test_orphan_sweep_keeps_running(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=[cid])
     svc.destroy_by_conversation = AsyncMock()
-    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 
@@ -474,7 +474,7 @@ async def test_orphan_sweep_destroys_concurrently(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=list(cids))
     svc.destroy_by_conversation = AsyncMock(side_effect=_slow_destroy)
-    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     start = time.perf_counter()
     await rt.reconcile_orphaned_runs()
@@ -508,7 +508,7 @@ async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
     svc = MagicMock()
     svc.list_live_instances = AsyncMock(return_value=list(cids))
     svc.destroy_by_conversation = AsyncMock(side_effect=_maybe_fail)
-    rt._sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     await rt.reconcile_orphaned_runs()
 

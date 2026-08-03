@@ -90,7 +90,7 @@ async def _handle_list_projects(
     runtime: ConversationRuntime | None,
 ) -> dict[str, Any]:
     session = current_session(request)
-    project_store = runtime.project_store() if runtime is not None else None
+    project_store = runtime.projects.current_project_store() if runtime is not None else None
     if project_store is None:
         return {"projects": [], "status": StorageStatus.UNSET.value}
     status = project_store.status()
@@ -125,7 +125,7 @@ async def _handle_import_project(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
 ) -> dict[str, Any]:
-    project_store = runtime.project_store() if runtime is not None else None
+    project_store = runtime.projects.current_project_store() if runtime is not None else None
     if project_store is None or project_store.status() != StorageStatus.OK:
         raise HTTPException(status_code=503, detail={"reason": "storage_unavailable"})
     assert runtime is not None
@@ -179,7 +179,7 @@ async def _handle_backfill_titles(
 def _project_store_for_delete(
     runtime: ConversationRuntime | None,
 ) -> ProjectStore:
-    project_store = runtime.project_store() if runtime is not None else None
+    project_store = runtime.projects.current_project_store() if runtime is not None else None
     if project_store is None or project_store.status() != StorageStatus.OK:
         raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
     return project_store
@@ -215,7 +215,7 @@ async def _handle_delete_project(
     if runtime is None:
         deleted = project_store.delete(conversation_id)
     else:
-        async with runtime.workspace_mutation(
+        async with runtime.workspace.mutation(
             conversation_id,
             "project.delete",
             paths=(".",),

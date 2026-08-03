@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import httpx
@@ -473,7 +474,7 @@ class _StubRuntimeForBuild:
     def __init__(self, instance, *, backend_name: str = "gvisor") -> None:  # noqa: ANN001
         self._svc = _StubSandboxService(instance, name=backend_name)
 
-    def sandbox_backend_name(self) -> str:
+    def _backend_name(self) -> str:
         return self._svc.name
 
     def _sandbox_service_now(self):
@@ -481,6 +482,10 @@ class _StubRuntimeForBuild:
 
     def _build_sandbox_spec(self, *, surface):  # noqa: ANN001
         return _filtered_build_spec()
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 # ---- Epic O Cluster B: isolation-race, deploy-grade gate, egress, structured errs --
@@ -516,7 +521,7 @@ class _ConfigurableRuntime:
         self._gate_name = gate_name if gate_name is not None else svc.name
         self._spec = spec if spec is not None else _filtered_build_spec()
 
-    def sandbox_backend_name(self):
+    def _backend_name(self):
         return self._gate_name
 
     def _sandbox_service_now(self):
@@ -524,6 +529,10 @@ class _ConfigurableRuntime:
 
     def _build_sandbox_spec(self, *, surface):  # noqa: ANN001
         return self._spec
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 def _open_egress_spec():
@@ -542,7 +551,7 @@ class _ServiceLookupRaisesRuntime:
     provider import error). build() must convert it to a structured failed BuildResult,
     never let it escape as a 500 to the deploy caller."""
 
-    def sandbox_backend_name(self):
+    def _backend_name(self):
         return "gvisor"
 
     def _sandbox_service_now(self):
@@ -550,6 +559,10 @@ class _ServiceLookupRaisesRuntime:
 
     def _build_sandbox_spec(self, *, surface):  # noqa: ANN001
         return _filtered_build_spec()
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 class _SpecLookupRaisesRuntime:
@@ -560,7 +573,7 @@ class _SpecLookupRaisesRuntime:
     def __init__(self, svc) -> None:  # noqa: ANN001
         self._svc = svc
 
-    def sandbox_backend_name(self):
+    def _backend_name(self):
         return self._svc.name
 
     def _sandbox_service_now(self):
@@ -568,6 +581,10 @@ class _SpecLookupRaisesRuntime:
 
     def _build_sandbox_spec(self, *, surface):  # noqa: ANN001
         raise RuntimeError("bad BUILD_EGRESS config")
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 class _ExecRaisesInstance:
@@ -698,8 +715,15 @@ class _AdminEchoRunner(FakeRunner):
 
 
 class _FakeRuntime:
+    # 13-B4: `_workspace` and `_projects` are the public `workspace` / `projects`
+    # seam now, and the five delegates that forwarded to them are gone. The
+    # double follows the real object: the implementations stay here, and the
+    # COLLABORATORS carry the owning service's method names (§12.6). The old
+    # `self._workspace = self` self-reference is gone — the `workspace` property
+    # below is the collaborator, and an instance attribute of that name would
+    # collide with it.
     def __init__(self, ps: ProjectStore) -> None:
-        self._ps, self._workspace = ps, self
+        self._ps = ps
         self._lock = asyncio.Lock()
         self.mutations: list[tuple[str, tuple[str, ...]]] = []
         self._committed = ps.cut_verified_version(
@@ -709,13 +733,26 @@ class _FakeRuntime:
         )
         assert self._committed is not None
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._ps
 
-    def workspace_lock(self, _conversation_id: str) -> asyncio.Lock:
+    def _dbl_lock(self, _conversation_id: str) -> asyncio.Lock:
         return self._lock
 
-    async def require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
+
+    @property
+    def workspace(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            lock=self._dbl_lock,
+            record_mutation_locked=self._record_mutation_locked,
+            require_committed_host_mirror_locked=self._require_committed_host_mirror_locked,
+            finalize_host_mirror_change_locked=self._finalize_host_mirror_change_locked,
+        )
+
+    async def _require_committed_host_mirror_locked(self, conversation_id: str):  # noqa: ANN202
         assert self._lock.locked()
         facts = self._ps.inspect_workspace(conversation_id)
         if (
@@ -726,7 +763,7 @@ class _FakeRuntime:
             raise WorkspaceCommitUnavailable("test host mirror drifted")
         return self._committed
 
-    async def record_workspace_mutation_locked(
+    async def _record_mutation_locked(
         self,
         _conversation_id: str,
         operation: str,
@@ -736,7 +773,7 @@ class _FakeRuntime:
         assert self._lock.locked()
         self.mutations.append((operation, paths))
 
-    async def finalize_host_mirror_change_locked(
+    async def _finalize_host_mirror_change_locked(
         self,
         conversation_id: str,
         _operation: str,

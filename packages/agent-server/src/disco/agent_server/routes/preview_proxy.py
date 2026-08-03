@@ -564,7 +564,7 @@ async def _finished_websocket_upstream(
     events: list[Event],
     identity: _WebSocketPreviewIdentity,
 ) -> str | None:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         return None
     try:

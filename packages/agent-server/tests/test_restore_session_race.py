@@ -120,7 +120,7 @@ def _write_workspace(ps: ProjectStore, cid: str, files: dict[str, bytes]) -> Non
 
 
 def _seed_versions(rt: ConversationRuntime) -> tuple[Any, ProjectStore]:
-    ps = rt._projects.current_project_store()
+    ps = rt.projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_version(CID, trigger="turn")
     assert old is not None
@@ -150,7 +150,7 @@ async def test_restore_survives_a_dying_session_by_reacquiring_once(tmp_path: Pa
 
     rt._loop_factory.loop_for = _create_loop  # type: ignore[method-assign]
 
-    result = await rt.restore_workspace_version(CID, old.seq)
+    result = await rt.workspace.restore_version(CID, old.seq)
 
     assert dying.exec_attempts == 1, "the dying session was never even tried"
     assert fresh.clears == 1, "the reacquired session never applied the restore"
@@ -191,7 +191,7 @@ async def test_restore_retry_is_bounded_and_failure_is_logged(
 
     with caplog.at_level(logging.WARNING):
         with pytest.raises(WorkspaceRestoreStorageError):
-            await rt.restore_workspace_version(CID, old.seq)
+            await rt.workspace.restore_version(CID, old.seq)
 
     assert first.exec_attempts == 1
     assert second.exec_attempts == 1, "bounded retry must try the fresh session exactly once"
@@ -222,6 +222,6 @@ async def test_restore_reacquire_never_reuses_the_failed_session(tmp_path: Path)
     rt._loop_factory.loop_for = lambda cid: SimpleNamespace()  # type: ignore[method-assign]
 
     with pytest.raises(WorkspaceRestoreStorageError):
-        await rt.restore_workspace_version(CID, old.seq)
+        await rt.workspace.restore_version(CID, old.seq)
 
     assert dying.exec_attempts == 1, "the failed session must never be retried as if it were fresh"

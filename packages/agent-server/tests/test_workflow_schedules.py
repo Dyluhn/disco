@@ -354,7 +354,7 @@ def _save_instance(
             surface_shown_digest=digest,
         ),
     )
-    root = runtime._projects.current_project_store().root
+    root = runtime.projects.current_project_store().root
     assert root is not None
     workflows = root / "workflows"
     workflows.mkdir(parents=True, exist_ok=True)
@@ -366,7 +366,7 @@ def _save_instance(
 
 
 def _sandbox_spec_for_run(runtime: ConversationRuntime, run_cid: str) -> SandboxSpec:
-    service = cast(_MemorySandboxService, runtime._sandbox._injected_service)
+    service = cast(_MemorySandboxService, runtime.sandbox._injected_service)
     specs = [
         instance.spec
         for instance in service.instances.values()
@@ -443,7 +443,7 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
         assert record.output_path == "outputs/result.md"
         assert record.verify_verdict == "pass"
         assert manager.list_runs(schedule_id=row.schedule_id)[0].run_cid == record.run_cid
-        assert runtime._projects.current_project_store().get(record.run_cid) is not None
+        assert runtime.projects.current_project_store().get(record.run_cid) is not None
         resolved = runtime._driver_contexts.resolved_snapshot(record.run_cid)
         assert resolved is not None
         assert resolved.context_window > 0
@@ -565,7 +565,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
     release_append = asyncio.Event()
     run_started = asyncio.Event()
     conversation: list[str] = []
-    original_append = runtime._workspace.append_run_ingress_locked
+    original_append = runtime.workspace.append_run_ingress_locked
     original_run = runtime._run_execution.run
 
     async def blocked_append(
@@ -596,7 +596,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
         assert runtime._run_ingress.claimed_user_seq(conversation_id) == user.seq
         return await original_run(conversation_id, loop)
 
-    monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", blocked_append)
+    monkeypatch.setattr(runtime.workspace, "append_run_ingress_locked", blocked_append)
     monkeypatch.setattr(runtime._run_execution, "run", traced_run)
     fire: asyncio.Task[Any] | None = None
     try:
@@ -609,7 +609,7 @@ async def test_sealed_schedule_claims_exact_ingress_before_task_can_run(
         cid = conversation[0]
         exact_task = runtime._run_registry.task(cid)
         assert exact_task is not None
-        assert runtime._workspace.has_run_claim(cid)
+        assert runtime.workspace.has_run_claim(cid)
         assert not run_started.is_set()
 
         # An ordinary kick during the blocked atomic append must observe the
@@ -756,10 +756,10 @@ async def test_sealed_schedule_append_failure_cleans_exact_registration(
 
     async def fail_append(conversation_id: str, *_args: Any, **_kwargs: Any) -> list[Any]:
         nonlocal claim_was_visible
-        claim_was_visible = runtime._workspace.has_run_claim(conversation_id)
+        claim_was_visible = runtime.workspace.has_run_claim(conversation_id)
         raise RuntimeError("injected schedule append failure")
 
-    monkeypatch.setattr(runtime._workspace, "append_run_ingress_locked", fail_append)
+    monkeypatch.setattr(runtime.workspace, "append_run_ingress_locked", fail_append)
     try:
         instance = _save_instance(runtime, instance_id="wf_append_failure", tools=())
         record = await _workflow_runs(runtime).run(
@@ -773,7 +773,7 @@ async def test_sealed_schedule_append_failure_cleans_exact_registration(
         assert runtime._run_registry.task(record.run_cid) is None
         assert runtime._loop_registry.loop(record.run_cid) is None
         assert not runtime._run_resources.has_executor(record.run_cid)
-        assert not runtime._workspace.has_run_claim(record.run_cid)
+        assert not runtime.workspace.has_run_claim(record.run_cid)
         state = await runtime._store.get_state(record.run_cid)
         assert state.execution_status == ConversationStatus.ERROR
     finally:
@@ -1063,7 +1063,7 @@ def test_workflow_schedule_runs_route_lists_history() -> None:
         manager = _workflow_manager(runtime)
         instance = _save_instance(runtime, instance_id="wf_route", tools=())
         row = manager.create_schedule(_spec("wf_route", instance))
-        root = runtime._projects.current_project_store().root
+        root = runtime.projects.current_project_store().root
         assert root is not None
         runs_path = root / "workflow_schedules" / "runs.json"
         runs_path.parent.mkdir(parents=True, exist_ok=True)

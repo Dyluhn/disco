@@ -200,7 +200,7 @@ async def test_terminal_summary_emitted(
     rt._store.create_conversation(cid, surface="build")
     with (
         mock.patch.object(rt._driver_preflight, "check", return_value=None),
-        mock.patch.object(rt._sandbox, "preflight_failure", return_value=None),
+        mock.patch.object(rt.sandbox, "preflight_failure", return_value=None),
         mock.patch.object(rt._lifecycle, "_maybe_rehydrate", return_value=None),
         mock.patch.object(rt._lifecycle, "_rematerialize_uploads", return_value=None),
         mock.patch.object(rt._lifecycle, "_maybe_snapshot", return_value=None),

@@ -262,19 +262,29 @@ class _DeckRuntime:
         self._backend = backend
         self._sandbox_service = sandbox_service
         self._sandbox_spec = object()
+        self.live_sessions = SimpleNamespace(live_session=self.live_session)
+        self.sandbox = SimpleNamespace(
+            base_spec=lambda: self._sandbox_spec,
+            backend_name=self._backend_name,
+            _sandbox_service_now=self._sandbox_service_now,
+        )
 
     def live_session(self, _cid: str) -> _DeckSession:
         return self._session
 
-    def project_store(self):
+    def _current_project_store(self):
         return None
 
-    def sandbox_backend_name(self) -> str:
+    def _backend_name(self) -> str:
         return self._backend
 
     def _sandbox_service_now(self) -> _PdfSandboxService:
         assert self._sandbox_service is not None
         return self._sandbox_service
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 async def _declare_deck(store: SqliteEventStore, cid: str) -> None:

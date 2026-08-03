@@ -150,7 +150,7 @@ async def _finished_preview_authority(
     conversation_id: str,
     selected_port: int,
 ) -> str | None:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         return None
     try:
