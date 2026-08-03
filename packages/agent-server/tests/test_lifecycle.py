@@ -238,7 +238,7 @@ async def test_idle_statuses_are_eligible(status, tmp_path):
 
     # Force the event to appear old by patching the TTL to 0.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
 
     assert count == 1
     assert not rt._run_resources.has_executor(cid)  # executor was removed (suspended)
@@ -255,7 +255,7 @@ async def test_running_never_swept():
     rt._run_resources.set_executor(cid, fake_executor)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
 
     assert count == 0
     assert rt._run_resources.has_executor(cid)  # not touched
@@ -273,7 +273,7 @@ async def test_connected_session_not_swept():
     rt.connections.on_connect(cid)
 
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
 
     assert count == 0
     assert rt._run_resources.has_executor(cid)
@@ -291,7 +291,7 @@ async def test_fresh_event_not_swept():
 
     # TTL very large — the event just happened, so it's not idle.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "99999"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
 
     assert count == 0
     assert rt._run_resources.has_executor(cid)
@@ -309,12 +309,12 @@ async def test_ttl_env_override(tmp_path):
 
     # With a huge TTL, NOT swept.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "99999"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
     assert count == 0
 
     # With TTL=0, swept.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
     assert count == 1
 
 
@@ -325,7 +325,7 @@ async def test_no_executor_not_swept():
     await _make_conversation(store, ConversationStatus.FINISHED)
     # No executor injected.
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
     assert count == 0
 
 
@@ -337,14 +337,14 @@ async def test_sandbox_state_active_with_executor():
     rt = _runtime(store)
     cid = "conv-active"
     rt._run_resources.set_executor(cid, MagicMock())
-    assert rt.sandbox_state(cid) == "active"
+    assert rt.lifecycle.sandbox_state(cid) == "active"
 
 
 async def test_sandbox_state_no_context():
     """No executor and no snapshot record → None (research surface)."""
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
-    result = rt.sandbox_state("conv-nobody")
+    result = rt.lifecycle.sandbox_state("conv-nobody")
     assert result is None
 
 
@@ -360,7 +360,7 @@ async def test_rehydrated_flag_cleared_after_teardown():
     cid = "conv-rehydrate-regression"
 
     # Simulate prior rehydration.
-    rt._lifecycle._rehydration._rehydrated.add(cid)
+    rt.lifecycle._rehydration._rehydrated.add(cid)
 
     # Inject a fake executor so teardown has something to remove.
     fake_executor = MagicMock()
@@ -370,7 +370,7 @@ async def test_rehydrated_flag_cleared_after_teardown():
     await rt._teardown_sandbox(cid)
 
     # The flag MUST be cleared so _maybe_rehydrate runs again after a recreate.
-    assert cid not in rt._lifecycle._rehydration._rehydrated
+    assert cid not in rt.lifecycle._rehydration._rehydrated
 
 
 async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():
@@ -381,17 +381,17 @@ async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     cid = "conv-midrun-recreate"
-    rt._lifecycle._rehydration._rehydrated.add(
+    rt.lifecycle._rehydration._rehydrated.add(
         cid
     )  # the run already rehydrated once before the drop
 
-    rt._lifecycle._rehydration._maybe_rehydrate = AsyncMock()
-    await rt._lifecycle._rehydrate_after_recreate(cid)
+    rt.lifecycle._rehydration._maybe_rehydrate = AsyncMock()
+    await rt.lifecycle._rehydrate_after_recreate(cid)
 
     assert (
-        cid not in rt._lifecycle._rehydration._rehydrated
+        cid not in rt.lifecycle._rehydration._rehydrated
     )  # flag cleared BEFORE the rehydrate call
-    rt._lifecycle._rehydration._maybe_rehydrate.assert_awaited_once_with(cid)
+    rt.lifecycle._rehydration._maybe_rehydrate.assert_awaited_once_with(cid)
 
 
 async def test_build_session_wires_recreate_hook():
@@ -421,7 +421,7 @@ async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
     svc.destroy_by_conversation = AsyncMock()
     rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
-    await rt.reconcile_orphaned_runs()
+    await rt.lifecycle.reconcile_orphaned_runs()
 
     destroyed = {c.args[0] for c in svc.destroy_by_conversation.await_args_list}
     assert idle_cid in destroyed, "IDLE conversation's container must be swept"
@@ -442,7 +442,7 @@ async def test_orphan_sweep_keeps_running(tmp_path):
     svc.destroy_by_conversation = AsyncMock()
     rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
-    await rt.reconcile_orphaned_runs()
+    await rt.lifecycle.reconcile_orphaned_runs()
 
     destroyed = {c.args[0] for c in svc.destroy_by_conversation.await_args_list}
     assert cid not in destroyed
@@ -477,7 +477,7 @@ async def test_orphan_sweep_destroys_concurrently(tmp_path):
     rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
     start = time.perf_counter()
-    await rt.reconcile_orphaned_runs()
+    await rt.lifecycle.reconcile_orphaned_runs()
     elapsed = time.perf_counter() - start
 
     assert set(destroyed) == set(cids), "every orphan must be destroyed"
@@ -510,7 +510,7 @@ async def test_orphan_sweep_one_failure_does_not_abort_others(tmp_path):
     svc.destroy_by_conversation = AsyncMock(side_effect=_maybe_fail)
     rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
-    await rt.reconcile_orphaned_runs()
+    await rt.lifecycle.reconcile_orphaned_runs()
 
     # destroy_by_conversation was attempted on every cid (incl. the bad one)...
     attempted = {c.args[0] for c in svc.destroy_by_conversation.await_args_list}
@@ -536,7 +536,7 @@ async def test_http_state_route_overlays_sandbox_state():
     rt._run_resources.set_executor(cid, MagicMock())  # live executor → sandbox_state == "active"
     rt.mcp._start_mcp_pool = AsyncMock()
     rt.mcp._close_mcp_pool = AsyncMock()
-    rt.reconcile_orphaned_runs = AsyncMock()
+    rt.lifecycle.reconcile_orphaned_runs = AsyncMock()
     rt.drivers.prewarm_model_probe = AsyncMock()
     rt.drivers.prewarm_vision_probe = AsyncMock()
 
@@ -567,10 +567,10 @@ async def test_live_run_task_blocks_suspend(tmp_path):
         await asyncio.Event().wait()
 
     task = asyncio.create_task(_never())
-    rt._run_registry.register_task(cid, task)  # type: ignore[arg-type]
+    rt.run_registry.register_task(cid, task)  # type: ignore[arg-type]
     try:
         with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-            count = await rt.sweep_idle_once()
+            count = await rt.lifecycle.sweep_idle_once()
         assert count == 0
         assert rt._run_resources.has_executor(cid)  # NOT suspended — a live run task is active work
     finally:
@@ -591,8 +591,8 @@ async def test_done_run_task_does_not_block_suspend(tmp_path):
 
     t = asyncio.create_task(_noop())
     await t  # let it finish
-    rt._run_registry.register_task(cid, t)  # type: ignore[arg-type]
+    rt.run_registry.register_task(cid, t)  # type: ignore[arg-type]
     with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-        count = await rt.sweep_idle_once()
+        count = await rt.lifecycle.sweep_idle_once()
     assert count == 1
     assert not rt._run_resources.has_executor(cid)  # a done task does not block suspend

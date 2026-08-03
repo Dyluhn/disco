@@ -54,8 +54,8 @@ def _runtime(store: SqliteEventStore) -> ConversationRuntime:
 def _advance_generation(rt: ConversationRuntime) -> int:
     task = MagicMock()
     task.done.return_value = True
-    generation = rt._run_registry.register_task(CID, task)
-    assert rt._run_registry.complete_task(CID, task)
+    generation = rt.run_registry.register_task(CID, task)
+    assert rt.run_registry.complete_task(CID, task)
     return generation
 
 
@@ -144,9 +144,9 @@ async def test_kill_newer_run_in_task_await_window_does_not_corrupt_it() -> None
     survivor_task.done.return_value = False
 
     def _newer_run_starts() -> None:
-        assert rt._run_registry.register_task(CID, survivor_task) == 2
+        assert rt.run_registry.register_task(CID, survivor_task) == 2
 
-    assert rt._run_registry.register_task(CID, _RaceTask(_newer_run_starts)) == 1
+    assert rt.run_registry.register_task(CID, _RaceTask(_newer_run_starts)) == 1
 
     await rt.kill(CID)
 
@@ -195,7 +195,7 @@ async def test_kill_newer_run_in_executor_teardown_window_does_not_terminalize_i
                 run_protocol_version=1,
             ),
         )
-        assert rt._run_registry.register_task(CID, survivor_task) == 2
+        assert rt.run_registry.register_task(CID, survivor_task) == 2
         rt._run_resources.set_executor(CID, survivor_executor)
         rt._loop_registry.bind(CID, survivor_loop)
 
@@ -275,7 +275,7 @@ async def test_kill_terminal_status_waits_for_host_workspace_fence() -> None:
     store.create_conversation(CID, owner_id="local")
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     lock = rt.workspace.lock(CID)
     await lock.acquire()
 
@@ -293,7 +293,7 @@ async def test_kill_accepts_current_durable_target_despite_stale_local_generatio
     store = SqliteEventStore(":memory:")
     await _seed(store)
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
     lock = rt.workspace.lock(CID)
     await lock.acquire()
@@ -314,7 +314,7 @@ async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> N
     store = SqliteEventStore(":memory:")
     await _seed(store)
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
     lock = rt.workspace.lock(CID)
     await lock.acquire()
@@ -341,7 +341,7 @@ async def test_kill_rechecks_generation_after_waiting_for_workspace_fence() -> N
     )
     replacement = MagicMock()
     replacement.done.return_value = False
-    assert rt._run_registry.register_task(CID, replacement) == 2
+    assert rt.run_registry.register_task(CID, replacement) == 2
     lock.release()
 
     await killing
@@ -393,7 +393,7 @@ async def test_kill_closure_waits_for_real_outcome_under_shared_fence() -> None:
     await _seed(store)
     action = await store.append(CID, _action(agent_view_id="view-a"))
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
 
     lock = rt.workspace.lock(CID)
@@ -444,7 +444,7 @@ async def test_kill_closure_preserves_strict_action_view_attribution() -> None:
     )
     action = await store.append(CID, _action(agent_view_id="view-strict"))
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
     assert _advance_generation(rt) == 1
 
     closures = await _close_dangling_actions(rt)
@@ -484,7 +484,7 @@ async def test_strict_kill_status_is_bound_to_captured_view() -> None:
         ),
     )
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
 
     await rt._control.kill(CID)
 
@@ -521,7 +521,7 @@ async def test_cross_process_new_intent_blocks_stale_kill_teardown_and_idle(
         ),
     )
     rt = _runtime(store)
-    rt._settings._set_surface(CID, "build")
+    rt.settings._set_surface(CID, "build")
 
     capture_done = asyncio.Event()
     release_kill = asyncio.Event()

@@ -334,7 +334,7 @@ def test_research_stream_frames_are_redacted_on_live_ws_path():
 
     fake_runtime = mock.MagicMock()
     fake_runtime.deep_research.research_stream = mock.MagicMock(side_effect=fake_stream)
-    fake_runtime.get_last_selected_model = mock.MagicMock(return_value=None)
+    fake_runtime.settings.model_binding.get_last_selected_model = mock.MagicMock(return_value=None)
     client = TestClient(create_app(store, runtime=fake_runtime))
 
     with client.websocket_connect("/ws/research") as ws:

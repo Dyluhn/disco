@@ -31,7 +31,7 @@ def _runtime() -> ConversationRuntime:
 
 
 def _compose(rt: ConversationRuntime, cid: str, *, surface: str):
-    rt._settings._set_surface(cid, surface)
+    rt.settings._set_surface(cid, surface)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
     with mock.patch.object(rt, "_sandbox_service_now"):

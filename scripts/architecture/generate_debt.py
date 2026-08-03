@@ -41,6 +41,12 @@ try:
     from .generate_debt_parts.location_overrides import LOCATION_OVERRIDES
     from .generate_debt_parts.resolved_ids import RESOLVED_IDS
 except ImportError:
+    # The mutation test executes a symlinked copy of this script from a
+    # temporary authority tree. Anchor the fallback import to this generator's
+    # directory so the sealed parts remain importable in that mode.
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from generate_debt_parts.location_overrides import LOCATION_OVERRIDES
     from generate_debt_parts.resolved_ids import RESOLVED_IDS
 

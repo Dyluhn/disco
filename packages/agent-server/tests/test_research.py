@@ -320,8 +320,8 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
             ),
         )
     )
-    rt._settings._set_surface(cid, "deep_research")
-    rt.set_autonomous(cid, True)
+    rt.settings._set_surface(cid, "deep_research")
+    rt.settings.set_autonomous(cid, True)
     exec_mock = AsyncMock()
     monkeypatch.setattr(rt.deep_research, "_execute_deep_research", exec_mock)
     asyncio.run(
@@ -345,7 +345,7 @@ def test_autonomous_deep_research_auto_approves_plan(tmp_path, monkeypatch):
             ),
         )
     )
-    rt2.set_surface(cid2, "deep_research")  # autonomous NOT set
+    rt2.settings._set_surface(cid2, "deep_research")  # autonomous NOT set
     exec_mock2 = AsyncMock()
     monkeypatch.setattr(rt2.deep_research, "_execute_deep_research", exec_mock2)
     asyncio.run(

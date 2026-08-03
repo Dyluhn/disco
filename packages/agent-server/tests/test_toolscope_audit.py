@@ -93,15 +93,15 @@ def test_flag_off_default_build_keeps_existing_executor_wiring(
     monkeypatch.delenv("PMX_TOOLSCOPE_AUDIT", raising=False)
     rt = _runtime()
     cid = "audit_off_default"
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
 
     loop = _compose(rt, cid)
 
     assert loop.executor._scope.allowed_tools == AGENT_TOOLS
     assert loop.executor._scope_guard is None
     assert loop.executor._on_tool_success is None
-    assert cid not in rt._contract._build_trackers
-    assert cid not in rt._contract._build_audit_trackers
+    assert cid not in rt.contract._build_trackers
+    assert cid not in rt.contract._build_audit_trackers
 
 
 @pytest.mark.asyncio
@@ -111,7 +111,7 @@ async def test_flag_on_default_build_uses_observe_guard_without_artifact_mode(
     monkeypatch.setenv("DISCO_TOOLSCOPE_AUDIT", "1")
     rt = _runtime()
     cid = "audit_on_default"
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     rt._store.create_conversation(cid, surface="build")
     await rt._store.append(
         cid,
@@ -121,13 +121,13 @@ async def test_flag_on_default_build_uses_observe_guard_without_artifact_mode(
         ),
     )
 
-    guard, on_success = rt._contract._build_scope_audit_guard(cid)
+    guard, on_success = rt.contract._build_scope_audit_guard(cid)
 
-    assert rt._settings._effective_artifact_mode(cid) is False
+    assert rt.settings._effective_artifact_mode(cid) is False
     assert guard is not None
     assert on_success is not None
-    assert cid not in rt._contract._build_trackers
-    assert rt._contract._build_audit_trackers[cid][0].kind.value == "static.site"
+    assert cid not in rt.contract._build_trackers
+    assert rt.contract._build_audit_trackers[cid][0].kind.value == "static.site"
 
 
 @pytest.mark.asyncio
@@ -138,8 +138,8 @@ async def test_flag_on_would_deny_file_write_in_edit_but_does_not_block(
     monkeypatch.setenv("DISCO_TOOLSCOPE_AUDIT", "1")
     rt = _runtime()
     cid = "audit_write_edit"
-    rt.set_surface(cid, "build")
-    guard, on_success = rt._contract._build_scope_audit_guard(cid)
+    rt.settings._set_surface(cid, "build")
+    guard, on_success = rt.contract._build_scope_audit_guard(cid)
     executor = DefaultToolExecutor(
         build_default_registry(),
         agent_scope(model_policy=ModelExecutionPolicy.standard()),
@@ -176,8 +176,8 @@ async def test_terminal_summary_emitted(
     monkeypatch.setenv("DISCO_TOOLSCOPE_AUDIT", "1")
     rt = _runtime()
     cid = "audit_summary"
-    rt.set_surface(cid, "build")
-    guard, on_success = rt._contract._build_scope_audit_guard(cid)
+    rt.settings._set_surface(cid, "build")
+    guard, on_success = rt.contract._build_scope_audit_guard(cid)
     executor = DefaultToolExecutor(
         build_default_registry(),
         agent_scope(model_policy=ModelExecutionPolicy.standard()),
@@ -201,9 +201,9 @@ async def test_terminal_summary_emitted(
     with (
         mock.patch.object(rt._driver_preflight, "check", return_value=None),
         mock.patch.object(rt.sandbox, "preflight_failure", return_value=None),
-        mock.patch.object(rt._lifecycle, "_maybe_rehydrate", return_value=None),
-        mock.patch.object(rt._lifecycle, "_rematerialize_uploads", return_value=None),
-        mock.patch.object(rt._lifecycle, "_maybe_snapshot", return_value=None),
+        mock.patch.object(rt.lifecycle, "_maybe_rehydrate", return_value=None),
+        mock.patch.object(rt.lifecycle, "_rematerialize_uploads", return_value=None),
+        mock.patch.object(rt.lifecycle, "_maybe_snapshot", return_value=None),
         caplog.at_level("INFO", logger="disco.agent_server.runtime"),
     ):
         await rt._run_execution.run(cid, _DoneLoop())  # type: ignore[arg-type]
@@ -230,8 +230,8 @@ async def test_terminal_summary_emitted_once_across_repeated_terminal_emits(
     monkeypatch.setenv("DISCO_TOOLSCOPE_AUDIT", "1")
     rt = _runtime()
     cid = "audit_summary_idempotent"
-    rt.set_surface(cid, "build")
-    guard, on_success = rt._contract._build_scope_audit_guard(cid)
+    rt.settings._set_surface(cid, "build")
+    guard, on_success = rt.contract._build_scope_audit_guard(cid)
     executor = DefaultToolExecutor(
         build_default_registry(),
         agent_scope(model_policy=ModelExecutionPolicy.standard()),
@@ -244,9 +244,9 @@ async def test_terminal_summary_emitted_once_across_repeated_terminal_emits(
     await executor.execute(_call("doc_set_section", section="intro", title="Two", body="two"))
 
     with caplog.at_level("INFO", logger="disco.agent_server.runtime"):
-        rt._contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+        rt.contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
         # Second emit = the done-callback path landing after `_run_with_persistence`.
-        rt._contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+        rt.contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
 
     summaries = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"]
     assert len(summaries) == 1
@@ -265,9 +265,9 @@ def test_terminal_summary_noop_when_audit_never_composed(
     # short-circuit is what keeps unaudited runs out of the audit log.
     rt = _runtime()
     cid = "audit_never_composed"
-    assert cid not in rt._contract._toolscope_audits  # no guard was ever built for this cid
+    assert cid not in rt.contract._toolscope_audits  # no guard was ever built for this cid
     with caplog.at_level("INFO", logger="disco.agent_server.runtime"):
-        rt._contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
+        rt.contract._emit_toolscope_audit_summary(cid, ConversationStatus.FINISHED)
     summaries = [r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_summary"]
     assert summaries == []
 

@@ -100,7 +100,7 @@ async def main() -> None:
         store, config=cfg, sandbox_service=sbx, sandbox_spec=SandboxSpec(memory_mb=512)
     )
     store.create_conversation(CID, owner_id="local")
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     await store.append(CID, _user(TASK))
     print(f"\nTASK: {TASK.splitlines()[0]} …\n--- agent trace ---")
 
@@ -109,7 +109,7 @@ async def main() -> None:
     actions = 0
     for _round in range(30):
         runtime.run_controller.kick(CID)
-        task = runtime._run_registry.task(CID)
+        task = runtime.run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)

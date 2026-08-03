@@ -50,14 +50,14 @@ async def test_authoritative_flag_stamps_unverifiable_manifest_without_canary(
     monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", "1")
     rt = _runtime()
     cid = "conv_authoritative_unverifiable"
-    rt.set_surface(cid, "build")
+    rt.settings._set_surface(cid, "build")
     fs = MemFS()
     _inject_executor(rt, cid, fs)
     await ArtifactMemoryStore(fs).upsert_artifact(
         ArtifactRecord(path="report.txt", kind="files", shown=True)
     )
 
-    hook = rt._contract._host_verify_canary_hook_for(cid, rt._contract.note_build_verify_result)
+    hook = rt.contract._host_verify_canary_hook_for(cid, rt.contract.note_build_verify_result)
     assert hook is not None
 
     await hook(

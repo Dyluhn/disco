@@ -89,7 +89,7 @@ def _runtime(
     )
     projects = ProjectStore(str(tmp_path / "projects"))
     rt.projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
-    rt._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt.lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     return rt, projects
 
 
@@ -425,7 +425,7 @@ async def _finish(
     *,
     agent_view_id: str | None = None,
 ) -> StatusEvent:
-    return await runtime._lifecycle.commit_finished_workspace(
+    return await runtime.lifecycle.commit_finished_workspace(
         conversation_id,
         StatusEvent(
             status=ConversationStatus.FINISHED,
@@ -706,12 +706,12 @@ async def _assert_host_mirror_authority(
             StatusEvent(status=ConversationStatus.FINISHED),
         ):
             with pytest.raises(RuntimeError, match="matching mutation authority"):
-                await runtime._lifecycle.commit_finished_host_mirror_locked(
+                await runtime.lifecycle.commit_finished_host_mirror_locked(
                     conversation_id,
                     terminal,
                 )
             assert await store.get_events(conversation_id) == before
-        await runtime._lifecycle.commit_finished_host_mirror_locked(
+        await runtime.lifecycle.commit_finished_host_mirror_locked(
             conversation_id,
             StatusEvent(
                 status=ConversationStatus.FINISHED,

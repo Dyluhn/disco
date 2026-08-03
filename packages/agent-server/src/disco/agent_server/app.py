@@ -200,7 +200,7 @@ def _make_runtime_lifespan(
                 _start_mcp_without_owning_readiness(), name="mcp-startup"
             )
             with contextlib.suppress(Exception):  # never block boot on reconciliation
-                await active_runtime.reconcile_orphaned_runs()
+                await active_runtime.lifecycle.reconcile_orphaned_runs()
             with contextlib.suppress(Exception):  # warm the live /props cache off-loop
                 await active_runtime.drivers.prewarm_model_probe()
             with contextlib.suppress(Exception):  # V2/V4: probe live vision modality once

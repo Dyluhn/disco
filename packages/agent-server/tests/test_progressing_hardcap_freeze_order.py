@@ -158,7 +158,7 @@ async def test_pause_and_persist_preserves_exact_bytes_then_kill(
     # 2-4. land PAUSED, then the end-gate snapshot the product already performs
     paused = await event_store.append(cid, StatusEvent(status=ConversationStatus.PAUSED))
     async with rt.workspace.lock(cid):  # the product's own fencing
-        await rt._lifecycle._maybe_snapshot(cid, trigger=ConversationStatus.PAUSED.value)
+        await rt.lifecycle._maybe_snapshot(cid, trigger=ConversationStatus.PAUSED.value)
 
     versions = await _version_events(event_store, cid)
     assert len(versions) == versions_before + 1, "PAUSED end-gate must emit a durable version"

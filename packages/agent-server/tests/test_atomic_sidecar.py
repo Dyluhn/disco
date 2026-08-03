@@ -51,17 +51,17 @@ def _crash_json_dump(monkeypatch):
     [
         (
             "_autonomous_path",
-            lambda rt: rt.set_autonomous("conv-A", False),
+            lambda rt: rt.settings.set_autonomous("conv-A", False),
             {"conv-A": True, "conv-B": False},
         ),
         (
             "_override_path",
-            lambda rt: rt.set_model_override("conv-A", "anthropic/claude-3-opus"),
+            lambda rt: rt.settings.set_model_override("conv-A", "anthropic/claude-3-opus"),
             {"conv-A": "anthropic/claude-3-haiku"},
         ),
         (
             "_surface_path",
-            lambda rt: rt.set_surface("conv-A", "research"),
+            lambda rt: rt.settings._set_surface("conv-A", "research"),
             {"conv-A": "build", "conv-B": "research"},
         ),
     ],
@@ -76,9 +76,9 @@ def test_save_preserves_existing_file_on_failure(
     only ever swaps in a complete new file via os.replace."""
     rt = _new_runtime(tmp_path, monkeypatch)
     owner_attr = {
-        "_autonomous_path": "_settings._autonomous_path",
-        "_override_path": "_settings.model_binding._override_path",
-        "_surface_path": "_settings._surface_settings._path",
+        "_autonomous_path": "settings._autonomous_path",
+        "_override_path": "settings.model_binding._override_path",
+        "_surface_path": "settings._surface_settings._path",
     }[sidecar_attr]
     path = attrgetter(owner_attr)(rt)
     assert path, f"runtime did not configure {sidecar_attr}"
@@ -114,7 +114,7 @@ def test_save_assist_is_already_atomic(tmp_path, monkeypatch):
     refactor of the sibling saves must not be allowed to quietly drop the
     temp+os.replace pattern; this test pins it for the assist sidecar."""
     rt = _new_runtime(tmp_path, monkeypatch)
-    path = rt._settings._assist_path
+    path = rt.settings._assist_path
     assert path
 
     _seed(path, {"conv-A": True})
@@ -124,7 +124,7 @@ def test_save_assist_is_already_atomic(tmp_path, monkeypatch):
 
     _crash_json_dump(monkeypatch)
     try:
-        rt.set_assist("conv-A", False)
+        rt.settings.set_assist("conv-A", False)
     except Exception:
         pass
 
@@ -136,25 +136,25 @@ def test_save_autonomous_succeeds_on_happy_path(tmp_path, monkeypatch):
     """Sanity: the atomic rewrite still produces a valid file on the happy path.
     If we break the temp+os.replace plumbing, this catches it."""
     rt = _new_runtime(tmp_path, monkeypatch)
-    rt.set_autonomous("conv-X", True)
-    rt.set_autonomous("conv-Y", False)
-    with open(rt._settings._autonomous_path) as f:
+    rt.settings.set_autonomous("conv-X", True)
+    rt.settings.set_autonomous("conv-Y", False)
+    with open(rt.settings._autonomous_path) as f:
         data = json.load(f)
     assert data == {"conv-X": True, "conv-Y": False}
 
 
 def test_save_surfaces_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
-    rt.set_surface("conv-X", "build")
-    with open(rt._settings._surface_settings._path) as f:
+    rt.settings._set_surface("conv-X", "build")
+    with open(rt.settings._surface_settings._path) as f:
         data = json.load(f)
     assert data == {"conv-X": "build"}
 
 
 def test_save_overrides_succeeds_on_happy_path(tmp_path, monkeypatch):
     rt = _new_runtime(tmp_path, monkeypatch)
-    rt.set_model_override("conv-X", "anthropic/claude-3-haiku")
-    with open(rt._settings.model_binding._override_path) as f:
+    rt.settings.set_model_override("conv-X", "anthropic/claude-3-haiku")
+    with open(rt.settings.model_binding._override_path) as f:
         data = json.load(f)
     assert data == {"conv-X": "anthropic/claude-3-haiku"}
 
@@ -172,9 +172,9 @@ def test_effective_autonomous_gated_by_surface(tmp_path, monkeypatch):
         ("c-research", "research", False),
     ]
     for conv, surface, expected in cases:
-        rt.set_autonomous(conv, True)
-        rt.set_surface(conv, surface)
+        rt.settings.set_autonomous(conv, True)
+        rt.settings._set_surface(conv, surface)
         assert rt._effective_autonomous(conv) is expected, f"{surface}: {expected}"
     # autonomous never set → False even on an eligible surface
-    rt.set_surface("c-unset", "deep_research")
+    rt.settings._set_surface("c-unset", "deep_research")
     assert rt._effective_autonomous("c-unset") is False

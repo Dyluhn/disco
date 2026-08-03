@@ -180,7 +180,7 @@ def _user(content: str) -> MessageEvent:
 async def _run_to_rest(runtime: ConversationRuntime) -> None:
     """Kick the loop and await it to a terminal-for-now status (WAITING/FINISHED)."""
     runtime.run_controller.kick(CID)
-    task = runtime._run_registry.task(CID)
+    task = runtime.run_registry.task(CID)
     if task is not None:
         await task
 
@@ -188,7 +188,7 @@ async def _run_to_rest(runtime: ConversationRuntime) -> None:
 async def _build_convo(store, steps) -> ConversationRuntime:
     store.create_conversation(CID, owner_id="local")
     runtime = _runtime(store, steps)
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     await store.append(CID, _user("delete the temp directory"))
     return runtime
 
@@ -240,7 +240,7 @@ async def _await_task(runtime: ConversationRuntime) -> None:
     parked status with no live task left."""
     settled = _CONCLUDED_STATUSES | _RUN_PARKED_STATUSES
     for _ in range(500):  # generous bound; each pass awaits a task or yields one tick
-        task = runtime._run_registry.task(CID)
+        task = runtime.run_registry.task(CID)
         if task is not None and not task.done():
             with contextlib.suppress(Exception):
                 await task
@@ -248,7 +248,7 @@ async def _await_task(runtime: ConversationRuntime) -> None:
         # No live task right now — let any scheduled done-callback / re-kick run,
         # then re-check (a successor task may appear, or the status may settle).
         await asyncio.sleep(0)
-        if runtime._run_registry.task(CID) is not None:
+        if runtime.run_registry.task(CID) is not None:
             continue  # a re-kick landed; loop back to await it
         try:
             status = (await runtime._store.get_state(CID)).execution_status
@@ -560,7 +560,7 @@ async def test_request_plan_on_a_fresh_conversation_composes_the_loop():
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     runtime = _runtime(store, [("here's the plan", [_plan(["build it"])])])
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     assert runtime._loop_registry.loop(CID) is None  # never kicked — the no-op precondition
 
     await runtime.request_plan(CID, "build an express server")
@@ -663,7 +663,7 @@ async def _compose_and_get_executor(runtime: ConversationRuntime, store):
     """Kick a build conversation to the plan gate so _compose_build_loop runs and
     stores the executor; return it for advertised-set inspection."""
     store.create_conversation(CID, owner_id="local")
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     await store.append(CID, _user("build a thing"))
     await _run_to_rest(runtime)
     executor = runtime._run_resources.executor(CID)

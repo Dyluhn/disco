@@ -23,8 +23,8 @@ def _compose(
     else:
         monkeypatch.setenv("DISCO_APPKIT_PLATFORM_ROUTE", "0")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface(conversation_id, "agent")
-    runtime.set_appkit_mode(conversation_id, True)
+    runtime.settings._set_surface(conversation_id, "agent")
+    runtime.settings.set_appkit_mode(conversation_id, True)
     with mock.patch.object(runtime, "_sandbox_service_now"):
         loop = runtime._compose_build_loop(
             conversation_id,
@@ -74,8 +74,8 @@ def test_appkit_platform_resolution_failure_has_no_freeform_fallback(
 ) -> None:
     monkeypatch.delenv("DISCO_APPKIT_PLATFORM_ROUTE", raising=False)
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.set_surface("blocked-appkit", "agent")
-    runtime.set_appkit_mode("blocked-appkit", True)
+    runtime.settings._set_surface("blocked-appkit", "agent")
+    runtime.settings.set_appkit_mode("blocked-appkit", True)
     with (
         mock.patch.object(runtime, "_sandbox_service_now"),
         mock.patch(
@@ -146,7 +146,7 @@ async def test_appkit_platform_admission_is_durable_and_rollback_is_new_run_only
 
     monkeypatch.setenv("DISCO_APPKIT_PLATFORM_ROUTE", "0")
     restarted = ConversationRuntime(runtime._store)
-    restarted.set_surface("durable-appkit", "agent")
+    restarted.settings._set_surface("durable-appkit", "agent")
     await restarted._build_platform.prepare_route_pin("durable-appkit")
     with mock.patch.object(restarted, "_sandbox_service_now"):
         restarted._compose_build_loop(

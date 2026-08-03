@@ -185,7 +185,7 @@ class _ConversationMixin(_ClientBase):
         if appkit:
             # EPIC F strict AppKit mode — the phase-based allowlist build. The
             # appkit soak lane (deadlock regression cbfec1fd) sets this per
-            # scenario; the route flips runtime.set_appkit_mode at create time.
+            # scenario; the route flips runtime.settings.set_appkit_mode at create time.
             body["appkit_mode"] = True
         if model:
             body["model_override"] = model

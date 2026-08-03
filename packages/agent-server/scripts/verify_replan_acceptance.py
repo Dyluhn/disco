@@ -76,7 +76,7 @@ async def _drive(runtime: ConversationRuntime, store, *, max_rounds: int, label:
     shown = len(await store.get_events(CID))
     for _r in range(max_rounds):
         runtime.run_controller.kick(CID)
-        task = runtime._run_registry.task(CID)
+        task = runtime.run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)
@@ -204,7 +204,7 @@ async def main() -> None:
         store, config=cfg, sandbox_service=sbx, sandbox_spec=SandboxSpec(memory_mb=512)
     )
     store.create_conversation(CID, owner_id="local")
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
 
     # ---- phase 1: the initial build ----
     await store.append(CID, _user(BUILD))

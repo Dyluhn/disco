@@ -71,14 +71,14 @@ class _Runtime:
         self._store = store
         self._project_store = project_store
         self._tasks: dict[str, Any] = {}
-        self._settings = MagicMock()
-        self._settings._surface_of.return_value = "build"
+        self.settings = MagicMock()
+        self.settings._surface_of.return_value = "build"
         projects = MagicMock()
         projects.current_project_store.return_value = project_store
-        fence = WorkspaceFenceService(store, projects, self._settings)
+        fence = WorkspaceFenceService(store, projects, self.settings)
         self.workspace = WorkspaceCoordinator(
             store,
-            self._settings,
+            self.settings,
             projects,
             MagicMock(),
             MagicMock(),

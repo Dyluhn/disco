@@ -85,14 +85,14 @@ class _RuntimeWiringSchema:
     sandbox: SandboxRuntimeService
     projects: ProjectRuntimeService
     _loop_registry: LoopRegistry
-    _run_registry: RunRegistry
+    run_registry: RunRegistry
     _run_authorities: RunAuthorityLedger
     _run_ingress: RunIngressLedger
     _run_resources: RunResourceRegistry
     _run_recovery: RunRecoveryLedger
     _driver_contexts: DriverContextState
     _appkit_ejections: AppKitEjectionLedger
-    _settings: RuntimeSettings
+    settings: RuntimeSettings
     drivers: DriverRuntime
     _driver_preflight: DriverPreflight
     _cancellations: CancellationRegistry
@@ -109,9 +109,9 @@ class _RuntimeWiringSchema:
     workspace: WorkspaceCoordinator
     _workspace_ownership: WorkspaceOwnership
     _persistence_notifier: PersistenceNotifier
-    _contract: BuildContractService
+    contract: BuildContractService
     _build_platform: BuildPlatformRuntime
-    _lifecycle: LifecycleManager
+    lifecycle: LifecycleManager
     _lifecycle_commands: LifecycleCommandService
     connections: ConnectionTracker
     _appkit_ejection: AppKitEjectionService

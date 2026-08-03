@@ -102,7 +102,7 @@ from .workspace_service import (
 
 if TYPE_CHECKING:
 
-    from disco.core import DEFAULT_OWNER_ID, ToolCall, ToolResult
+    from disco.core import ToolCall, ToolResult
 
     from .build_contract_service import BuildContractService
     from .build_loop_factory import BuildLoopFactory
@@ -196,24 +196,27 @@ class ConversationRuntime:
 
     if TYPE_CHECKING:
         # fmt: off
-        # The declared public collaborator seam (13-B1, extended by 13-B2,
-        # 13-B3 and 13-B4).
+        # The declared public collaborator seam (13-B1 through 13-B4).
         # Consumers reach the owning service by name instead of through a
         # delegate.
         connections: ConnectionTracker
+        contract: BuildContractService
         conversation_control: ConversationControlService
         deep_research: DeepResearchService
         drivers: DriverRuntime
+        lifecycle: LifecycleManager
         live_sessions: LiveSessionDirectory
         mcp: McpManager
         preview: PreviewService
         projects: ProjectRuntimeService
         run_controller: RunController
+        run_registry: RunRegistry
         run_sweep: RunStrandedSweep
         sandbox: SandboxRuntimeService
         sandbox_resources: SandboxResourceReconciler
         schedules: ScheduleService
         sessions: SessionsService
+        settings: RuntimeSettings
         share: ShareService
         spaces: SpaceService
         suggestions: SuggestionService
@@ -222,45 +225,16 @@ class ConversationRuntime:
         workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore
-        _contract: BuildContractService
         _driver_preflight: DriverPreflight
         _idle_sweeper: LifecycleIdleSweeper
-        _lifecycle: LifecycleManager
         _loop_factory: BuildLoopFactory
         _resume: ResumeService
-        _run_registry: RunRegistry
         _run_execution: RunPersistenceSupervisor
         _run_supervisor: RunSupervisor
         _secret_store: SecretStore
-        _settings: RuntimeSettings
         _skill_store: SkillStore
 
-        def set_surface(self, conversation_id: str, surface: str) -> None: ...
-        def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
-        def set_autonomous(self, conversation_id: str, value: bool=True) -> None: ...
-        def is_autonomous(self, conversation_id: str) -> bool: ...
-        def set_quiet(self, conversation_id: str, value: bool=True) -> None: ...
-        def is_quiet(self, conversation_id: str) -> bool: ...
-        def set_assist(self, conversation_id: str, value: bool=True) -> None: ...
-        def is_assist(self, conversation_id: str) -> bool: ...
-        async def apply_settings_change(self, conversation_id: str, *, model_override: str | None=None, assist: bool | None=None, model_provided: bool | None=None) -> bool: ...  # noqa: E501
-        def set_artifact_mode(self, conversation_id: str, on: bool) -> None: ...
-        def set_appkit_mode(self, conversation_id: str, on: bool) -> None: ...
-        def set_research_sources(self, conversation_id: str, sources: list[str]) -> None: ...
-        def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]: ...
-        def activate_contract_for_brief(self, conversation_id: str, build_brief: BuildBrief | None) -> None: ...  # noqa: E501
-        def set_build_kind(self, conversation_id: str, kind: str | None) -> None: ...
-        def expected_delivery_mode(self, conversation_id: str) -> str | None: ...
-        def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None: ...
-        def get_last_selected_model(self) -> str | None: ...
-        def set_last_selected_model(self, model_id: str | None) -> None: ...
         async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
-        async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
-        def sandbox_state(self, conversation_id: str) -> str | None: ...
-        def sandbox_instance_ids(self, conversation_id: str) -> list[str]: ...
-        async def sweep_idle_once(self) -> int: ...
-        async def sweep_abandoned_gates_once(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
-        def running_conversation_ids(self) -> set[str]: ...
         # fmt: on
 
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
@@ -333,10 +307,10 @@ class ConversationRuntime:
         )
 
     def _surface_of(self, conversation_id: str) -> str:
-        return self._settings._surface_of(conversation_id)
+        return self.settings._surface_of(conversation_id)
 
     def _effective_autonomous(self, conversation_id: str) -> bool:
-        return self._settings._effective_autonomous(conversation_id)
+        return self.settings._effective_autonomous(conversation_id)
 
     def _sandbox_service_now(self) -> SandboxService:
         return self.sandbox._sandbox_service_now()
@@ -427,13 +401,13 @@ class ConversationRuntime:
         *,
         trigger: str = "turn",
     ) -> None:
-        await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
+        await self.lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
 
     async def _suspend(self, conversation_id: str) -> None:
-        await self._lifecycle._suspend(conversation_id)
+        await self.lifecycle._suspend(conversation_id)
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
-        await self._lifecycle._teardown_sandbox(conversation_id)
+        await self.lifecycle._teardown_sandbox(conversation_id)
 
     def start(self, conversation_id: str) -> None:
         self.conversation_control.start(conversation_id)

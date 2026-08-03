@@ -1,7 +1,8 @@
 """P3 — sticky last-picked model tests.
 
 1. set_model_override writes the last-selected sidecar.
-2. A fresh runtime.get_last_selected_model() returns the written value (survives restart).
+2. A fresh runtime.settings.model_binding.get_last_selected_model() returns the
+   written value (survives restart).
 3. create_conversation with model_override=None seeds from last-selected when the key
    is valid in cfg.models; falls through to default when not valid.
 4. No last pick ever → default_model applies.
@@ -36,24 +37,24 @@ def _runtime(tmp_path, monkeypatch) -> ConversationRuntime:
 
 def test_set_model_override_writes_last_selected(tmp_path, monkeypatch):
     rt = _runtime(tmp_path, monkeypatch)
-    rt.set_model_override("conv_abc", "or-gpt-oss-120b")
+    rt.settings.set_model_override("conv_abc", "or-gpt-oss-120b")
 
     # Immediately readable from the same runtime
-    assert rt.get_last_selected_model() == "or-gpt-oss-120b"
+    assert rt.settings.model_binding.get_last_selected_model() == "or-gpt-oss-120b"
 
 
 def test_last_selected_survives_restart(tmp_path, monkeypatch):
     rt = _runtime(tmp_path, monkeypatch)
-    rt.set_model_override("conv_abc", "or-gpt-oss-120b")
+    rt.settings.set_model_override("conv_abc", "or-gpt-oss-120b")
 
     # Simulate a server restart
     rt2 = _runtime(tmp_path, monkeypatch)
-    assert rt2.get_last_selected_model() == "or-gpt-oss-120b"
+    assert rt2.settings.model_binding.get_last_selected_model() == "or-gpt-oss-120b"
 
 
 def test_no_pick_ever_returns_none(tmp_path, monkeypatch):
     rt = _runtime(tmp_path, monkeypatch)
-    assert rt.get_last_selected_model() is None
+    assert rt.settings.model_binding.get_last_selected_model() is None
 
 
 def test_context_window_uses_the_conversation_model_override(tmp_path, monkeypatch):
@@ -61,14 +62,14 @@ def test_context_window_uses_the_conversation_model_override(tmp_path, monkeypat
     cid = "conv_context_override"
 
     assert rt.drivers.context_window(cid) == 32768
-    rt.set_model_override(cid, "or-test-model")
+    rt.settings.set_model_override(cid, "or-test-model")
     assert rt.drivers.context_window(cid) == 128000
 
 
 def test_stale_context_window_override_falls_back_to_default(tmp_path, monkeypatch):
     _, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
     cid = "conv_stale_context_override"
-    rt.set_model_override(cid, "deleted-model")
+    rt.settings.set_model_override(cid, "deleted-model")
 
     assert rt.drivers.context_window(cid) == 32768
 
@@ -80,9 +81,9 @@ def test_no_db_path_returns_none(tmp_path, monkeypatch):
         config_store=ConfigStore(tmp_path / "c.json"),
         secret_store=SecretStore(tmp_path / "s.json", box=SecretBox(None)),
     )
-    rt.set_model_override("conv_x", "some-model")
+    rt.settings.set_model_override("conv_x", "some-model")
     # In-memory only (no sidecar path) → get returns None (no persistence)
-    assert rt.get_last_selected_model() is None
+    assert rt.settings.model_binding.get_last_selected_model() is None
 
 
 # ---- seed path: conversation create routes ----------------------------------
@@ -132,7 +133,7 @@ def test_create_conversation_seeds_last_selected_when_no_override(tmp_path, monk
     client, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
 
     # Prime the last-selected model
-    rt.set_last_selected_model("or-test-model")
+    rt.settings.model_binding.set_last_selected_model("or-test-model")
 
     resp = client.post(
         "/conversations",
@@ -142,13 +143,13 @@ def test_create_conversation_seeds_last_selected_when_no_override(tmp_path, monk
     cid = resp.json()["conversation_id"]
 
     # The conversation's model override should be the last-selected model
-    assert rt._settings._get_model_override(cid) == "or-test-model"
+    assert rt.settings._get_model_override(cid) == "or-test-model"
 
 
 def test_create_conversation_explicit_override_wins(tmp_path, monkeypatch):
     """An explicit model_override must never be silently replaced by last-selected."""
     client, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
-    rt.set_last_selected_model("or-test-model")
+    rt.settings.model_binding.set_last_selected_model("or-test-model")
 
     resp = client.post(
         "/conversations",
@@ -162,7 +163,7 @@ def test_create_conversation_explicit_override_wins(tmp_path, monkeypatch):
     cid = resp.json()["conversation_id"]
 
     # Explicit pick must win
-    assert rt._settings._get_model_override(cid) == "local-default"
+    assert rt.settings._get_model_override(cid) == "local-default"
 
 
 def test_create_conversation_no_pick_ever_uses_default(tmp_path, monkeypatch):
@@ -178,7 +179,7 @@ def test_create_conversation_no_pick_ever_uses_default(tmp_path, monkeypatch):
     cid = resp.json()["conversation_id"]
 
     # No override set (the default model governs)
-    assert rt._settings._get_model_override(cid) is None
+    assert rt.settings._get_model_override(cid) is None
 
 
 async def test_create_conversation_stale_last_selected_falls_back_loudly(
@@ -192,7 +193,7 @@ async def test_create_conversation_stale_last_selected_falls_back_loudly(
     # Persist a model key that doesn't exist in the catalogue
     stale = "or-model-that-was-deleted"
     default = "local-default"
-    rt.set_last_selected_model(stale)
+    rt.settings.model_binding.set_last_selected_model(stale)
 
     with caplog.at_level("WARNING", logger="disco.agent_server.routes.conversations"):
         resp = client.post(
@@ -203,8 +204,8 @@ async def test_create_conversation_stale_last_selected_falls_back_loudly(
     cid = resp.json()["conversation_id"]
 
     # Unknown key → no override (falls to default_model)
-    assert rt._settings._get_model_override(cid) is None
-    assert rt.get_last_selected_model() is None
+    assert rt.settings._get_model_override(cid) is None
+    assert rt.settings.model_binding.get_last_selected_model() is None
 
     note = (
         f"your previously selected model '{stale}' is no longer available; "
@@ -238,7 +239,7 @@ def test_get_last_selected_returns_null_initially(tmp_path, monkeypatch):
 
 def test_get_last_selected_returns_value_after_pick(tmp_path, monkeypatch):
     client, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
-    rt.set_last_selected_model("or-test-model")
+    rt.settings.model_binding.set_last_selected_model("or-test-model")
 
     resp = client.get("/models/last-selected")
     assert resp.status_code == 200

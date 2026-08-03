@@ -28,7 +28,7 @@ from disco.core import (
 
 
 def _mgr(store: SqliteEventStore) -> LifecycleManager:
-    return ConversationRuntime(store)._lifecycle
+    return ConversationRuntime(store).lifecycle
 
 
 # Keep the accepted fixture identity stable while the old fake-runtime helper

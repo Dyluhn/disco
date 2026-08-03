@@ -157,7 +157,7 @@ async def _drive(
     stats = {"actions": 0, "plan_gates": 0, "action_gates": 0, "planning_reads": 0}
     for _round in range(60):
         runtime.run_controller.kick(CID)
-        task = runtime._run_registry.task(CID)
+        task = runtime.run_registry.task(CID)
         if task is not None:
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=240)
@@ -205,7 +205,7 @@ async def main() -> None:
         store, config=cfg, sandbox_service=sbx, sandbox_spec=SandboxSpec(memory_mb=512)
     )
     store.create_conversation(CID, owner_id="local")
-    runtime.set_surface(CID, "build")
+    runtime.settings._set_surface(CID, "build")
     await store.append(CID, _user(TASK))
     print(f"\nTASK: {TASK[:120]} …\n--- agent trace (round 1: first plan + build) ---")
 

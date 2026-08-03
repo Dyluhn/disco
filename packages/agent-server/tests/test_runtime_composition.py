@@ -35,14 +35,14 @@ def test_runtime_owns_no_cross_domain_mutable_collections() -> None:
 def test_run_owners_form_an_explicit_construction_graph() -> None:
     runtime = _runtime()
 
-    assert runtime.run_controller._registry is runtime._run_registry
-    assert runtime._run_supervisor._registry is runtime._run_registry
+    assert runtime.run_controller._registry is runtime.run_registry
+    assert runtime._run_supervisor._registry is runtime.run_registry
     assert runtime._run_supervisor._resources is runtime._run_resources
-    assert runtime._run_kills._runs is runtime._run_registry
+    assert runtime._run_kills._runs is runtime.run_registry
     assert runtime._run_kills._resources is runtime._run_resources
     assert runtime._control._controller is runtime.run_controller
     assert runtime.conversation_control._pins is runtime._kernel_pins
-    assert runtime.conversation_control._runs is runtime._run_registry
+    assert runtime.conversation_control._runs is runtime.run_registry
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
     assert runtime.run_sweep._completion is runtime._run_finalizer
     assert runtime.deep_research._state is runtime._research_state
@@ -99,9 +99,11 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # _conversation_control and _drivers, now sessions/connections/
     # sandbox_resources/live_sessions/conversation_control/drivers. 13-B3
     # dissolved four more (18 delegates): _preview, _dr, _mcp and
-    # _run_controller, now preview/deep_research/mcp/run_controller. This count
+    # _run_controller, now preview/deep_research/mcp/run_controller. 13-B5
+    # dissolved the remaining single-owner families; execute_pi_tool remains
+    # as the final orchestration delegate. This count
     # is a ratchet: it falls as 13-B proceeds and must never rise.
-    assert len(compatibility) == 26
+    assert len(compatibility) == 1
     assert public == active_ingress | compatibility
     assert all(
         getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
@@ -213,7 +215,7 @@ async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> N
     runtime = _runtime()
     runtime.mcp._start_mcp_pool = AsyncMock()
     runtime.mcp._close_mcp_pool = AsyncMock()
-    runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
+    runtime.lifecycle.reconcile_orphaned_runs = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
     runtime.schedules._schedule_manager_loop = AsyncMock()
     runtime.drivers.prewarm_model_probe = AsyncMock()

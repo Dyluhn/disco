@@ -279,9 +279,9 @@ async def _registered_generation(runtime: ConversationRuntime) -> int:
         return await runtime._store.get_state(CID)
 
     task = asyncio.create_task(state())
-    generation = runtime._run_registry.register_task(CID, task)
+    generation = runtime.run_registry.register_task(CID, task)
     await task
-    assert runtime._run_registry.complete_task(CID, task)
+    assert runtime.run_registry.complete_task(CID, task)
     return generation
 
 

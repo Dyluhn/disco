@@ -51,11 +51,11 @@ _GATE_PARAMS = [
 def _advance_generation(rt: ConversationRuntime, cid: str, target: int) -> None:
     """Advance a run generation through the registry's public operations."""
 
-    while (rt._run_registry.generation(cid) or 0) < target:
+    while (rt.run_registry.generation(cid) or 0) < target:
         task = MagicMock()
         task.done.return_value = True
-        rt._run_registry.register_task(cid, task)
-        assert rt._run_registry.complete_task(cid, task)
+        rt.run_registry.register_task(cid, task)
+        assert rt.run_registry.complete_task(cid, task)
 
 
 @pytest.mark.asyncio
@@ -68,7 +68,7 @@ async def test_abandoned_gate_past_ttl_is_reaped(gate, monkeypatch):
     cid = await _gated_conv(store, f"conv_{gate.value}", gate)
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     assert reaped == 1
     state = await store.get_state(cid)
@@ -94,7 +94,7 @@ async def test_recent_gate_not_reaped():
     # No env override → default 86400s TTL; a just-created conv is way under it.
     os.environ.pop("DISCO_ABANDONED_GATE_TTL_S", None)
     os.environ.pop("PMX_ABANDONED_GATE_TTL_S", None)
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     assert reaped == 0
     state = await store.get_state(cid)
@@ -111,7 +111,7 @@ async def test_connected_gate_not_reaped_even_past_ttl(monkeypatch):
     rt.connections.on_connect(cid)  # UI attached
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     assert reaped == 0
     state = await store.get_state(cid)
@@ -136,12 +136,12 @@ async def test_active_run_gate_not_reaped_even_past_ttl(monkeypatch):
         await asyncio.Event().wait()
 
     task = asyncio.ensure_future(_never())
-    rt._run_registry.register_task(active, task)  # type: ignore[arg-type]
+    rt.run_registry.register_task(active, task)  # type: ignore[arg-type]
     try:
-        assert active in rt.running_conversation_ids()
+        assert active in rt.run_registry.active_conversation_ids()
 
         monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
-        reaped = await rt.sweep_abandoned_gates_once()
+        reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
         # Only the dormant one is reaped; the live run is untouched.
         assert reaped == 1
@@ -188,7 +188,7 @@ async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
     monkeypatch.setattr(store, "get_events", _get_events_then_newer_run)
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
 
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     # Stale reap is skipped: no STUCK in the NEWER run's log.
     assert reaped == 0
@@ -197,7 +197,7 @@ async def test_newer_run_reusing_pin_blocks_stale_reap(monkeypatch):
     )
     # The NEWER run's pin is left intact (that run owns it now).
     assert rt._kernel_pin_store.current(cid) is sentinel_kernel
-    assert rt._run_registry.generation(cid) == 6
+    assert rt.run_registry.generation(cid) == 6
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_genuinely_abandoned_gate_terminalizes_and_unpins(monkeypatch):
     _advance_generation(rt, cid, 3)  # the gate-creating run's generation, never bumped
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     assert reaped == 1
     assert (await store.get_state(cid)).execution_status is ConversationStatus.STUCK
@@ -234,7 +234,7 @@ async def test_non_gate_conversations_never_reaped(monkeypatch):
     finished = await _gated_conv(store, "conv_finished", ConversationStatus.FINISHED)
 
     monkeypatch.setenv("DISCO_ABANDONED_GATE_TTL_S", "0")
-    reaped = await rt.sweep_abandoned_gates_once()
+    reaped = await rt.lifecycle.sweep_abandoned_gates_once()
 
     assert reaped == 0
     assert (await store.get_state(running)).execution_status is ConversationStatus.RUNNING

@@ -24,7 +24,7 @@ async def _create_schedule_response(
         # model_override. An explicit schedule pick stays authoritative.
         schedule_model = body.model_override
         if not schedule_model:
-            last = runtime.get_last_selected_model()
+            last = runtime.settings.model_binding.get_last_selected_model()
             if last:
                 cfg = runtime._config_store.load()
                 if last in cfg.models:

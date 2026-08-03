@@ -406,7 +406,7 @@ async def import_project(
         title=title,
         surface="build",
     )
-    runtime.set_surface(conversation_id, "build")
+    runtime.settings._set_surface(conversation_id, "build")
     created_at = await _created_at_for(store, conversation_id, owner_id)
     project_store.write_manifest(
         conversation_id,
