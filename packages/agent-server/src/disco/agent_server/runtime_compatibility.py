@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .runtime import ConversationRuntime
 
 
-async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult:
+async def execute_disco_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult:
 
     executor = self._run_resources.executor(conversation_id)
     if executor is None:
@@ -27,7 +27,7 @@ async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> To
     if executor is None:
         raise RuntimeError("tool executor was not composed")
     action = ActionEvent(
-        source=EventSource.AGENT, thought=f"[pi] {tool_call.tool_name}", tool_call=tool_call
+        source=EventSource.AGENT, thought=f"[disco] {tool_call.tool_name}", tool_call=tool_call
     )
     await self._store.append(conversation_id, action)
     result = await executor.execute(tool_call)
@@ -50,4 +50,4 @@ async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> To
 def install_runtime_compatibility(runtime_cls: type[ConversationRuntime]) -> None:
     """Install explicit delegates without a dynamic attribute/service-locator seam."""
 
-    runtime_cls.execute_pi_tool = execute_pi_tool
+    runtime_cls.execute_disco_tool = execute_disco_tool

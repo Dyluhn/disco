@@ -1,30 +1,14 @@
-"""Print the OpenRouter API key for the harness-respawned agent-server.
+"""Pass the explicitly configured Disclaude harness credential to the server."""
 
-The encrypted secret store is permanently locked (PMX_SECRET_KEY lost;
-OpenRouter never re-shows keys), so the runtime's PMX_OPENROUTER_API_KEY env
-fallback is the live auth path. Source of truth: Pi's auth.json (free-models
-key — dev traffic only). Stdout is consumed by _SERVER_SH's $(...); never log
-or echo the key anywhere else.
-"""
-
-import json
+import os
+import sys
 
 
-def _find(o):
-    if isinstance(o, dict):
-        k = o.get("key")
-        if isinstance(k, str) and k.startswith("sk-or-"):
-            return k
-        for v in o.values():
-            r = _find(v)
-            if r:
-                return r
-    elif isinstance(o, list):
-        for v in o:
-            r = _find(v)
-            if r:
-                return r
-    return None
+_CREDENTIAL_ENV = "DISCO_OPENROUTER_API_KEY"
 
 
-print(_find(json.load(open("/home/dylan/.pi/agent/auth.json"))) or "")
+credential = os.environ.get(_CREDENTIAL_ENV, "")
+if not credential.startswith("sk-or-"):
+    print(f"{_CREDENTIAL_ENV} is required", file=sys.stderr)
+    raise SystemExit(2)
+print(credential, end="")

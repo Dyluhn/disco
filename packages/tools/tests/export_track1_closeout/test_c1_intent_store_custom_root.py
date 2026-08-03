@@ -10,7 +10,7 @@ fallback store, and a missing capability / invalid root / owner mismatch / persi
 failure fails closed with a typed error and ZERO bytes persisted.
 
 Boundary (plan §1.2 / §4 crit 3): the end-to-end tests drive ``release_declare``
-through the REAL runtime tool path — ``ConversationRuntime.execute_pi_tool`` builds
+through the REAL runtime tool path — ``ConversationRuntime.execute_disco_tool`` builds
 the conversation's real ``DefaultToolExecutor`` over a real ``ProcessSandboxService``
 and runs the real ``ReleaseDeclareTool`` — and ``GET /api/projects/{cid}/release``
 through the REAL FastAPI app. Nothing under test is mocked; the ONLY ``monkeypatch``
@@ -62,7 +62,7 @@ pytestmark = pytest.mark.export_track1_closeout
 
 
 class _NeverCalledProvider:
-    """A model double that fails LOUD if invoked. ``execute_pi_tool`` runs ONE tool
+    """A model double that fails LOUD if invoked. ``execute_disco_tool`` runs ONE tool
     call directly against the conversation's executor and never drives a model
     turn, so a correct run never touches this — but if the plumbing changed to
     call the model, the test fails honestly instead of hanging on a real network."""
@@ -166,7 +166,7 @@ async def _declare(
     if create:
         store.create_conversation(cid, owner_id=owner_id)
         runtime.settings._set_surface(cid, "build")
-    return await runtime.execute_pi_tool(
+    return await runtime.execute_disco_tool(
         cid,
         ToolCall(
             tool_name="release_declare",

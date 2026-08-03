@@ -47,12 +47,11 @@ _INSTALL = re.compile(
 
 # The exact command the pane runs — tee -a so Phase C's token series spans
 # both server lives in one log.
-# The OpenRouter key is injected the same way the operator pane does it: the
-# encrypted secret store is permanently locked (PMX_SECRET_KEY lost), so the
-# runtime's env fallback is the live auth path — a respawn WITHOUT it leaves
+# The explicitly configured Disclaude OpenRouter key is injected the same way
+# the operator pane does it — a respawn WITHOUT it leaves
 # the resumed driver 401ing (found live 2026-06-11: post-restart resume stalled
 # with zero recovered ports because the agent couldn't authenticate).
-_OR_KEY_SH = "PMX_OPENROUTER_API_KEY=$(python3 harness/marathon/_or_key.py)"
+_OR_KEY_SH = "DISCO_OPENROUTER_API_KEY=$(python3 harness/marathon/_or_key.py)"
 _SERVER_SH = (
     "cd '{root}' && " + _OR_KEY_SH + " PMX_LOG_JSON=1 PMX_DRIVER_VISION=1 PMX_SANDBOX=gvisor "
     "PMX_LOCAL_SOCKET=ssh://sandbox@100.81.82.115 PMX_LOCAL_RUNTIME=runsc "
