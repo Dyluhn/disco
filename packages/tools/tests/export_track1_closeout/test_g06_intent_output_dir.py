@@ -55,7 +55,7 @@ pytestmark = pytest.mark.export_track1_closeout
 
 
 class _NeverCalledProvider:
-    """A model double that fails LOUD if invoked. ``execute_pi_tool`` runs ONE tool
+    """A model double that fails LOUD if invoked. ``execute_disco_tool`` runs ONE tool
     call directly against the conversation's executor and never drives a model turn,
     so a correct run never touches this — but if the plumbing changed to call the
     model, the test fails honestly instead of hanging on a real network."""
@@ -138,7 +138,7 @@ async def test_declared_static_output_dir_round_trips_into_sidecar(
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    result = await runtime.execute_pi_tool(
+    result = await runtime.execute_disco_tool(
         cid,
         ToolCall(
             tool_name="release_declare",

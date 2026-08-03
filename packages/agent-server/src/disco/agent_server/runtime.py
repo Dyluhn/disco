@@ -234,7 +234,7 @@ class ConversationRuntime:
         _secret_store: SecretStore
         _skill_store: SkillStore
 
-        async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
+        async def execute_disco_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
         # fmt: on
 
     _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS

@@ -98,7 +98,7 @@ class LifecycleOracle:
 
 
 class SidecarStopOracle:
-    """The Pi sidecar (and provider calls) stopped at the terminal state — no runaway
+    """The execution sidecar (and provider calls) stopped at the terminal state — no runaway
     token burn."""
 
     _NAME = "sidecar_stop"

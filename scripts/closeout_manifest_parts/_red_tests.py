@@ -22,7 +22,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py"
             "::test_release_declare_writes_under_configured_custom_root"
         ),
-        "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_pi_tool",
+        "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_disco_tool",
         "expected_failure": (
             "release_declare writes the sidecar under the DISCO_DATA_DIR default root "
             "(ProjectStore('')) instead of the configured custom projects root"
@@ -195,7 +195,7 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "::test_positional_credential_rejected_at_release_declare[leading]"
         ),
         "boundary": (
-            "real release_declare ToolExecutor (execute_pi_tool) + real release route "
+            "real release_declare ToolExecutor (execute_disco_tool) + real release route "
             "+ real bound /download zip bytes"
         ),
         "expected_failure": (

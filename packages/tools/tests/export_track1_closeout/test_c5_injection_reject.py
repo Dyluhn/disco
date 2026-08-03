@@ -84,7 +84,7 @@ _MARK = "C5SENT"
 
 
 class _NeverCalledProvider:
-    """A model double that fails LOUD if invoked. ``execute_pi_tool`` runs ONE tool
+    """A model double that fails LOUD if invoked. ``execute_disco_tool`` runs ONE tool
     call directly against the conversation's executor and never drives a model turn,
     so a correct run never touches this — but if the plumbing changed to call the
     model, the test fails honestly instead of hanging on a real network."""
@@ -151,7 +151,7 @@ async def _declare(
     data_dir: Path,
 ) -> ToolResult:
     """Run `release_declare` through the REAL runtime tool path — create the build
-    conversation, then ``ConversationRuntime.execute_pi_tool`` builds the conversation's
+    conversation, then ``ConversationRuntime.execute_disco_tool`` builds the conversation's
     real ``DefaultToolExecutor`` over a real ``ProcessSandboxService`` and runs the real
     ``ReleaseDeclareTool``. ``DISCO_DATA_DIR`` (and the configured default root) point at
     `data_dir` so any persisted sidecar is contained and provable. Returns the runtime's
@@ -159,7 +159,7 @@ async def _declare(
     runtime, store = _runtime(monkeypatch, data_dir=data_dir)
     store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    return await runtime.execute_pi_tool(
+    return await runtime.execute_disco_tool(
         cid,
         ToolCall(tool_name="release_declare", arguments=dict(arguments), call_id="closeout-c5"),
     )
@@ -226,7 +226,7 @@ async def _reject_resource(
     runtime.settings._set_surface(cid, "build")
     call = ToolCall(tool_name="release_declare", arguments=dict(arguments), call_id="closeout-c5")
     try:
-        result = await runtime.execute_pi_tool(cid, call)
+        result = await runtime.execute_disco_tool(cid, call)
     except Exception as exc:
         # A typed rejection surfaced as a raise (rather than a returned failure) is an
         # acceptable fail-closed outcome; the load-bearing invariants below still hold.

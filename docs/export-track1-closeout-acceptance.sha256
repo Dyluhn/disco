@@ -525,7 +525,7 @@
       "work_order": "C1",
       "lane": "python-closeout",
       "node_id": "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_release_declare_writes_under_configured_custom_root",
-      "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_pi_tool",
+      "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_disco_tool",
       "expected_failure": "release_declare writes the sidecar under the DISCO_DATA_DIR default root (ProjectStore('')) instead of the configured custom projects root"
     },
     {
@@ -611,7 +611,7 @@
       "work_order": "R1/G02",
       "lane": "python-closeout",
       "node_id": "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[leading]",
-      "boundary": "real release_declare ToolExecutor (execute_pi_tool) + real release route + real bound /download zip bytes",
+      "boundary": "real release_declare ToolExecutor (execute_disco_tool) + real release route + real bound /download zip bytes",
       "expected_failure": "a bare POSITIONAL literal credential (npm _authToken operand — no flag, no '=', no shell metacharacter, not a ${NAME} ref) passes check_token_hygiene AND the positional-operand branch of check_declaration_argv, so it is ACCEPTED at declare, PERSISTS in release-intent.json, and SHIPS verbatim in the emitted Dockerfile CMD + release.json; it must fail closed like the C5 flag forms. Siblings cover the middle/trailing positions and the does_not_ship_through_release_download half (6 nodes total). Fix = R1."
     },
     {

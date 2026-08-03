@@ -27,7 +27,7 @@ fail closed the same way it does for the flag forms.
 
 Boundary (plan §1.2 / §4 crit 3+4): every case drives the REAL public boundary — a
 real ``ConversationRuntime`` + real ``ProjectStore`` over a real on-disk root, the real
-``release_declare`` ToolExecutor (``execute_pi_tool``), the real
+``release_declare`` ToolExecutor (``execute_disco_tool``), the real
 ``GET /api/projects/{cid}/release`` route, and the real bound
 ``GET /download?version_seq=&spec_digest=`` zip bytes. Nothing under test is
 mocked/patched/faked. The ONLY seam is ``monkeypatch.setattr(cfg_store, "load", …)``
@@ -166,7 +166,7 @@ def _runtime_and_client(
 ) -> tuple[ConversationRuntime, TestClient, ProjectStore]:
     """The C4 ``_app_and_store`` construction, additionally returning the real
     ``ConversationRuntime`` so a real ``release_declare`` ToolExecutor can be driven
-    through ``execute_pi_tool``. Identical build (real ConversationRuntime + real
+ through ``execute_disco_tool``. Identical build (real ConversationRuntime + real
     ProjectStore over a real on-disk root); the ONLY seam is ``ConfigStore.load`` — the
     runtime resolves the ACTIVE configured projects root through it, so the tool's
     host-owned intent writer lands (or, on a correct rejection, does NOT land) its
@@ -245,13 +245,13 @@ async def _declare(
     runtime: ConversationRuntime, store: SqliteEventStore, cid: str, start_cmd: list[str]
 ) -> ToolResult:
     """Run ``release_declare`` through the REAL runtime tool path: create the build
-    conversation, then ``execute_pi_tool`` builds the conversation's real
+    conversation, then ``execute_disco_tool`` builds the conversation's real
     ``DefaultToolExecutor`` and runs the real ``ReleaseDeclareTool`` over the real
     ``ReleaseIntent`` / ``check_declaration_argv`` validators. Returns the
     ``ToolResult``."""
     store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    return await runtime.execute_pi_tool(
+    return await runtime.execute_disco_tool(
         cid,
         ToolCall(
             tool_name="release_declare",

@@ -9,7 +9,7 @@ inline ``NAME=value`` / URL-userinfo forms) and drives each independently throug
 EACH real boundary, so removing the guard at any one boundary fails that boundary's
 test (the committed half of the mutation criterion):
 
-* the real ``release_declare`` tool (``execute_pi_tool``) must fail closed with a
+* the real ``release_declare`` tool (``execute_disco_tool``) must fail closed with a
   typed error, echo NO value, and persist ZERO sidecar bytes;
 * a directly-written RAW ``release-intent.json`` sidecar (bypassing the tool) must
   make ``GET /api/projects/{cid}/release`` fail closed to ``needs_review`` /
@@ -179,7 +179,7 @@ async def _declare(
 ) -> ToolResult:
     store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    return await runtime.execute_pi_tool(
+    return await runtime.execute_disco_tool(
         cid,
         ToolCall(
             tool_name="release_declare",
@@ -328,7 +328,7 @@ async def test_release_declare_accepts_benign_and_declared_reference(
     runtime, _app, _ps = _build(_store, tmp_path, monkeypatch)
     _store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    result = await runtime.execute_pi_tool(
+    result = await runtime.execute_disco_tool(
         cid,
         ToolCall(tool_name="release_declare", arguments=arguments, call_id="closeout-r1ok"),
     )
@@ -395,7 +395,7 @@ async def _declare_with_resources(
 ) -> ToolResult:
     store.create_conversation(cid, owner_id="local")
     runtime.settings._set_surface(cid, "build")
-    return await runtime.execute_pi_tool(
+    return await runtime.execute_disco_tool(
         cid,
         ToolCall(
             tool_name="release_declare",

@@ -100,7 +100,7 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # sandbox_resources/live_sessions/conversation_control/drivers. 13-B3
     # dissolved four more (18 delegates): _preview, _dr, _mcp and
     # _run_controller, now preview/deep_research/mcp/run_controller. 13-B5
-    # dissolved the remaining single-owner families; execute_pi_tool remains
+    # dissolved the remaining single-owner families; execute_disco_tool remains
     # as the final orchestration delegate. This count
     # is a ratchet: it falls as 13-B proceeds and must never rise.
     assert len(compatibility) == 1
