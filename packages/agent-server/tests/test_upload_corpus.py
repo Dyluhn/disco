@@ -88,9 +88,10 @@ class _FakeRuntime:
         self._upload_passages: dict[str, list[Any]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
         self.sessions = SimpleNamespace(upload_session=self.upload_session)
-        self._workspace = SimpleNamespace(
-            fence=self.workspace_fence,
-            record_mutation_locked=self.record_workspace_mutation_locked,
+        self.workspace = SimpleNamespace(
+            lock=self._workspace_lock,
+            fence=self._workspace_fence,
+            record_mutation_locked=self._record_workspace_mutation_locked,
         )
         self.uploads = SimpleNamespace(
             store=self.store_upload,
@@ -105,22 +106,22 @@ class _FakeRuntime:
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
+    def _workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
 
     @contextlib.asynccontextmanager
-    async def workspace_fence(self, conversation_id: str) -> AsyncIterator[None]:
-        async with self.workspace_lock(conversation_id):
+    async def _workspace_fence(self, conversation_id: str) -> AsyncIterator[None]:
+        async with self._workspace_lock(conversation_id):
             yield
 
-    async def record_workspace_mutation_locked(
+    async def _record_workspace_mutation_locked(
         self,
         conversation_id: str,
         operation: str,
         *,
         paths=(),  # noqa: ANN001
     ) -> None:
-        assert self.workspace_lock(conversation_id).locked()
+        assert self._workspace_lock(conversation_id).locked()
 
     def kick(self, cid: str) -> None:
         pass
@@ -265,7 +266,7 @@ def _research_runtime(research_stream: Any) -> mock.MagicMock:
     runtime.drivers.prewarm_model_probe = mock.AsyncMock()
     runtime.drivers.prewarm_vision_probe = mock.AsyncMock()
     runtime.aclose = mock.AsyncMock()
-    runtime.project_store = lambda: _EmptyProjectStore()
+    runtime.projects.current_project_store = lambda: _EmptyProjectStore()
     return runtime
 
 

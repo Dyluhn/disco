@@ -19,7 +19,6 @@ was folded into the atomic ingress and is proven dead here.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -59,7 +58,9 @@ class _Runtime:
     """Faithful runtime double for ControlOps.request_plan: a REAL
     WorkspaceCoordinator over a real event store, plus trackable kick/_loop_for
     spies. Mirrors test_run_status_authority.py::_Runtime and the real
-    ConversationRuntime wiring — workspace_lock -> coordinator.lock, and
+    ConversationRuntime wiring — 13-B4 promoted `_workspace` to the public
+    `workspace` seam and deleted the `workspace_lock` delegate, so consumers
+    reach `runtime.workspace.lock` on the REAL coordinator held here, and
     _BUILD_LIKE_SURFACES == {"build", "agent"} (runtime.py:1142). Because the
     ingress runs the production coordinator, assertions read the real event log,
     not mock bookkeeping."""
@@ -75,7 +76,7 @@ class _Runtime:
         projects = MagicMock()
         projects.current_project_store.return_value = project_store
         fence = WorkspaceFenceService(store, projects, self._settings)
-        self._workspace = WorkspaceCoordinator(
+        self.workspace = WorkspaceCoordinator(
             store,
             self._settings,
             projects,
@@ -87,10 +88,10 @@ class _Runtime:
         )
         self._lifecycle_commands = LifecycleCommandService(
             store=store,
-            fence=self._workspace,
+            fence=self.workspace,
             terminal_effects=MagicMock(),
         )
-        self._workspace._lifecycle_commands = self._lifecycle_commands
+        self.workspace._lifecycle_commands = self._lifecycle_commands
         # 13-B3: `kick` is owned by RunController and reached as
         # `runtime.run_controller.kick`, so the double doubles the COLLABORATOR
         # rather than re-exposing the method on itself.
@@ -104,8 +105,6 @@ class _Runtime:
     def _project_store_now(self) -> ProjectStore:
         return self._project_store
 
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._workspace.lock(conversation_id)
 
 
 # ---- helpers -----------------------------------------------------------------
@@ -123,7 +122,7 @@ def _make_ops(runtime: _Runtime) -> ControlOps:
     controller.loop_for = runtime._loop_for
     return ControlOps(
         runtime._store,
-        runtime._workspace,
+        runtime.workspace,
         LoopRegistry(),
         CancellationRegistry(),
         controller,

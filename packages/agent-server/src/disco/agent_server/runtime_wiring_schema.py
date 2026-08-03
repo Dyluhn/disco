@@ -82,8 +82,8 @@ class _RuntimeWiringSchema:
     uploads: UploadStore
     _secret_store: SecretStore
     _config_store: ConfigStore
-    _sandbox: SandboxRuntimeService
-    _projects: ProjectRuntimeService
+    sandbox: SandboxRuntimeService
+    projects: ProjectRuntimeService
     _loop_registry: LoopRegistry
     _run_registry: RunRegistry
     _run_authorities: RunAuthorityLedger
@@ -106,7 +106,7 @@ class _RuntimeWiringSchema:
     suggestions: SuggestionService
     share: ShareService
     _resume: ResumeService
-    _workspace: WorkspaceCoordinator
+    workspace: WorkspaceCoordinator
     _workspace_ownership: WorkspaceOwnership
     _persistence_notifier: PersistenceNotifier
     _contract: BuildContractService

@@ -12,6 +12,8 @@ published) even while a dev server is live inside the box. These tests prove:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from disco.agent_server.host_proxy import HostPreviewProxyMiddleware
 from disco.agent_server.routes.preview import make_preview_router
 from disco.core import SqliteEventStore
@@ -55,11 +57,15 @@ class _FakeRuntime:
     def live_session(self, conversation_id: str):
         return self._session
 
-    def project_store(self):
+    def _current_project_store(self):
         return None  # no host snapshot → the only channel is fetch_inside
 
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         return f"conv_{cid8}"
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 def _client(runtime: _FakeRuntime) -> TestClient:

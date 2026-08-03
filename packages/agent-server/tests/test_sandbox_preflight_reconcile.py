@@ -43,7 +43,7 @@ class _FakeSession:
 
 def _set_backend(rt: ConversationRuntime, backend: str) -> None:
     """Pin the effective backend identity the reconcile paths compare."""
-    rt._sandbox.effective_backend_name = lambda: backend  # type: ignore[method-assign]
+    rt.sandbox.effective_backend_name = lambda: backend  # type: ignore[method-assign]
 
 
 def _fake_executor(session: _FakeSession) -> types.SimpleNamespace:
@@ -58,8 +58,8 @@ def _fake_executor(session: _FakeSession) -> types.SimpleNamespace:
 async def test_preflight_sandbox_passes_when_reachable():
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)  # no injected sandbox → preflight active
-    rt._sandbox._sandbox_service_now = lambda: _FakeService()  # type: ignore[method-assign]
-    assert await rt._sandbox.preflight_failure() is None
+    rt.sandbox._sandbox_service_now = lambda: _FakeService()  # type: ignore[method-assign]
+    assert await rt.sandbox.preflight_failure() is None
 
 
 async def test_preflight_sandbox_typed_named_reason_when_unreachable():
@@ -72,7 +72,7 @@ async def test_preflight_sandbox_typed_named_reason_when_unreachable():
         )
 
     cfg = SandboxConfig(backend="gvisor", docker_socket="ssh://sandbox@100.81.82.115")
-    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+    rt.sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(
             sandbox=SandboxSettings(
                 backend="gvisor",
@@ -80,10 +80,10 @@ async def test_preflight_sandbox_typed_named_reason_when_unreachable():
             )
         )
     )
-    rt._sandbox._sandbox_service_now = lambda: _FakeService(  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = lambda: _FakeService(  # type: ignore[method-assign]
         name="gvisor", cfg=cfg, on_health=_dead
     )
-    reason = await rt._sandbox.preflight_failure()
+    reason = await rt.sandbox.preflight_failure()
     assert reason is not None
     assert "gvisor sandbox host ssh://sandbox@100.81.82.115" in reason  # endpoint NAMED
     assert "unreachable" in reason
@@ -98,7 +98,7 @@ async def test_preflight_sandbox_is_wall_bounded_on_black_hole():
     async def _hang():
         await asyncio.sleep(60)
 
-    rt._sandbox._sandbox_service_now = lambda: _FakeService(on_health=_hang)  # type: ignore[method-assign]
+    rt.sandbox._sandbox_service_now = lambda: _FakeService(on_health=_hang)  # type: ignore[method-assign]
     import disco.agent_server.sandbox_runtime_service as srs_mod
 
     monkeypatch_timeout = 0.1
@@ -107,7 +107,7 @@ async def test_preflight_sandbox_is_wall_bounded_on_black_hole():
 
     t0 = time.monotonic()
     try:
-        reason = await rt._sandbox.preflight_failure()
+        reason = await rt.sandbox.preflight_failure()
     finally:
         srs_mod._RUN_PREFLIGHT_TIMEOUT_S = original_timeout
     elapsed = time.monotonic() - t0
@@ -120,7 +120,7 @@ async def test_preflight_sandbox_skipped_when_backend_injected():
     store = SqliteEventStore(":memory:")
     # An injected sandbox is authoritative — no endpoint to probe.
     rt = ConversationRuntime(store, sandbox_service=_FakeService(name="process"))
-    assert await rt._sandbox.preflight_failure() is None
+    assert await rt.sandbox.preflight_failure() is None
 
 
 async def test_run_with_persistence_emits_typed_error_and_skips_loop():
@@ -137,7 +137,7 @@ async def test_run_with_persistence_emits_typed_error_and_skips_loop():
         return "gvisor sandbox host ssh://sandbox@host unreachable: connection refused"
 
     rt._driver_preflight.check = _ok_driver  # type: ignore[method-assign]
-    rt._sandbox.preflight_failure = _fail_sandbox  # type: ignore[method-assign]
+    rt.sandbox.preflight_failure = _fail_sandbox  # type: ignore[method-assign]
 
     class _Loop:
         def __init__(self):
@@ -256,7 +256,7 @@ async def test_evict_stale_backend_uses_effective_local_podman_identity(monkeypa
     session is not stale merely because the persisted UI label remains ``local``."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+    rt.sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
@@ -279,7 +279,7 @@ async def test_evict_stale_backend_uses_effective_podman_socket_identity(monkeyp
     local position whose Docker-compatible socket is visibly a Podman socket."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+    rt.sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(
             sandbox=SandboxSettings(
                 backend="local",
@@ -307,7 +307,7 @@ async def test_reconcile_preserves_effective_local_podman_identity(monkeypatch):
     """Bulk reconciliation uses the same effective deployment identity as a kick."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+    rt.sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "podman")
@@ -324,7 +324,7 @@ async def test_reconcile_effective_engine_change_still_evicts(monkeypatch):
     """A real deployment-engine change remains a stale-backend transition."""
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
+    rt.sandbox._config_store = types.SimpleNamespace(  # type: ignore[assignment]
         load=lambda: types.SimpleNamespace(sandbox=SandboxSettings(backend="local"))
     )
     monkeypatch.setenv("DISCO_LOCAL_ENGINE", "docker")

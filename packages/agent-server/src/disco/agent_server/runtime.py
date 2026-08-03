@@ -101,13 +101,8 @@ from .workspace_service import (
 )
 
 if TYPE_CHECKING:
-    import asyncio
-    import contextlib
-    from collections.abc import AsyncIterator
 
-    from disco.core import DEFAULT_OWNER_ID, ToolCall, ToolResult, WorkspaceMutationEvent
-    from disco.core.llm import SandboxSettings
-    from disco.tools.projects import VersionRecord
+    from disco.core import DEFAULT_OWNER_ID, ToolCall, ToolResult
 
     from .build_contract_service import BuildContractService
     from .build_loop_factory import BuildLoopFactory
@@ -139,7 +134,6 @@ if TYPE_CHECKING:
     from .suggestion_service import SuggestionService
     from .title_service import TitleService
     from .upload_store import UploadStore
-    from .workspace_commit import CommittedWorkspaceView
     from .workspace_service import WorkspaceCoordinator
 
 
@@ -202,7 +196,8 @@ class ConversationRuntime:
 
     if TYPE_CHECKING:
         # fmt: off
-        # The declared public collaborator seam (13-B1, extended by 13-B2).
+        # The declared public collaborator seam (13-B1, extended by 13-B2,
+        # 13-B3 and 13-B4).
         # Consumers reach the owning service by name instead of through a
         # delegate.
         connections: ConnectionTracker
@@ -212,8 +207,10 @@ class ConversationRuntime:
         live_sessions: LiveSessionDirectory
         mcp: McpManager
         preview: PreviewService
+        projects: ProjectRuntimeService
         run_controller: RunController
         run_sweep: RunStrandedSweep
+        sandbox: SandboxRuntimeService
         sandbox_resources: SandboxResourceReconciler
         schedules: ScheduleService
         sessions: SessionsService
@@ -222,6 +219,7 @@ class ConversationRuntime:
         suggestions: SuggestionService
         titles: TitleService
         uploads: UploadStore
+        workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore
         _contract: BuildContractService
@@ -229,20 +227,15 @@ class ConversationRuntime:
         _idle_sweeper: LifecycleIdleSweeper
         _lifecycle: LifecycleManager
         _loop_factory: BuildLoopFactory
-        _projects: ProjectRuntimeService
         _resume: ResumeService
         _run_registry: RunRegistry
         _run_execution: RunPersistenceSupervisor
         _run_supervisor: RunSupervisor
-        _sandbox: SandboxRuntimeService
         _secret_store: SecretStore
         _settings: RuntimeSettings
         _skill_store: SkillStore
-        _workspace: WorkspaceCoordinator
 
         def set_surface(self, conversation_id: str, surface: str) -> None: ...
-        async def probe_active_sandbox(self) -> tuple[bool, str, str]: ...
-        async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]: ...  # noqa: E501
         def set_model_override(self, conversation_id: str, model_id: str | None) -> None: ...
         def set_autonomous(self, conversation_id: str, value: bool=True) -> None: ...
         def is_autonomous(self, conversation_id: str) -> bool: ...
@@ -262,25 +255,11 @@ class ConversationRuntime:
         def get_last_selected_model(self) -> str | None: ...
         def set_last_selected_model(self, model_id: str | None) -> None: ...
         async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult: ...  # noqa: E501
-        def workspace_lock(self, conversation_id: str) -> asyncio.Lock: ...
-        def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]: ...  # noqa: E501
-        @contextlib.asynccontextmanager
-        async def workspace_mutation(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> AsyncIterator[None]:  # noqa: E501
-            if False:
-                yield
-        async def record_workspace_mutation_locked(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> WorkspaceMutationEvent: ...  # noqa: E501
-        async def finalize_host_workspace_change(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
-        async def finalize_host_mirror_change_locked(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
-        async def require_committed_host_mirror_locked(self, conversation_id: str) -> CommittedWorkspaceView: ...  # noqa: E501
         async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
         def sandbox_state(self, conversation_id: str) -> str | None: ...
         def sandbox_instance_ids(self, conversation_id: str) -> list[str]: ...
         async def sweep_idle_once(self) -> int: ...
         async def sweep_abandoned_gates_once(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
-        def project_store(self) -> ProjectStore: ...
-        async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict: ...
-        def sandbox_backend_name(self) -> str | None: ...
-        async def forget_conversation(self, conversation_id: str) -> None: ...
         def running_conversation_ids(self) -> set[str]: ...
         # fmt: on
 
@@ -360,7 +339,7 @@ class ConversationRuntime:
         return self._settings._effective_autonomous(conversation_id)
 
     def _sandbox_service_now(self) -> SandboxService:
-        return self._sandbox._sandbox_service_now()
+        return self.sandbox._sandbox_service_now()
 
     def _build_sandbox_spec(
         self,
@@ -368,7 +347,7 @@ class ConversationRuntime:
         surface: str = "build",
         mcp_egress_hosts: frozenset[str] | None = None,
     ) -> SandboxSpec:
-        return self._sandbox._build_sandbox_spec(
+        return self.sandbox._build_sandbox_spec(
             surface=surface,
             mcp_egress_hosts=mcp_egress_hosts,
         )
@@ -393,7 +372,7 @@ class ConversationRuntime:
         )
 
     def _project_store_now(self) -> ProjectStore:
-        return self._projects.current_project_store()
+        return self.projects.current_project_store()
 
     def _workflow_tool_definitions(self) -> tuple[Any, ...]:
         """State-free compatibility delegate pending PKG-11-WORKFLOWS."""

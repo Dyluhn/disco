@@ -149,7 +149,7 @@ async def test_resume_running_flip_waits_for_workspace_mutation_fence(monkeypatc
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     monkeypatch.setattr(rt._resume._run_start, "start", MagicMock())
 
-    underlying = rt._workspace.lock(CID)
+    underlying = rt.workspace.lock(CID)
     entered = asyncio.Event()
 
     class _ObservedFence:
@@ -709,8 +709,8 @@ async def test_resume_timeout_never_cancels_or_pops_newer_task(monkeypatch):
         await newer_release.wait()
 
     newer_task = asyncio.create_task(_newer_run())
-    async with rt._workspace.lock(CID):
-        async with rt._workspace.interprocess_mutation_fence(CID):
+    async with rt.workspace.lock(CID):
+        async with rt.workspace.interprocess_mutation_fence(CID):
             rt._run_registry._generations[CID] = 2
             rt._run_registry._tasks[CID] = newer_task
 
@@ -761,8 +761,8 @@ async def test_resume_reconstructs_from_fresh_post_drain_history(monkeypatch):
     resuming = asyncio.create_task(rt._resume.resume_conversation(CID))
     await asyncio.wait_for(drain_entered.wait(), timeout=1)
 
-    async with rt._workspace.lock(CID):
-        async with rt._workspace.interprocess_mutation_fence(CID):
+    async with rt.workspace.lock(CID):
+        async with rt.workspace.interprocess_mutation_fence(CID):
             await store.append(
                 CID,
                 PlanEvent(

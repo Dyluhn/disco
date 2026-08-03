@@ -101,7 +101,7 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # dissolved four more (18 delegates): _preview, _dr, _mcp and
     # _run_controller, now preview/deep_research/mcp/run_controller. This count
     # is a ratchet: it falls as 13-B proceeds and must never rise.
-    assert len(compatibility) == 39
+    assert len(compatibility) == 26
     assert public == active_ingress | compatibility
     assert all(
         getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"

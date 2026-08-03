@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 from unittest.mock import MagicMock
@@ -78,8 +79,12 @@ class _PreviewRuntime:
     def live_session(self, conversation_id: str) -> None:
         return None
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._store
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 def _runtime(store: SqliteEventStore, root: Path) -> ConversationRuntime:
@@ -103,8 +108,8 @@ async def _seed_appkit_attempt(
         ),
     )
     assert isinstance(intent, WorkspaceMutationEvent)
-    async with runtime._workspace.lock(conversation_id):
-        async with runtime._workspace.interprocess_mutation_fence(conversation_id):
+    async with runtime.workspace.lock(conversation_id):
+        async with runtime.workspace.interprocess_mutation_fence(conversation_id):
             await runtime._build_platform.record_route_locked(conversation_id)
     admission = current_build_platform_admission(await store.get_events(conversation_id))
     assert admission is not None and admission.profile_id == "disco.appkit_web@1"
@@ -154,7 +159,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     router = MagicMock(spec=DefaultLLMRouter)
     agent = MagicMock(spec=RouterAgent)
     with (
-        mock.patch.object(runtime._sandbox, "_sandbox_service_now"),
+        mock.patch.object(runtime.sandbox, "_sandbox_service_now"),
         mock.patch.object(runtime._settings, "_effective_driver_endpoint", return_value=None),
     ):
         loop = runtime._compose_build_loop(
@@ -180,7 +185,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert denied.success is False
     assert "recorded human confirmation" in denied.error
     assert APPKIT_EJECTION_PATH not in session.files
-    assert runtime._projects.current_project_store().list_versions(conversation_id) == []
+    assert runtime.projects.current_project_store().list_versions(conversation_id) == []
 
     await store.append(
         conversation_id,
@@ -207,7 +212,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert rejected.success is False
     assert "replacement engine unavailable" in rejected.error
     assert APPKIT_EJECTION_PATH not in session.files
-    assert runtime._projects.current_project_store().list_versions(conversation_id) == []
+    assert runtime.projects.current_project_store().list_versions(conversation_id) == []
     assert current_appkit_ejection(await store.get_events(conversation_id)) is None
 
     result = await loop.executor.execute_attributed(call, "view-1")
@@ -221,7 +226,7 @@ async def test_confirmed_ejection_cuts_previewable_audited_revision_and_restarts
     assert receipt.preview_version_seq == receipt.ejected_version_seq
     assert receipt.source_version_seq != receipt.ejected_version_seq
 
-    projects = runtime._projects.current_project_store()
+    projects = runtime.projects.current_project_store()
     versions = {record.seq: record for record in projects.list_versions(conversation_id)}
     source = versions[receipt.source_version_seq]
     target = versions[receipt.ejected_version_seq]

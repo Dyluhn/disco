@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "0684350198d71eb16687a569932d6ff06afe59a0",
+  "source_identity": "0864bbb6404af6aef5f4907dcbf9bfbb35592a45",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -42,25 +42,16 @@
             "async def cancel(self, conversation_id: str) -> None",
             "async def confirm(self, conversation_id: str) -> None",
             "async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult",
-            "async def finalize_host_mirror_change_locked(self, conversation_id: str, operation: str) -> VersionRecord",
-            "async def finalize_host_workspace_change(self, conversation_id: str, operation: str) -> VersionRecord",
-            "async def forget_conversation(self, conversation_id: str) -> None",
             "async def kill(self, conversation_id: str) -> None",
             "async def pause(self, conversation_id: str) -> None",
             "async def pick_alternative(self, conversation_id: str, option_id: str) -> None",
-            "async def probe_active_sandbox(self) -> tuple[bool, str, str]",
-            "async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]",
             "async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int",
-            "async def record_workspace_mutation_locked(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> WorkspaceMutationEvent",
             "async def reject(self, conversation_id: str, reason: str='rejected by user') -> None",
             "async def request_plan(self, conversation_id: str, text: str='') -> None",
-            "async def require_committed_host_mirror_locked(self, conversation_id: str) -> CommittedWorkspaceView",
-            "async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict",
             "async def resume(self, conversation_id: str) -> None",
             "async def send_user_turn(self, conversation_id: str, text: str, *, context: str | None=None, build_brief: BuildBrief | None=None, verification_requirements: VerificationRequirementsDirective | None=None, steer: bool=False) -> MessageEvent",
             "async def sweep_abandoned_gates_once(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int",
             "async def sweep_idle_once(self) -> int",
-            "async def workspace_mutation(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> AsyncIterator[None]",
             "def __init__(self, store: SqliteEventStore, *, config: RouterConfig | None=None, config_store: ConfigStore | None=None, secret_store: SecretStore | None=None, router: DefaultLLMRouter | None=None, enable_thinking: bool=False, mode: OperatingMode=OperatingMode.INTERACTIVE, research_providers: dict[str, Any] | None=None, sandbox_service: SandboxService | None=None, sandbox_spec: SandboxSpec | None=None, skill_store: SkillStore | None=None) -> None",
             "def activate_contract_for_brief(self, conversation_id: str, build_brief: BuildBrief | None) -> None",
             "def expected_delivery_mode(self, conversation_id: str) -> str | None",
@@ -70,9 +61,7 @@
             "def is_autonomous(self, conversation_id: str) -> bool",
             "def is_quiet(self, conversation_id: str) -> bool",
             "def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None",
-            "def project_store(self) -> ProjectStore",
             "def running_conversation_ids(self) -> set[str]",
-            "def sandbox_backend_name(self) -> str | None",
             "def sandbox_instance_ids(self, conversation_id: str) -> list[str]",
             "def sandbox_state(self, conversation_id: str) -> str | None",
             "def set_appkit_mode(self, conversation_id: str, on: bool) -> None",
@@ -85,9 +74,7 @@
             "def set_quiet(self, conversation_id: str, value: bool=True) -> None",
             "def set_research_sources(self, conversation_id: str, sources: list[str]) -> None",
             "def set_surface(self, conversation_id: str, surface: str) -> None",
-            "def start(self, conversation_id: str) -> None",
-            "def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]",
-            "def workspace_lock(self, conversation_id: str) -> asyncio.Lock"
+            "def start(self, conversation_id: str) -> None"
           ],
           "fields": [
             "connections: ConnectionTracker",
@@ -97,8 +84,10 @@
             "live_sessions: LiveSessionDirectory",
             "mcp: McpManager",
             "preview: PreviewService",
+            "projects: ProjectRuntimeService",
             "run_controller: RunController",
             "run_sweep: RunStrandedSweep",
+            "sandbox: SandboxRuntimeService",
             "sandbox_resources: SandboxResourceReconciler",
             "schedules: ScheduleService",
             "sessions: SessionsService",
@@ -106,7 +95,8 @@
             "spaces: SpaceService",
             "suggestions: SuggestionService",
             "titles: TitleService",
-            "uploads: UploadStore"
+            "uploads: UploadStore",
+            "workspace: WorkspaceCoordinator"
           ]
         },
         "create_app": {
@@ -29202,9 +29192,9 @@
       "surface": "python",
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
       "public_name": "ConversationRuntime",
-      "target_sha256": "0a9ef1b8b7099a02a3ce212dd49cff3a2791ef7587423be340242dfc9839b157",
+      "target_sha256": "729e04097a0eeafecec167b20c48ec969f9305bd8fb7ad781a7ada2a40bf315b",
       "owner_package": "PKG-13-FACADES",
-      "reason": "Epic 13-B3: four further collaborator families promoted to the declared public typed seam (_preview -> preview, _dr -> deep_research, _mcp -> mcp, _run_controller -> run_controller); the 18 delegates that forwarded to them are deleted. Supersedes the 13-B2 row for this identity -- member_authority keys on (path, public_name) and refuses a duplicate. Member delta pinned by the paired member_transitions row."
+      "reason": "Epic 13-B4: three further collaborator families promoted to the declared public typed seam (_sandbox -> sandbox, _projects -> projects, _workspace -> workspace); the 13 delegates that forwarded to them are deleted. Supersedes the 13-B3 row for this identity -- member_authority keys on (path, public_name) and refuses a duplicate. Member delta pinned by the paired member_transitions row."
     }
   ],
   "compatibility_bridges": [],
@@ -29215,31 +29205,26 @@
       "public_name": "ConversationRuntime",
       "origin": "disco.agent_server.runtime.ConversationRuntime",
       "removed_members": [
-        "async def ensure_preview(self, conversation_id: str) -> bool",
-        "async def export_report(self, conversation_id: str, fmt: str, *, owner_id: str=DEFAULT_OWNER_ID) -> tuple[bytes, str, str] | None",
-        "async def preview(self, conversation_id: str) -> dict[str, Any]",
-        "async def reload_mcp_pool(self) -> dict[str, Any]",
-        "async def resolve_active_preview_projection(self, conversation_id: str, projection: Any) -> bool",
-        "async def resolve_finished_preview_runtime(self, conversation_id: str, contract: Any) -> dict[str, Any] | None",
-        "async def wake_for_preview(self, cid8: str, port: int, *, owner_id: str=DEFAULT_OWNER_ID) -> str | None",
-        "def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None",
-        "def get_upload_passages(self, conversation_id: str) -> list[Any]",
-        "def kick(self, conversation_id: str, *, claimed_user_seq: int | None=None) -> None",
-        "def mcp_approval_state(self) -> dict[str, dict]",
-        "def port_upstream(self, conversation_id: str, port: int) -> str | None",
-        "def preview_target_port(self, conversation_id: str) -> int | None",
-        "def preview_upstream(self, conversation_id: str) -> str | None",
-        "def research_stream(self, query: str, *, model_override: str | None=None, drop_weak: bool=False, domains_deny: frozenset[str]=frozenset(), think: bool=False, conversation_id: str | None=None, space_ids: frozenset[str]=frozenset(), owner_id: str | None=None, include_unclaimed_legacy: bool=False, sources: list[str] | tuple[str, ...] | None=None) -> AsyncIterator[dict[str, Any]]",
-        "def set_depth(self, conversation_id: str, tier: str | None) -> None",
-        "def set_iterative(self, conversation_id: str, enabled: bool) -> None",
-        "def set_recency(self, conversation_id: str, window: str | None) -> None"
+        "async def finalize_host_mirror_change_locked(self, conversation_id: str, operation: str) -> VersionRecord",
+        "async def finalize_host_workspace_change(self, conversation_id: str, operation: str) -> VersionRecord",
+        "async def forget_conversation(self, conversation_id: str) -> None",
+        "async def probe_active_sandbox(self) -> tuple[bool, str, str]",
+        "async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]",
+        "async def record_workspace_mutation_locked(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> WorkspaceMutationEvent",
+        "async def require_committed_host_mirror_locked(self, conversation_id: str) -> CommittedWorkspaceView",
+        "async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict",
+        "async def workspace_mutation(self, conversation_id: str, operation: str, *, paths: tuple[str, ...]=()) -> AsyncIterator[None]",
+        "def project_store(self) -> ProjectStore",
+        "def sandbox_backend_name(self) -> str | None",
+        "def workspace_fence(self, conversation_id: str) -> contextlib.AbstractAsyncContextManager[None]",
+        "def workspace_lock(self, conversation_id: str) -> asyncio.Lock"
       ],
       "added_members": [],
-      "old_signature_sha256": "34d6454a05aff3cfc29369c1ff760ab1e93b766dfe97663a2c3faa3045c6595c",
-      "new_signature_sha256": "334b6353d570da7ef7e3a4cf45b4157a5a9ca6707c389f98c9c4b0ff9588b615",
+      "old_signature_sha256": "334b6353d570da7ef7e3a4cf45b4157a5a9ca6707c389f98c9c4b0ff9588b615",
+      "new_signature_sha256": "beb46074b3590c5e558e2caec54bf6dc5139d279132f4ac5c7eda945a9b9fdef",
       "owner_package": "PKG-13-FACADES",
-      "accepting_commit": "0684350198d71eb16687a569932d6ff06afe59a0",
-      "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13B3-ACCEPTANCE-RECEIPT.md"
+      "accepting_commit": "0864bbb6404af6aef5f4907dcbf9bfbb35592a45",
+      "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13B4-ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",

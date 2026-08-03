@@ -72,7 +72,7 @@ async def _consumer_workspace(
 
 
 def _project_store(runtime: ConversationRuntime | None) -> ProjectStore:
-    project_store = runtime.project_store() if runtime is not None else None
+    project_store = runtime.projects.current_project_store() if runtime is not None else None
     if project_store is None or project_store.status() != StorageStatus.OK:
         raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
     return project_store

@@ -133,7 +133,7 @@ def _attach_inspect_journal(event_db_path: str) -> None:
 
 def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
     try:
-        project_store = runtime.project_store()
+        project_store = runtime.projects.current_project_store()
         status = project_store.status()
         root = project_store.root
         if status != StorageStatus.OK or root is None:

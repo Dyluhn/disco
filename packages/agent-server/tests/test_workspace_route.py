@@ -10,6 +10,8 @@ test-record/bp-15/integration-workspace-route.log.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from disco.agent_server.routes.conversations import make_conversations_router
 from disco.core import SqliteEventStore
@@ -52,8 +54,12 @@ class _StubRuntime:
     def get_last_selected_model(self) -> str | None:
         return None  # no last pick in the stub
 
-    def sandbox_backend_name(self) -> str | None:
+    def _backend_name(self) -> str | None:
         return "gvisor"
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 @pytest.fixture
@@ -74,7 +80,10 @@ def _route_client(store: SqliteEventStore, runtime: object | None) -> TestClient
     from fastapi import FastAPI
 
     if runtime is not None:
-        runtime.project_store = _project_store  # type: ignore[attr-defined]
+        # 13-B4: `project_store` moved onto the `projects` collaborator, so the
+        # stub's project source is installed on the owner rather than on the
+        # runtime double itself.
+        runtime.projects = SimpleNamespace(current_project_store=_project_store)  # type: ignore[attr-defined]
     app = FastAPI()
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.include_router(make_conversations_router(store, runtime))  # type: ignore[arg-type]

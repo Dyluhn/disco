@@ -183,7 +183,7 @@ def make_spaces_router(store: SqliteEventStore, runtime: ConversationRuntime | N
 def _space_store(runtime: ConversationRuntime | None) -> JsonSpaceStore:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,

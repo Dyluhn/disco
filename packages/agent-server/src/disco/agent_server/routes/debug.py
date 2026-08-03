@@ -97,7 +97,7 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
         runtime_state: dict[str, Any] | None = None
         if runtime is not None:
             runtime_state = {
-                "sandbox_backend": runtime.sandbox_backend_name(),
+                "sandbox_backend": runtime.sandbox.backend_name(),
                 "sandbox_state": runtime.sandbox_state(conversation_id),
                 "sandbox_instance_ids": runtime.sandbox_instance_ids(conversation_id),
                 "live_session": runtime.live_sessions.live_session(conversation_id) is not None,
@@ -110,7 +110,7 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                     for provider in runtime.mcp._retrieval_extractions
                 ],
             }
-            ps = runtime.project_store()
+            ps = runtime.projects.current_project_store()
             record = ps.get(conversation_id)
             if record is not None:
                 project_manifest = {

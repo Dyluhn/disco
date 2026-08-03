@@ -139,7 +139,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store, tmp_path)
-    ps = rt._projects.current_project_store()
+    ps = rt.projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_version(CID, trigger="turn")
     assert old is not None
@@ -198,7 +198,7 @@ async def test_restore_preserves_current_host_owned_deployment_record(tmp_path: 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local", surface="build")
     rt = _runtime(store, tmp_path)
-    ps = rt._projects.current_project_store()
+    ps = rt.projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_verified_version(CID, trigger="turn", pin=True)
     assert old is not None
@@ -212,7 +212,7 @@ async def test_restore_preserves_current_host_owned_deployment_record(tmp_path: 
     session = _MemorySession({"index.html": b"current"})
     rt._run_resources.set_executor(CID, cast(Any, SimpleNamespace(_sandbox=session)))
 
-    result = await rt.restore_workspace_version(CID, old.seq)
+    result = await rt.workspace.restore_version(CID, old.seq)
 
     assert session.files == {"index.html": b"old"}
     assert (ps.path_for(CID) / record_path).read_bytes() == b"host-signed-record"
@@ -226,7 +226,7 @@ async def test_restore_of_finished_build_publishes_a_fresh_exact_seal(tmp_path: 
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local", surface="build")
     rt = _runtime(store, tmp_path)
-    ps = rt._projects.current_project_store()
+    ps = rt.projects.current_project_store()
     _write_workspace(ps, CID, {"index.html": b"old"})
     old = ps.cut_verified_version(CID, trigger="turn", pin=True)
     assert old is not None
@@ -278,8 +278,12 @@ class _PreviewRuntime:
     def live_session(self, conversation_id: str):
         return None
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._ps
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 async def test_preview_version_query_serves_version_bytes(tmp_path: Path) -> None:

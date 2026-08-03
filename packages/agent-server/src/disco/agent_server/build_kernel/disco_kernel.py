@@ -53,7 +53,7 @@ class DiscoKernel:
 
             self._assign_owners(
                 runtime._store,
-                runtime._workspace,
+                runtime.workspace,
                 runtime._lifecycle_commands,
                 runtime.run_controller,
                 runtime._control,

@@ -82,9 +82,10 @@ class _FakeRuntime:
         self._sidecar: dict[str, dict[str, bytes]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
         self.sessions = SimpleNamespace(upload_session=self.upload_session)
-        self._workspace = SimpleNamespace(
-            fence=self.workspace_fence,
-            record_mutation_locked=self.record_workspace_mutation_locked,
+        self.workspace = SimpleNamespace(
+            lock=self._workspace_lock,
+            fence=self._workspace_fence,
+            record_mutation_locked=self._record_workspace_mutation_locked,
         )
         self.uploads = SimpleNamespace(
             store=self.store_upload,
@@ -96,22 +97,22 @@ class _FakeRuntime:
         self._config_store = ConfigStore()
         self._secret_store = SecretStore()
 
-    def workspace_lock(self, conversation_id: str) -> asyncio.Lock:
+    def _workspace_lock(self, conversation_id: str) -> asyncio.Lock:
         return self._workspace_locks.setdefault(conversation_id, asyncio.Lock())
 
     @contextlib.asynccontextmanager
-    async def workspace_fence(self, conversation_id: str) -> AsyncIterator[None]:
-        async with self.workspace_lock(conversation_id):
+    async def _workspace_fence(self, conversation_id: str) -> AsyncIterator[None]:
+        async with self._workspace_lock(conversation_id):
             yield
 
-    async def record_workspace_mutation_locked(
+    async def _record_workspace_mutation_locked(
         self,
         conversation_id: str,
         operation: str,
         *,
         paths=(),  # noqa: ANN001
     ) -> None:
-        assert self.workspace_lock(conversation_id).locked()
+        assert self._workspace_lock(conversation_id).locked()
 
     def kick(self, cid: str) -> None:  # noqa: D401
         pass
@@ -451,7 +452,7 @@ async def test_pending_session_adopted_by_build_loop() -> None:
     cid = "conv_adoption_test"
     rt._settings._set_surface(cid, "build")
 
-    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+    with mock.patch.object(rt.sandbox, "_sandbox_service_now"):
         session = rt.sessions.upload_session(cid)
         assert rt._run_resources.has_pending_session(cid)
         assert session._auto_preview_disabled is True
@@ -473,7 +474,7 @@ def test_non_build_upload_session_retains_legacy_preview_compatibility() -> None
     cid = "conv_research_upload"
     rt._settings._set_surface(cid, "research")
 
-    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+    with mock.patch.object(rt.sandbox, "_sandbox_service_now"):
         session = rt.sessions.upload_session(cid)
 
     assert session._auto_preview_disabled is False
@@ -495,7 +496,7 @@ async def test_pending_session_destroyed_on_kill(
     cid = f"conv_{uuid.uuid4().hex}"
     store.create_conversation(cid, owner_id="local")
 
-    with mock.patch.object(rt._sandbox, "_sandbox_service_now"):
+    with mock.patch.object(rt.sandbox, "_sandbox_service_now"):
         session = rt.sessions.upload_session(cid)
     assert rt._run_resources.has_pending_session(cid)
 
@@ -652,7 +653,7 @@ async def test_upload_rematerialized_on_lazy_compose_path() -> None:
 
         # Simulate the resume path: compose a fresh build loop (the lazy path).
         with mock.patch.object(
-            rt._sandbox,
+            rt.sandbox,
             "_sandbox_service_now",
             return_value=mock_service,
         ):

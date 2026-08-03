@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from types import SimpleNamespace
 
 from disco.agent_server.routes.preview_edit import make_preview_edit_router
 from disco.core import (
@@ -59,14 +60,22 @@ class _Runtime:
     def get_last_selected_model(self) -> str | None:
         return None
 
-    def sandbox_backend_name(self) -> str | None:
+    def _backend_name(self) -> str | None:
         return "process"
 
     def live_session(self, cid: str) -> None:
         return None
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._ps
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
+
+    @property
+    def sandbox(self) -> SimpleNamespace:
+        return SimpleNamespace(backend_name=self._backend_name)
 
 
 def _client(tmp_path, files: dict[str, bytes]) -> tuple[TestClient, str]:

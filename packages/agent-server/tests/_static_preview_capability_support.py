@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -34,6 +35,7 @@ from disco.core.auth import (
 )
 from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
 from disco.tools.projects import ProjectStore
+from disco.tools.sandbox._container import PREVIEW_PORT
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -73,11 +75,18 @@ class _StaticRuntime:
     def __init__(self, project_store: ProjectStore, *, target_port: int | None = 8000) -> None:
         self._project_store = project_store
         self._target_port = target_port
+        self.preview = SimpleNamespace(
+            preview_target_port=self.preview_target_port,
+            wake_for_preview=self.wake_for_preview,
+            ensure_preview=self.ensure_preview,
+            preview=self.preview_metadata,
+            resolve_finished_preview_runtime=self._resolve_finished_preview_runtime,
+        )
 
     def preview_target_port(self, _conversation_id: str) -> int | None:
         return self._target_port
 
-    def project_store(self) -> ProjectStore:
+    def _current_project_store(self) -> ProjectStore:
         return self._project_store
 
     def live_session(self, _conversation_id: str) -> None:
@@ -92,6 +101,23 @@ class _StaticRuntime:
     async def ensure_preview(self, _conversation_id: str) -> bool:
         return False
 
+    async def _resolve_finished_preview_runtime(
+        self,
+        _conversation_id: str,
+        _contract: object,
+    ) -> dict[str, object] | None:
+        return None
+
+    async def preview_metadata(self, _conversation_id: str) -> dict[str, object]:
+        return {
+            "generation": "pv_static_test",
+            "port": self._target_port or PREVIEW_PORT,
+        }
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
+
 
 class _SealedProjectionRuntime(_StaticRuntime):
     """Passive pre-restart authority for an exact recorded managed generation."""
@@ -100,7 +126,7 @@ class _SealedProjectionRuntime(_StaticRuntime):
         super().__init__(project_store, target_port=cast(int, projection["port"]))
         self._projection = projection
 
-    async def resolve_finished_preview_runtime(
+    async def _resolve_finished_preview_runtime(
         self,
         _conversation_id: str,
         _contract: object,

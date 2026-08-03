@@ -546,7 +546,7 @@ async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
             owner_id: str,  # noqa: ARG002
         ) -> dict:
             self.created_spec = spec
-            root = self.project_store().root
+            root = self.projects.current_project_store().root
             assert root is not None
             schedules = root / "workflow_schedules" / "schedules"
             schedules.mkdir(parents=True, exist_ok=True)

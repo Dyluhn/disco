@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from disco.agent_server import create_app
@@ -149,13 +150,24 @@ class _LiveSessions:
 
 
 class _Sandbox:
-    """Minimal stand-in for the SandboxRuntimeService named owner."""
+    """Minimal stand-in for the SandboxRuntimeService named owner.
 
-    def __init__(self, spec: object) -> None:
+    13-B4 promoted `_sandbox` to the public `sandbox` seam and deleted the
+    `sandbox_backend_name` delegate, so the route now reads BOTH
+    `runtime.sandbox.base_spec()` and `runtime.sandbox.backend_name()` off this
+    one owner. Carrying `backend_name` here rather than on the runtime double is
+    the shape the real object has (§12.6).
+    """
+
+    def __init__(self, spec: object, backend: str | None = None) -> None:
         self._spec = spec
+        self._backend = backend
 
     def base_spec(self) -> object:
         return self._spec
+
+    def backend_name(self) -> str | None:
+        return self._backend
 
 
 class _LiveRuntime:
@@ -172,7 +184,7 @@ class _LiveRuntime:
         self._backend = backend
         self._svc = sandbox_service
         self._sandbox_spec = object()
-        self._sandbox = _Sandbox(self._sandbox_spec)
+        self.sandbox = _Sandbox(self._sandbox_spec, backend)
         self.finalized_host_changes: list[tuple[str, str]] = []
         self.live_sessions = _LiveSessions(session)
         self._config_store = ConfigStore()
@@ -184,23 +196,31 @@ class _LiveRuntime:
     def get_last_selected_model(self) -> str | None:
         return None
 
-    def sandbox_backend_name(self) -> str | None:
-        return self._backend
-
     def _sandbox_service_now(self) -> _FakeSandboxService:
         assert self._svc is not None, "no sandbox service injected"
         return self._svc
 
-    def project_store(self) -> object:
+    def _current_project_store(self) -> object:
         # No host snapshot by default — the live session is the only source.
         return self._ps
 
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
+
     @asynccontextmanager
-    async def workspace_mutation(self, cid: str, operation: str, *, paths=()):  # noqa: ANN001
+    async def _mutation(self, cid: str, operation: str, *, paths=()):  # noqa: ANN001
         yield
 
-    async def finalize_host_workspace_change(self, cid: str, operation: str):
+    async def _finalize_sandbox_change(self, cid: str, operation: str):
         self.finalized_host_changes.append((cid, operation))
+
+    @property
+    def workspace(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            mutation=self._mutation,
+            finalize_sandbox_change=self._finalize_sandbox_change,
+        )
 
 
 def _declare_editable_slides(store: SqliteEventStore, cid: str) -> None:

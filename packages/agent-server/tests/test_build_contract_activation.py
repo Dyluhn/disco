@@ -129,7 +129,7 @@ async def test_forget_conversation_evicts_build_state() -> None:
     rt.set_build_kind("c6", "appkit.leadgen")
     rt._contract._build_scope_guard("c6")
     assert "c6" in rt._contract._build_trackers and "c6" in rt._contract._build_kind
-    await rt.forget_conversation("c6")
+    await rt.workspace.forget("c6")
     assert "c6" not in rt._contract._build_trackers and "c6" not in rt._contract._build_kind
 
 

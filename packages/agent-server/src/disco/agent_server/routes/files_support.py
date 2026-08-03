@@ -96,7 +96,7 @@ async def _store_upload(
     clean: str,
     data: bytes,
 ) -> str | None:
-    async with runtime.workspace_fence(conversation_id):
+    async with runtime.workspace.fence(conversation_id):
         existing_names, existing_bytes = await _sandbox_upload_usage(
             runtime, conversation_id, session
         )
@@ -104,7 +104,7 @@ async def _store_upload(
             return None
         final_name = _available_name(clean, existing_names)
         upload_path = f"uploads/{final_name}"
-        await runtime.record_workspace_mutation_locked(
+        await runtime.workspace.record_mutation_locked(
             conversation_id,
             "upload.write",
             paths=(upload_path,),
@@ -200,7 +200,7 @@ async def _read_artifact_bytes(
     if session is not None:
         with contextlib.suppress(Exception):
             return await session.read_file(norm)
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store is not None and project_store.status() == StorageStatus.OK:
         with contextlib.suppress(Exception):
             workspace = project_store.path_for(conversation_id).resolve()
@@ -227,7 +227,7 @@ async def _committed_artifact(
     norm: str,
     events: list[Any],
 ) -> bytes:
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store is None or project_store.status() != StorageStatus.OK:
         raise ArtifactRejected(503, {"reason": "workspace_unsealed"})
     try:

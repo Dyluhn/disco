@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 from disco.agent_server.routes.deck_editor import _direction_brand_override
@@ -33,8 +34,12 @@ class _Runtime:
         self._session = session
         self.live_sessions = _LiveSessions(session)
 
-    def project_store(self) -> None:
+    def _current_project_store(self) -> None:
         return None
+
+    @property
+    def projects(self) -> SimpleNamespace:
+        return SimpleNamespace(current_project_store=self._current_project_store)
 
 
 async def test_direction_brand_override_reads_committed_context() -> None:

@@ -88,7 +88,7 @@ def _runtime(
         event_store, router=MagicMock(), sandbox_service=ProcessSandboxService()
     )
     projects = ProjectStore(str(tmp_path / "projects"))
-    rt._projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
+    rt.projects.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     rt._lifecycle._sandbox.current_project_store = MagicMock(return_value=projects)  # type: ignore[method-assign]
     return rt, projects
 
@@ -326,7 +326,7 @@ async def _record_host_mutation(
 ) -> None:
     if attempting is not None:
         attempting.set()
-    async with runtime.workspace_mutation(
+    async with runtime.workspace.mutation(
         conversation_id,
         "test.host-edit",
         paths=("index.html",),
@@ -352,7 +352,7 @@ async def _queued_committed_view(
     conversation_id: str,
 ) -> None:
     async with lock:
-        await runtime.require_committed_host_mirror_locked(conversation_id)
+        await runtime.workspace.require_committed_host_mirror_locked(conversation_id)
 
 
 def _mutating_cut(
@@ -690,8 +690,8 @@ async def _assert_host_mirror_authority(
     projects: ProjectStore,
     conversation_id: str,
 ) -> None:
-    async with runtime._workspace.lock(conversation_id):
-        mutation = await runtime.record_workspace_mutation_locked(
+    async with runtime.workspace.lock(conversation_id):
+        mutation = await runtime.workspace.record_mutation_locked(
             conversation_id,
             "host-write",
             paths=("index.html",),

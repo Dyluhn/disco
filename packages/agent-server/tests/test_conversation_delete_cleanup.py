@@ -58,7 +58,7 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
     rt._driver_preflight._proven.add(("another-conversation", ModelRole.AGENT_DRIVER, "m"))
     rt._driver_preflight._ok["m"] = 123.0
 
-    await rt.forget_conversation(CID)
+    await rt.workspace.forget(CID)
 
     assert rt._kernel_pin_store.current(CID) is None  # the leak the finding cites
     assert CID not in rt._run_registry._generations
@@ -79,7 +79,7 @@ async def test_forget_conversation_clears_pin_and_caches() -> None:
 async def test_forget_conversation_is_idempotent_on_unknown_cid() -> None:
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
-    await rt.forget_conversation("never-existed")  # must not raise
+    await rt.workspace.forget("never-existed")  # must not raise
 
 
 async def test_forget_conversation_reconciles_backend_after_runtime_restart() -> None:
@@ -89,13 +89,13 @@ async def test_forget_conversation_reconciles_backend_after_runtime_restart() ->
     listeners indefinitely and eventually exhaust the fixed preview-port pool."""
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
-    service = rt._sandbox._injected_service
+    service = rt.sandbox._injected_service
     assert isinstance(service, ProcessSandboxService)
     service.destroy_by_conversation = AsyncMock()
 
     assert not rt._run_resources.has_executor(CID)
     assert not rt._run_resources.has_pending_session(CID)
-    await rt.forget_conversation(CID)
+    await rt.workspace.forget(CID)
 
     service.destroy_by_conversation.assert_awaited_once_with(CID)
 

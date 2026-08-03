@@ -168,7 +168,7 @@ async def _create_conversation_response(
         "conversation_id": conversation_id,
         "conversation_url": f"/ws/conversations/{conversation_id}",
         "surface": body.surface,
-        "sandbox_backend": (runtime.sandbox_backend_name() if runtime is not None else None),
+        "sandbox_backend": (runtime.sandbox.backend_name() if runtime is not None else None),
     }
 
 
@@ -252,7 +252,7 @@ def _read_workspace_snapshot(
     runtime: ConversationRuntime, conversation_id: str, norm: str
 ) -> bytes | None:
     """Read an allowlisted workspace image from the project-store snapshot on disk."""
-    ps = runtime.project_store()
+    ps = runtime.projects.current_project_store()
     store_path = ps.path_for(conversation_id)
     if store_path is None:
         return None
@@ -281,7 +281,7 @@ def _register_workspace_version_routes(
         if runtime is None:
             return {"versions": []}
         try:
-            project_store = runtime.project_store()
+            project_store = runtime.projects.current_project_store()
             if project_store is None or project_store.status() != StorageStatus.OK:
                 return {"versions": []}
             return {
@@ -299,7 +299,7 @@ def _register_workspace_version_routes(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         try:
-            return await runtime.restore_workspace_version(conversation_id, seq)
+            return await runtime.workspace.restore_version(conversation_id, seq)
         except WorkspaceRestoreConflict as exc:
             raise HTTPException(
                 status_code=409,
@@ -446,7 +446,7 @@ async def _handle_get_state(
     result = state.model_dump(mode="json")
     # BP-15: overlay the real sandbox backend name so the UI shows the live tier.
     if runtime is not None:
-        sbackend = runtime.sandbox_backend_name()
+        sbackend = runtime.sandbox.backend_name()
         if sbackend is not None:
             result["sandbox_backend"] = sbackend
     # Overlay the stored (auto-titled) conversation title so a resumed surface
@@ -578,7 +578,7 @@ async def _handle_delete(
     owner_id = current_owner_id(request)
     _revoke_host_tokens(host_token_store, conversation_id)
     if runtime is not None:
-        await runtime.forget_conversation(conversation_id)
+        await runtime.workspace.forget(conversation_id)
     store.release_local_preview_lease(
         conversation_id=conversation_id,
         owner_id=owner_id,
@@ -774,7 +774,7 @@ def _get_space_or_404(
 ) -> None:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-    project_store = runtime.project_store()
+    project_store = runtime.projects.current_project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
