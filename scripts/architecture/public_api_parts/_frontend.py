@@ -26,8 +26,8 @@ fail-closed on every prong:
 
 1. exact field set, every value a non-empty string, ``owner_package``
    well-formed, ``surface`` is ``frontend``, both digests well-formed **and
-   distinct**, and ``accepting_commit`` a full SHA that resolves in this
-   repository.  The distinctness check lives here rather than in the change
+   distinct**, and ``accepting_commit`` a full SHA reachable from a named local
+   branch.  The distinctness check lives here rather than in the change
    check so that a record claiming a transition from a digest to itself is
    refused on every load, not only during a regeneration that reaches it;
 2. ``old_target_sha256``/``new_target_sha256`` pin the removed and added
@@ -66,7 +66,7 @@ from ._constants import (
     TargetIdentity,
     TargetKey,
 )
-from ._members import commit_resolves
+from ._members import commit_is_ref_reachable
 from ._surface import canonical
 
 DeclarationKey = tuple[str, str]
@@ -87,7 +87,7 @@ def _declaration_of(target: dict[str, Any]) -> dict[str, str] | None:
 
 
 def _valid_declaration_row(row: Any, root: Path) -> bool:
-    """Prong 1: schema, surface, package form, digest form and resolvability."""
+    """Prong 1: schema, surface, package form, digest form and provenance."""
     if not isinstance(row, dict) or set(row) != DECLARATION_FIELDS:
         return False
     if not all(isinstance(row[key], str) and row[key] for key in DECLARATION_FIELDS):
@@ -104,7 +104,7 @@ def _valid_declaration_row(row: Any, root: Path) -> bool:
         return False
     if not GIT_SHA.fullmatch(row["accepting_commit"]):
         return False
-    return commit_resolves(root, row["accepting_commit"])
+    return commit_is_ref_reachable(root, row["accepting_commit"])
 
 
 def declaration_authority(

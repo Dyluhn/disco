@@ -273,6 +273,14 @@ def _widen(
     """Widen ``State``, commit, and return (identity, record, transition)."""
     _set_state(root, state)
     identity = _checkpoint(root)
+    # The source identity is a sibling of the derived authority seal. Keep a
+    # named source anchor exactly as the real campaign does, so provenance
+    # validation distinguishes it from an abandoned object still in .git.
+    subprocess.run(
+        ["git", "-C", str(root), "update-ref", "refs/heads/source-anchor", identity],
+        capture_output=True,
+        check=True,
+    )
     return identity, _record(root, accepted, "State", identity), _transition(root, "State")
 
 
@@ -520,6 +528,31 @@ class TestDeclarationRowValidity:
         _tamper(tmp_path, {"frontend/src/public.ts": "State"})
 
         assert_problem_contains(public_api.check_public_api(tmp_path)["problems"], _INVALID)
+
+    def test_unreachable_commit_object_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An abandoned object is not an accepted source-anchor provenance."""
+        accepted = _setup(tmp_path, monkeypatch)
+        identity, record, transition = _widen(tmp_path, accepted)
+        orphan = subprocess.check_output(
+            [
+                "git", "-C", str(tmp_path), "-c", "user.name=Test",
+                "-c", "user.email=test@example.invalid", "commit", "--allow-empty",
+                "-qm", "abandoned candidate",
+            ],
+            text=True,
+        ).strip()
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "reset", "--hard", identity],
+            capture_output=True,
+            check=True,
+        )
+        record["accepting_commit"] = orphan
+
+        with pytest.raises(RuntimeError) as error:
+            _regenerate(tmp_path, identity, record, transition)
+        assert _INVALID in str(error.value)
 
 
 # --------------------------------------------------------------------------

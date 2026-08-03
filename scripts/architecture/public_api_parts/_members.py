@@ -27,7 +27,7 @@ a record exists for the identity, and it is fail-closed on every prong:
    silently absorb a signature change to a *surviving* member;
 5. :func:`check_member_delta` mirrors ``_check_bridge_delta``, so a stale or
    extra record fails regeneration;
-6. ``accepting_commit`` must be a full SHA that resolves in this repository.
+6. ``accepting_commit`` must be a full SHA reachable from a named local ref.
 
 No wildcards, no defaults, no partial records.
 """
@@ -62,24 +62,30 @@ def _members_of(signature: Any) -> list[str] | None:
     return members
 
 
-def commit_resolves(root: Path, value: str) -> bool:
-    """Report whether ``value`` names a commit object in this repository.
+def commit_is_ref_reachable(root: Path, value: str) -> bool:
+    """Report whether ``value`` is reachable from a named local branch.
 
     Shared with :mod:`._frontend`, whose prong 1 asserts the same thing about a
     frontend record's ``accepting_commit``.  Copying it would have made a third
     occurrence in the tree (``test_inventory_parts/_splits.py`` holds the
     second), which standing §6 treats as the threshold for a general mechanism
-    rather than another clone.
+    rather than another clone. Object existence alone is not provenance: an
+    abandoned candidate can remain in the object database while no accepted
+    source anchor names it.
     """
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"{value}^{{commit}}"],
+            [
+                "git", "-C", str(root), "for-each-ref", "--contains", value,
+                "--format=%(refname)", "refs/heads",
+            ],
             capture_output=True,
+            text=True,
             check=False,
         )
     except OSError:
         return False
-    return result.returncode == 0
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 
 def _string_list(row: dict[str, Any], key: str) -> list[str] | None:
@@ -94,7 +100,7 @@ def _string_list(row: dict[str, Any], key: str) -> list[str] | None:
 
 
 def _valid_member_row(row: Any, root: Path) -> bool:
-    """Prong 1 and prong 6: schema, package form, and commit resolvability."""
+    """Prong 1 and prong 6: schema, package form, and commit provenance."""
     if not isinstance(row, dict) or set(row) != MEMBER_FIELDS:
         return False
     scalars = (
@@ -114,7 +120,7 @@ def _valid_member_row(row: Any, root: Path) -> bool:
         return False
     if not GIT_SHA.fullmatch(row["accepting_commit"]):
         return False
-    return commit_resolves(root, row["accepting_commit"])
+    return commit_is_ref_reachable(root, row["accepting_commit"])
 
 
 def member_authority(
