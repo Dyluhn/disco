@@ -102,7 +102,9 @@ def _valid_member_row(row: Any, root: Path) -> bool:
         "new_signature_sha256", "owner_package", "accepting_commit",
         "accepting_receipt",
     )
-    if not all(isinstance(row[key], str) and row[key] for key in scalars):
+    if not all(isinstance(row[key], str) and row[key] for key in scalars if key != "origin"):
+        return False
+    if row["origin"] is not None and (not isinstance(row["origin"], str) or not row["origin"]):
         return False
     removed = _string_list(row, "removed_members")
     added = _string_list(row, "added_members")
@@ -171,12 +173,7 @@ def _check_origin_sameness(
     """Prong 3: both origins exist, are equal, and equal the recorded origin."""
     old_origin = target_origin(old_target)
     new_origin = target_origin(new_target)
-    if (
-        old_origin is None
-        or new_origin is None
-        or old_origin != new_origin
-        or record["origin"] != old_origin
-    ):
+    if old_origin != new_origin or record["origin"] != old_origin:
         problems.append(
             "member transition requires one unchanged origin equal to the "
             f"record: {identity}; old={old_origin}; new={new_origin}; "
