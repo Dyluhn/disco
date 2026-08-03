@@ -472,7 +472,7 @@ class ConversationRuntime:
 
 
 async def execute_disco_tool(
-    self: ConversationRuntime, conversation_id: str, tool_call: ToolCall
+    self: Any, conversation_id: str, tool_call: ToolCall
 ) -> ToolResult:
     """Execute one composed tool and record its action/result events."""
 
