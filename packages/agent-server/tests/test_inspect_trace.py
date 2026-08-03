@@ -123,7 +123,7 @@ def _inspect_runtime(store: SqliteEventStore) -> ConversationRuntime:
 
 
 async def _drive_build_to_finish(runtime: ConversationRuntime) -> None:
-    runtime.kick(CID)
+    runtime.run_controller.kick(CID)
     task = runtime._run_registry.task(CID)
     if task is not None:
         await task

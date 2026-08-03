@@ -142,7 +142,7 @@ async def replay_conversation(
         await store.append(cid, msg)
 
     async def _kick_and_wait() -> None:
-        runtime.kick(cid)
+        runtime.run_controller.kick(cid)
         task = runtime._tasks.get(cid)
         if task is not None:
             await task

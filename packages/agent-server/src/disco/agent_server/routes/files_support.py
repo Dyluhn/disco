@@ -122,7 +122,7 @@ def _index_upload(
 ) -> None:
     upload_doc = parse_upload_to_doc(final_name, data, conversation_id)
     if upload_doc is not None and upload_doc.passages:
-        runtime.add_upload_passages(conversation_id, list(upload_doc.passages))
+        runtime.deep_research.add_upload_passages(conversation_id, list(upload_doc.passages))
 
 
 async def _announce_uploads(

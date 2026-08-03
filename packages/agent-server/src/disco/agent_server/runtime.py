@@ -119,8 +119,10 @@ if TYPE_CHECKING:
     from .lifecycle_idle_sweep import LifecycleIdleSweeper
     from .live_session_directory import LiveSessionDirectory
     from .mcp_manager import McpManager
+    from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
     from .resume_service import ResumeService
+    from .run_controller import RunController
     from .run_registry import RunRegistry
     from .run_stranded_sweep import RunStrandedSweep
     from .run_supervisor import (
@@ -205,8 +207,12 @@ class ConversationRuntime:
         # delegate.
         connections: ConnectionTracker
         conversation_control: ConversationControlService
+        deep_research: DeepResearchService
         drivers: DriverRuntime
         live_sessions: LiveSessionDirectory
+        mcp: McpManager
+        preview: PreviewService
+        run_controller: RunController
         run_sweep: RunStrandedSweep
         sandbox_resources: SandboxResourceReconciler
         schedules: ScheduleService
@@ -219,12 +225,10 @@ class ConversationRuntime:
 
         _config_store: ConfigStore
         _contract: BuildContractService
-        _dr: DeepResearchService
         _driver_preflight: DriverPreflight
         _idle_sweeper: LifecycleIdleSweeper
         _lifecycle: LifecycleManager
         _loop_factory: BuildLoopFactory
-        _mcp: McpManager
         _projects: ProjectRuntimeService
         _resume: ResumeService
         _run_registry: RunRegistry
@@ -268,32 +272,14 @@ class ConversationRuntime:
         async def finalize_host_workspace_change(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
         async def finalize_host_mirror_change_locked(self, conversation_id: str, operation: str) -> VersionRecord: ...  # noqa: E501
         async def require_committed_host_mirror_locked(self, conversation_id: str) -> CommittedWorkspaceView: ...  # noqa: E501
-        def add_upload_passages(self, conversation_id: str, passages: list[Any]) -> None: ...
-        def get_upload_passages(self, conversation_id: str) -> list[Any]: ...
-        def set_depth(self, conversation_id: str, tier: str | None) -> None: ...
-        def set_iterative(self, conversation_id: str, enabled: bool) -> None: ...
-        def set_recency(self, conversation_id: str, window: str | None) -> None: ...
-        def research_stream(self, query: str, *, model_override: str | None=None, drop_weak: bool=False, domains_deny: frozenset[str]=frozenset(), think: bool=False, conversation_id: str | None=None, space_ids: frozenset[str]=frozenset(), owner_id: str | None=None, include_unclaimed_legacy: bool=False, sources: list[str] | tuple[str, ...] | None=None) -> AsyncIterator[dict[str, Any]]: ...  # noqa: E501
-        def kick(self, conversation_id: str, *, claimed_user_seq: int | None=None) -> None: ...
         async def reconcile_orphaned_runs(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
-        async def reload_mcp_pool(self) -> dict[str, Any]: ...
-        def mcp_approval_state(self) -> dict[str, dict]: ...
         def sandbox_state(self, conversation_id: str) -> str | None: ...
         def sandbox_instance_ids(self, conversation_id: str) -> list[str]: ...
         async def sweep_idle_once(self) -> int: ...
         async def sweep_abandoned_gates_once(self, *, owner_id: str=DEFAULT_OWNER_ID) -> int: ...
         def project_store(self) -> ProjectStore: ...
         async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict: ...
-        async def export_report(self, conversation_id: str, fmt: str, *, owner_id: str=DEFAULT_OWNER_ID) -> tuple[bytes, str, str] | None: ...  # noqa: E501
-        def preview_upstream(self, conversation_id: str) -> str | None: ...
-        def preview_target_port(self, conversation_id: str) -> int | None: ...
-        async def resolve_active_preview_projection(self, conversation_id: str, projection: Any) -> bool: ...  # noqa: E501
-        async def resolve_finished_preview_runtime(self, conversation_id: str, contract: Any) -> dict[str, Any] | None: ...  # noqa: E501
-        def port_upstream(self, conversation_id: str, port: int) -> str | None: ...
-        async def wake_for_preview(self, cid8: str, port: int, *, owner_id: str=DEFAULT_OWNER_ID) -> str | None: ...  # noqa: E501
         def sandbox_backend_name(self) -> str | None: ...
-        async def preview(self, conversation_id: str) -> dict[str, Any]: ...
-        async def ensure_preview(self, conversation_id: str) -> bool: ...
         async def forget_conversation(self, conversation_id: str) -> None: ...
         def running_conversation_ids(self) -> set[str]: ...
         # fmt: on
@@ -412,7 +398,7 @@ class ConversationRuntime:
     def _workflow_tool_definitions(self) -> tuple[Any, ...]:
         """State-free compatibility delegate pending PKG-11-WORKFLOWS."""
 
-        return self._mcp.workflow_tool_definitions()
+        return self.mcp.workflow_tool_definitions()
 
     def _workflow_skills(self) -> list[Any]:
         """State-free compatibility delegate pending PKG-11-WORKFLOWS."""

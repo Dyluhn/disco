@@ -437,7 +437,7 @@ class TestConversationRuntimeDriverContextSeams:
         monkeypatch.setattr(rt.sandbox_resources, "evict_stale", evict_stale_backend)
         monkeypatch.setattr(rt._workspace, "run_after_admission", admit)
 
-        rt.kick(cid, claimed_user_seq=user_seq)
+        rt.run_controller.kick(cid, claimed_user_seq=user_seq)
         task = rt._run_registry.task(cid)
         assert task is not None
         await asyncio.wait_for(resolve_entered.wait(), timeout=1.0)

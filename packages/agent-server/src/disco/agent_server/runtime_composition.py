@@ -229,7 +229,7 @@ def _wire_foundation(
     )
     rt._driver_preflight = DriverPreflight(rt.drivers)
     rt._cancellations = CancellationRegistry()
-    rt._mcp = McpManager(rt._config_store, rt._secret_store, store)
+    rt.mcp = McpManager(rt._config_store, rt._secret_store, store)
     rt._kernel_pin_store = KernelPinStore()
     rt._connection_state = ConnectionState()
     rt._lifecycle_idle = LifecycleIdleSweepDeps(rt._config_store)
@@ -335,14 +335,14 @@ def _wire_research(
     research_provider = DeepResearchProvider(
         rt._config_store,
         rt._secret_store,
-        rt._mcp,
+        rt.mcp,
         injected_providers=research_providers,
     )
     rt.spaces = SpaceService(
         ConfiguredProjectRoot(rt._config_store),
         research_provider,
     )
-    rt._dr = DeepResearchService(
+    rt.deep_research = DeepResearchService(
         store=rt._store,
         lifecycle_commands=rt._lifecycle_commands,
         drivers=rt.drivers,
@@ -373,8 +373,8 @@ def _wire_workspace(rt: _RuntimeWiringSchema) -> None:
             rt._cancellations,
             rt._settings,
             rt._contract,
-            rt._dr,
-            rt._mcp,
+            rt.deep_research,
+            rt.mcp,
             rt.spaces,
         ),
         ConversationContextDisposal(
@@ -401,7 +401,7 @@ def _wire_workspace(rt: _RuntimeWiringSchema) -> None:
         sandboxes=executors,
         transitions=rt._build_platform,
     )
-    rt._build_retrieval = BuildRetrievalCapabilities(rt._dr, rt._mcp)
+    rt._build_retrieval = BuildRetrievalCapabilities(rt.deep_research, rt.mcp)
     rt._build_shadows = BuildShadowLedger()
 
 
@@ -443,7 +443,7 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
         LoopModeResolver(rt._settings, rt.drivers, rt._contract),
         BuildCapabilityBroker(rt._build_retrieval),
         executors,
-        rt._mcp,
+        rt.mcp,
         McpLoopConfigurator(rt._store, rt._appkit_ejection),
         rt._run_resources,
         assembler,
@@ -453,7 +453,7 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
         rt.drivers,
         rt._workspace,
         rt._store,
-        rt._dr,
+        rt.deep_research,
         composer,
         rt._loop_registry,
         rt._run_resources,
@@ -461,7 +461,7 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
         mode,
     )
     rt.live_sessions = LiveSessionDirectory(rt._run_resources, rt._store)
-    rt._preview = PreviewService(
+    rt.preview = PreviewService(
         rt.live_sessions,
         rt._store,
         rt._config_store,
@@ -476,7 +476,7 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
         rt._run_resources,
         rt._sandbox,
         rt._settings,
-        rt._mcp,
+        rt.mcp,
         rt._lifecycle,
         rt.connections,
         rt.live_sessions,
@@ -484,7 +484,7 @@ def _wire_loops(rt: _RuntimeWiringSchema, *, mode: OperatingMode) -> None:
     rt._workspace_ownership.bind_restore_session(
         WorkspaceRestoreSession(
             rt._run_resources,
-            rt._preview,
+            rt.preview,
             rt._loop_factory,
         )
     )
@@ -509,7 +509,7 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
         rt._workspace,
         completion,
     )
-    rt._run_controller = RunController(
+    rt.run_controller = RunController(
         rt._run_registry,
         rt._run_supervisor,
         rt.titles,
@@ -531,14 +531,14 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
         rt._workspace,
         rt._loop_registry,
         rt._cancellations,
-        rt._run_controller,
+        rt.run_controller,
         rt._run_kills,
     )
     rt._disco_kernel = DiscoKernel._from_owners(
         rt._store,
         rt._workspace,
         rt._lifecycle_commands,
-        rt._run_controller,
+        rt.run_controller,
         rt._control,
         rt._loop_factory,
         rt._run_registry,
@@ -568,7 +568,7 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
         rt._kernel_pins,
         rt._run_registry,
         rt._cancellations,
-        rt._run_controller,
+        rt.run_controller,
         rt._control,
         rt._resume,
     )
@@ -589,7 +589,7 @@ def _wire_run_completion(
         rt._store,
         rt._workspace,
         rt._lifecycle_commands,
-        RunReentry(rt._run_controller, rt._resume),
+        RunReentry(rt.run_controller, rt._resume),
         run_policy,
         observability,
     )
@@ -610,10 +610,10 @@ def _wire_run_completion(
         observability,
         RunPreflight(rt._driver_preflight, rt._sandbox),
         RunPersistence(rt._workspace, rt._lifecycle),
-        DeepResearchRun(rt._dr),
+        DeepResearchRun(rt.deep_research),
     )
     rt._workspace.bind_run_collaborators(
-        rt._run_controller,
+        rt.run_controller,
         rt._run_execution,
     )
 
@@ -646,7 +646,7 @@ def _wire_workflows(rt: _RuntimeWiringSchema) -> None:
         recurring_control=RecurringScheduleControlAdapter(
             rt._settings,
             rt.conversation_control,
-            rt._dr,
+            rt.deep_research,
         ),
     )
 

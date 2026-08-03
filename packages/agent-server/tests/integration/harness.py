@@ -143,10 +143,12 @@ async def run_scripted(
     )
 
     # Kick the loop; wait for it to reach a terminal status.
-    runtime.kick(cid)
+    runtime.run_controller.kick(cid)
     task = runtime._run_registry.task(cid)
     if task is None:
-        raise RuntimeError("runtime.kick() did not schedule a task — check surface wiring")
+        raise RuntimeError(
+            "runtime.run_controller.kick() did not schedule a task — check surface wiring"
+        )
 
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)

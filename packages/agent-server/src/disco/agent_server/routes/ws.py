@@ -209,7 +209,7 @@ async def _handle_steer_frame(
     # OFF-path (no DR run active): falls through to the original agent-loop kick,
     # now routed through the pinned Build kernel (A1 finding #1; disco ⇒ identical).
     steer_text = frame.steer_text or ""
-    if runtime is not None and runtime._dr.enqueue_steer(conversation_id, steer_text):
+    if runtime is not None and runtime.deep_research.enqueue_steer(conversation_id, steer_text):
         return
     if runtime is not None:
         await runtime.send_user_turn(conversation_id, steer_text, steer=True)
@@ -267,7 +267,7 @@ def _handle_inject_source_frame(
         source_url="user-injected",
         source_title="User-injected source",
     )
-    runtime._dr.inject_source(conversation_id, passage)
+    runtime.deep_research.inject_source(conversation_id, passage)
 
 
 async def _require_ws_session(websocket: WebSocket):
@@ -561,7 +561,7 @@ async def _stream_research_frames(
 ) -> None:
     """Stream research frames to the WebSocket, handling errors and closing."""
     try:
-        async for frame in runtime.research_stream(
+        async for frame in runtime.deep_research.research_stream(
             query,
             model_override=params["model_override"],
             drop_weak=params["drop_weak"],

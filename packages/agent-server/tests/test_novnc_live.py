@@ -103,7 +103,7 @@ def test_live_url_route_no_sandbox_returns_503():
 # These prove the ROUTE's wiring end-to-end WITHOUT a real sandbox backend
 # (the P5 hardware-deferred bit): daemon-health probe → live_start POST →
 # wake_for_preview → 200. They mock the SandboxSession's async exec_shell
-# (the two curls) and runtime.wake_for_preview (the proxy-url resolver), so
+# (the two curls) and runtime.preview.wake_for_preview (the proxy-url resolver), so
 # the orchestration logic in preview.py:browser_live_url is fully exercised.
 # ---------------------------------------------------------------------------
 
@@ -128,7 +128,7 @@ def _enabled_app(*, session, upstream):
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
     runtime.live_sessions.live_session.return_value = session
-    runtime.wake_for_preview = AsyncMock(return_value=upstream)
+    runtime.preview.wake_for_preview = AsyncMock(return_value=upstream)
     return create_app(store, runtime=runtime)
 
 
@@ -391,7 +391,7 @@ def test_live_ready_route_disabled_no_side_effect():
 
     asyncio.run(run())
     # live_session is never even reached for the disabled case; wake_for_preview not called.
-    runtime.wake_for_preview.assert_not_called()
+    runtime.preview.wake_for_preview.assert_not_called()
 
 
 def test_live_ready_route_no_sandbox_returns_not_ready():
@@ -444,7 +444,7 @@ def test_live_ready_route_healthy_daemon_is_ready_with_NO_live_start():
     runtime = MagicMock()
     runtime._config_store.load.return_value = cfg
     runtime.live_sessions.live_session.return_value = session
-    runtime.wake_for_preview = AsyncMock(return_value="http://192.168.1.77:49213")
+    runtime.preview.wake_for_preview = AsyncMock(return_value="http://192.168.1.77:49213")
     app = create_app(store, runtime=runtime)
 
     async def run():
@@ -463,7 +463,7 @@ def test_live_ready_route_healthy_daemon_is_ready_with_NO_live_start():
     only_call = session.exec_shell.await_args_list[0]
     assert "/health" in only_call.args[0]
     # The side-effecting port-expose was NEVER triggered by the readiness probe.
-    runtime.wake_for_preview.assert_not_called()
+    runtime.preview.wake_for_preview.assert_not_called()
 
 
 def test_live_ready_route_daemon_down_not_ready():

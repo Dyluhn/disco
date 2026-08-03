@@ -55,7 +55,7 @@ class DiscoKernel:
                 runtime._store,
                 runtime._workspace,
                 runtime._lifecycle_commands,
-                runtime._run_controller,
+                runtime.run_controller,
                 runtime._control,
                 runtime._loop_factory,
                 runtime._run_registry,

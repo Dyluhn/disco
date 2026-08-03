@@ -497,7 +497,7 @@ async def test_deep_research_kick_blocks_on_dead_driver():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -538,7 +538,7 @@ async def test_deep_research_kick_decompose_failure_goes_error_not_stuck():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -576,7 +576,7 @@ async def test_deep_research_kick_bounds_query_rewriter_role():
             message=LLMMessage(role="user", content="research X"),
         ),
     )
-    await rt._dr._propose_deep_research_plan("c1", await store.get_events("c1"))
+    await rt.deep_research._propose_deep_research_plan("c1", await store.get_events("c1"))
 
     events = await store.get_events("c1")
     statuses = [e for e in events if isinstance(e, StatusEvent)]
@@ -611,7 +611,7 @@ async def test_deep_research_preflights_rag_answerer_role():
         return "stop here"  # short-circuit before the real stream
 
     rt._driver_preflight.check = _capture  # type: ignore[method-assign]
-    frames = [f async for f in rt.research_stream("q")]
+    frames = [f async for f in rt.deep_research.research_stream("q")]
 
     assert probed.get("role") == ModelRole.RAG_ANSWERER
     assert frames and frames[0]["type"] == "error"
@@ -661,7 +661,7 @@ async def test_preflight_encoders_names_unreachable_reranker():
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     deps = {"reranker": _dead_reranker(), "nli": _FakeNLI()}
-    reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
+    reason = await rt.deep_research._preflight_encoders(deps, required=("reranker", "nli"))
     assert reason is not None
     assert "reranker" in reason and "dead:8091" in reason
 
@@ -671,7 +671,7 @@ async def test_preflight_encoders_names_missing_nli():
     rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     # bundled/fake reranker (no probe) present, but NLI is None (declined encoder).
     deps = {"reranker": _FakeNLI(), "nli": None}
-    reason = await rt._dr._preflight_encoders(deps, required=("reranker", "nli"))
+    reason = await rt.deep_research._preflight_encoders(deps, required=("reranker", "nli"))
     assert reason is not None and "nli" in reason
 
 
@@ -680,7 +680,7 @@ async def test_preflight_encoders_passes_when_all_present():
     rt = ConversationRuntime(store, router=DefaultLLMRouter(_cfg(), {"fake": _FakeProvider()}))
     # Bundled encoders have no probe() → treated as present (raise on RAM fail).
     deps = {"reranker": _FakeNLI(), "nli": _FakeNLI()}
-    assert await rt._dr._preflight_encoders(deps, required=("reranker", "nli")) is None
+    assert await rt.deep_research._preflight_encoders(deps, required=("reranker", "nli")) is None
 
 
 async def test_research_stream_emits_named_error_on_dead_encoder():
@@ -698,7 +698,7 @@ async def test_research_stream_emits_named_error_on_dead_encoder():
             "nli": _FakeNLI(),
         },
     )
-    frames = [f async for f in rt.research_stream("q")]
+    frames = [f async for f in rt.deep_research.research_stream("q")]
     assert len(frames) == 1
     assert frames[0]["type"] == "error"
     assert "reranker" in frames[0]["message"]
@@ -727,7 +727,7 @@ async def test_execute_deep_research_blocks_on_dead_encoder():
         ),
     )
     plan = PlanEvent(summary="plan", steps=[PlanStep(title="q1")])
-    await rt._dr._execute_deep_research("c1", plan)
+    await rt.deep_research._execute_deep_research("c1", plan)
 
     events = await store.get_events("c1")
     assert any(isinstance(e, ErrorEvent) and e.code == "deep_research_preflight" for e in events)

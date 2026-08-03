@@ -103,11 +103,11 @@ def make_debug_router(store: SqliteEventStore, runtime: ConversationRuntime | No
                 "live_session": runtime.live_sessions.live_session(conversation_id) is not None,
                 "mcp_retrieval_searches": [
                     str(getattr(provider, "name", type(provider).__name__))
-                    for provider in runtime._mcp._retrieval_searches
+                    for provider in runtime.mcp._retrieval_searches
                 ],
                 "mcp_retrieval_extractions": [
                     str(getattr(provider, "name", type(provider).__name__))
-                    for provider in runtime._mcp._retrieval_extractions
+                    for provider in runtime.mcp._retrieval_extractions
                 ],
             }
             ps = runtime.project_store()

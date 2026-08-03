@@ -390,9 +390,9 @@ async def test_patch_route_deep_research_settings_preserves_upload_cid(tmp_path,
         },
     )
     assert r.status_code == 200
-    assert rt._dr._depth_for(cid).value == "exhaustive"
-    assert rt._dr._iterative_for(cid) is True
-    assert rt._dr._recency_for(cid) == "week"
+    assert rt.deep_research._depth_for(cid).value == "exhaustive"
+    assert rt.deep_research._iterative_for(cid) is True
+    assert rt.deep_research._recency_for(cid) == "week"
     assert rt._settings.get_research_sources(cid) == ("arxiv", "ddgs")
 
 

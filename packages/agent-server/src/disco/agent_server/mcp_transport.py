@@ -10,7 +10,7 @@ Split out of `mcp_manager.py` (pure move, zero behavior change) to bring
   collaborator attribute plus thin private properties (`_http_clients`,
   `_http_tools`, `_http_status`) delegating to `.clients` / `.tools` /
   `.status` here, so external readers (`routes/mcp.py`, the test suite) that
-  reach into `runtime._mcp._http_clients` etc. keep working unchanged. The
+  reach into `runtime.mcp._http_clients` etc. keep working unchanged. The
   connector never references the retry attempt through `McpManager` — the
   manager passes its own (monkeypatchable) `_connect_http` bound method in as
   the `connect` callable, so tests that do
@@ -20,7 +20,7 @@ Split out of `mcp_manager.py` (pure move, zero behavior change) to bring
   over an HTTP-client map + env, previously `_mcp_egress_hosts` /
   `_mcp_proxy_env` methods on `McpManager`. `McpManager` keeps same-named
   thin delegator methods (production code and tests call them as
-  `runtime._mcp._mcp_egress_hosts()` / `..._mcp_proxy_env(url)`).
+  `runtime.mcp._mcp_egress_hosts()` / `..._mcp_proxy_env(url)`).
 """
 
 from __future__ import annotations

@@ -380,7 +380,7 @@ def test_appkit_mcp_delta_deferred_not_in_strict_allowlist() -> None:
         runs_in="in_process",
         behavior=OPAQUE_MCP_BEHAVIOR,
     )
-    rt._mcp._http_tools = {"mcp_remote_search": mcp_def}
+    rt.mcp._http_tools = {"mcp_remote_search": mcp_def}
     with mock.patch.object(rt, "_sandbox_service_now"):
         loop = rt._compose_build_loop("ak5", router, agent)
 

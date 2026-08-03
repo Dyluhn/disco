@@ -91,7 +91,10 @@ class _Runtime:
             terminal_effects=MagicMock(),
         )
         self._workspace._lifecycle_commands = self._lifecycle_commands
-        self.kick = MagicMock()
+        # 13-B3: `kick` is owned by RunController and reached as
+        # `runtime.run_controller.kick`, so the double doubles the COLLABORATOR
+        # rather than re-exposing the method on itself.
+        self.run_controller = MagicMock()
         self._loop_for = MagicMock()
         self._loop_for.return_value.enter_planning = AsyncMock()
 
@@ -116,7 +119,7 @@ def _make_rt(store: SqliteEventStore, tmp_path: Path) -> _Runtime:
 
 def _make_ops(runtime: _Runtime) -> ControlOps:
     controller = MagicMock()
-    controller.kick = runtime.kick
+    controller.kick = runtime.run_controller.kick
     controller.loop_for = runtime._loop_for
     return ControlOps(
         runtime._store,
@@ -180,7 +183,7 @@ async def _assert_replan_landed(
     state = await store.get_state(CID)
 
     # Exactly one kick, carrying the new user turn's seq.
-    rt.kick.assert_called_once_with(CID, claimed_user_seq=claimed_user_seq)
+    rt.run_controller.kick.assert_called_once_with(CID, claimed_user_seq=claimed_user_seq)
 
     # The conversation is now RUNNING (planning), not its prior state.
     assert state.execution_status == ConversationStatus.RUNNING
@@ -303,7 +306,7 @@ async def test_ship_it_post_finish_appends_message_no_planning_status(tmp_path: 
     # The replan machinery must NOT have been engaged.
     rt._loop_for.assert_not_called()
     rt._loop_for.return_value.enter_planning.assert_not_awaited()
-    rt.kick.assert_not_called()
+    rt.run_controller.kick.assert_not_called()
 
 
 async def test_ship_it_case_insensitive(tmp_path: Path) -> None:
@@ -318,7 +321,7 @@ async def test_ship_it_case_insensitive(tmp_path: Path) -> None:
     state = await store.get_state(CID)
     assert state.execution_status == ConversationStatus.FINISHED
     assert not _run_intents(await store.get_events(CID))
-    rt.kick.assert_not_called()
+    rt.run_controller.kick.assert_not_called()
 
 
 async def test_ship_it_all_stop_phrases_skip_replan(tmp_path: Path) -> None:
@@ -343,7 +346,7 @@ async def test_ship_it_all_stop_phrases_skip_replan(tmp_path: Path) -> None:
 
         await ops.request_plan(CID, phrase)
 
-        rt.kick.assert_not_called()
+        rt.run_controller.kick.assert_not_called()
         assert not _run_intents(await store.get_events(CID)), (
             f"no run-intent marker may land for phrase {phrase!r}"
         )
@@ -438,7 +441,7 @@ async def test_replan_ingress_is_atomic_no_orphan_kick(
 
     after = await store.get_events(CID)
     state = await store.get_state(CID)
-    rt.kick.assert_not_called()
+    rt.run_controller.kick.assert_not_called()
     assert [e.id for e in after] == [e.id for e in before], "nothing partial may land"
     assert state.execution_status == ConversationStatus.FINISHED
     assert not _planning_statuses(after)

@@ -203,14 +203,14 @@ async def test_resume_pins_the_kernel_via_start(monkeypatch):
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED))
     # Stub kick so the resume does not spawn a real run (whose finalize could clear the
     # pin mid-assert) — we only assert the pin/trigger wiring.
-    monkeypatch.setattr(rt._run_controller, "kick", MagicMock())
+    monkeypatch.setattr(rt.run_controller, "kick", MagicMock())
 
     assert rt._kernel_pin_store.current(CID) is None  # no pin before resume
     result = await rt._resume.resume_conversation(CID)
 
     assert result["ok"] is True
     assert rt._kernel_pin_store.current(CID) is rt._disco_kernel  # resume pinned via start
-    rt._run_controller.kick.assert_called_once_with(CID)  # disco kernel start → kick = the trigger
+    rt.run_controller.kick.assert_called_once_with(CID)  # disco kernel start → kick = the trigger
 
 
 async def test_resume_routes_to_the_pinned_selected_kernel_not_silently_disco():

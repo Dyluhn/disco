@@ -397,7 +397,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
             "disco.agent_server.runtime._probe_live_model",
             return_value={"model_id": None, "n_ctx": None},
         ):
-            rt.kick(cid)
+            rt.run_controller.kick(cid)
 
         # Wait for the loop to compose the executor (it runs in a background task)
         import asyncio
@@ -505,7 +505,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
             "disco.agent_server.runtime._probe_live_model",
             return_value={"model_id": None, "n_ctx": None},
         ):
-            rt.kick(cid)
+            rt.run_controller.kick(cid)
 
         import asyncio
 

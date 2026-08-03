@@ -121,7 +121,8 @@ async def test_w33_deep_research_stream_stops_on_named_encoder_preflight_error()
     )
     rt._preflight_driver = lambda *_args, **_kwargs: asyncio.sleep(0, result=None)  # type: ignore[method-assign]
 
-    frames = [frame async for frame in rt.research_stream("What changed?", conversation_id="dr1")]
+    stream = rt.deep_research.research_stream("What changed?", conversation_id="dr1")
+    frames = [frame async for frame in stream]
 
     assert frames == [
         {

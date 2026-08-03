@@ -9,8 +9,8 @@ The HTTP transport lifecycle (retry ladder, origin/secret-ref approval gate,
 ToolDef construction for `streamable_http` servers) and the egress/proxy
 posture computations live in `mcp_transport.py` — `McpManager` reaches them
 through a `_http` collaborator (`McpHttpConnector`) and thin private
-delegators, so every existing call site (`runtime._mcp._http_clients`,
-`runtime._mcp._http_status`, `runtime._mcp._mcp_egress_hosts()`, ...) is
+delegators, so every existing call site (`runtime.mcp._http_clients`,
+`runtime.mcp._http_status`, `runtime.mcp._mcp_egress_hosts()`, ...) is
 unaffected. See `mcp_transport.py`'s module docstring for the split rationale.
 
 The MCP STATE attributes (`_mcp_pool`, `_mcp_http_clients`, `_mcp_http_tools`,

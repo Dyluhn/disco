@@ -35,21 +35,21 @@ def test_runtime_owns_no_cross_domain_mutable_collections() -> None:
 def test_run_owners_form_an_explicit_construction_graph() -> None:
     runtime = _runtime()
 
-    assert runtime._run_controller._registry is runtime._run_registry
+    assert runtime.run_controller._registry is runtime._run_registry
     assert runtime._run_supervisor._registry is runtime._run_registry
     assert runtime._run_supervisor._resources is runtime._run_resources
     assert runtime._run_kills._runs is runtime._run_registry
     assert runtime._run_kills._resources is runtime._run_resources
-    assert runtime._control._controller is runtime._run_controller
+    assert runtime._control._controller is runtime.run_controller
     assert runtime.conversation_control._pins is runtime._kernel_pins
     assert runtime.conversation_control._runs is runtime._run_registry
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
     assert runtime.run_sweep._completion is runtime._run_finalizer
-    assert runtime._dr._state is runtime._research_state
-    assert runtime._dr._live_state is runtime._research_live_state
+    assert runtime.deep_research._state is runtime._research_state
+    assert runtime.deep_research._live_state is runtime._research_live_state
 
     explicit_owners = (
-        runtime._run_controller,
+        runtime.run_controller,
         runtime._run_supervisor,
         runtime._run_kills,
         runtime._control,
@@ -97,9 +97,11 @@ def test_runtime_public_surface_is_frozen_and_bounded() -> None:
     # titles/schedules/uploads/run_sweep. 13-B2 dissolved six more (14
     # delegates): _sessions, _connections, _sandbox_resources, _live_sessions,
     # _conversation_control and _drivers, now sessions/connections/
-    # sandbox_resources/live_sessions/conversation_control/drivers. This count
+    # sandbox_resources/live_sessions/conversation_control/drivers. 13-B3
+    # dissolved four more (18 delegates): _preview, _dr, _mcp and
+    # _run_controller, now preview/deep_research/mcp/run_controller. This count
     # is a ratchet: it falls as 13-B proceeds and must never rise.
-    assert len(compatibility) == 57
+    assert len(compatibility) == 39
     assert public == active_ingress | compatibility
     assert all(
         getattr(ConversationRuntime, name).__module__ == "disco.agent_server.runtime_compatibility"
@@ -209,8 +211,8 @@ async def test_shutdown_order_is_deterministic() -> None:
 
 async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> None:
     runtime = _runtime()
-    runtime._mcp._start_mcp_pool = AsyncMock()
-    runtime._mcp._close_mcp_pool = AsyncMock()
+    runtime.mcp._start_mcp_pool = AsyncMock()
+    runtime.mcp._close_mcp_pool = AsyncMock()
     runtime._lifecycle.reconcile_orphaned_runs = AsyncMock()
     runtime._idle_sweeper.run = AsyncMock()
     runtime.schedules._schedule_manager_loop = AsyncMock()
@@ -223,4 +225,4 @@ async def test_app_lifespan_closes_runtime_even_when_request_scope_raises() -> N
             raise RuntimeError("request scope failed")
 
     runtime.aclose.assert_awaited_once_with()
-    runtime._mcp._close_mcp_pool.assert_awaited_once_with()
+    runtime.mcp._close_mcp_pool.assert_awaited_once_with()

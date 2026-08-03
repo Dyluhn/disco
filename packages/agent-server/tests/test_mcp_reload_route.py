@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 async def test_reload_route_applies_persisted_mcp_settings_to_runtime() -> None:
     runtime = MagicMock()
-    runtime.reload_mcp_pool = AsyncMock(
+    runtime.mcp.reload = AsyncMock(
         return_value={
             "ok": True,
             "configured_servers": ["tools"],
@@ -26,7 +26,7 @@ async def test_reload_route_applies_persisted_mcp_settings_to_runtime() -> None:
 
     assert response.status_code == 200
     assert response.json()["registered_tools"] == ["mcp__tools__lookup"]
-    runtime.reload_mcp_pool.assert_awaited_once_with()
+    runtime.mcp.reload.assert_awaited_once_with()
 
 
 async def test_reload_route_fails_honestly_without_runtime() -> None:

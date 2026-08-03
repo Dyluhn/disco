@@ -300,8 +300,8 @@ async def test_deep_research_resume_carries_the_partial_report_forward(tmp_path,
         captured["cid"] = conversation_id
         captured["resume_from"] = resume_from
 
-    monkeypatch.setattr(rt._dr, "_execute_deep_research", _fake_execute)
-    await rt._dr._maybe_run_deep_research(cid)
+    monkeypatch.setattr(rt.deep_research, "_execute_deep_research", _fake_execute)
+    await rt.deep_research._maybe_run_deep_research(cid)
 
     # it resumed with the partial report (its completed section carried), and
     # flipped the status back to RUNNING/plan_approved before executing.

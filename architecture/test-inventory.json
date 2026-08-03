@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
+  "source_identity": "0684350198d71eb16687a569932d6ff06afe59a0",
   "collected": {
     "counts": {
       "packages": 9880,
@@ -11539,7 +11539,7 @@
     }
   },
   "mapping_static": {
-    "identity": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
+    "identity": "0684350198d71eb16687a569932d6ff06afe59a0",
     "python_test_file_count": 792,
     "python_static_test_id_count": 9396,
     "python_test_files": [
@@ -23329,7 +23329,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_preview_wake.py",
-        "line": 43,
+        "line": 44,
         "fixture": "_close_owned_stores",
         "scope": "pytest.fixture(autouse=True)"
       },
@@ -23875,7 +23875,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_preview_hmr_ws.py",
-        "line": 107,
+        "line": 118,
         "fixture": "fake_ws_connect",
         "scope": "pytest.fixture"
       },
@@ -29167,6 +29167,33 @@
             "path": "packages/agent-server/tests/test_wo_a4_bus_quota_integration.py",
             "line": 57,
             "fixture": "a4",
+            "scope": "pytest.fixture"
+          }
+        ]
+      }
+    },
+    {
+      "package": "PKG-02-GATE-13B3",
+      "root": "multiple",
+      "source_identity_before": "1b2b494fe155c3e3e645530c0e11fc2eb81da489",
+      "source_identity_after": "0684350198d71eb16687a569932d6ff06afe59a0",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_preview_wake.py",
+            "line": 44,
+            "fixture": "_close_owned_stores",
+            "scope": "pytest.fixture(autouse=True)"
+          },
+          {
+            "path": "packages/agent-server/tests/test_preview_hmr_ws.py",
+            "line": 118,
+            "fixture": "fake_ws_connect",
             "scope": "pytest.fixture"
           }
         ]

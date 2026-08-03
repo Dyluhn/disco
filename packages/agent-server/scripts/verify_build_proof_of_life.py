@@ -108,7 +108,7 @@ async def main() -> None:
     gates_seen = 0
     actions = 0
     for _round in range(30):
-        runtime.kick(CID)
+        runtime.run_controller.kick(CID)
         task = runtime._run_registry.task(CID)
         if task is not None:
             try:

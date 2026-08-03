@@ -189,7 +189,7 @@ def _make_runtime_lifespan(
 
             async def _start_mcp_without_owning_readiness() -> None:
                 try:
-                    await active_runtime._mcp._start_mcp_pool()
+                    await active_runtime.mcp._start_mcp_pool()
                 except Exception:
                     # Approval and per-server connection failures are handled by
                     # McpManager. An unexpected aggregate error is still logged,
@@ -219,7 +219,7 @@ def _make_runtime_lifespan(
                     await runtime.aclose()
                 finally:
                     with contextlib.suppress(Exception):
-                        await runtime._mcp._close_mcp_pool()
+                        await runtime.mcp._close_mcp_pool()
 
     return runtime_lifespan
 

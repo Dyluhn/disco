@@ -30,17 +30,20 @@ def _runtime(
 ):
     mcp = SimpleNamespace(enabled=enabled, servers=servers)
     pool = SimpleNamespace(server_status=lambda: statuses or {})
+    # 13-B3: `_mcp` is the declared public seam `mcp`, and `mcp_approval_state`
+    # is owned by McpManager rather than forwarded by a runtime delegate, so the
+    # double holds ONE object supplying both instead of two disagreeing surfaces.
     runtime = SimpleNamespace(
         _config_store=SimpleNamespace(load=lambda: SimpleNamespace(mcp=mcp)),
-        _mcp=SimpleNamespace(
+        mcp=SimpleNamespace(
             _pool=pool,
             _http_clients={name: object() for name in connected_http or set()},
             _http_status={
                 **{name: {"status": "connected"} for name in connected_http or set()},
                 **(http_states or {}),
             },
+            mcp_approval_state=lambda: {},
         ),
-        mcp_approval_state=lambda: {},
     )
     return runtime
 

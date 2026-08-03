@@ -170,18 +170,18 @@ async def test_wake_for_preview(tmp_path):
     rt = _runtime_with_storage(store, str(tmp_path))
 
     # mock ensure_preview
-    rt._preview.ensure_preview = AsyncMock(return_value=True)  # type: ignore[method-assign]
-    rt._preview.port_upstream = MagicMock(return_value="http://upstream")  # type: ignore[method-assign]
+    rt.preview.ensure_preview = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    rt.preview.port_upstream = MagicMock(return_value="http://upstream")  # type: ignore[method-assign]
 
     # 1. Unknown
-    res = await rt._preview.wake_for_preview("00000000", 8000)
+    res = await rt.preview.wake_for_preview("00000000", 8000)
     assert res is None
 
     # 2. Known without live executor
-    res = await rt._preview.wake_for_preview("12345678", 8000)
+    res = await rt.preview.wake_for_preview("12345678", 8000)
     assert res == "http://upstream"
-    rt._preview.ensure_preview.assert_called_once_with("conv_1234567890")
-    rt._preview.port_upstream.assert_called_once_with("conv_1234567890", 8000)
+    rt.preview.ensure_preview.assert_called_once_with("conv_1234567890")
+    rt.preview.port_upstream.assert_called_once_with("conv_1234567890", 8000)
 
 
 @pytest.mark.asyncio
@@ -200,16 +200,16 @@ async def test_wake_for_preview_concurrent(tmp_path):
         rt._run_resources.set_executor(cid, MagicMock())
         return True
 
-    rt._preview.ensure_preview = AsyncMock(side_effect=fake_ensure)  # type: ignore[method-assign]
-    rt._preview.port_upstream = MagicMock(return_value="http://upstream")  # type: ignore[method-assign]
+    rt.preview.ensure_preview = AsyncMock(side_effect=fake_ensure)  # type: ignore[method-assign]
+    rt.preview.port_upstream = MagicMock(return_value="http://upstream")  # type: ignore[method-assign]
 
     # All three callers pass the no-live-executor fast path before any of them
     # acquires the lock; the re-check of _executors INSIDE the lock is what must
     # collapse the storm to a single ensure_preview call.
     await asyncio.gather(
-        rt._preview.wake_for_preview("12345678", 8000),
-        rt._preview.wake_for_preview("12345678", 8000),
-        rt._preview.wake_for_preview("12345678", 8000),
+        rt.preview.wake_for_preview("12345678", 8000),
+        rt.preview.wake_for_preview("12345678", 8000),
+        rt.preview.wake_for_preview("12345678", 8000),
     )
 
-    assert rt._preview.ensure_preview.call_count == 1
+    assert rt.preview.ensure_preview.call_count == 1

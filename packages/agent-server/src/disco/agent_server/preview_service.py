@@ -8,11 +8,12 @@ suspended-sandbox wake (`wake_for_preview`), the passive availability probe
 (`preview`), and the 'Restart preview' rematerialize path (`ensure_preview`).
 
 The service receives its actual collaborators directly — no runtime back-ref,
-no ``rt: Any``, no multi-domain locator. ``preview_upstream`` stays on the
-runtime and calls the ``port_upstream`` delegator. Every moved method keeps a
-one-line delegator on `ConversationRuntime` because routes call each on the
-runtime (and `wake_for_preview`'s internal cross-calls route back through the
-runtime).
+no ``rt: Any``, no multi-domain locator.
+
+13-B3 finished the move: ``preview_upstream`` is owned here (it composes
+``preview_target_port`` and ``port_upstream`` behind a ``None`` guard), and the
+one-line delegators on `ConversationRuntime` are gone. Routes reach this service
+by name as ``runtime.preview.<method>``.
 """
 
 from __future__ import annotations
@@ -222,6 +223,17 @@ class PreviewService:
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         """Resolve a curated port, gating noVNC on live-view enablement and capability."""
         return self._runtime_projection.port_upstream(conversation_id, port)
+
+    def preview_upstream(self, conversation_id: str) -> str | None:
+        """Resolve the conversation's own preview port to an upstream, or None.
+
+        13-B3: this composition (target port, then upstream, with the None
+        guard) was the one delegate in `runtime_compatibility.py` with a real
+        body. It is preview policy, so it is owned here rather than assembled
+        on the runtime.
+        """
+        port = self.preview_target_port(conversation_id)
+        return self.port_upstream(conversation_id, port) if port is not None else None
 
     async def wake_for_preview(
         self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID

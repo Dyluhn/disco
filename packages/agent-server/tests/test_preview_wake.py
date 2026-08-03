@@ -1,13 +1,14 @@
 """WALK-10: preview-app and port-app routes must wake suspended sandboxes.
 
-Root cause (confirmed): preview_app called runtime.preview_upstream which only
+Root cause (confirmed): preview_app called the then-runtime-level preview_upstream
+(13-B3 moved it onto PreviewService as runtime.preview.preview_upstream), which only
 looks up a live in-memory executor → 503 "preview not available" after the run
 ends and the sandbox auto-suspends.  The embedded Preview tab works because
 PreviewPane's iframe uses the HostPreviewProxyMiddleware which calls
 wake_for_preview.
 
 Fix: preview_app and port_app now extract cid8 from the conversation_id and call
-await runtime.wake_for_preview(cid8, port), which rematerialises a suspended
+await runtime.preview.wake_for_preview(cid8, port), which rematerialises a suspended
 sandbox before proxying — same path as the hostname proxy.
 
 Tests prove:
@@ -46,13 +47,22 @@ def _close_owned_stores():
         _OWNED_STORES.pop().close()
 
 
-class FakeRuntime:
-    def __init__(self, wake_result: str | None = None) -> None:
-        self.wake_calls: list[tuple[str, int]] = []
+class _FakePreviewService:
+    """13-B3: the preview behaviours are owned by `PreviewService` and reached as
+    `runtime.preview.<method>`, so the double doubles the COLLABORATOR. Calls are
+    recorded on the owning FakeRuntime so every assertion below is unchanged.
+
+    `preview_upstream` is still deliberately ABSENT: its absence is what proves
+    the fix, and it now has to be absent from the service rather than from the
+    runtime, because that is where it lives.
+    """
+
+    def __init__(self, runtime: FakeRuntime, wake_result: str | None) -> None:
+        self._runtime = runtime
         self._wake_result = wake_result
 
     async def wake_for_preview(self, cid8: str, port: int) -> str | None:
-        self.wake_calls.append((cid8, port))
+        self._runtime.wake_calls.append((cid8, port))
         return self._wake_result
 
     def preview_target_port(self, conversation_id: str) -> int:
@@ -63,6 +73,12 @@ class FakeRuntime:
 
     async def ensure_preview(self, conversation_id: str) -> bool:
         return False
+
+
+class FakeRuntime:
+    def __init__(self, wake_result: str | None = None) -> None:
+        self.wake_calls: list[tuple[str, int]] = []
+        self.preview = _FakePreviewService(self, wake_result)
 
 
 def _make_client(runtime: FakeRuntime) -> tuple[TestClient, FakeRuntime]:
