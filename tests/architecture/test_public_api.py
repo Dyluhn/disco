@@ -975,6 +975,7 @@ class TestFrontendPublicApi:
             "SecretStore",
             "BuildPlatformRegistry",
             "ConversationRuntime",
+            "FinishGate",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.
