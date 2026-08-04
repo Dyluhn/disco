@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
+  "source_identity": "2e062577dc9489d169549d4de54ccfc94c542616",
   "collected": {
     "counts": {
-      "packages": 9880,
+      "packages": 9882,
       "harness": 1253,
       "integrations": 9,
       "tests": 376
     },
-    "total": 11518,
+    "total": 11520,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -3721,6 +3721,8 @@
         "packages/core/tests/test_build_platform_shadow.py::test_appkit_observe_only_comparison_preserves_strict_policy",
         "packages/core/tests/test_build_platform_shadow.py::test_freeform_observe_only_comparison_matches_all_fields",
         "packages/core/tests/test_build_platform_shadow.py::test_shadow_mismatch_is_visible_and_cannot_change_active_route",
+        "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
+        "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes",
         "packages/core/tests/test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval",
         "packages/core/tests/test_build_replan_contract.py::test_followup_after_approval_enters_planning",
         "packages/core/tests/test_build_replan_contract.py::test_revision_framing_emitted_once",
@@ -11539,9 +11541,9 @@
     }
   },
   "mapping_static": {
-    "identity": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
-    "python_test_file_count": 792,
-    "python_static_test_id_count": 9396,
+    "identity": "2e062577dc9489d169549d4de54ccfc94c542616",
+    "python_test_file_count": 793,
+    "python_static_test_id_count": 9398,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -11891,6 +11893,7 @@
       "packages/core/tests/test_build_platform_nonweb_conformance.py",
       "packages/core/tests/test_build_platform_resolver.py",
       "packages/core/tests/test_build_platform_shadow.py",
+      "packages/core/tests/test_build_platform_vercel_contract.py",
       "packages/core/tests/test_build_replan_contract.py",
       "packages/core/tests/test_c13_exec_prefill.py",
       "packages/core/tests/test_c16_hard_reset_pointer_flush.py",
@@ -16247,6 +16250,8 @@
       "packages/core/tests/test_build_platform_shadow.py::test_appkit_observe_only_comparison_preserves_strict_policy",
       "packages/core/tests/test_build_platform_shadow.py::test_freeform_observe_only_comparison_matches_all_fields",
       "packages/core/tests/test_build_platform_shadow.py::test_shadow_mismatch_is_visible_and_cannot_change_active_route",
+      "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
+      "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes",
       "packages/core/tests/test_build_replan_contract.py::test_agent_cannot_write_before_revised_plan_approval",
       "packages/core/tests/test_build_replan_contract.py::test_followup_after_approval_enters_planning",
       "packages/core/tests/test_build_replan_contract.py::test_revision_framing_emitted_once",
@@ -27001,10 +27006,26 @@
       "source_identity_before": "068ec1f4499a76d700a399ee30c580786143c580",
       "source_identity_after": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
       "collected_roots": {
-        "harness": {"before_count": 1253, "after_count": 1253, "added_ids": []},
-        "integrations": {"before_count": 9, "after_count": 9, "added_ids": []},
-        "packages": {"before_count": 9880, "after_count": 9880, "added_ids": []},
-        "tests": {"before_count": 376, "after_count": 376, "added_ids": []}
+        "harness": {
+          "before_count": 1253,
+          "after_count": 1253,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "packages": {
+          "before_count": 9880,
+          "after_count": 9880,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 376,
+          "after_count": 376,
+          "added_ids": []
+        }
       },
       "mapping_static_additions": {
         "python_test_files": [],
@@ -27055,10 +27076,26 @@
       "source_identity_before": "64c2b8d51a18017dbef4ee4fb04e9f76dbef3aea",
       "source_identity_after": "9e51ab9b8c2d46a66ec583bb7abbb9d5649f8df0",
       "collected_roots": {
-        "packages": {"before_count": 9880, "after_count": 9880, "added_ids": []},
-        "harness": {"before_count": 1253, "after_count": 1253, "added_ids": []},
-        "integrations": {"before_count": 9, "after_count": 9, "added_ids": []},
-        "tests": {"before_count": 376, "after_count": 376, "added_ids": []}
+        "packages": {
+          "before_count": 9880,
+          "after_count": 9880,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1253,
+          "after_count": 1253,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 376,
+          "after_count": 376,
+          "added_ids": []
+        }
       },
       "mapping_static_additions": {
         "python_test_files": [],
@@ -28206,6 +28243,34 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-15-TARGETS",
+      "root": "packages",
+      "source_identity_before": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
+      "source_identity_after": "2e062577dc9489d169549d4de54ccfc94c542616",
+      "collected_roots": {
+        "packages": {
+          "before_count": 9880,
+          "after_count": 9882,
+          "added_ids": [
+            "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
+            "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_build_platform_vercel_contract.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
+          "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
       }
     },
     {
