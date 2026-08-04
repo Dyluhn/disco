@@ -159,8 +159,8 @@ class _FinalizeService(_FinishGateComponent):
                 self._loop,
                 verify_cmd,
                 events,
-                finish_verify_passed=self._coordinator.finish_verify_passed,
-                finish_dod_gate_passed=self._coordinator.finish_dod_gate_passed,
+                finish_verify_passed=self._coordinator.verification.finish_verify_passed,
+                finish_dod_gate_passed=self._coordinator.verification.finish_dod_gate_passed,
             )
             if disp is not None:
                 return step, disp
@@ -179,7 +179,7 @@ class _FinalizeService(_FinishGateComponent):
         # byte-identical). See `_finish_dod_gate_passed` for
         # the full algorithm + the byte-identical-no-spec
         # proof.
-        if not await self._coordinator.finish_dod_gate_passed():
+        if not await self._coordinator.verification.finish_dod_gate_passed():
             return step, Disp.CONTINUE
         summary = str(step.tool_call.arguments.get("summary") or "").strip()
         step = step.model_copy(
@@ -211,7 +211,7 @@ class _FinalizeService(_FinishGateComponent):
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
         if await self._loop._stop_allowed(state, events):
-            if not await self._coordinator.seal_gate_allows_finish():
+            if not await self._coordinator.verification.seal_gate_allows_finish():
                 return Disp.CONTINUE
             unverified_release = _unverified_release_active(events)
             final_content = (
@@ -276,7 +276,7 @@ class _FinalizeService(_FinishGateComponent):
             return Disp.CONTINUE
 
         events = await self._loop._events()
-        disp = await self._coordinator.run_finish_verify_gates(step, events)
+        disp = await self._coordinator.verification.run_finish_verify_gates(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:

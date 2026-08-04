@@ -337,7 +337,7 @@ async def test_infra_failure_blocks_finish_with_visible_unverified_reason(tmp_pa
     await store.set_dod_spec(
         CID, DoDSpec(predicates=[CommandExitPredicate(cmd="make", expect_exit=0)])
     )
-    passed = await loop._finish.finish_dod_gate_passed()
+    passed = await loop._finish.verification.finish_dod_gate_passed()
     assert passed is False
     events = await store.get_events(CID)
     blockers = [

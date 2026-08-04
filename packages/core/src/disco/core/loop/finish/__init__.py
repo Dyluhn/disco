@@ -32,6 +32,7 @@ from .common import (
 )
 from .content_gates import _ContentGateService
 from .finalize import _FinalizeService
+from .verification_surface import FinishVerificationSurface
 from .verify_gates import (
     _BrowserVerifyGateService,
     _ExportRenderGateService,
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "FinishGate",
+    "FinishVerificationSurface",
     "_DICTATED_CONTENT_REFUSAL_CAP",
     "_DOD_REFUSAL_CAP",
     "_EXECUTION_NUDGE",
@@ -90,6 +92,7 @@ class FinishGate:
         self._browser_verify = _BrowserVerifyGateService(loop, self)
         self._export_render = _ExportRenderGateService(loop, self)
         self._render_verify = _RenderVerifyGateService(loop, self)
+        self.verification = FinishVerificationSurface(self)
 
     def __setattr__(self, name, value):
         object.__setattr__(self, name, value)
@@ -120,17 +123,8 @@ class FinishGate:
     async def finalize_finish(self, step, state, events):
         return await self._finalize.finalize_finish(step, state, events)
 
-    async def finish_dod_gate_passed(self):
-        return await self._content.finish_dod_gate_passed()
-
     async def synthetic_finish_after_actionless_pauses(self, state, events):
         return await self._finalize.synthetic_finish_after_actionless_pauses(state, events)
-
-    async def maybe_honest_unverifiable_static_actionless_finish(self, events):
-        return await self._browser_verify.maybe_honest_unverifiable_static_actionless_finish(events)
-
-    async def finish_verify_passed(self, command):
-        return await self._finish_verify.finish_verify_passed(command)
 
     def _active_verify_tool(self):
         return self._finish_verify._active_verify_tool()
@@ -143,12 +137,6 @@ class FinishGate:
 
     async def dictated_content_gate_passed(self, events):
         return await self._content.dictated_content_gate_passed(events)
-
-    async def run_finish_verify_gates(self, step, events):
-        return await self._render_verify.run_finish_verify_gates(step, events)
-
-    async def seal_gate_allows_finish(self):
-        return await self._finalize.seal_gate_allows_finish()
 
     async def _detect_preview_url(self):
         return await self._browser_verify._detect_preview_url()
@@ -221,26 +209,11 @@ class FinishGate:
     async def _with_host_verification_profile(self, deliverable, events):
         return await self._host_verify._with_host_verification_profile(deliverable, events)
 
-    async def build_dod_evaluator(self):
-        return await self._content.build_dod_evaluator()
-
-    async def gate_host_verify(self, step, events, **kwargs):
-        return await self._host_verify.gate_host_verify(step, events, **kwargs)
-
     def _host_verify_authoritative(self):
         return self._host_verify._host_verify_authoritative()
-
-    async def gate_browser_verify(self, step, events, **kwargs):
-        return await self._browser_verify.gate_browser_verify(step, events, **kwargs)
-
-    async def gate_export_render(self, step, events):
-        return await self._export_render.gate_export_render(step, events)
 
     async def _manifest_export_artifact_path(self, events, **kwargs):
         return await self._export_render._manifest_export_artifact_path(events, **kwargs)
 
     async def _artifact_manifest_records(self, events, **kwargs):
         return await self._host_verify._artifact_manifest_records(events, **kwargs)
-
-    async def gate_workflow_output_contract(self, step, events):
-        return await self._render_verify.gate_workflow_output_contract(step, events)

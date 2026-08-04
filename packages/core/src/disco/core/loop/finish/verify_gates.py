@@ -656,4 +656,4 @@ class _RenderVerifyGateService(_FinishGateComponent):
         the P10 check). Returns CONTINUE (a gate refused — caller must not finish),
         HALT (a gate landed the terminal status / loop-breaker), or FALLTHROUGH (all
         render-verify gates clear)."""
-        return await _run_finish_verify_gates_fn(self._coordinator, step, events)
+        return await _run_finish_verify_gates_fn(self._coordinator.verification, step, events)

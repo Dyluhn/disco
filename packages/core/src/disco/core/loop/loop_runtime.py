@@ -248,7 +248,7 @@ class LoopRuntime:
     async def _finish_dod_gate_passed(self) -> bool:
         """Delegates to FinishGate.finish_dod_gate_passed (self._finish). Kept as an
         instance method for tests."""
-        return await self._loop._finish.finish_dod_gate_passed()
+        return await self._loop._finish.verification.finish_dod_gate_passed()
 
     async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
         for hook in self._loop._stop_hooks:
