@@ -27,6 +27,7 @@ from disco.core.build_platform import (
 )
 from disco.core.build_platform.registry import RegistryError
 from disco.core.build_platform.resolver import ResolutionError
+from disco.core.targets.nextjs_connectors import NEXTJS_SELF_HOST_CONNECTOR_ID
 from disco.core.targets.nextjs_server import (
     BUILD_COMMAND as SERVER_BUILD_COMMAND,
 )
@@ -136,7 +137,7 @@ def test_static_profile_resolves_with_distinct_identity_and_target() -> None:
     assert composition.verifier == NEXTJS_STATIC_VERIFIER_ID
     assert composition.preview == NEXTJS_STATIC_PREVIEW_ID
     assert composition.exporter == NEXTJS_STATIC_EXPORTER_ID
-    assert composition.connector is None
+    assert composition.connector == NEXTJS_SELF_HOST_CONNECTOR_ID
     assert composition.blocked_operations == ()
 
 
@@ -148,7 +149,7 @@ def test_server_profile_resolves_with_distinct_identity_and_target() -> None:
     assert composition.verifier == NEXTJS_SERVER_VERIFIER_ID
     assert composition.preview == NEXTJS_SERVER_PREVIEW_ID
     assert composition.exporter == NEXTJS_SERVER_EXPORTER_ID
-    assert composition.connector is None
+    assert composition.connector == NEXTJS_SELF_HOST_CONNECTOR_ID
     assert composition.blocked_operations == ()
 
 
@@ -304,13 +305,13 @@ def test_no_digest_or_provider_behavior_in_resolved_profiles() -> None:
     for profile_id in (_STATIC_PROFILE, _SERVER_PROFILE):
         profile = build_builtin_registry().profiles.get(profile_id)
         assert profile is not None
-        assert profile.connector is None
+        assert profile.connector == NEXTJS_SELF_HOST_CONNECTOR_ID
         serialized = profile.model_dump_json().casefold()
         assert "package_digest_ref" not in serialized
         assert "provider_rebuild" not in serialized
         assert "deployment" not in serialized
         composition = _resolve(profile_id, "probe")
-        assert composition.connector is None
+        assert composition.connector == NEXTJS_SELF_HOST_CONNECTOR_ID
         assert composition.blocked_operations == ()
 
 

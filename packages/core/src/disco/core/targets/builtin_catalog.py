@@ -24,6 +24,10 @@ from ..build_platform.contracts import (
     PolicyLayer,
 )
 from ..build_platform.registry import ComponentSpec
+from .nextjs_connectors import (
+    NEXTJS_SELF_HOST_CONNECTOR_ID,
+    NextjsSelfHostConnector,
+)
 from .nextjs_server import (
     NEXTJS_SERVER_EXPORTER_ID,
     NEXTJS_SERVER_PREVIEW_ID,
@@ -89,18 +93,25 @@ def _spec(component_id: ComponentId, kind: ComponentKind) -> ComponentSpec:
     )
 
 
+def _with_connector(profile: BuildProfile) -> BuildProfile:
+    """Attach the first-class self-host connector to a Next.js profile."""
+    return profile.model_copy(update={"connector": NEXTJS_SELF_HOST_CONNECTOR_ID})
+
+
 def target_builtin_catalog() -> BuiltinRegistrationBundle:
     """Return the generic target registration bundle.
 
     This is the only target-owned surface the built-in catalog consumes.  It
-    registers two distinct profiles and their distinct target/exporter
-    implementations plus their verifier/preview specs.  It carries no
-    connector and no digest/provider behavior in this slice.
+    registers two distinct profiles, their distinct target/exporter
+    implementations plus their verifier/preview specs, and the first-class
+    self-host connector attached to both Next.js profiles.  It carries no
+    provider rebuild, artifact mode, Vercel, or authenticated-provider
+    behavior in this slice.
     """
     return BuiltinRegistrationBundle(
         profiles=(
-            nextjs_static_profile(),
-            nextjs_server_profile(),
+            _with_connector(nextjs_static_profile()),
+            _with_connector(nextjs_server_profile()),
         ),
         implementations=(
             RegisteredImplementation(
@@ -122,6 +133,11 @@ def target_builtin_catalog() -> BuiltinRegistrationBundle:
                 _spec(NEXTJS_SERVER_EXPORTER_ID, ComponentKind.EXPORTER),
                 NextjsServerExporter(),
                 ComponentKind.EXPORTER,
+            ),
+            RegisteredImplementation(
+                _spec(NEXTJS_SELF_HOST_CONNECTOR_ID, ComponentKind.CONNECTOR),
+                NextjsSelfHostConnector(),
+                ComponentKind.CONNECTOR,
             ),
         ),
         plain_specs=(
