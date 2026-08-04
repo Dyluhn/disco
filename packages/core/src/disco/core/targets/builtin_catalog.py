@@ -26,7 +26,9 @@ from ..build_platform.contracts import (
 from ..build_platform.registry import ComponentSpec
 from .nextjs_connectors import (
     NEXTJS_SELF_HOST_CONNECTOR_ID,
+    NEXTJS_VERCEL_PREBUILT_CONNECTOR_ID,
     NextjsSelfHostConnector,
+    NextjsVercelPrebuiltConnector,
 )
 from .nextjs_server import (
     NEXTJS_SERVER_EXPORTER_ID,
@@ -103,10 +105,10 @@ def target_builtin_catalog() -> BuiltinRegistrationBundle:
 
     This is the only target-owned surface the built-in catalog consumes.  It
     registers two distinct profiles, their distinct target/exporter
-    implementations plus their verifier/preview specs, and the first-class
-    self-host connector attached to both Next.js profiles.  It carries no
-    provider rebuild, artifact mode, Vercel, or authenticated-provider
-    behavior in this slice.
+    implementations plus their verifier/preview specs, the first-class
+    self-host connector attached to both Next.js profiles, and the optional
+    strict-prebuilt Vercel connector for direct registry selection.  It carries
+    no authenticated-provider behavior and no deployment effect in this slice.
     """
     return BuiltinRegistrationBundle(
         profiles=(
@@ -137,6 +139,11 @@ def target_builtin_catalog() -> BuiltinRegistrationBundle:
             RegisteredImplementation(
                 _spec(NEXTJS_SELF_HOST_CONNECTOR_ID, ComponentKind.CONNECTOR),
                 NextjsSelfHostConnector(),
+                ComponentKind.CONNECTOR,
+            ),
+            RegisteredImplementation(
+                _spec(NEXTJS_VERCEL_PREBUILT_CONNECTOR_ID, ComponentKind.CONNECTOR),
+                NextjsVercelPrebuiltConnector(),
                 ComponentKind.CONNECTOR,
             ),
         ),
