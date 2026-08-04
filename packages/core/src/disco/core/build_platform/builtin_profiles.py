@@ -366,6 +366,25 @@ def _profile(*, appkit: bool) -> BuildProfile:
     )
 
 
+def _register_target_bundle(registry: BuildPlatformRegistry) -> None:
+    """Register the generic target-owned bundle with no target-specific spelling.
+
+    This helper iterates the opaque registration bundle supplied by the target
+    layer and routes each entry to the existing trusted built-in registration
+    paths.  It never names a target identity, command, output, port, or provider
+    value.
+    """
+    from ..targets.builtin_catalog import target_builtin_catalog
+
+    bundle = target_builtin_catalog()
+    for entry in bundle.implementations:
+        registry.components._add_implementation(entry.spec, entry.implementation, entry.kind)
+    for spec in bundle.plain_specs:
+        registry.components._add_spec(spec)
+    for profile in bundle.profiles:
+        registry.profiles._add(profile)
+
+
 def build_builtin_registry(
     *,
     freeform_tools: frozenset[str] = frozenset(),
@@ -410,6 +429,7 @@ def build_builtin_registry(
         _spec(APPKIT_PROMPT_ID, ComponentKind.PROMPT_MODULE),
     ):
         registry.components._add_spec(component)
+    _register_target_bundle(registry)
     registry.profiles._add(_profile(appkit=False))
     registry.profiles._add(_profile(appkit=True))
     return registry
