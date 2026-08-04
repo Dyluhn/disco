@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -35,6 +35,14 @@ class RegistryError(ValueError):
     """A component registration violates identity or ownership rules."""
 
 
+class UnregistrationError(RegistryError):
+    """A bare unregistration was refused or an explicit one was malformed."""
+
+
+class PersistedReferenceError(RegistryError):
+    """A persisted reference could not be resolved, migrated, or rolled back."""
+
+
 class ComponentSpec(FrozenModel):
     id: ComponentId
     kind: ComponentKind
@@ -46,6 +54,32 @@ class ComponentSpec(FrozenModel):
 class ProfileChoice(FrozenModel):
     id: ComponentId
     label: str = Field(min_length=1, max_length=96)
+
+
+# The one descriptor shape this registry can migrate deterministically.  A
+# persisted reference carrying a different version is unsupported and must fail
+# closed rather than fall back to a nearest-name or alias.
+SUPPORTED_DESCRIPTOR_VERSION: Literal[1] = 1
+
+
+class PersistedProfileDescriptor(FrozenModel):
+    """A typed, deterministic migration record for one persisted profile ID.
+
+    The persisted reference binds ``persisted_profile`` (the ID a stored
+    consumer still holds) to the exact live built-in profile ``profile`` it
+    resolves through this registry's descriptor/migration path.  It also
+    preserves the original profile, target, exporter, and self-host connector
+    identities so resolution can never silently reinterpret or reattach them.
+    ``descriptor_version`` makes the migration typed: any version other than
+    the supported one is unknown/unsupported and fails closed.
+    """
+
+    persisted_profile: ComponentId
+    profile: ComponentId
+    target: ComponentId
+    exporter: ComponentId | None
+    connector: ComponentId | None
+    descriptor_version: int = SUPPORTED_DESCRIPTOR_VERSION
 
 
 class ConstructionEngineDefinition(FrozenModel):
@@ -167,6 +201,168 @@ class ProfileCatalog:
         key = self._keyspace.claim(profile.id)
         self._profiles[key] = profile
 
+    def _add_mirror(self, persisted_id: ComponentId, mirror: BuildProfile) -> None:
+        """Register a persisted mirror through the shared exact-ID keyspace.
+
+        The persisted ID is claimed in the same keyspace as every profile and
+        component, so a persisted reference whose ID collides with any existing
+        profile or component fails closed (raising before any storage) instead
+        of overwriting it.  The claim is the single mutation that can fail, so
+        the caller can hold the descriptor write until after it succeeds.
+        """
+        key = self._keyspace.claim(persisted_id)
+        self._profiles[key] = mirror
+
+    def _restore_mirror(self, persisted_id: ComponentId, mirror: BuildProfile) -> None:
+        """Restore a persisted mirror whose identity is already claimed.
+
+        The exact ID was reserved by the shared keyspace when the persisted
+        reference was first registered, so rollback must not re-claim it.  It
+        only refuses to overwrite a mirror that is still present, which keeps
+        rollback from duplicating or silently replacing an already-claimed
+        identity.
+        """
+        key = persisted_id.canonical
+        if key in self._profiles:
+            raise RegistryError(f"duplicate component id: {key}")
+        self._profiles[key] = mirror
+
+
+class PersistedReferenceCatalog:
+    """Sole owner of persisted built-in profile references and their migration.
+
+    A persisted reference is created only after the referenced live built-in
+    profile is already registered.  It is a typed descriptor that binds an old
+    consumer-held profile ID to an exact live profile and preserves the
+    original profile/target/exporter/self-host identities.  The persisted ID
+    itself is registered as a mirror of the live profile under the persisted ID
+    through the shared exact-ID keyspace, so it is a normal, resolvable profile
+    that a stored consumer may hold.  A bare unregistration of a persisted ID
+    is rejected with a typed reason; only an explicit rollback restores the
+    prior registration deterministically.
+    """
+
+    def __init__(self) -> None:
+        self._descriptors: dict[str, PersistedProfileDescriptor] = {}
+
+    def get(self, persisted_profile: ComponentId) -> PersistedProfileDescriptor | None:
+        return self._descriptors.get(persisted_profile.canonical)
+
+    def has(self, persisted_profile: ComponentId) -> bool:
+        return persisted_profile.canonical in self._descriptors
+
+    @staticmethod
+    def _mirror(descriptor: PersistedProfileDescriptor, live: BuildProfile) -> BuildProfile:
+        """Register the persisted ID as a mirror of the live built-in profile."""
+        return live.model_copy(update={"id": descriptor.persisted_profile})
+
+    def register(
+        self, registry: BuildPlatformRegistry, descriptor: PersistedProfileDescriptor
+    ) -> None:
+        """Validate, then claim the mirror atomically, then record the descriptor.
+
+        The mirror's exact-ID claim is the single mutation that can fail; the
+        descriptor is only recorded after that claim succeeds, so a collision
+        (or any earlier validation failure) leaves neither a mirror nor a
+        descriptor behind — no partial state.
+        """
+        if descriptor.persisted_profile.canonical in self._descriptors:
+            raise RegistryError(
+                f"persisted reference already exists: {descriptor.persisted_profile.canonical}"
+            )
+        if descriptor.descriptor_version != SUPPORTED_DESCRIPTOR_VERSION:
+            raise PersistedReferenceError(
+                f"unsupported persisted descriptor version: {descriptor.descriptor_version}"
+            )
+        if descriptor.persisted_profile.canonical == descriptor.profile.canonical:
+            raise PersistedReferenceError(
+                "persisted reference must differ from its resolved live profile"
+            )
+        live = registry.profiles.get(descriptor.profile)
+        if live is None:
+            raise PersistedReferenceError(
+                f"persisted reference binds to missing live profile {descriptor.profile.canonical}"
+            )
+        if descriptor.target != live.target:
+            raise PersistedReferenceError(
+                "persisted reference target differs from the bound live profile"
+            )
+        if descriptor.exporter != live.exporter:
+            raise PersistedReferenceError(
+                "persisted reference exporter differs from the bound live profile"
+            )
+        if descriptor.connector != live.connector:
+            raise PersistedReferenceError(
+                "persisted reference connector differs from the bound live profile"
+            )
+        mirror = self._mirror(descriptor, live)
+        registry.profiles._add_mirror(descriptor.persisted_profile, mirror)
+        self._descriptors[descriptor.persisted_profile.canonical] = descriptor
+
+    def resolve(
+        self, registry: BuildPlatformRegistry, persisted_profile: ComponentId
+    ) -> BuildProfile:
+        """Resolve a persisted ID through its descriptor to a live profile.
+
+        No nearest-name, alias, or provider fallback is permitted: the exact
+        persisted ID must have a typed descriptor, that descriptor must be the
+        supported version, and its bound live profile must currently be
+        registered.  Any failure closes with a typed reason and raises.
+        """
+        descriptor = self._descriptors.get(persisted_profile.canonical)
+        if descriptor is None:
+            raise PersistedReferenceError(
+                f"no persisted reference for {persisted_profile.canonical}"
+            )
+        if descriptor.descriptor_version != SUPPORTED_DESCRIPTOR_VERSION:
+            raise PersistedReferenceError(
+                f"unsupported persisted descriptor version: {descriptor.descriptor_version}"
+            )
+        live = registry.profiles.get(descriptor.profile)
+        if live is None:
+            raise PersistedReferenceError(
+                f"persisted {persisted_profile.canonical} binds to missing "
+                f"profile {descriptor.profile.canonical}"
+            )
+        # The descriptor's preserved identities must agree with the live profile
+        # so the migration can never silently reinterpret the component, target,
+        # exporter, or connector.
+        if (
+            descriptor.target != live.target
+            or descriptor.exporter != live.exporter
+            or descriptor.connector != live.connector
+        ):
+            raise PersistedReferenceError(
+                f"persisted descriptor identity drift for {persisted_profile.canonical}"
+            )
+        return live
+
+    def rollback(
+        self, registry: BuildPlatformRegistry, persisted_profile: ComponentId
+    ) -> None:
+        """Restore a prior descriptor/registration deterministically.
+
+        The persisted ID is re-registered as a mirror of the exact live built-in
+        profile the descriptor already names, proving the persisted ID is
+        neither lost nor silently reinterpreted across a rollback.  The exact ID
+        was reserved by the shared keyspace at initial registration, so rollback
+        restores the already-claimed identity and refuses to duplicate or
+        overwrite a mirror that is still present.
+        """
+        descriptor = self._descriptors.get(persisted_profile.canonical)
+        if descriptor is None:
+            raise PersistedReferenceError(
+                f"no persisted reference to roll back: {persisted_profile.canonical}"
+            )
+        live = registry.profiles.get(descriptor.profile)
+        if live is None:
+            raise PersistedReferenceError(
+                f"cannot roll back {persisted_profile.canonical}: bound profile "
+                f"{descriptor.profile.canonical} is not registered"
+            )
+        mirror = self._mirror(descriptor, live)
+        registry.profiles._restore_mirror(descriptor.persisted_profile, mirror)
+
 
 class ComponentCatalog:
     """Sole owner of component specs and their kind-specific implementations."""
@@ -252,6 +448,7 @@ class BuildPlatformRegistry:
         keyspace = _ComponentKeyspace()
         self.profiles = ProfileCatalog(keyspace)
         self.components = ComponentCatalog(keyspace)
+        self.persisted = PersistedReferenceCatalog()
 
     @staticmethod
     def _check_public_namespace(component_id: ComponentId) -> None:
@@ -310,6 +507,56 @@ class BuildPlatformRegistry:
         self.components._add_implementation(
             spec, _DeclaredConnector(definition), ComponentKind.CONNECTOR
         )
+
+    def register_persisted_reference(self, descriptor: PersistedProfileDescriptor) -> None:
+        """Typed, deterministic persisted-reference compatibility seam.
+
+        A persisted reference may only be recorded for an exact live built-in
+        profile that is already registered, and only for the supported
+        descriptor version.  The persisted ID is claimed through the shared
+        exact-ID keyspace, so a persisted ID that collides with any existing
+        profile or component ID fails closed with no overwrite and no partial
+        descriptor/catalog state.  The descriptor preserves the original
+        profile, target, exporter, and self-host connector identities so
+        resolution never silently reinterprets or reattaches them.
+        """
+        if type(descriptor) is not PersistedProfileDescriptor:
+            raise RegistryError("persisted reference registration requires exact frozen data")
+        self.persisted.register(self, descriptor)
+
+    def resolve_persisted_reference(self, persisted_profile: ComponentId) -> BuildProfile:
+        """Resolve a persisted built-in profile ID through its descriptor path.
+
+        Returns the exact live profile the persisted ID migrates to.  Fails
+        closed on an unknown, removed, unsupported, or drifted persisted
+        reference; there is no nearest-name, alias, or provider fallback.  The
+        returned live profile ID is what must be passed to
+        ``resolve_build_composition(...)`` for real composition.
+        """
+        return self.persisted.resolve(self, persisted_profile)
+
+    def rollback_persisted_reference(self, persisted_profile: ComponentId) -> None:
+        """Deterministically restore the prior descriptor/registration."""
+        self.persisted.rollback(self, persisted_profile)
+
+    def unregister_profile(self, profile_id: ComponentId) -> None:
+        """Bare unregistration: remove a live profile registration, never a descriptor.
+
+        A live, unpersisted profile can be unregistered and then resolves as
+        unavailable/blocked rather than silently selecting another component.
+        Once a profile ID has a persisted reference, a bare unregister is
+        rejected with a typed reason so the persisted ID keeps resolving through
+        its descriptor/migration path.
+        """
+        if self.persisted.has(profile_id):
+            raise UnregistrationError(
+                f"cannot bare-unregister persisted profile {profile_id.canonical}; "
+                "resolve or roll back its persisted reference instead"
+            )
+        key = profile_id.canonical
+        if key not in self.profiles._profiles:
+            raise UnregistrationError(f"profile {profile_id.canonical} is not registered")
+        self.profiles._profiles.pop(key)
 
     def _add_builtins(
         self,
