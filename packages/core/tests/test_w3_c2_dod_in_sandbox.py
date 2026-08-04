@@ -53,7 +53,7 @@ async def test_dod_command_predicate_routes_through_exec_shell(tmp_path):
     sbx = _ExecShellSandbox(str(ws), exit_code=0)
     loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(sbx), conversation_id=CID)
 
-    ev = await FinishGate(loop).build_dod_evaluator()
+    ev = await FinishGate(loop).verification.build_dod_evaluator()
     spec = DoDSpec(predicates=[CommandExitPredicate(cmd="test -f marker", expect_exit=0)])
     verdict = await ev.evaluate(spec)
 
@@ -70,7 +70,7 @@ async def test_dod_command_uses_sandbox_verdict_not_host(tmp_path):
     sbx = _ExecShellSandbox(str(ws), exit_code=1)
     loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(sbx), conversation_id=CID)
 
-    ev = await FinishGate(loop).build_dod_evaluator()
+    ev = await FinishGate(loop).verification.build_dod_evaluator()
     # A host-only path that WOULD exist on the host (exit 0) but not in the box.
     spec = DoDSpec(predicates=[CommandExitPredicate(cmd="test -f /etc/hostname", expect_exit=0)])
     verdict = await ev.evaluate(spec)
@@ -87,7 +87,7 @@ async def test_dod_command_hard_deny_still_applies_in_sandbox_runner(tmp_path):
     sbx = _ExecShellSandbox(str(ws), exit_code=0)
     loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(sbx), conversation_id=CID)
 
-    ev = await FinishGate(loop).build_dod_evaluator()
+    ev = await FinishGate(loop).verification.build_dod_evaluator()
     spec = DoDSpec(predicates=[CommandExitPredicate(cmd="rm -rf -- /", expect_exit=0)])
     verdict = await ev.evaluate(spec)
 
@@ -117,7 +117,7 @@ async def test_container_dod_file_evidence_is_checked_inside_sandbox_without_hos
 
     sandbox = _ContainerSandbox()
     loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(sandbox), conversation_id=CID)
-    evaluator = await FinishGate(loop).build_dod_evaluator()
+    evaluator = await FinishGate(loop).verification.build_dod_evaluator()
     verdict = await evaluator.evaluate(
         DoDSpec(predicates=[FileExistsPredicate(path="artifact.txt")])
     )

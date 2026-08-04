@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "068ec1f4499a76d700a399ee30c580786143c580",
+  "source_identity": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -11916,6 +11916,7 @@
       "has_all": true,
       "explicit_all": [
         "FinishGate",
+        "FinishVerificationSurface",
         "_DICTATED_CONTENT_REFUSAL_CAP",
         "_DOD_REFUSAL_CAP",
         "_DoDWorkspaceUnavailable",
@@ -11945,6 +11946,7 @@
       ],
       "public_names": [
         "FinishGate",
+        "FinishVerificationSurface",
         "_DICTATED_CONTENT_REFUSAL_CAP",
         "_DOD_REFUSAL_CAP",
         "_DoDWorkspaceUnavailable",
@@ -11980,6 +11982,14 @@
           "level": 1,
           "alias": null,
           "kind": "from"
+        },
+        {
+          "public_name": "FinishVerificationSurface",
+          "name": "FinishVerificationSurface",
+          "module": "verification_surface",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
         }
       ],
       "public_signatures": {
@@ -11987,23 +11997,31 @@
           "kind": "class",
           "signature": "class FinishGate()",
           "members": [
-            "async def build_dod_evaluator(self)",
             "async def dictated_content_gate_passed(self, events)",
             "async def finalize_finish(self, step, state, events)",
+            "async def gate_execution_nudge(self, step, events)",
+            "async def handle_finish_path(self, step, state, events)",
+            "async def normalize_finish_step(self, step, events)",
+            "async def synthetic_finish_after_actionless_pauses(self, state, events)",
+            "def __init__(self, loop: AgentLoop) -> None"
+          ],
+          "fields": []
+        },
+        "FinishVerificationSurface": {
+          "kind": "class",
+          "signature": "class FinishVerificationSurface()",
+          "members": [
+            "async def build_dod_evaluator(self)",
             "async def finish_dod_gate_passed(self)",
             "async def finish_verify_passed(self, command)",
             "async def gate_browser_verify(self, step, events, **kwargs)",
-            "async def gate_execution_nudge(self, step, events)",
             "async def gate_export_render(self, step, events)",
             "async def gate_host_verify(self, step, events, **kwargs)",
             "async def gate_workflow_output_contract(self, step, events)",
-            "async def handle_finish_path(self, step, state, events)",
             "async def maybe_honest_unverifiable_static_actionless_finish(self, events)",
-            "async def normalize_finish_step(self, step, events)",
             "async def run_finish_verify_gates(self, step, events)",
             "async def seal_gate_allows_finish(self)",
-            "async def synthetic_finish_after_actionless_pauses(self, state, events)",
-            "def __init__(self, loop: AgentLoop) -> None"
+            "def __init__(self, gate: FinishGate) -> None"
           ],
           "fields": []
         },
@@ -29223,9 +29241,17 @@
       "surface": "python",
       "path": "packages/core/src/disco/core/loop/finish/__init__.py",
       "public_name": "FinishGate",
-      "target_sha256": "cfabea4badc9f3a4a543645c840d50eca25e4d2369239b8e0e104f03deb3d11e",
+      "target_sha256": "7ef3f3792508767454c906907ae91f37490061e74208e65069b9f4d6e24d7756",
       "owner_package": "PKG-13-FACADES",
       "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/finish/__init__.py",
+      "public_name": "FinishVerificationSurface",
+      "target_sha256": "e74dd9111c0a5e4abf773b794b9ecd0b6715e9f1411a5781bb1c1244c88765db",
+      "owner_package": "PKG-13-FACADES",
+      "reason": "A8: explicit typed verification surface moved verification operations off FinishGate."
     },
     {
       "surface": "python",
@@ -29467,29 +29493,23 @@
       "path": "packages/core/src/disco/core/loop/finish/__init__.py",
       "public_name": "FinishGate",
       "origin": null,
-      "removed_members": [],
-      "added_members": [
+      "removed_members": [
         "async def build_dod_evaluator(self)",
-        "async def dictated_content_gate_passed(self, events)",
-        "async def finalize_finish(self, step, state, events)",
         "async def finish_dod_gate_passed(self)",
         "async def finish_verify_passed(self, command)",
         "async def gate_browser_verify(self, step, events, **kwargs)",
-        "async def gate_execution_nudge(self, step, events)",
         "async def gate_export_render(self, step, events)",
         "async def gate_host_verify(self, step, events, **kwargs)",
         "async def gate_workflow_output_contract(self, step, events)",
-        "async def handle_finish_path(self, step, state, events)",
         "async def maybe_honest_unverifiable_static_actionless_finish(self, events)",
-        "async def normalize_finish_step(self, step, events)",
         "async def run_finish_verify_gates(self, step, events)",
-        "async def seal_gate_allows_finish(self)",
-        "async def synthetic_finish_after_actionless_pauses(self, state, events)"
+        "async def seal_gate_allows_finish(self)"
       ],
-      "old_signature_sha256": "3f127768a61e296ad72d65fc2a220c11736e06a83793c2825b7d658942cd1550",
-      "new_signature_sha256": "d92c210c32e4d89005b60cf453af43a8c8e9b5bd6fcafe833a89089c2c927af1",
+      "added_members": [],
+      "old_signature_sha256": "d92c210c32e4d89005b60cf453af43a8c8e9b5bd6fcafe833a89089c2c927af1",
+      "new_signature_sha256": "7c8fb7096b4292a2a9ab64c857fcc9ce31cb509d5851e1447c631fb74a54a7a3",
       "owner_package": "PKG-13-FACADES",
-      "accepting_commit": "e7a774c4350ecf458637f07b7137ae6ceca3f90d",
+      "accepting_commit": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
       "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13C-ACCEPTANCE-RECEIPT.md"
     }
   ],

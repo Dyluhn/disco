@@ -80,7 +80,7 @@ def _blank_html(n: int = 4) -> dict:
 
 
 def _gate(loop):
-    return loop._finish.gate_export_render
+    return loop._finish.verification.gate_export_render
 
 
 @pytest.mark.asyncio

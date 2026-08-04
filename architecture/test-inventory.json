@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "068ec1f4499a76d700a399ee30c580786143c580",
+  "source_identity": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
   "collected": {
     "counts": {
       "packages": 9880,
@@ -11539,7 +11539,7 @@
     }
   },
   "mapping_static": {
-    "identity": "068ec1f4499a76d700a399ee30c580786143c580",
+    "identity": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
     "python_test_file_count": 792,
     "python_static_test_id_count": 9396,
     "python_test_files": [
@@ -26996,6 +26996,25 @@
       }
     },
     {
+      "package": "PKG-02-GATE-13C-A8",
+      "root": "multiple",
+      "source_identity_before": "068ec1f4499a76d700a399ee30c580786143c580",
+      "source_identity_after": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
+      "collected_roots": {
+        "harness": {"before_count": 1253, "after_count": 1253, "added_ids": []},
+        "integrations": {"before_count": 9, "after_count": 9, "added_ids": []},
+        "packages": {"before_count": 9880, "after_count": 9880, "added_ids": []},
+        "tests": {"before_count": 376, "after_count": 376, "added_ids": []}
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
       "package": "PKG-02-GATE-13C-R1",
       "root": "multiple",
       "source_identity_before": "e7a774c4350ecf458637f07b7137ae6ceca3f90d",
@@ -27036,26 +27055,10 @@
       "source_identity_before": "64c2b8d51a18017dbef4ee4fb04e9f76dbef3aea",
       "source_identity_after": "9e51ab9b8c2d46a66ec583bb7abbb9d5649f8df0",
       "collected_roots": {
-        "packages": {
-          "before_count": 9880,
-          "after_count": 9880,
-          "added_ids": []
-        },
-        "harness": {
-          "before_count": 1253,
-          "after_count": 1253,
-          "added_ids": []
-        },
-        "integrations": {
-          "before_count": 9,
-          "after_count": 9,
-          "added_ids": []
-        },
-        "tests": {
-          "before_count": 376,
-          "after_count": 376,
-          "added_ids": []
-        }
+        "packages": {"before_count": 9880, "after_count": 9880, "added_ids": []},
+        "harness": {"before_count": 1253, "after_count": 1253, "added_ids": []},
+        "integrations": {"before_count": 9, "after_count": 9, "added_ids": []},
+        "tests": {"before_count": 376, "after_count": 376, "added_ids": []}
       },
       "mapping_static_additions": {
         "python_test_files": [],

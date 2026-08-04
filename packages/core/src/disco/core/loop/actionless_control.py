@@ -133,7 +133,9 @@ class ActionlessValveMixin(_ValveHost):
             return await self._completed_via_notify_finish(events)
         if (
             not pending_revision
-            and await self._loop._finish.maybe_honest_unverifiable_static_actionless_finish(events)
+            and await self._loop._finish.verification.maybe_honest_unverifiable_static_actionless_finish(
+                events
+            )
         ):
             return True
         if not incomplete:
@@ -278,7 +280,7 @@ class ActionlessValveMixin(_ValveHost):
         # export gate too, both of which it silently skipped before. Re-poll first:
         # gate_execution_nudge may have emitted.
         events = await self._loop._events()
-        disp = await finish.run_finish_verify_gates(finish_step, events)
+        disp = await finish.verification.run_finish_verify_gates(finish_step, events)
         if disp is Disp.CONTINUE:
             return False
         if disp is Disp.HALT:
@@ -286,12 +288,12 @@ class ActionlessValveMixin(_ValveHost):
             # failure with no progress) and emitted the terminal status itself.
             return True
         # (3) external Definition-of-Done gate (no spec → no-op pass-through).
-        if not await finish.finish_dod_gate_passed():
+        if not await finish.verification.finish_dod_gate_passed():
             return False
         # (4) REL-27 — a notify-signaled "done" is an affirmative delivery claim
         # and clears the same seal gate a real finish() clears (refusal reminder
         # already injected; False ⇒ CONTINUE so the model can act on it).
-        if not await finish.seal_gate_allows_finish():
+        if not await finish.verification.seal_gate_allows_finish():
             return False
         # All gates passed → land a clean FINISHED (same message + detail as the
         # pre-W-32 force-finish, now EARNED rather than bypassed).

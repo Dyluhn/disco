@@ -97,14 +97,7 @@ def _valid_member_row(row: Any, root: Path) -> bool:
     """Prong 1 and prong 6: schema, package form, and commit resolvability."""
     if not isinstance(row, dict) or set(row) != MEMBER_FIELDS:
         return False
-    scalars = (
-        "surface", "path", "public_name", "origin", "old_signature_sha256",
-        "new_signature_sha256", "owner_package", "accepting_commit",
-        "accepting_receipt",
-    )
-    if not all(isinstance(row[key], str) and row[key] for key in scalars if key != "origin"):
-        return False
-    if row["origin"] is not None and (not isinstance(row["origin"], str) or not row["origin"]):
+    if not _valid_member_scalars(row):
         return False
     removed = _string_list(row, "removed_members")
     added = _string_list(row, "added_members")
@@ -117,6 +110,19 @@ def _valid_member_row(row: Any, root: Path) -> bool:
     if not GIT_SHA.fullmatch(row["accepting_commit"]):
         return False
     return commit_resolves(root, row["accepting_commit"])
+
+
+def _valid_member_scalars(row: dict[str, Any]) -> bool:
+    """Validate the scalar half of a member-transition record."""
+    scalar_keys = (
+        "surface", "path", "public_name", "old_signature_sha256",
+        "new_signature_sha256", "owner_package", "accepting_commit",
+        "accepting_receipt",
+    )
+    if not all(isinstance(row[key], str) and row[key] for key in scalar_keys):
+        return False
+    origin = row["origin"]
+    return origin is None or isinstance(origin, str) and bool(origin)
 
 
 def member_authority(
