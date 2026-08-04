@@ -258,8 +258,9 @@ class TestMappingStatic:
             # from the coupling inventory. Its 4 static test ids are 4 collected
             # node ids — nothing is parametrized — so for once the two counts
             # move by the same amount.
-            "python_test_file_count": 792,
-            "python_static_test_id_count": 9396,
+            # 793 from Epic 15: the documented Vercel prebuilt contract tests.
+            "python_test_file_count": 793,
+            "python_static_test_id_count": 9398,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -545,14 +546,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 9880,
+            "packages": 9882,
             "harness": 1253,
             "integrations": 9,
             "tests": 376,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11518 == sum(expected.values())
+        assert collected["total"] == 11520 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -568,7 +569,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11518}
+        assert result == {"collected_total": 11520}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -587,9 +588,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9396,
+            "python_static_ids": 9398,
             "typescript_static_ids": 1203,
-            "collected_total": 11518,
+            "collected_total": 11520,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
