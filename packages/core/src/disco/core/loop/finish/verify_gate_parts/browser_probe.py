@@ -296,7 +296,7 @@ async def maybe_honest_unverifiable_static_actionless_finish(
     # refusal (exact-paths reminder already emitted) return False: the valve
     # keeps its existing pause/stuck behavior and never lands a FINISHED
     # whose deliverable cannot be sealed.
-    if not await gate.seal_gate_allows_finish():
+    if not await gate._coordinator.verification.seal_gate_allows_finish():
         return False
     # All guards hold — finish honestly instead of pausing actionless. Same honest
     # marker as the finish-gate path, then a clean terminal FINISHED (NOT PAUSED).
