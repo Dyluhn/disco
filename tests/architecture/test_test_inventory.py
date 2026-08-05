@@ -297,8 +297,21 @@ class TestMappingStatic:
             # gate it guards is the comparator that closes findings F1/F2/F6:
             # it fails when the inventory certifies an id no sanctioned command
             # can collect, which was true of 1213 ids at the parent identity.
-            "python_test_file_count": 816,
-            "python_static_test_id_count": 9840,
+            # 818 from PKG-03-HARNESS-ORACLES (A11): two files —
+            # `harness/build_soak/tests/test_thrash_shapes.py` (the shape
+            # classifier's regression fixtures, built from register #5's three
+            # real firings) and `packages/core/tests/test_freshness_memo.py`
+            # (the memo's deterministic acceptance). +20 static ids against +24
+            # collected node ids: the gap is the six PARAMETRIZED historical
+            # cases (two tests x three fixtures) counted once statically and
+            # three times each when collected, less the one id the retargeted
+            # `test_assist_off_never_reminds` keeps. That id was deliberately
+            # NOT renamed: the inventory authorises deletions only through
+            # `module_split_transitions`, whose contract states "a rename is not
+            # a relocation", so renaming would have meant inventing governance
+            # authority or weakening the ratchet.
+            "python_test_file_count": 818,
+            "python_static_test_id_count": 9860,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -584,14 +597,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 10322,
-            "harness": 1253,
+            "packages": 10333,
+            "harness": 1266,
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11970 == sum(expected.values())
+        assert collected["total"] == 11994 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -607,7 +620,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11970}
+        assert result == {"collected_total": 11994}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -626,9 +639,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9840,
+            "python_static_ids": 9860,
             "typescript_static_ids": 1203,
-            "collected_total": 11970,
+            "collected_total": 11994,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

@@ -20,6 +20,22 @@ from .temporal import (
     _status_value_and_detail,
 )
 
+# Every code that lets the strict live-monitor stop boundary accept an otherwise
+# ambiguous `IDLE(detail=killed)` terminal as a proven pre-kill thrash stop.
+#
+# `TOOL_CALL_THRASH_CODES` covers the historical parent AND every A11 §2 shape,
+# so adding a shape can never silently narrow this control. It is a module
+# constant rather than a local set for the same reason: a local set is asserted
+# only by a test that copies it, and a copy that drifts agrees with the bug.
+STRICT_LIVE_THRASH_CODES = frozenset(
+    {
+        *fc.TOOL_CALL_THRASH_CODES,
+        fc.TOOL_ERROR_THRASH,
+        fc.ACTIONLESS_THRASH,
+        fc.MODEL_REPAIR_THRASH,
+    }
+)
+
 
 def _first_killed_idle_epoch(events: list[dict[str, Any]]) -> float | None:
     first: float | None = None
@@ -126,12 +142,7 @@ def _strict_live_thrash_stop_boundary(
     if counts is None:
         return False
     minimum, sample_count = counts
-    thrash_codes = {
-        fc.TOOL_CALL_THRASH,
-        fc.TOOL_ERROR_THRASH,
-        fc.ACTIONLESS_THRASH,
-        fc.MODEL_REPAIR_THRASH,
-    }
+    thrash_codes = STRICT_LIVE_THRASH_CODES
     findings = monitor.get("findings")
     if not isinstance(findings, list):
         return False

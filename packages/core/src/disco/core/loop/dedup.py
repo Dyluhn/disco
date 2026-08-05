@@ -28,11 +28,13 @@ from ..events import (
     ActionEvent,
     AgentErrorEvent,
     Event,
+    EventSource,
     LLMMessage,
     MessageEvent,
     ObservationEvent,
     WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
+from ..tool_fingerprint import tool_call_fingerprint
 from .resource_context import (  # noqa: F401 — compatibility facade bindings
     canonical_workspace_identifier,
     latest_read_revision_by_resource,
@@ -564,17 +566,27 @@ _W39_REMINDER_SENTINEL = "[W-39 verify-dedup]"
 # a false non-match).
 _W39_COMMAND_MAX_CHARS = 200
 
+# Length cap on the PRIOR RESULT echoed back. Larger than the command cap
+# because the result is the actual signal — the model is being handed the answer
+# it already has — but still bounded so a build log is not re-inlined whole.
+_W39_RESULT_MAX_CHARS = 800
+
 # Advisory reminder text. ADVISORY ONLY — it never asserts "nothing changed"
 # in absolute terms; it puts the judgment on the model ("re-run only if you
 # changed something"). format-only (single source of truth).
 _W39_REMINDER_TEMPLATE = (
     "<system-reminder>\n"
     "{sentinel} You already ran `{command}` earlier (step {step}) and it "
-    "passed, and nothing has been written to the workspace since. Re-run it "
+    "passed, and nothing has changed since. Re-run it "
     "only if you have changed something relevant — otherwise act on the "
-    "result you already have instead of re-verifying.\n"
+    "result you already have instead of re-verifying.{result}\n"
     "</system-reminder>"
 )
+
+# The prior result block, appended only when a result was actually captured.
+# A6.3 §2's sentence is "here is that result"; an empty block would promise one
+# and deliver nothing.
+_W39_RESULT_BLOCK = "\n\nThat run produced:\n{result}"
 
 
 def _w39_short_command(command: str) -> str:
@@ -584,6 +596,72 @@ def _w39_short_command(command: str) -> str:
     if len(s) > _W39_COMMAND_MAX_CHARS:
         s = s[: _W39_COMMAND_MAX_CHARS - 1] + "…"
     return s
+
+
+def _w39_prior_result_excerpt(events: list[Event], action_id: str) -> str:
+    """A6.3 §2 — the prior RESULT, not merely the fact that a prior run passed.
+
+    The memo's governing sentence is *"you ran this exact command at seq N;
+    nothing has changed since; **here is that result**"*. Without the result the
+    model is told an answer exists but not what it was, which is a weaker signal
+    than the one the design specifies — and in every one of register #5's three
+    firings the model already HAD a usable answer. Bounded so a large build log
+    never lands in the prompt twice.
+    """
+    for e in events:
+        if isinstance(e, ObservationEvent) and e.action_id == action_id:
+            content = e.tool_result.content
+            if not isinstance(content, str) or not content.strip():
+                return ""
+            text = content.strip()
+            if len(text) > _W39_RESULT_MAX_CHARS:
+                text = text[: _W39_RESULT_MAX_CHARS - 1] + "…"
+            return text
+    return ""
+
+
+def _w39_freshness_boundary_seq(events: list[Event], *, before_seq: int | None = None) -> int:
+    """A6.3 §3.2 — seq of the most recent event that reset "nothing has changed".
+
+    This is the loop-side counterpart of the oracle's `progress_epoch_boundary`.
+    It counts the three boundary kinds that are observable from the typed event
+    log without importing harness adjudication policy:
+
+    * a **workspace mutation** (the A8 mutating-tool set) — the original W-39
+      signal;
+    * a **user message** — the user said something, so the world the earlier
+      verification described may no longer be the world the model is in;
+    * a **blocking environment message** — the environment interrupted.
+
+    The last two are the ones plain `_w39_latest_mutation_seq` missed, and the
+    miss was not cosmetic: without them the memo would tell a model "nothing has
+    been written to the workspace since" immediately after a user turn that
+    changed the goal. The predicate is **fail-safe by construction** — if
+    anything did change, no memo is emitted and the model re-runs exactly as it
+    does today. Its failure mode is silence, never a false assurance.
+
+    NOT covered, and deliberately: the oracle additionally treats an approved
+    plan predicate scope change and a trusted mutation receipt as boundaries.
+    Both are harness adjudication over serialized events; reproducing them here
+    would be the second implementation A6.3 §3 forbids. The consequence is that
+    this predicate is STRICTLY MORE CONSERVATIVE than the oracle's in those two
+    cases — it can only suppress a memo the oracle would have allowed, never
+    emit one the oracle would have refused.
+    """
+    latest = _w39_latest_mutation_seq(events, before_seq=before_seq)
+    for e in events:
+        seq = e.seq or 0
+        if before_seq is not None and seq >= before_seq:
+            continue
+        if not isinstance(e, MessageEvent):
+            continue
+        if e.source == EventSource.USER:
+            latest = max(latest, seq)
+            continue
+        blocking = e.meta.get("blocking") if isinstance(e.meta, dict) else None
+        if e.source == EventSource.ENVIRONMENT and isinstance(blocking, str) and blocking:
+            latest = max(latest, seq)
+    return latest
 
 
 def _w39_latest_mutation_seq(events: list[Event], *, before_seq: int | None = None) -> int:
@@ -628,15 +706,22 @@ def _w39_reminder_emitted_after(events: list[Event], short_command: str, after_s
 def _w39_validate_candidate(
     e: ActionEvent,
     events: list[Event],
-    current_tool: str,
-    current_args: dict,
+    current_fingerprint: str,
     streak_start_seq: int,
     short_command: str,
 ) -> tuple[bool, int]:
-    """Validate a prior shell call; return (valid, prior_seq)."""
-    if e.tool_call.tool_name != current_tool:
-        return (False, 0)
-    if (e.tool_call.arguments or {}) != current_args:
+    """Validate a prior shell call; return (valid, prior_seq).
+
+    Identity is `tool_call_fingerprint`, the SHARED owner the `ThrashOracle`
+    grades runs with (A6.3 §3.1, binding). It replaced a private `tool_name` +
+    `arguments ==` comparison, which is a *second* notion of "the same call":
+    `==` treats `{"n": 1}` and `{"n": 1.0}` as equal where the canonical
+    rendering the oracle uses does not, and it cannot compare values that are
+    not directly comparable. A memo firing on a different equivalence class than
+    the oracle that grades the run is worse than no memo — the disagreement
+    would stay invisible until a canary fired on a class the memo never saw.
+    """
+    if tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) != current_fingerprint:
         return (False, 0)
     if not _f9_has_successful_observation(events, e.id):
         return (False, 0)
@@ -674,8 +759,9 @@ def _w39_shell_verify_reminder(
         return (False, 0, "")
 
     prior_events = events[:-1] if events else []
-    streak_start_seq = _w39_latest_mutation_seq(prior_events)
+    streak_start_seq = _w39_freshness_boundary_seq(prior_events)
     short_command = _w39_short_command(command)
+    current_fingerprint = tool_call_fingerprint(current_tool, current_args)
     shell_calls_seen = 0
     for e in reversed(prior_events):
         if not isinstance(e, ActionEvent) or e.tool_call is None:
@@ -686,14 +772,16 @@ def _w39_shell_verify_reminder(
             if shell_calls_seen > window:
                 break  # window exhausted — give up (mirrors F9 eviction)
         valid, prior_seq = _w39_validate_candidate(
-            e, events, current_tool, current_args, streak_start_seq, short_command
+            e, events, current_fingerprint, streak_start_seq, short_command
         )
         if not valid:
             continue
+        prior_result = _w39_prior_result_excerpt(events, e.id)
         reminder = _W39_REMINDER_TEMPLATE.format(
             sentinel=_W39_REMINDER_SENTINEL,
             command=short_command,
             step=prior_seq,
+            result=_W39_RESULT_BLOCK.format(result=prior_result) if prior_result else "",
         )
         return (True, prior_seq, reminder)
     return (False, 0, "")

@@ -37,6 +37,12 @@ class OracleResult:
       facts:  structured, machine-readable evidence (never prose narrative).
       first_broken_link: the "A -> B" link this result breaks (FAIL only), used by
               the classifier's first-broken-link wins ordering (§16).
+      shape:  an OPTIONAL machine-readable sub-classification of the failure, for
+              oracles that detect structurally different failures (A11 §2). It is
+              adjudicable, unlike `first_broken_link`, which is free text: reading
+              a shape out of a prose link is what let A6.3 §1 misattribute 10-C.
+              When present it is emitted with a code that agrees with it, derived
+              from one table (see `_thrash_shapes`), so the two cannot drift.
       reason: an OPTIONAL short human token (e.g. why a SKIP) — advisory only,
               never adjudicated on.
     """
@@ -46,6 +52,7 @@ class OracleResult:
     code: str | None = None
     facts: dict[str, Any] = field(default_factory=dict)
     first_broken_link: str | None = None
+    shape: str | None = None
     reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -80,6 +87,8 @@ class OracleResult:
         }
         if self.first_broken_link is not None:
             out["first_broken_link"] = self.first_broken_link
+        if self.shape is not None:
+            out["shape"] = self.shape
         if self.reason is not None:
             out["reason"] = self.reason
         return out
@@ -97,6 +106,7 @@ class OracleResult:
             code=raw.get("code"),
             facts=dict(raw.get("facts") or {}),
             first_broken_link=raw.get("first_broken_link"),
+            shape=raw.get("shape"),
             reason=raw.get("reason"),
         )
 
@@ -113,6 +123,7 @@ def failing(
     *,
     first_broken_link: str,
     facts: dict[str, Any] | None = None,
+    shape: str | None = None,
 ) -> OracleResult:
     return OracleResult(
         oracle=oracle,
@@ -120,6 +131,7 @@ def failing(
         code=code,
         facts=facts or {},
         first_broken_link=first_broken_link,
+        shape=shape,
     )
 
 

@@ -141,6 +141,36 @@ TOOL_ERROR_THRASH = "TOOL_ERROR_THRASH"
 ACTIONLESS_THRASH = "ACTIONLESS_THRASH"
 MODEL_REPAIR_THRASH = "MODEL_REPAIR_THRASH"
 
+# A11 §2 — the four SHAPES that `TOOL_CALL_THRASH` used to report under one name.
+# They were separable only by reading the free-text `first_broken_link`, and the
+# campaign's own A6.3 design record misattributed 10-C because of it. Each shape
+# is now its own code.
+#
+# Every one maps to P1 — exactly what `TOOL_CALL_THRASH` maps to. A11 §4 forbids
+# weakening anything, and a severity that moved in either direction would be a
+# weakening dressed up as a refactor. `TOOL_CALL_THRASH` is RETAINED (below, and
+# in SEVERITY_BY_CODE) so the frozen historical artifacts that carry it stay
+# `is_known_code`; the oracle no longer emits it.
+TOOL_CALL_THRASH_IDENTICAL_STREAK = "TOOL_CALL_THRASH_IDENTICAL_STREAK"
+TOOL_CALL_THRASH_SEMANTIC_SHELL = "TOOL_CALL_THRASH_SEMANTIC_SHELL"
+TOOL_CALL_THRASH_BACKGROUND_RESTART = "TOOL_CALL_THRASH_BACKGROUND_RESTART"
+TOOL_CALL_THRASH_STUCK_VALVE = "TOOL_CALL_THRASH_STUCK_VALVE"
+
+# Every code that means "this run thrashed on tool calls", historical parent
+# included. Consumers that gate on thrash MUST use this set rather than listing
+# codes by hand: the live-monitor stop boundary in `_runner/thrash.py` would
+# otherwise stop recognising thrash the moment a shape was added, which is a
+# silent weakening of a control.
+TOOL_CALL_THRASH_CODES = frozenset(
+    {
+        TOOL_CALL_THRASH,
+        TOOL_CALL_THRASH_IDENTICAL_STREAK,
+        TOOL_CALL_THRASH_SEMANTIC_SHELL,
+        TOOL_CALL_THRASH_BACKGROUND_RESTART,
+        TOOL_CALL_THRASH_STUCK_VALVE,
+    }
+)
+
 # P8D — targeted-edit / manual-edit discipline (an edit touched only what it should,
 # preserved direct work + anchors, and did not rewrite the world).
 TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES = "TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES"
@@ -280,6 +310,10 @@ SEVERITY_BY_CODE: dict[str, str] = {
     BUILD_DID_NOT_FINISH: P1,
     FINISH_UNSEALABLE_CONTENT: P1,
     TOOL_CALL_THRASH: P1,
+    TOOL_CALL_THRASH_IDENTICAL_STREAK: P1,
+    TOOL_CALL_THRASH_SEMANTIC_SHELL: P1,
+    TOOL_CALL_THRASH_BACKGROUND_RESTART: P1,
+    TOOL_CALL_THRASH_STUCK_VALVE: P1,
     TOOL_ERROR_THRASH: P1,
     ACTIONLESS_THRASH: P1,
     MODEL_REPAIR_THRASH: P1,

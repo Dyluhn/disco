@@ -73,6 +73,13 @@ async def test_observer_execution_honors_bound_restart_override() -> None:
         def __init__(self) -> None:
             self.events: list[object] = []
 
+        async def _events(self) -> list[object]:
+            # `_events` is declared on LoopEventPort, which `_prepare_observation`
+            # is typed against; this fake simply never provided it, because the
+            # assist gate returned before reaching it. The freshness memo (A11 §1)
+            # is not assist-gated, so the declared method is now actually called.
+            return list(self.events)
+
         async def _prepare_executor(self) -> None:
             return None
 

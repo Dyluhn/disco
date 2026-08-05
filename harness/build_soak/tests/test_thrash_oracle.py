@@ -38,7 +38,7 @@ def test_identical_tool_call_streak_fails() -> None:
         a = action(seq, "file_read", action_id=action_id, args={"path": "same.txt"})
         events += [a, observation(seq + 1, action_id, tool="file_read", success=True)]
     result = ThrashOracle().check(events, scenario=_scenario())[0]
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_IDENTICAL_STREAK
     assert result.facts["action_seqs"] == [1, 3, 5]
 
 
@@ -80,7 +80,7 @@ def test_same_predicate_reapproval_cannot_reset_identical_action_streak() -> Non
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_IDENTICAL_STREAK
     assert result.facts["action_seqs"] == [2, 5, 8]
 
 
@@ -90,7 +90,7 @@ def test_plain_environment_prose_cannot_reset_identical_action_streak() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_IDENTICAL_STREAK
     assert result.facts["action_seqs"] == [1, 4, 6]
 
 
@@ -141,7 +141,7 @@ def test_semantically_repeated_direct_script_verification_fails_across_shell_wra
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 3, 5]
     assert result.facts["fingerprint"] == '["python","/workspace/inventory.py",[]]'
@@ -229,7 +229,7 @@ def test_same_predicate_reapproval_cannot_reset_cosmetic_wrapper_thrash() -> Non
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [3, 7, 11]
 
@@ -265,7 +265,7 @@ def test_exact_command_retries_remain_bounded_when_successful_output_changes() -
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 5, 9]
 
@@ -286,7 +286,7 @@ def test_repeated_same_static_tee_sink_remains_bounded_across_append_and_cwd_for
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 3, 5]
     assert result.facts["fingerprint"].endswith(',{"tee_sinks":["/workspace/primes.out"]}]')
@@ -342,7 +342,7 @@ def test_unproven_tee_sink_cannot_evade_pure_repeat_limit(tee_stage: str) -> Non
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 3, 5]
 
@@ -428,7 +428,7 @@ def test_documentation_write_does_not_hide_repeated_script_verification() -> Non
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 5, 9]
 
@@ -460,7 +460,7 @@ def test_failed_semantic_script_rewrite_does_not_hide_repeated_verification() ->
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
     assert result.facts["action_seqs"] == [1, 5, 7]
 
@@ -550,7 +550,7 @@ def test_three_background_script_starts_without_cleanup_fail() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_BACKGROUND_RESTART
     assert result.first_broken_link == "tool_call -> repeated_background_script_restart"
     assert result.facts["action_seqs"] == [1, 3, 5]
     assert result.facts["cleanup_credit"] == 0
@@ -579,7 +579,7 @@ def test_repeated_cleanup_cannot_hide_four_background_restarts() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_BACKGROUND_RESTART
     assert result.first_broken_link == "tool_call -> repeated_background_script_restart"
     assert result.facts["count"] == 4
     assert result.facts["allowed"] == 3
@@ -606,7 +606,7 @@ def test_cleanup_after_final_background_start_grants_no_credit() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_BACKGROUND_RESTART
     assert result.facts["cleanup_credit"] == 0
 
 
@@ -631,7 +631,7 @@ def test_stderr_redirection_is_not_background_lifecycle() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
 
 
@@ -651,7 +651,7 @@ def test_quoted_ampersand_argument_remains_foreground_verification() -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
 
 
@@ -675,7 +675,7 @@ def test_pipeline_stderr_and_comment_ampersands_remain_foreground(suffix: str) -
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_SEMANTIC_SHELL
     assert result.first_broken_link == "tool_call -> repeated_semantic_shell_verification"
 
 
@@ -833,7 +833,7 @@ def test_product_stuck_marker_is_classified_as_thrash(detail: str) -> None:
         [status(1, "STUCK", detail=detail)],
         scenario=_scenario(),
     )[0]
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_STUCK_VALVE
 
 
 def _superseded_blocked_status(seq: int, detail: str = "verifier_no_progress") -> dict:
@@ -897,7 +897,7 @@ def test_incomplete_blocked_landing_lineage_remains_thrash(mutate) -> None:
 
     result = ThrashOracle().check(events, scenario=_scenario())[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_STUCK_VALVE
 
 
 def test_later_unsuperseded_stuck_marker_still_fails() -> None:
@@ -912,7 +912,7 @@ def test_later_unsuperseded_stuck_marker_still_fails() -> None:
         scenario=_scenario(),
     )[0]
 
-    assert result.code == fc.TOOL_CALL_THRASH
+    assert result.code == fc.TOOL_CALL_THRASH_STUCK_VALVE
     assert result.facts["terminal_markers"] == [{"seq": 5, "detail": "repeated_noop"}]
 
 

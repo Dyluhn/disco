@@ -322,17 +322,74 @@ async def test_anti_spam_mutation_resets_streak():
 
 
 # ---------------------------------------------------------------------------
-# (f) assist OFF → the W-39 path is never entered
+# (f) assist OFF → the freshness memo STILL fires (A11 §1 product change)
 # ---------------------------------------------------------------------------
 
 
-async def test_assist_off_never_reminds():
+async def test_assist_off_still_reminds_and_never_suppresses():
+    """A11 §1 — the freshness memo is no longer assist-gated.
+
+    This test asserted the opposite until 2026-08-05, and the old assertion is
+    exactly why register #5 stayed open: assist is OFF for capable models, which
+    is the population all three of #5's firings came from (10-C `6606503c`, 10-D
+    `65a9f46a`, 11-A `488741db`), so an assist-gated memo was dead code in every
+    canary that reproduced the defect.
+
+    Both halves matter. The memo must FIRE (otherwise there is no feedback
+    path), and the command must still EXECUTE all three times (A6.3 §3.4 — the
+    memo informs, it never constrains a valid output shape). A memo that
+    suppressed the call would make a thrash red disappear without the underlying
+    behaviour changing, which is the one outcome this design forbids.
+    """
     ex = _EchoExecutor()
     loop = _make_loop(model_policy=ModelExecutionPolicy.standard(), executor=ex)
+    assert loop._assist is False, "precondition: this is the capable-model default"
     for i in range(3):
         events = await _drive_execute(loop, _shell_action(f"call_shell_{i + 1}", "ls -la"))
-    assert _reminders(events) == []
+    reminders = _reminders(events)
+    assert len(reminders) == 1, "one memo per passed-and-unchanged streak, not one per repeat"
+    assert "You already ran `ls -la` earlier (step 1)" in reminders[0]
+    # A6.3 §2 — "here is that result", not merely "a result exists".
+    assert "That run produced:" in reminders[0]
     assert len([c for c in ex.calls if c.tool_name == "shell"]) == 3
+
+
+async def test_assist_off_never_reminds():
+    """Assist OFF + a NON-shell repeat → still no memo. The memo's scope boundary.
+
+    A11 §1 un-gated the freshness memo from the assist tier, but only on the
+    SHELL channel (`_W39_SHELL_TOOLS`); F9's read dedup — which short-circuits
+    the call rather than advising — remains assist-gated, because A6.3 §3.4
+    forbids the memo from suppressing anything. So with assist off a repeated
+    read-only call is neither memoed nor deduped, and executes every time.
+
+    This id predates A11 and is kept deliberately. Its original body asserted
+    that assist-off suppressed the memo on the SHELL channel, which A11 reversed
+    on purpose; that new behaviour is asserted directly above. The id is
+    retained rather than renamed because the test inventory's deletion ratchet
+    authorises deletions only through `module_split_transitions`, whose own
+    contract states "a rename is not a relocation" — so renaming would have
+    required either inventing governance authority or weakening the ratchet.
+    Preserving the id and re-pointing it at the surviving boundary costs
+    nothing and pins something real: the memo is shell-scoped.
+    """
+    ex = _EchoExecutor()
+    loop = _make_loop(model_policy=ModelExecutionPolicy.standard(), executor=ex)
+    assert loop._assist is False
+    for i in range(3):
+        events = await _drive_execute(
+            loop,
+            ActionEvent(
+                thought="reading the component",
+                tool_call=ToolCall(
+                    tool_name="file_read",
+                    call_id=f"call_read_{i + 1}",
+                    arguments={"path": "src/App.jsx"},
+                ),
+            ),
+        )
+    assert _reminders(events) == []
+    assert len([c for c in ex.calls if c.tool_name == "file_read"]) == 3
 
 
 # ---------------------------------------------------------------------------

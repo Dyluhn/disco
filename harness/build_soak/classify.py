@@ -99,10 +99,18 @@ def classify(
         severity = fc.severity_for(code)
         broken, facts = first_fail.first_broken_link, dict(first_fail.facts)
 
+    # A11 §2 — the failure SHAPE is top-level, beside the code it agrees with.
+    # It is deliberately not buried in `oracle_results[]`: a reader classifying a
+    # red should never have to dig for the one field that says what broke, which
+    # is how `first_broken_link` came to be read as a classifier in the first
+    # place. `None` for oracles that do not sub-classify.
+    shape = first_fail.shape if first_fail is not None else None
+
     classification: dict[str, Any] = {
         "status": status,
         "severity": severity,
         "code": code,
+        "shape": shape,
         "first_broken_link": broken,
         "scenario_id": (scenario or {}).get("id") if scenario else None,
         "run_id": run_id,
