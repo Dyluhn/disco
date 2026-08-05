@@ -10,10 +10,16 @@ mount.
 This module freezes the Starter Recipe record — including a bounded, typed,
 schema-owned representation of its value surface — and a deterministic,
 fail-closed registry that applies the frozen ``R-LATENT/v1`` classification to
-that typed value surface at registration.  It does not add user selection,
-prompt injection, direct-reference workflow, persistence/ejection, provider,
-runtime-effect, Library Recipe, trust evaluation, precedence, provenance/BOM,
-or guided-authoring channels; those are later slices.
+that typed value surface at registration.  It adds no user selection, prompt
+injection, direct-reference workflow, persistence/ejection, provider or
+runtime-effect channel of its own: selection, guided authoring and ejection are
+owned by :mod:`.library_catalog`, and trust evaluation, capability intersection,
+precedence and provenance/BOM by :mod:`.library_composition`.
+
+The classification itself is owned once by :mod:`.latent_effects`.  The frozen
+lexicon's §6 binds the same version to all three input kinds that carry
+user/owner content, so this schema contributes only the declared *surface* of
+its own fields rather than a second implementation of ``R-LATENT/v1``.
 
 The record carries its engine, profile, target, trust, required-capability,
 scaffold mount, and ``R-LATENT/v1`` binding explicitly — no scope is implicit in
@@ -24,7 +30,6 @@ through, persisted by, or executed through this module.
 
 from __future__ import annotations
 
-import re
 from typing import Literal
 
 from pydantic import Field
@@ -39,14 +44,20 @@ from .builtin_profiles import (
     WEB_TARGET_ID,
 )
 from .contracts import ComponentId, FrozenModel, TrustLevel
+from .latent_effects import (
+    R_LATENT_LEXICON_VERSION,
+    LatentEffect,
+    ValueSurface,
+    classify_document,
+)
 
 SUPPORTED_STARTER_RECIPE_SCHEMA_VERSION: Literal[1] = 1
 
 # The frozen R-LATENT/v1 lexicon and scanner rule set a Starter Recipe value
 # surface is bound to and classified against at registration.  This is a
-# schema-owned, bounded classifier over the typed value surface; it is not a
-# separate runtime scanner or effect channel.
-SUPPORTED_R_LATENT_VERSION: Literal["R-LATENT/v1"] = "R-LATENT/v1"
+# schema-owned, bounded classification over the typed value surface, applied at
+# registration; it is not a separate runtime scanner or effect channel.
+SUPPORTED_R_LATENT_VERSION: Literal["R-LATENT/v1"] = R_LATENT_LEXICON_VERSION
 
 _STARTER_RECIPE_NAMESPACE = "disco_starter"
 
@@ -95,156 +106,84 @@ class StarterRecipeValues(FrozenModel):
     src: str = ""
     build_command: str = ""
 
+    def as_document(self) -> dict[str, object]:
+        """Project the declared values to the plain document the classifier walks."""
+        return {
+            "name": self.name,
+            "extra_args": self.extra_args,
+            "init": self.init,
+            "note": self.note,
+            "payload": list(self.payload),
+            "src": self.src,
+            "build_command": self.build_command,
+        }
+
+
+_StarterVerdict = Literal[
+    "clean",
+    "parameter_smuggling",
+    "hidden_executable",
+    "path_escape",
+    "credential_leak",
+    "network_egress",
+    "unbounded_input",
+]
+
 
 class StarterClassification(FrozenModel):
     """One deny-wins classification of a Starter Recipe value surface."""
 
-    verdict: Literal[
-        "clean",
-        "parameter_smuggling",
-        "hidden_executable",
-        "path_escape",
-        "credential_leak",
-        "network_egress",
-        "unbounded_input",
-    ]
+    verdict: _StarterVerdict
     rule: str | None = None
     r_latent_version: str = SUPPORTED_R_LATENT_VERSION
 
 
-# Bounded rule caps (mirror the frozen R-LATENT/v1 corpus values).
-_MAX_VALUE_BYTES = 4096
-_MAX_DOC_BYTES = 256 * 1024
+#: The declared purpose of every Starter Recipe value field.  A field's surface
+#: is what makes a control legitimate rather than latent: ``build_command`` is
+#: the schema's own declared command field (``LC6``), ``note`` is an annotation
+#: surface (``LC4``), ``src`` is a project path, and ``name``/``extra_args``/
+#: ``init`` are plain data where every rule applies.  Surfaces are declared here
+#: by the schema; nothing is inferred from a field's name.
+STARTER_VALUE_SURFACES: dict[str, ValueSurface] = {
+    "name": ValueSurface.DATA,
+    "extra_args": ValueSurface.DATA,
+    "init": ValueSurface.DATA,
+    "note": ValueSurface.DOCUMENTATION,
+    "payload": ValueSurface.STRUCTURED,
+    "src": ValueSurface.PROJECT_PATH,
+    "build_command": ValueSurface.COMMAND,
+}
 
-# A conservative set of command verbs that turn a meta-character into a real
-# shell chain (R1), so a lone ``;``/``&&`` in prose (LC2) stays clean while a
-# genuine chain (``; rm``, ``&& curl``, ``| sh``) is rejected.
-_CHAIN_VERBS = (
-    "rm",
-    "curl",
-    "wget",
-    "sh",
-    "bash",
-    "python",
-    "python3",
-    "node",
-    "npm",
-    "npx",
-    "mkdir",
-    "cd",
-    "echo",
-    "cat",
-    "chmod",
-    "chown",
-    "touch",
-    "cp",
-    "mv",
-    "dd",
-    "nc",
-    "perl",
-    "ruby",
-)
-_CHAIN_TOKEN = "(?:{})".format("|".join(re.escape(v) for v in _CHAIN_VERBS))
-
-_SHELL_CHAIN_RE = re.compile(
-    r"""(;\s*"""
-    + _CHAIN_TOKEN
-    + r"""|&&\s*"""
-    + _CHAIN_TOKEN
-    + r"""|\|\|\s*"""
-    + _CHAIN_TOKEN
-    + r"""|\|\s*"""
-    + _CHAIN_TOKEN
-    + r"""|\$\('|`|^\s*\|\s*"""
-    + _CHAIN_TOKEN
-    + r""")"""
-)
-_EXEC_HEAD_RE = re.compile(
-    r"""^\s*(node|npm|npx|python|python3|curl|wget|sh|bash|/bin/sh|/bin/bash|./)\s+""",
-    re.IGNORECASE,
-)
-_BARE_OPTION_RE = re.compile(
-    r"""^\s*(--|-\s*[ecx]|--eval|--exec|-c|-x|--force|--network)\s*$""",
-    re.IGNORECASE,
-)
-_SCRIPT_PROLOGUE_RE = re.compile(r"#!|require\(|import\(|<script>|\beval\(", re.IGNORECASE)
-_CALLBACK_RE = re.compile(
-    r"""^\s*(\([^)]*\)\s*=>|=>|function\s*\(|\blambda\b|\bdef\s+\w+\s*\(|__call__)""",
-    re.IGNORECASE,
-)
-_PATH_ESCAPE_RE = re.compile(r"(\.\./|^(?:\/|[a-zA-Z]:[\\\/])|file://)")
-_SECRET_VALUE_RE = re.compile(
-    r"(secret|token|password|passwd|credential|private|apikey|api[_-]?key)\s*[=:]\s*\S+",
-    re.IGNORECASE,
-)
-_NETWORK_EGRESS_RE = re.compile(
-    r"(wss?://[^\s'\"\)]+|://[^\s'\"\)]+|socket://|connect\(|fetch\()",
-    re.IGNORECASE,
-)
-
-# Annotation/documentation fields are treated as data (R-LATENT LC4), so a
-# hyperlink there is data, not runtime egress.  Credentials (R8) are never
-# exempted, even in a doc field.
-_DOC_FIELDS = frozenset(
-    {"note", "summary", "description", "notes", "docs", "label", "comment", "annotations"}
-)
-
-
-def _classify_scalar(value: str, *, doc_field: bool) -> StarterClassification | None:
-    """Classify one scalar string with deny-wins ordering (R5/R6, then R1-R4, then R7-R9)."""
-    if len(value.encode("utf-8")) > _MAX_VALUE_BYTES:
-        return StarterClassification(verdict="unbounded_input", rule="R10")
-    trimmed = value.strip()
-    if _SCRIPT_PROLOGUE_RE.search(trimmed):
-        return StarterClassification(verdict="hidden_executable", rule="R5")
-    if _CALLBACK_RE.match(trimmed):
-        return StarterClassification(verdict="hidden_executable", rule="R6")
-    if _SHELL_CHAIN_RE.search(trimmed):
-        return StarterClassification(verdict="parameter_smuggling", rule="R1")
-    if _EXEC_HEAD_RE.match(trimmed):
-        return StarterClassification(verdict="parameter_smuggling", rule="R2")
-    if _BARE_OPTION_RE.match(trimmed):
-        return StarterClassification(verdict="parameter_smuggling", rule="R3")
-    if _PATH_ESCAPE_RE.search(trimmed):
-        return StarterClassification(verdict="path_escape", rule="R7")
-    if _SECRET_VALUE_RE.search(trimmed):
-        return StarterClassification(verdict="credential_leak", rule="R8")
-    if not doc_field and _NETWORK_EGRESS_RE.search(trimmed):
-        return StarterClassification(verdict="network_egress", rule="R9")
-    return None
+# The frozen lexicon's classification vocabulary, projected onto this schema's
+# own verdict names.  The two vocabularies are identical by construction; this
+# table exists so the mapping is explicit and type-checked rather than implied
+# by a string coercion.
+_VERDICT_NAMES: dict[LatentEffect, _StarterVerdict] = {
+    LatentEffect.CLEAN: "clean",
+    LatentEffect.PARAMETER_SMUGGLING: "parameter_smuggling",
+    LatentEffect.HIDDEN_EXECUTABLE: "hidden_executable",
+    LatentEffect.PATH_ESCAPE: "path_escape",
+    LatentEffect.CREDENTIAL_LEAK: "credential_leak",
+    LatentEffect.NETWORK_EGRESS: "network_egress",
+    LatentEffect.UNBOUNDED_INPUT: "unbounded_input",
+}
 
 
 def classify_starter_values(values: StarterRecipeValues) -> StarterClassification:
     """Apply the frozen ``R-LATENT/v1`` classification to a typed value surface.
 
-    Deny-wins.  The declared command field ``build_command`` is the schema's own
-    declared command surface (R-LATENT ``LC6``) and is never treated as latent.
-    A whole value surface that exceeds the bounded document cap (R11) fails
-    closed even when every individual scalar is ordinary and bounded.
+    The classification itself is owned once by :mod:`.latent_effects`, because
+    the frozen lexicon's §6 binds the *same* version to all three input kinds
+    that carry user/owner content.  This schema contributes only the declared
+    surface of its own fields; a second implementation of ``R-LATENT/v1`` here
+    could disagree with the Library Recipe and Reference Pack paths while
+    claiming the same version, which the lexicon's §2 forbids.
     """
-    doc = values.model_dump_json().encode("utf-8")
-    if len(doc) > _MAX_DOC_BYTES:
-        return StarterClassification(verdict="unbounded_input", rule="R11")
-
-    for payload_entry in values.payload:
-        if len(payload_entry.encode("utf-8")) > _MAX_VALUE_BYTES:
-            return StarterClassification(verdict="unbounded_input", rule="R10")
-
-    for field, value in (
-        ("name", values.name),
-        ("extra_args", values.extra_args),
-        ("init", values.init),
-        ("note", values.note),
-        ("src", values.src),
-    ):
-        result = _classify_scalar(value, doc_field=field in _DOC_FIELDS)
-        if result is not None:
-            return result
-    for payload_entry in values.payload:
-        result = _classify_scalar(payload_entry, doc_field=False)
-        if result is not None:
-            return result
-    return StarterClassification(verdict="clean", rule=None)
+    verdict = classify_document(values.as_document(), STARTER_VALUE_SURFACES)
+    return StarterClassification(
+        verdict=_VERDICT_NAMES[verdict.classification],
+        rule=verdict.rule,
+    )
 
 
 class StarterRecipe(FrozenModel):

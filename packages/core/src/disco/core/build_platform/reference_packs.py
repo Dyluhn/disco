@@ -1,11 +1,15 @@
 """Frozen, versioned Reference Pack scope/schema and its bounded registry entry.
 
-A Reference Pack is a *distinct* input concept from a Starter Recipe, a Library
-Recipe, an AppKit composition, a Freeform composition, a target, or a persisted
-profile.  This module freezes only the Reference Pack record and a bounded,
-deterministic registry for it.  It does not add user selection, prompt
-injection, direct-reference workflow, persistence/ejection, provider, or
-runtime-effect channels; those are later slices.
+A Reference Pack is a *distinct* input concept from a Starter Recipe (scaffold),
+a Library Recipe (construction), an AppKit composition, a Freeform composition,
+a target, or a persisted profile.  Reference Packs supply *context*: they are
+bound to the host ``CONTEXT`` mount.  This module freezes only the Reference Pack
+record, its bounded typed value surface, and a deterministic registry for it.  It
+adds no user selection, prompt injection, direct-reference workflow,
+persistence/ejection, provider or runtime-effect channel of its own: selection,
+guided authoring and ejection are owned by :mod:`.library_catalog`, and trust
+evaluation, capability intersection, precedence and provenance/BOM by
+:mod:`.library_composition`.
 
 The record carries its engine, profile, target, and required-capability scope
 explicitly — no scope is implicit in a label.  Registration and exact
@@ -26,8 +30,34 @@ from .builtin_profiles import (
     WEB_TARGET_ID,
 )
 from .contracts import ComponentId, FrozenModel
+from .latent_effects import (
+    R_LATENT_LEXICON_VERSION,
+    StructuredEntry,
+    ValueSurface,
+    classify_document,
+    structured_document,
+)
 
 SUPPORTED_REFERENCE_PACK_SCHEMA_VERSION: Literal[1] = 1
+
+#: The frozen lexicon version this schema's value surface is validated against.
+SUPPORTED_R_LATENT_VERSION: Literal["R-LATENT/v1"] = R_LATENT_LEXICON_VERSION
+
+#: The declared purpose of every Reference Pack value field.  ``docs`` and
+#: ``summary`` are annotation surfaces (``LC4``/``LC2``), so a documentation
+#: link is data there; ``callback_url`` is plain data, so an endpoint declared
+#: in it is ``R9`` egress.  The contrast between those two is the point: the
+#: same bytes are legitimate in one declared surface and latent in another.
+REFERENCE_PACK_VALUE_SURFACES: dict[str, ValueSurface] = {
+    "label": ValueSurface.DATA,
+    "version": ValueSurface.DATA,
+    "src": ValueSurface.PROJECT_PATH,
+    "callback_url": ValueSurface.DATA,
+    "summary": ValueSurface.DOCUMENTATION,
+    "docs": ValueSurface.DOCUMENTATION,
+    "nested": ValueSurface.STRUCTURED,
+    "tiers": ValueSurface.STRUCTURED,
+}
 
 _REFERENCE_PACK_NAMESPACE = "disco_refpack"
 
@@ -50,6 +80,41 @@ class ReferencePackError(ValueError):
     """A Reference Pack registration or resolution failed closed."""
 
 
+class ReferencePackValues(FrozenModel):
+    """The bounded, typed value surface a Reference Pack may carry.
+
+    ``nested`` and ``tiers`` are tuples of :class:`StructuredEntry` rather than
+    ``dict[str, Any]``: a structured value is a tree of typed, immutable entries
+    that cannot carry a callable or an arbitrary object, so a structured field
+    never becomes an execution channel.
+    """
+
+    label: str | None = None
+    version: str | None = None
+    src: str | None = None
+    callback_url: str | None = None
+    summary: str | None = None
+    docs: str | None = None
+    nested: tuple[StructuredEntry, ...] = ()
+    tiers: tuple[StructuredEntry, ...] = ()
+
+    def as_document(self) -> dict[str, object]:
+        """Project the declared values to the plain document the classifier walks."""
+        document: dict[str, object] = {
+            "label": self.label,
+            "version": self.version,
+            "src": self.src,
+            "callback_url": self.callback_url,
+            "summary": self.summary,
+            "docs": self.docs,
+        }
+        if self.nested:
+            document["nested"] = structured_document(self.nested)
+        if self.tiers:
+            document["tiers"] = structured_document(self.tiers)
+        return document
+
+
 class ReferencePack(FrozenModel):
     """A versioned Reference Pack record with explicit composition scope.
 
@@ -66,6 +131,8 @@ class ReferencePack(FrozenModel):
     profile: ComponentId
     target: ComponentId
     required_capabilities: frozenset[str] = frozenset()
+    r_latent_version: str = SUPPORTED_R_LATENT_VERSION
+    values: ReferencePackValues = ReferencePackValues()
 
 
 class ReferencePackRegistry:
@@ -102,7 +169,22 @@ class ReferencePackRegistry:
         if key in self._packs:
             raise ReferencePackError(f"duplicate reference pack id: {key}")
         self._validate_scope(pack)
+        self._validate_values(pack)
         self._packs[key] = pack
+
+    @staticmethod
+    def _validate_values(pack: ReferencePack) -> None:
+        """Apply the frozen ``R-LATENT`` classification to the value surface."""
+        if pack.r_latent_version != SUPPORTED_R_LATENT_VERSION:
+            raise ReferencePackError(
+                f"unsupported reference pack lexicon version: {pack.r_latent_version}"
+            )
+        verdict = classify_document(pack.values.as_document(), REFERENCE_PACK_VALUE_SURFACES)
+        if not verdict.clean:
+            raise ReferencePackError(
+                "reference pack value surface rejected by "
+                f"{verdict.lexicon_version}: {verdict.classification.value} ({verdict.rule})"
+            )
 
     @staticmethod
     def _validate_scope(pack: ReferencePack) -> None:
