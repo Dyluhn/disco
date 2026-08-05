@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "870ea708467974adab24792525c5d63e742e2d31",
+  "source_identity": "527321d2ea2a10d535988761b83e2535163bfe96",
   "collected": {
     "counts": {
-      "packages": 10018,
+      "packages": 10034,
       "harness": 1253,
       "integrations": 9,
       "tests": 376
     },
-    "total": 11656,
+    "total": 11672,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -3845,6 +3845,22 @@
         "packages/core/tests/test_build_platform_nonweb_conformance.py::test_optional_executable_preview_blocks_alone_when_host_lacks_it",
         "packages/core/tests/test_build_platform_nonweb_conformance.py::test_packaged_nonweb_conformance_lifecycle",
         "packages/core/tests/test_build_platform_nonweb_conformance.py::test_synthetic_registration_uses_public_registry_without_central_switch",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_appkit_scoped_record_resolves_with_distinct_scope",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_capability_widening_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_duplicate_identity_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_engine_or_profile_or_target_id_is_rejected",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_namespace_id_is_rejected",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_ids_are_sorted_deterministically",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_duplicate_rejection_depends_on_the_check",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_unsupported_version_rejection_depends_on_the_check",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_registration_and_resolution_are_deterministic",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_resolved_record_carries_explicit_scope",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_engine_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_profile_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_target_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_does_not_register",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_fails_closed",
+        "packages/core/tests/test_build_platform_reference_packs.py::test_wrong_engine_profile_scope_fails_closed",
         "packages/core/tests/test_build_platform_resolver.py::test_capability_is_intersection_and_blocks_only_dependent_operation",
         "packages/core/tests/test_build_platform_resolver.py::test_component_plan_identity_mismatch_fails_closed",
         "packages/core/tests/test_build_platform_resolver.py::test_incompatible_reference_category_is_visible_and_scoped",
@@ -11677,9 +11693,9 @@
     }
   },
   "mapping_static": {
-    "identity": "870ea708467974adab24792525c5d63e742e2d31",
-    "python_test_file_count": 801,
-    "python_static_test_id_count": 9534,
+    "identity": "527321d2ea2a10d535988761b83e2535163bfe96",
+    "python_test_file_count": 802,
+    "python_static_test_id_count": 9550,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12035,6 +12051,7 @@
       "packages/core/tests/test_build_platform_nextjs_static.py",
       "packages/core/tests/test_build_platform_nextjs_vercel_connector.py",
       "packages/core/tests/test_build_platform_nonweb_conformance.py",
+      "packages/core/tests/test_build_platform_reference_packs.py",
       "packages/core/tests/test_build_platform_resolver.py",
       "packages/core/tests/test_build_platform_shadow.py",
       "packages/core/tests/test_build_platform_vercel_contract.py",
@@ -16518,6 +16535,22 @@
       "packages/core/tests/test_build_platform_nonweb_conformance.py::test_optional_executable_preview_blocks_alone_when_host_lacks_it",
       "packages/core/tests/test_build_platform_nonweb_conformance.py::test_packaged_nonweb_conformance_lifecycle",
       "packages/core/tests/test_build_platform_nonweb_conformance.py::test_synthetic_registration_uses_public_registry_without_central_switch",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_appkit_scoped_record_resolves_with_distinct_scope",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_capability_widening_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_duplicate_identity_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_engine_or_profile_or_target_id_is_rejected",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_namespace_id_is_rejected",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_ids_are_sorted_deterministically",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_duplicate_rejection_depends_on_the_check",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_unsupported_version_rejection_depends_on_the_check",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_registration_and_resolution_are_deterministic",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_resolved_record_carries_explicit_scope",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_engine_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_profile_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_target_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_does_not_register",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_fails_closed",
+      "packages/core/tests/test_build_platform_reference_packs.py::test_wrong_engine_profile_scope_fails_closed",
       "packages/core/tests/test_build_platform_resolver.py::test_capability_is_intersection_and_blocks_only_dependent_operation",
       "packages/core/tests/test_build_platform_resolver.py::test_component_plan_identity_mismatch_fails_closed",
       "packages/core/tests/test_build_platform_resolver.py::test_incompatible_reference_category_is_visible_and_scoped",
@@ -28822,6 +28855,62 @@
           "packages/core/tests/test_build_platform_nextjs_vercel_connector.py::test_vercel_connector_id_is_exact_and_registered_in_registry",
           "packages/core/tests/test_build_platform_nextjs_vercel_connector.py::test_vercel_connector_produces_exact_five_parameter_plan",
           "packages/core/tests/test_build_platform_nextjs_vercel_connector.py::test_vercel_operation_is_distinct_from_self_host_operation"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-16-LIBRARIES",
+      "root": "packages",
+      "source_identity_before": "870ea708467974adab24792525c5d63e742e2d31",
+      "source_identity_after": "527321d2ea2a10d535988761b83e2535163bfe96",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10018,
+          "after_count": 10034,
+          "added_ids": [
+            "packages/core/tests/test_build_platform_reference_packs.py::test_appkit_scoped_record_resolves_with_distinct_scope",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_capability_widening_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_duplicate_identity_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_engine_or_profile_or_target_id_is_rejected",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_namespace_id_is_rejected",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_ids_are_sorted_deterministically",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_duplicate_rejection_depends_on_the_check",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_unsupported_version_rejection_depends_on_the_check",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_registration_and_resolution_are_deterministic",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_resolved_record_carries_explicit_scope",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_engine_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_profile_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_target_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_does_not_register",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_fails_closed",
+            "packages/core/tests/test_build_platform_reference_packs.py::test_wrong_engine_profile_scope_fails_closed"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_build_platform_reference_packs.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_build_platform_reference_packs.py::test_appkit_scoped_record_resolves_with_distinct_scope",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_capability_widening_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_duplicate_identity_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_engine_or_profile_or_target_id_is_rejected",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_foreign_namespace_id_is_rejected",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_ids_are_sorted_deterministically",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_duplicate_rejection_depends_on_the_check",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_mutation_unsupported_version_rejection_depends_on_the_check",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_registration_and_resolution_are_deterministic",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_resolved_record_carries_explicit_scope",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_engine_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_profile_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_unknown_target_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_does_not_register",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_unsupported_schema_version_fails_closed",
+          "packages/core/tests/test_build_platform_reference_packs.py::test_wrong_engine_profile_scope_fails_closed"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

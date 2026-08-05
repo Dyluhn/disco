@@ -260,8 +260,9 @@ class TestMappingStatic:
             # move by the same amount.
             # 801 from Epic 15: the eight Next.js target/connector test files
             # added by slices 15-T2..15-C3, 15-P1 corrective, and 15-L1.
-            "python_test_file_count": 801,
-            "python_static_test_id_count": 9534,
+            # 802 from Epic 16-S1: the Reference Pack registry focused tests.
+            "python_test_file_count": 802,
+            "python_static_test_id_count": 9550,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -547,14 +548,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 10018,
+            "packages": 10034,
             "harness": 1253,
             "integrations": 9,
             "tests": 376,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11656 == sum(expected.values())
+        assert collected["total"] == 11672 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -570,7 +571,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11656}
+        assert result == {"collected_total": 11672}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -589,9 +590,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9534,
+            "python_static_ids": 9550,
             "typescript_static_ids": 1203,
-            "collected_total": 11656,
+            "collected_total": 11672,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
