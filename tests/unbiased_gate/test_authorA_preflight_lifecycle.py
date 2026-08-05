@@ -90,9 +90,15 @@ async def test_w35_deep_research_initial_kick_fails_before_running_on_dead_drive
     async def dead_driver(*_args, **_kwargs) -> str:
         return "Driver 'dr-answerer' unreachable: no route to host"
 
-    rt._preflight_driver = dead_driver  # type: ignore[method-assign]
+    # Epic 13-B3 promoted deep research onto `rt.deep_research` and driver
+    # preflight onto a DriverPreflight collaborator. `rt._preflight_driver` still
+    # EXISTS and still forwards, so the call route survived — but a delegator
+    # forwards calls, not monkeypatches, so assigning to it stopped intercepting
+    # anything (finding F8). Seam re-pointed at the collaborator that now owns
+    # the behavior; the assertions below are untouched.
+    rt.deep_research._preflight.check = dead_driver
 
-    await rt._maybe_run_deep_research(cid)
+    await rt.deep_research._maybe_run_deep_research(cid)
     events = await store.get_events(cid)
 
     assert not any(isinstance(e, PlanEvent) for e in events)
@@ -169,15 +175,36 @@ class _CurrentTransitionWorkspace:
         return await self._store.append_many(conversation_id, [*events, status])
 
 
-async def test_w48_gvisor_preflight_names_endpoint_and_is_bounded() -> None:
+def _point_sandbox_seam(rt, endpoint: str, outcome: str) -> None:
+    """Re-point this file's sandbox seams at the collaborator that now owns them.
+
+    Epic 13-B3 moved sandbox preflight off ConversationRuntime onto
+    `rt.sandbox` (SandboxRuntimeService): `_preflight_sandbox` became
+    `preflight_failure()`, `_sandbox_service_now` moved with it, and the endpoint
+    label is now read from the config store rather than off the service stub.
+    Setting the old attributes on `rt` created new, unread attributes and the
+    real preflight ran instead — the delegator/injector split recorded as F8.
+    Seam re-pointed; every assertion in the tests below is untouched.
+    """
+    rt.sandbox._sandbox_service_now = lambda: _SandboxService(endpoint, outcome)
+    cfg = rt.sandbox._config_store.load()
+    cfg.sandbox.docker_socket = endpoint
+    rt.sandbox._config_store = SimpleNamespace(load=lambda: cfg)
+
+
+async def test_w48_gvisor_preflight_names_endpoint_and_is_bounded(monkeypatch) -> None:
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
     endpoint = "ssh://sandbox@100.81.82.115"
-    rt._sandbox_service_now = lambda: _SandboxService(endpoint, "hang")  # type: ignore[method-assign]
-    rt._SANDBOX_PREFLIGHT_TIMEOUT_S = 0.03
+    _point_sandbox_seam(rt, endpoint, "hang")
+    # The bound is now a module constant on the owning collaborator, not an
+    # attribute on the runtime.
+    monkeypatch.setattr(
+        "disco.agent_server.sandbox_runtime_service._RUN_PREFLIGHT_TIMEOUT_S", 0.03
+    )
 
     started = time.perf_counter()
-    reason = await rt._preflight_sandbox("conv_gvisor")
+    reason = await rt.sandbox.preflight_failure()
     elapsed = time.perf_counter() - started
 
     assert elapsed < 0.5, f"gVisor preflight took {elapsed:.3f}s instead of failing fast"
@@ -192,15 +219,15 @@ async def test_w48_gvisor_preflight_reports_typed_endpoint_error_and_ok() -> Non
     rt = ConversationRuntime(store)
     endpoint = "ssh://sandbox@100.81.82.115"
 
-    rt._sandbox_service_now = lambda: _SandboxService(endpoint, "error")  # type: ignore[method-assign]
-    reason = await rt._preflight_sandbox("conv_gvisor")
+    _point_sandbox_seam(rt, endpoint, "error")
+    reason = await rt.sandbox.preflight_failure()
     assert reason is not None
     assert endpoint in reason
     assert "connection refused" in reason
     assert "unreachable" in reason
 
-    rt._sandbox_service_now = lambda: _SandboxService(endpoint, "ok")  # type: ignore[method-assign]
-    assert await rt._preflight_sandbox("conv_gvisor") is None
+    _point_sandbox_seam(rt, endpoint, "ok")
+    assert await rt.sandbox.preflight_failure() is None
 
 
 async def test_pc_abandoned_gate_sweeper_reaps_only_stale_unwatched_gates(monkeypatch) -> None:

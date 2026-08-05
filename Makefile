@@ -33,13 +33,25 @@ help:
 
 # ---- hermetic (fast, offline) ----------------------------------------------
 
-test: unit harness
+# PKG-19-CERT-STRUCTURAL finding F2: `test` reached `harness/tests` and nothing
+# else, while architecture/test-inventory.json certified 1253 harness ids and 9
+# integrations ids. 1213 certified ids were runnable by no sanctioned command at
+# all — the certification's own Stage 3 batteries used `pytest harness` and
+# `pytest integrations`, which no Makefile target and no CI step named.
+# scripts/check_inventory_execution.py now fails if that gap ever reopens.
+test: unit harness integrations
 
 unit:
 	uv run pytest
 
+# Whole-tree harness, not just harness/tests. Safe to widen because F6-b marked
+# the marathon phases `live` (harness/marathon/conftest.py) — they need a real
+# agent-server, and now say so contractually instead of ERRORing at setup.
 harness:
-	PYTHONPATH=. uv run pytest harness/tests
+	PYTHONPATH=. uv run pytest harness
+
+integrations:
+	PYTHONPATH=. uv run pytest integrations
 
 contract:
 	PYTHONPATH=. uv run pytest harness/tests/test_contract.py

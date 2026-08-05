@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1513203c4b51fe911f6b72a8bd7f4eccd813e3cc",
+  "source_identity": "ba81f4203cd157128a465a71041813ea4963f249",
   "collected": {
     "counts": {
       "packages": 10322,
       "harness": 1253,
       "integrations": 9,
-      "tests": 376
+      "tests": 386
     },
-    "total": 11960,
+    "total": 11970,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11781,6 +11781,16 @@
         "tests/architecture/test_imports.py::TestUpwardAndSiblingEdges::test_downward_import_not_upward",
         "tests/architecture/test_imports.py::TestUpwardAndSiblingEdges::test_top_sibling_import_detected",
         "tests/architecture/test_imports.py::TestUpwardAndSiblingEdges::test_upward_import_detected",
+        "tests/architecture/test_inventory_execution.py::TestCertifiedIdsSource::test_certified_ids_are_read_from_the_sealed_inventory",
+        "tests/architecture/test_inventory_execution.py::TestCertifiedIdsSource::test_real_inventory_exposes_every_python_root",
+        "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_declaration_that_no_longer_matches_its_source_fails",
+        "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_every_declared_command_names_a_source_file_the_gate_reads",
+        "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_real_declarations_are_quoted_verbatim_in_their_sources",
+        "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_fully_covered_root_reports_nothing",
+        "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_orphan_report_is_truncated_but_says_so",
+        "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_orphaned_certified_id_is_reported_with_its_root",
+        "tests/architecture/test_inventory_execution.py::TestVacuousControlGuards::test_collection_failure_is_an_error_not_an_empty_result",
+        "tests/architecture/test_inventory_execution.py::TestVacuousControlGuards::test_empty_executable_set_fails_rather_than_passing_vacuously",
         "tests/architecture/test_ownership.py::TestCollaboratorDetection::test_10_collaborators_at_cap_no_violation",
         "tests/architecture/test_ownership.py::TestCollaboratorDetection::test_11_collaborator_class_scanned_in_temp_repo",
         "tests/architecture/test_ownership.py::TestCollaboratorDetection::test_11_collaborators_produce_violation",
@@ -11981,9 +11991,9 @@
     }
   },
   "mapping_static": {
-    "identity": "1513203c4b51fe911f6b72a8bd7f4eccd813e3cc",
-    "python_test_file_count": 815,
-    "python_static_test_id_count": 9830,
+    "identity": "ba81f4203cd157128a465a71041813ea4963f249",
+    "python_test_file_count": 816,
+    "python_static_test_id_count": 9840,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12789,6 +12799,7 @@
       "tests/architecture/test_frontend_declarations.py",
       "tests/architecture/test_generated.py",
       "tests/architecture/test_imports.py",
+      "tests/architecture/test_inventory_execution.py",
       "tests/architecture/test_ownership.py",
       "tests/architecture/test_public_api.py",
       "tests/architecture/test_python_scan.py",
@@ -22436,6 +22447,16 @@
       "tests/architecture/test_imports.py::test_upward_import_detected",
       "tests/architecture/test_imports.py::test_wildcard_dm005_exemption_rejected",
       "tests/architecture/test_imports.py::test_zero_edge_graph_fails",
+      "tests/architecture/test_inventory_execution.py::test_certified_ids_are_read_from_the_sealed_inventory",
+      "tests/architecture/test_inventory_execution.py::test_collection_failure_is_an_error_not_an_empty_result",
+      "tests/architecture/test_inventory_execution.py::test_declaration_that_no_longer_matches_its_source_fails",
+      "tests/architecture/test_inventory_execution.py::test_empty_executable_set_fails_rather_than_passing_vacuously",
+      "tests/architecture/test_inventory_execution.py::test_every_declared_command_names_a_source_file_the_gate_reads",
+      "tests/architecture/test_inventory_execution.py::test_fully_covered_root_reports_nothing",
+      "tests/architecture/test_inventory_execution.py::test_orphan_report_is_truncated_but_says_so",
+      "tests/architecture/test_inventory_execution.py::test_orphaned_certified_id_is_reported_with_its_root",
+      "tests/architecture/test_inventory_execution.py::test_real_declarations_are_quoted_verbatim_in_their_sources",
+      "tests/architecture/test_inventory_execution.py::test_real_inventory_exposes_every_python_root",
       "tests/architecture/test_ownership.py::test_10_collaborators_at_cap_no_violation",
       "tests/architecture/test_ownership.py::test_11_collaborator_class_scanned_in_temp_repo",
       "tests/architecture/test_ownership.py::test_11_collaborators_produce_violation",
@@ -31270,6 +31291,50 @@
           "tests/architecture/test_typescript_scan.py::test_small_ts_module_passes",
           "tests/architecture/test_typescript_scan.py::test_ts_context_cycle_detected",
           "tests/architecture/test_typescript_scan.py::test_ts_parse_error_collected"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CERT-STRUCTURAL",
+      "root": "tests",
+      "source_identity_before": "1513203c4b51fe911f6b72a8bd7f4eccd813e3cc",
+      "source_identity_after": "ba81f4203cd157128a465a71041813ea4963f249",
+      "collected_roots": {
+        "tests": {
+          "before_count": 376,
+          "after_count": 386,
+          "added_ids": [
+            "tests/architecture/test_inventory_execution.py::TestCertifiedIdsSource::test_certified_ids_are_read_from_the_sealed_inventory",
+            "tests/architecture/test_inventory_execution.py::TestCertifiedIdsSource::test_real_inventory_exposes_every_python_root",
+            "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_declaration_that_no_longer_matches_its_source_fails",
+            "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_every_declared_command_names_a_source_file_the_gate_reads",
+            "tests/architecture/test_inventory_execution.py::TestDeclarationDrift::test_real_declarations_are_quoted_verbatim_in_their_sources",
+            "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_fully_covered_root_reports_nothing",
+            "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_orphan_report_is_truncated_but_says_so",
+            "tests/architecture/test_inventory_execution.py::TestOrphanDetection::test_orphaned_certified_id_is_reported_with_its_root",
+            "tests/architecture/test_inventory_execution.py::TestVacuousControlGuards::test_collection_failure_is_an_error_not_an_empty_result",
+            "tests/architecture/test_inventory_execution.py::TestVacuousControlGuards::test_empty_executable_set_fails_rather_than_passing_vacuously"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "tests/architecture/test_inventory_execution.py"
+        ],
+        "python_static_test_ids": [
+          "tests/architecture/test_inventory_execution.py::test_certified_ids_are_read_from_the_sealed_inventory",
+          "tests/architecture/test_inventory_execution.py::test_collection_failure_is_an_error_not_an_empty_result",
+          "tests/architecture/test_inventory_execution.py::test_declaration_that_no_longer_matches_its_source_fails",
+          "tests/architecture/test_inventory_execution.py::test_empty_executable_set_fails_rather_than_passing_vacuously",
+          "tests/architecture/test_inventory_execution.py::test_every_declared_command_names_a_source_file_the_gate_reads",
+          "tests/architecture/test_inventory_execution.py::test_fully_covered_root_reports_nothing",
+          "tests/architecture/test_inventory_execution.py::test_orphan_report_is_truncated_but_says_so",
+          "tests/architecture/test_inventory_execution.py::test_orphaned_certified_id_is_reported_with_its_root",
+          "tests/architecture/test_inventory_execution.py::test_real_declarations_are_quoted_verbatim_in_their_sources",
+          "tests/architecture/test_inventory_execution.py::test_real_inventory_exposes_every_python_root"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

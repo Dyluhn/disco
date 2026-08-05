@@ -5,6 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .ci_contract_sealed import (
+    TOOL_SCHEMAS_SCRIPT,
+    _check_tool_schemas_position,
+    _find_gate_order,
+    check_sealed_ordered_contract,
+    enforced_ordered_commands,
+)
 from .policy import REPO_ROOT
 from .yaml_parser import load_yaml
 
@@ -57,9 +64,6 @@ PRE_COMMIT_ARGV: dict[str, list[str]] = {
         "python", "scripts/gen_arch_diagram.py", "--check",
     ],
 }
-
-# tool_schemas.py must run after check_ci_contract.py and before non-web conformance
-TOOL_SCHEMAS_SCRIPT = "scripts/check_tool_schemas.py"
 
 # The exact argv that each gate command must produce after tokenization.
 # Matching is by exact token sequence, never by substring.
@@ -302,24 +306,6 @@ def _check_environment_shadowing(
     return problems
 
 
-def _find_gate_order(commands: list[str], gates: list[str]) -> dict[str, int]:
-    """Find each exact gate argv position, or -1 when absent."""
-    positions: dict[str, int] = {}
-    for gate in gates:
-        expected_argv = GATE_ARGV.get(gate)
-        positions[gate] = -1
-        if expected_argv is None:
-            continue
-        for i, cmd in enumerate(commands):
-            actual_argv, err = _tokenize(cmd)
-            if err:
-                continue
-            if actual_argv == expected_argv:
-                positions[gate] = i
-                break
-    return positions
-
-
 def _check_node_before_typescript(steps: list[Any]) -> list[str]:
     """Check that Node/npm provisioning precedes the TypeScript scanner/import gate."""
     problems: list[str] = []
@@ -362,28 +348,6 @@ def _check_gate_order(commands: list[str], label: str) -> list[str]:
                 f"(pos {found_gates[i][1]}) must precede "
                 f"{found_gates[i + 1][0]} (pos {found_gates[i + 1][1]})"
             )
-    return problems
-
-
-def _check_tool_schemas_position(
-    commands: list[str], positions: dict[str, int], label: str
-) -> list[str]:
-    """Check that tool_schemas.py runs after CI contract and before non-web."""
-    problems: list[str] = []
-    ts_pos = _find_gate_order(commands, [TOOL_SCHEMAS_SCRIPT])[TOOL_SCHEMAS_SCRIPT]
-    ci_contract_pos = positions.get("scripts/check_ci_contract.py", -1)
-    nonweb_pos = positions.get(
-        "packages/core/tests/test_build_platform_nonweb_conformance.py", -1
-    )
-    if ts_pos < 0:
-        problems.append(f"{label}: missing gate: {TOOL_SCHEMAS_SCRIPT}")
-        return problems
-    if ts_pos >= 0 and ci_contract_pos >= 0 and ts_pos < ci_contract_pos:
-        problems.append(f"{label}: tool_schemas.py must run after check_ci_contract.py")
-    if ts_pos >= 0 and nonweb_pos >= 0 and ts_pos > nonweb_pos:
-        problems.append(
-            f"{label}: tool_schemas.py must run before persistent non-web conformance"
-        )
     return problems
 
 
@@ -564,6 +528,12 @@ def check_ci(root: Path | None = None) -> dict[str, Any]:
 
     positions = _find_gate_order(commands, ORDERED_GATE_SCRIPTS)
     problems.extend(_check_tool_schemas_position(commands, positions, "CI"))
+    problems.extend(
+        check_sealed_ordered_contract(
+            root,
+            enforced_ordered_commands(ORDERED_GATE_SCRIPTS, TOOL_SCHEMAS_SCRIPT, GATE_ARGV),
+        )
+    )
 
     # Check that the advisory job is retained with continue-on-error
     advisory = jobs.get("advisory")
