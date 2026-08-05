@@ -336,6 +336,14 @@ class _LiveReadyRuntime:
         self._config_store = SimpleNamespace(load=lambda: cfg)
         self.session = session
         self.wake_calls = 0
+        # Epic 13-B3 promoted live-session lookup onto its own collaborator, so
+        # production now routes through `runtime.live_sessions.live_session(...)`
+        # (packages/agent-server/.../routes/preview_browser.py:301). This stub is
+        # a test double for that interface, so it owes the same shape; the
+        # one-level `live_session` below is kept because the double is also
+        # constructed directly elsewhere in this module. Interface migrated; the
+        # assertions in the test are untouched.
+        self.live_sessions = self
 
     def live_session(self, _conversation_id: str) -> _LiveReadySession:
         return self.session

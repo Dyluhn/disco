@@ -140,8 +140,17 @@ jobs:
       # test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events
       # (unrelated to contract parity, reproduces at the Epic 12-A parent
       # a9daf96d, unowned as of this writing).
+      # PKG-19-CERT-STRUCTURAL finding F2: this named harness/tests only, so the
+      # certified harness ids outside it — build_soak, marathon, replay — ran in
+      # no lane at all. Widened to the whole tree to match `make harness`;
+      # F6-b's `live` marker on the marathon phases keeps it hermetic.
       - name: Harness tests (contract/fuzz/eval — advisory)
-        run: PYTHONPATH=. uv run pytest harness/tests
+        run: PYTHONPATH=. uv run pytest harness
+
+      # PKG-19-CERT-STRUCTURAL finding F2: the `integrations` root carried 9
+      # certified ids and was named by no Makefile target and no CI step.
+      - name: Integrations tests (advisory)
+        run: PYTHONPATH=. uv run pytest integrations
 
       - name: Set up Node
         uses: actions/setup-node@v4

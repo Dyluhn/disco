@@ -25,13 +25,20 @@ def _write_config(tmp_path, monkeypatch, cfg):
     monkeypatch.delenv("DISCO_OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("PMX_OPENROUTER_API_KEY", raising=False)
     store = ConfigStore(config_path)
-    store.approve_origin(
+    # PKG-11-SETTINGS moved origin approval off ConfigStore onto its own
+    # authority (`dbdc4afa`, PY-0459: "an approval registry is not a config-file
+    # writer"), accepted at `a0e4b9b3` and recorded in public-api.json's
+    # member_transitions. Every other consumer in the tree already calls
+    # `store.approvals.approve_origin`; these were left behind only because
+    # tests/unbiased_gate was outside `testpaths` and so ran nowhere.
+    # Call route migrated; the assertions below are untouched.
+    store.approvals.approve_origin(
         "https://openrouter.ai/api/v1",
         "image:openrouter",
         "openrouter",
     )
     driver = cfg.models[cfg.model_for(ModelRole.AGENT_DRIVER)]
-    store.approve_origin(
+    store.approvals.approve_origin(
         driver.base_url,
         f"model:{driver.provider}",
         driver.api_key_env,
@@ -68,7 +75,7 @@ def test_w04_openrouter_display_label_drops_or_prefix_but_keeps_catalogue_key(tm
     )
 
     state = ConfigState(store=ConfigStore(tmp_path / "w04-config.json", base_factory=lambda: cfg))
-    model = next(m for m in state.models() if m.id == "or-anthropic-claude-opus")
+    model = next(m for m in state.models.models() if m.id == "or-anthropic-claude-opus")
 
     assert model.id == "or-anthropic-claude-opus"
     assert not model.label.startswith("Or ")
@@ -94,7 +101,7 @@ def test_w05_zero_price_subscription_is_not_free_or_local_in_catalogue_mapping(t
     )
 
     state = ConfigState(store=ConfigStore(tmp_path / "w05-config.json", base_factory=lambda: cfg))
-    model = next(m for m in state.models() if m.id == "minimax-subscription")
+    model = next(m for m in state.models.models() if m.id == "minimax-subscription")
 
     assert model.pricing_mode == "subscription"
     assert model.provider != "local"

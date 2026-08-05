@@ -18,10 +18,48 @@ from __future__ import annotations
 
 import subprocess
 import time
+from pathlib import Path
 
 import httpx
 import pytest
 from common import API, RECORD_DIR, ROOT, SHOT_DIR, UI
+
+
+_MARATHON_DIR = Path(__file__).parent
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every marathon test `live`.
+
+    PKG-19-CERT-STRUCTURAL finding F6-b: these phases require a reachable
+    agent-server (and VM-201, and vite, and Firefox — see the module docstring),
+    but carried **no marker**, so a deterministic battery had no contractual way
+    to exclude them. `pytest -q harness -m "not live and not sandbox_integration"`
+    still collected them, phases A and B ERRORed at fixture setup, and C then
+    failed on the phase log the earlier phases never wrote.
+
+    Applied here rather than as a `pytestmark` in each `test_phase_*.py` so a
+    future phase file cannot be added without it. It is also why this costs the
+    recorded-marker baseline nothing: the inventory scanner counts
+    skip/xfail/todo/only *decorators in source text*, and `live` is a selection
+    marker applied at collection, not a suppression.
+
+    **The path filter is load bearing, not defensive.** A
+    `pytest_collection_modifyitems` hook in ANY conftest is handed the whole
+    session's item list, not just the items under its own directory. The first
+    version of this hook omitted the filter and marked all **1253** harness
+    tests `live`, so `pytest -q harness -m "not live"` collected nothing and
+    exited 5 — a silent total loss of the harness battery that looked like a
+    passing run to anything checking only for failures. Caught by running the
+    complete battery; kept here as the reason the filter exists.
+    """
+    for item in items:
+        try:
+            item_path = Path(str(item.fspath))
+        except AttributeError:  # pragma: no cover - defensive for exotic items
+            continue
+        if _MARATHON_DIR in item_path.parents:
+            item.add_marker(pytest.mark.live)
 
 
 def _up(url: str, timeout: float = 3.0) -> bool:
