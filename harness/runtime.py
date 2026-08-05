@@ -40,11 +40,15 @@ def build_replay_runtime(cassette: Cassette, store, *, config_store=None, secret
         "extraction": ReplayExtractionProvider(cassette),
         **_live_encoders(),
     }
+    # One config for both seams: the injected router now IS the runtime's config
+    # source (`DriverRuntime.config_now`), so it must report the same document the
+    # runtime's own config store holds, not a second one.
+    cfg_store = config_store or ConfigStore(":memory:")
     return ConversationRuntime(
         store,
-        config_store=config_store or ConfigStore(":memory:"),
+        config_store=cfg_store,
         secret_store=secret_store or SecretStore(":memory:"),
-        router=ReplayRouter(cassette),
+        router=ReplayRouter(cassette, config=cfg_store.load()),
         research_providers=providers,
         # The build surface runs tools through a sandbox; serve it from the cassette
         # too so a recorded BUILD conversation replays deterministically (research

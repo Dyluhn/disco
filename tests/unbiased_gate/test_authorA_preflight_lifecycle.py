@@ -6,7 +6,9 @@ import time
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from disco.agent_server.lifecycle import LifecycleManager
+from disco.agent_server.lifecycle import GateReaper
+from disco.agent_server.lifecycle_idle_sweep import LifecycleIdleSweeper
+from disco.agent_server.lifecycle_ports import LifecycleStoreAccess
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     ConversationStatus,
@@ -29,9 +31,18 @@ class _NeverReturningRouter:
 async def test_w35_driver_preflight_is_bounded_and_names_driver() -> None:
     store = SqliteEventStore(":memory:")
     rt = ConversationRuntime(store)
-    rt._router_now = lambda *_args, **_kwargs: _NeverReturningRouter()  # type: ignore[method-assign]
-    rt._DRIVER_PREFLIGHT_TIMEOUT_S = 0.03
-    rt._DRIVER_PREFLIGHT_ATTEMPTS = 1
+    # F8: `rt._preflight_driver` still exists and still forwards, but it delegates to
+    # `rt._driver_preflight`, and a delegator forwards calls, not monkeypatches — so
+    # the old `rt._router_now` / `rt._DRIVER_PREFLIGHT_*` assignments silently created
+    # unread attributes and the real driver ran. Re-pointing the *preflight* seam is
+    # not enough either: driver RESOLUTION fails first on origin approval, returning a
+    # config error instead of a timeout, so the reachable-but-hanging-driver
+    # precondition is never established. The router seam is the one point upstream of
+    # resolution, so it is the seam this test needs; the bound moved to the owning
+    # collaborator. Every assertion below is untouched.
+    rt.drivers.router = lambda *_args, **_kwargs: _NeverReturningRouter()
+    rt._driver_preflight._TIMEOUT_S = 0.03
+    rt._driver_preflight._ATTEMPTS = 1
 
     started = time.perf_counter()
     reason = await rt._preflight_driver("conv_dead_driver")
@@ -61,7 +72,12 @@ async def test_w35_dead_driver_records_error_and_does_not_enter_loop() -> None:
             raise AssertionError("a doomed loop was started after preflight failed")
 
     loop = LoopThatMustNotRun()
-    rt._preflight_driver = dead_driver  # type: ignore[method-assign]
+    # F8 again: the run supervisor reaches driver preflight through
+    # `RunPreflight.driver_failure` -> `DriverPreflight.check`, and composition wires
+    # the SAME `rt._driver_preflight` instance into both that port and deep research
+    # (runtime_composition.py:230, 350, 611). Seam re-pointed at the collaborator that
+    # is actually called; the assertions below are untouched.
+    rt._driver_preflight.check = dead_driver
 
     state = await rt._run_with_persistence(cid, loop)
     events = await store.get_events(cid)
@@ -125,7 +141,9 @@ async def test_w33_deep_research_stream_stops_on_named_encoder_preflight_error()
         store,
         research_providers={"reranker": DeadReranker(), "nli": HealthyNli()},
     )
-    rt._preflight_driver = lambda *_args, **_kwargs: asyncio.sleep(0, result=None)  # type: ignore[method-assign]
+    # Same seam the already-green `test_w35_deep_research_initial_kick_…` above uses:
+    # deep research owns its driver preflight through the shared collaborator.
+    rt.deep_research._preflight.check = lambda *_args, **_kwargs: asyncio.sleep(0, result=None)
 
     stream = rt.deep_research.research_stream("What changed?", conversation_id="dr1")
     frames = [frame async for frame in stream]
@@ -173,6 +191,88 @@ class _CurrentTransitionWorkspace:
         if state.execution_status not in expected_statuses:
             return None
         return await self._store.append_many(conversation_id, [*events, status])
+
+
+class _StubRunState:
+    """The run-state queries `GateReaper` asks for, read off this file's stub runtime.
+
+    The stub deliberately fakes run state (an empty generation map, an exploding
+    one, a fixed live-run set) — that IS the variable each test below controls, so
+    it is translated onto the port rather than replaced by a real registry.
+    `generation` reads through `.get` so a stub that raises there still raises
+    inside the reaper's per-conversation guard, which is what the error-isolation
+    test asserts on.
+    """
+
+    def __init__(self, rt) -> None:
+        self._rt = rt
+
+    def active_conversation_ids(self) -> tuple[str, ...]:
+        return tuple(self._rt.running_conversation_ids())
+
+    def generation(self, conversation_id: str) -> int | None:
+        return self._rt._run_generation.get(conversation_id)
+
+    def generation_is_current(self, conversation_id: str, generation: int | None) -> bool:
+        return self._rt._run_generation.get(conversation_id) == generation
+
+
+class _StubConnections:
+    """`has_connections` over the stub's plain cid->count mapping."""
+
+    def __init__(self, connections) -> None:
+        self._connections = connections
+
+    def has_connections(self, conversation_id: str) -> bool:
+        return conversation_id in self._connections
+
+
+class _StubKernelPins:
+    """The generation-guarded unpin the reaper performs after terminalizing."""
+
+    def __init__(self, unpin) -> None:
+        self._unpin = unpin
+
+    def clear_if_current(self, conversation_id: str, generation: int | None) -> None:
+        self._unpin(conversation_id, generation)
+
+
+def _gate_reaper(rt) -> GateReaper:
+    """Build the collaborator that now owns gate reaping, from the stub's own pieces.
+
+    Epic 13-B3 promoted the reaping behaviour off `LifecycleManager` (whose
+    constructor now takes ten explicit collaborators) onto `GateReaper`, whose five
+    are exactly the five things these stubs already provide: the event store, the
+    run-state queries, the connection tracker, the lifecycle command service and the
+    kernel-pin owner. `rt._workspace` is passed straight through — the stub's
+    `append_current_run_transition` already matches `LifecycleCommandService`'s
+    signature — and the real `LifecycleStoreAccess` port does the store narrowing, so
+    the tests still drive the production reap logic rather than a copy of it. Every
+    assertion below is untouched.
+    """
+    return GateReaper(
+        LifecycleStoreAccess(rt._store),
+        _StubRunState(rt),
+        _StubConnections(rt._connections),
+        rt._workspace,
+        _StubKernelPins(rt._unpin_if_current_generation),
+    )
+
+
+def _idle_sweeper(rt) -> LifecycleIdleSweeper:
+    """Build the collaborator that now owns the background sweep loop.
+
+    `_idle_sweep_loop` is not on `LifecycleManager` at all any more: the loop is
+    `LifecycleIdleSweeper.run()`, which drives two explicit owners instead of one
+    whole runtime. The stub runtimes below already expose `sweep_idle_once` and
+    `sweep_abandoned_gates_once` (the lifecycle owner's half); the stranded-run
+    sweep moved to its own owner, whose method is `sweep_once`, so the stub's
+    `sweep_stranded_runs_once` is bound to it by name here.
+    """
+    return LifecycleIdleSweeper(
+        rt,
+        SimpleNamespace(sweep_once=getattr(rt, "sweep_stranded_runs_once", None)),
+    )
 
 
 def _point_sandbox_seam(rt, endpoint: str, outcome: str) -> None:
@@ -257,7 +357,7 @@ async def test_pc_abandoned_gate_sweeper_reaps_only_stale_unwatched_gates(monkey
         _unpin_if_current_generation=lambda *_args: None,
         running_conversation_ids=lambda: {"active_run_gate"},
     )
-    swept = await LifecycleManager(rt).sweep_abandoned_gates_once()
+    swept = await _gate_reaper(rt).sweep_abandoned_gates_once()
 
     assert swept == 1
     assert (await store.get_state("abandoned")).execution_status is ConversationStatus.STUCK
@@ -310,7 +410,7 @@ async def test_pc_abandoned_gate_sweeper_logs_candidate_errors(monkeypatch, capl
     ids = await store.list_conversations(owner_id="local", limit=2)
     assert ids == ["broken_gate", "healthy_gate"]
     caplog.set_level(logging.ERROR, logger="disco.agent_server.lifecycle")
-    assert await LifecycleManager(rt).sweep_abandoned_gates_once() == 1
+    assert await _gate_reaper(rt).sweep_abandoned_gates_once() == 1
     assert (await store.get_state("healthy_gate")).execution_status is ConversationStatus.STUCK
     assert "failed to evaluate abandoned gate conversation broken_gate" in caplog.text
     assert "generation lookup failed" in caplog.text
@@ -348,7 +448,7 @@ async def test_pc_abandoned_gate_background_sweep_logs_and_continues(monkeypatch
     )
     caplog.set_level(logging.ERROR, logger="disco.agent_server.lifecycle")
     rt = BrokenRuntime()
-    await LifecycleManager(rt)._idle_sweep_loop()
+    await _idle_sweeper(rt).run()
 
     assert sleep_delays == [60.0, 60.0]
     assert rt.abandoned_calls == 1
@@ -372,7 +472,7 @@ async def test_pc_idle_sweep_invalid_intervals_use_bounded_default(monkeypatch, 
         delays.clear()
         monkeypatch.setenv("DISCO_IDLE_SWEEP_INTERVAL_S", raw)
         monkeypatch.setattr(asyncio, "sleep", cancel_after_first_sleep)
-        await LifecycleManager(RuntimeThatMustNotSweep())._idle_sweep_loop()
+        await _idle_sweeper(RuntimeThatMustNotSweep()).run()
         assert delays == [60.0]
 
     assert caplog.text.count("DISCO_IDLE_SWEEP_INTERVAL_S must be finite") == len(invalid)

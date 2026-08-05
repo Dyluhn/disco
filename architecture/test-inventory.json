@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ba81f4203cd157128a465a71041813ea4963f249",
+  "source_identity": "186c0e1446b51b8a401b8c8ff6935d1fec82aedc",
   "collected": {
     "counts": {
       "packages": 10322,
@@ -11991,7 +11991,7 @@
     }
   },
   "mapping_static": {
-    "identity": "ba81f4203cd157128a465a71041813ea4963f249",
+    "identity": "186c0e1446b51b8a401b8c8ff6935d1fec82aedc",
     "python_test_file_count": 816,
     "python_static_test_id_count": 9840,
     "python_test_files": [
@@ -25442,13 +25442,6 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/agent-server/tests/release_remediation/test_r6_verifier_truthfulness.py",
-        "line": 530,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"needs the node/npm/npx toolchain\")"
-      },
-      {
-        "framework": "pytest",
         "path": "packages/tools/tests/test_sandbox.py",
         "line": 57,
         "marker": "pytest.skip",
@@ -25460,6 +25453,13 @@
         "line": 596,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"installed Chromium is required\")"
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/agent-server/tests/release_remediation/test_r6_verifier_truthfulness.py",
+        "line": 606,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"needs the node/npm/npx toolchain\")"
       },
       {
         "framework": "pytest",
@@ -27729,6 +27729,41 @@
         "tests": {
           "before_count": 376,
           "after_count": 376,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CERT-STRUCTURAL-R3",
+      "root": "multiple",
+      "source_identity_before": "ba81f4203cd157128a465a71041813ea4963f249",
+      "source_identity_after": "186c0e1446b51b8a401b8c8ff6935d1fec82aedc",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10322,
+          "after_count": 10322,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1253,
+          "after_count": 1253,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 386,
           "added_ids": []
         }
       },
