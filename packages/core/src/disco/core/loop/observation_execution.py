@@ -23,6 +23,7 @@ from ..events import (
 )
 from ..llm import LLMContextWindowExceeded
 from .dedup import (
+    _W39_SHELL_TOOLS,
     _f8_confirmed_file_writes,
     _f9_dedupable_read,
     _w39_shell_verify_reminder,
@@ -187,20 +188,49 @@ async def _prepare_observation(
     loop: _LoopFacet,
     action: ActionEvent,
 ) -> tuple[bool, str | None]:
-    """Return whether F9 handled the call and any deferred W-39 reminder."""
-    if not loop._assist or action.tool_call is None:
+    """Return whether F9 handled the call and any deferred freshness memo.
+
+    **This is the re-derived injection point for register #5's freshness memo
+    (amendment A11 §1).** A6.3 named the seam only as "tool-dispatch time, in
+    `core/loop/`" and predates Epic 13's port migration, so it was re-derived
+    against the current tree rather than trusted: dispatch runs through
+    `execute_and_observe` below, and this is the one place that sees the action
+    before it executes and can return a message for the next turn's context.
+
+    The two paths are gated DIFFERENTLY, on purpose:
+
+    * **F9 read-dedup stays assist-gated.** It SHORT-CIRCUITS the call — it
+      changes which tools actually run — and A6.3 §3.4 is explicit that the memo
+      must never suppress a call. Un-gating a suppressing path is a much larger
+      product change than this boundary is scoped for.
+    * **The W-39 freshness memo is NOT gated.** Assist is OFF for capable models,
+      which is exactly the population register #5's three firings came from, so
+      an assist-gated memo would have been dead code in every canary that
+      reproduced the defect. It never suppresses anything: the command always
+      executes and the only observable change is one advisory message.
+
+    Cost of un-gating, bounded deliberately: the event log is read only when a
+    memo could actually fire — assist on (F9's path), or a shell tool (the only
+    channel the memo covers). A non-shell call with assist off takes the same
+    early return it always did and reads nothing, so the un-gating adds no work
+    to the paths it cannot affect.
+    """
+    if action.tool_call is None:
         return False, None
     call = action.tool_call
+    if not loop._assist and call.tool_name not in _W39_SHELL_TOOLS:
+        return False, None
     events = await loop._events()
-    deduped, prior_id, pointer = _f9_dedupable_read(
-        call.tool_name,
-        call.arguments,
-        events,
-        readonly_names=loop._readonly_tool_names(),
-    )
-    if deduped:
-        await _emit_dedup_observation(loop, action, prior_id, pointer)
-        return True, None
+    if loop._assist:
+        deduped, prior_id, pointer = _f9_dedupable_read(
+            call.tool_name,
+            call.arguments,
+            events,
+            readonly_names=loop._readonly_tool_names(),
+        )
+        if deduped:
+            await _emit_dedup_observation(loop, action, prior_id, pointer)
+            return True, None
     return False, _shell_reminder(action, events)
 
 

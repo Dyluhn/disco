@@ -155,8 +155,11 @@ async def _impl_test_current_stuck_terminal_preserves_product_failure_without_fi
     )
     classification = classify_dossier(base, scenario, run, autonomous=False)
     assert classification["status"] == "FAIL", classification
-    assert classification["code"] == "TOOL_CALL_THRASH"
+    # A11 §2: the stuck valve is its own shape, not the shared TOOL_CALL_THRASH
+    # name it used to share with the three repetition shapes.
+    assert classification["code"] == "TOOL_CALL_THRASH_STUCK_VALVE"
     assert classification["first_broken_link"] == "model_turns -> bounded_stuck_valve"
+    assert classification["shape"] == "bounded_stuck_valve"
 
 
 @pytest.mark.asyncio

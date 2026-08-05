@@ -9,10 +9,11 @@ streak/semantic/background repeats) and the error-signature helpers.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from collections import Counter
 from typing import Any
+
+from disco.core.tool_fingerprint import tool_call_fingerprint
 
 from .. import failure_codes as fc
 from ..events import (
@@ -25,6 +26,7 @@ from ..events import (
     seq_of,
     tool_name_of,
 )
+from . import _thrash_shapes as shapes
 from ._thrash_helpers import (
     approved_plan_predicate_scope,
     largest_background_script_restart_group,
@@ -49,10 +51,17 @@ _THRASH_STUCK_DETAILS = {
 
 
 def _fingerprint(event: dict[str, Any]) -> str:
+    """This event's tool-call identity.
+
+    Delegates to `disco.core.tool_fingerprint`, the SINGLE owner of "is this the
+    same call?" (A6.3 §3.1, a binding design constraint). The loop's freshness
+    memo keys on the same function, so the memo can never fire on a different
+    equivalence class than the oracle that grades the run. It is not copied here
+    — a second copy would drift, and the drift would stay invisible until a
+    canary fired on a class the memo had never seen.
+    """
     call = event.get("tool_call") or {}
-    args = call.get("arguments") or {}
-    encoded = json.dumps(args, sort_keys=True, separators=(",", ":"), default=str)
-    return f"{tool_name_of(event) or '?'}:{encoded}"
+    return tool_call_fingerprint(tool_name_of(event), call.get("arguments"))
 
 
 def _normalized_error_text(text: str) -> str:
@@ -144,10 +153,8 @@ def check_thrash_markers(
         if seq_of(event) not in recovered_marker_seqs
     ]
     if terminal_markers:
-        return failing(
-            _ORACLE,
-            fc.TOOL_CALL_THRASH,
-            first_broken_link="model_turns -> bounded_stuck_valve",
+        return shapes.shaped_red(
+            shapes.SHAPE_STUCK_VALVE,
             facts={"terminal_markers": terminal_markers, "action_count": len(actions)},
         )
     return None
@@ -310,16 +317,13 @@ def check_streak_thrash(
     streak, fingerprint, streak_seqs = longest_streak_fn(events, action_ids=known_action_ids)
     if streak > limits["max_identical_action_repeats"]:
         return (
-            failing(
-                _ORACLE,
-                fc.TOOL_CALL_THRASH,
-                first_broken_link="tool_call -> identical_tool_call_streak",
-                facts={
-                    "fingerprint": fingerprint,
-                    "count": streak,
-                    "allowed": limits["max_identical_action_repeats"],
-                    "action_seqs": streak_seqs,
-                },
+            shapes.repetition_red(
+                events,
+                shape=shapes.SHAPE_IDENTICAL_STREAK,
+                fingerprint=fingerprint,
+                count=streak,
+                allowed=limits["max_identical_action_repeats"],
+                occurrence_seqs=streak_seqs,
             ),
             streak,
             0,
@@ -331,16 +335,13 @@ def check_streak_thrash(
     )
     if semantic_count > limits["max_identical_action_repeats"]:
         return (
-            failing(
-                _ORACLE,
-                fc.TOOL_CALL_THRASH,
-                first_broken_link="tool_call -> repeated_semantic_shell_verification",
-                facts={
-                    "fingerprint": semantic_fingerprint,
-                    "count": semantic_count,
-                    "allowed": limits["max_identical_action_repeats"],
-                    "action_seqs": semantic_seqs,
-                },
+            shapes.repetition_red(
+                events,
+                shape=shapes.SHAPE_SEMANTIC_SHELL,
+                fingerprint=semantic_fingerprint,
+                count=semantic_count,
+                allowed=limits["max_identical_action_repeats"],
+                occurrence_seqs=semantic_seqs,
             ),
             streak,
             semantic_count,
@@ -353,17 +354,16 @@ def check_streak_thrash(
     background_allowed = limits["max_identical_action_repeats"] + cleanup_credit
     if background_count > background_allowed:
         return (
-            failing(
-                _ORACLE,
-                fc.TOOL_CALL_THRASH,
-                first_broken_link="tool_call -> repeated_background_script_restart",
-                facts={
-                    "fingerprint": background_fingerprint,
-                    "count": background_count,
-                    "allowed": background_allowed,
+            shapes.repetition_red(
+                events,
+                shape=shapes.SHAPE_BACKGROUND_RESTART,
+                fingerprint=background_fingerprint,
+                count=background_count,
+                allowed=background_allowed,
+                occurrence_seqs=background_seqs,
+                extra={
                     "base_allowed": limits["max_identical_action_repeats"],
                     "cleanup_credit": cleanup_credit,
-                    "action_seqs": background_seqs,
                     "cleanup_seqs": cleanup_seqs,
                 },
             ),
