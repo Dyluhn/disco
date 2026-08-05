@@ -398,13 +398,15 @@ def _segment_launches_via_runtime_server(head: str, args: list[str]) -> bool:
 
 
 def _segment_launches_via_build_tool(head: str, args: list[str], raw_args: list[str]) -> bool:
-    """Recognize vite/next/make/docker-compose invocations that start a server."""
+    """Recognize build/dev tool invocations that start a local server.
+
+    Target-neutral: no framework or provider is named here. A tool starts a
+    mutable local preview lifecycle when its first non-option operand is a
+    server-start verb (a dev/preview/serve/start subcommand).
+    """
     if head == "vite":
         vite_args = _discard_option_prefix(raw_args, _VITE_OPTIONS_WITH_VALUES)
         return not vite_args or vite_args[0].lower() != "build"
-    if head == "next":
-        next_args = [arg for arg in args if not arg.startswith("-")]
-        return not next_args or next_args[0] not in {"build", "info", "telemetry"}
     if head == "make":
         if any(arg in {"-n", "--dry-run", "--just-print", "--recon"} for arg in args):
             return False
@@ -413,7 +415,8 @@ def _segment_launches_via_build_tool(head: str, args: list[str], raw_args: list[
         return "up" in args
     if head == "docker" and "compose" in args:
         return "up" in args[args.index("compose") + 1 :]
-    return False
+    positional = [arg for arg in args if not arg.startswith("-")]
+    return bool(positional) and positional[0] in _SERVER_SCRIPT_NAMES
 
 
 def _segment_launches_via_named_tool(head: str, args: list[str], raw_args: list[str]) -> bool:
