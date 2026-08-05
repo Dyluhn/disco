@@ -54,8 +54,22 @@ class ReplayRouter:
     call surface the agent + pipeline use; other attrs raise (a replay run that
     needs them is a signal the cassette is incomplete)."""
 
-    def __init__(self, cassette):
+    def __init__(self, cassette, config=None):
         self._cas = cassette
+        # `a7ac7e60` made an INJECTED router the source of the router config:
+        # `DriverRuntime.config_now()` returns `self._injected_router._config`
+        # instead of loading the config store. `RecordingRouter` satisfies that
+        # through its `__getattr__` delegation to the real inner router; a replay
+        # run has no inner router, so it must carry the config itself. The value is
+        # the one `config_now()` returned before the injected path existed — the
+        # replay runtime's own in-memory ConfigStore — so replay resolution behaves
+        # exactly as it did. This is configuration, not a recorded call, so it does
+        # not weaken the "other attrs raise" rule above.
+        if config is None:
+            from disco.core.llm import ConfigStore
+
+            config = ConfigStore(":memory:").load()
+        self._config = config
 
     async def complete(self, req, *, context=None) -> CompletionResponse:
         row = self._cas.lookup("llm.complete", _req_payload(req))

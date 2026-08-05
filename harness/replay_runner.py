@@ -143,7 +143,11 @@ async def replay_conversation(
 
     async def _kick_and_wait() -> None:
         runtime.run_controller.kick(cid)
-        task = runtime._tasks.get(cid)
+        # `bbe073ae` moved the in-process run tasks off the runtime onto RunRegistry.
+        # `task()` is the exact former semantic of `_tasks.get(cid)` — it returns the
+        # registered task even when its done-callback has not cleaned it up yet, which
+        # `active_task()` would filter out and this await needs.
+        task = runtime.run_registry.task(cid)
         if task is not None:
             await task
 

@@ -38,9 +38,12 @@ Coverage against plan §9 strict acceptance criteria:
 from __future__ import annotations
 
 import importlib
+import io
 import json
 import shutil
+import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -365,21 +368,84 @@ def test_scanner_lane_git_diff_invocation_forces_ab_prefixes() -> None:
     assert "--src-prefix=a/" in src and "--dst-prefix=b/" in src
 
 
-# Certification-only: this scans the REAL git history window BASELINE_SHA..HEAD, so it
-# only holds on a checkout whose history matches the closeout campaign framing (the C9
-# certification lane). ``integration``-marked per the repo convention: excluded from the
-# default `-m "not integration"` unit selection, runnable explicitly / in the advisory
-# lane. The assertion itself is unchanged.
+# ---- The ratified acceptance anchor (F6-a) ---------------------------------------
+#
+# The two certification-only tests below were authored against ``..HEAD`` and the live
+# working tree. That made each one true only for as long as the checkout still *was*
+# the closeout campaign's accepted tree. Once a later campaign committed on top, both
+# began reporting drift that is perfectly real and says nothing whatever about Export
+# Track 1: the suppression window grew to span the whole of a different campaign, and
+# the frozen manifest was being compared against files that campaign had edited.
+#
+# So each is pinned to the commit whose evidence it was written about. That restores an
+# immutable historical fact in place of a moving one, and it is the reason the pin is a
+# strengthening rather than a relaxation.
+#
+# ``manifest_mod.ACCEPTANCE_TAG`` names v6 and the repository carries no v6 tag, so the
+# anchor is recorded by owner-delegate decision of 2026-08-05 (ESCALATION-2026-08-05.md
+# option 2, and DECISIONS-LOG "F6-a DECIDED"): ``18ffa403`` is the commit that re-froze
+# the manifest for v6 — its own message says so — and the last commit to change any
+# frozen file hash.
+#
+# Neither assertion's predicate is altered: still zero un-baselined suppressions, still
+# a manifest that verifies clean. Only the window/tree each is evaluated over is pinned.
+# The manifest and the drift detector itself are untouched.
+_ACCEPTANCE_ANCHOR = "18ffa4032dc58f2d76db9f372c9d4bebcf818504"
+
+
+def _require_anchor_commit() -> None:
+    """Prove the ratified anchor is present before anything is evaluated against it.
+
+    ``verify._run`` is deliberately ``check=False`` and never raises, so on a checkout
+    without this commit ``git diff`` would emit *nothing* and the suppression scan would
+    pass over an empty diff — a vacuous green that reads exactly like a real one. This
+    guard is what stops the pin from being weaker than the ``..HEAD`` form it replaces.
+    """
+    probe = verify._run(
+        ["git", "rev-parse", "--verify", f"{_ACCEPTANCE_ANCHOR}^{{commit}}"], cwd=_REPO_ROOT
+    )
+    assert probe.returncode == 0, (
+        f"the ratified acceptance anchor {_ACCEPTANCE_ANCHOR[:8]} is absent from this "
+        f"checkout, so nothing can be evaluated against it: {probe.stderr.strip()}"
+    )
+
+
+def _materialize_anchor_tree(dest: Path) -> Path:
+    """Extract the ratified tree at ``_ACCEPTANCE_ANCHOR`` into ``dest``.
+
+    A throwaway extraction rather than ``git worktree add``: this repository already
+    carries hundreds of registered worktrees, and a test must not add one.
+    """
+    _require_anchor_commit()
+    dest.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.run(
+        ["git", "archive", _ACCEPTANCE_ANCHOR], cwd=_REPO_ROOT, capture_output=True, check=True
+    ).stdout
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+        tar.extractall(dest, filter="data")
+    return dest
+
+
+# Certification-only: this scans the REAL git history window
+# BASELINE_SHA.._ACCEPTANCE_ANCHOR, so it needs a checkout that carries the closeout
+# campaign's history (the C9 certification lane). ``integration``-marked per the repo
+# convention: excluded from the default `-m "not integration"` unit selection, runnable
+# explicitly / in the advisory lane. The assertion itself is unchanged.
 @pytest.mark.integration
 def test_real_campaign_diff_has_no_unbaselined_suppression() -> None:
-    """End-to-end over the REAL campaign diff (BASELINE_SHA..HEAD) with the REAL committed
-    baseline: zero un-approved new suppressions. Proves the baseline is complete and the
-    scanner lane is green on the campaign as it stands."""
+    """End-to-end over the REAL campaign diff (BASELINE_SHA.._ACCEPTANCE_ANCHOR) with the
+    REAL committed baseline: zero un-approved new suppressions. Proves the baseline is
+    complete and the scanner lane was green on the campaign as it was accepted."""
     baseline, note = verify._load_suppression_baseline(_REPO_ROOT)
     assert note == "loaded" and baseline, "the owner-approved suppression baseline must load"
-    diff_text = verify._run(
-        ["git", "diff", f"{manifest_mod.BASELINE_SHA}..HEAD"], cwd=_REPO_ROOT
-    ).stdout
+    _require_anchor_commit()
+    completed = verify._run(
+        ["git", "diff", f"{manifest_mod.BASELINE_SHA}..{_ACCEPTANCE_ANCHOR}"], cwd=_REPO_ROOT
+    )
+    # Anti-vacuity: an empty diff would scan clean and prove nothing at all.
+    assert completed.returncode == 0, f"the campaign diff could not be taken: {completed.stderr}"
+    diff_text = completed.stdout
+    assert diff_text.strip(), "the campaign diff is empty — the window scanned nothing"
     violations = verify._scan_campaign_diff_suppressions(diff_text, baseline)
     assert violations == [], (
         f"unexpected un-baselined suppressions in the campaign diff: {violations}"
@@ -450,26 +516,36 @@ def test_final_verdict_is_false_when_any_gate_fails(override: dict[str, object])
 
 
 # Certification-only: the positive precondition requires the COMMITTED closeout manifest
-# to verify clean against the real tree — a binding that is regenerated only on the C9
-# certification lane. ``integration``-marked per the repo convention: excluded from the
-# default `-m "not integration"` unit selection, runnable explicitly / in the advisory
-# lane. The assertion itself is unchanged.
+# to verify clean against the tree it ratified (``_ACCEPTANCE_ANCHOR``, materialized
+# fresh) — a binding that only the C9 certification lane regenerates.
+# ``integration``-marked per the repo convention: excluded from the default
+# `-m "not integration"` unit selection, runnable explicitly / in the advisory lane. The
+# assertion itself is unchanged.
 @pytest.mark.integration
-def test_frozen_manifest_check_fails_on_deleted_or_replaced_frozen_file() -> None:
+def test_frozen_manifest_check_fails_on_deleted_or_replaced_frozen_file(tmp_path: Path) -> None:
     """Criterion 2: a frozen file missing from reality, or a frozen file whose hash was
     changed (e.g. replaced with placeholder text), makes ``_verify_frozen_manifest`` fail —
     folding the verdict false."""
     stored, note = verify._load_manifest(_REPO_ROOT)
     assert stored is not None and note == "loaded"
-    ok_now, _ = verify._verify_frozen_manifest(_REPO_ROOT, stored, note)
-    assert ok_now is True, "the committed manifest must verify clean on a fresh tree"
+    # Anti-vacuity: an empty frozen set would "verify clean" against anything.
+    stored_files = stored.get("files")
+    assert isinstance(stored_files, dict) and stored_files, (
+        "the committed manifest must carry frozen entries, or nothing below is a real check"
+    )
+
+    # The COMMITTED manifest, against the tree it was ratified over. Comparing it to the
+    # working tree instead would report a later campaign's edits as closeout drift.
+    ratified = _materialize_anchor_tree(tmp_path / "ratified")
+    ok_now, now_note = verify._verify_frozen_manifest(ratified, stored, note)
+    assert ok_now is True, f"the committed manifest must verify clean on the ratified tree: {now_note}"
 
     # Mutate a single stored hash → drift (this is what replacing a frozen artifact with
     # placeholder text looks like to the byte-hash check).
     tampered = json.loads(json.dumps(stored))  # deep copy
     some_file = next(iter(tampered["files"]))
     tampered["files"][some_file] = "0" * 64
-    ok_drift, drift_note = verify._verify_frozen_manifest(_REPO_ROOT, tampered, "loaded")
+    ok_drift, drift_note = verify._verify_frozen_manifest(ratified, tampered, "loaded")
     assert ok_drift is False and "drift" in drift_note.lower()
 
 
