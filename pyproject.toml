@@ -61,7 +61,24 @@ asyncio_default_fixture_loop_scope = "function"
 # guarding the governance machinery — outside every default run, local and CI
 # alike. Named explicitly rather than as bare `tests`, which would also pull
 # in the unrelated tests/unbiased_gate suite.
-testpaths = ["packages", "tests/architecture"]
+#
+# PKG-19-CERT-STRUCTURAL finding F1: calling tests/unbiased_gate "unrelated" is
+# what left 25 inventory-certified ids outside every default run, 16 of them red
+# against APIs three accepted transitions had moved. The exclusion hid the drift
+# rather than scoping it. The directory is named here so the ids the inventory
+# certifies are the ids a default run executes; the execution-coverage gate
+# (scripts/architecture/inventory_execution.py) now fails if that ever diverges
+# again for any directory.
+testpaths = ["packages", "tests/architecture", "tests/unbiased_gate"]
+# PKG-19-CERT-STRUCTURAL finding F2: six modules under packages/agent-server/tests
+# import `harness.*` / `packages.*`, which resolve only with the repository root
+# importable. The Makefile passed PYTHONPATH=. to the harness/contract/fuzz/fault
+# targets but NOT to `unit`, so the repository's own hermetic entrypoint
+# (`make unit` -> bare `uv run pytest`) died with `Interrupted: 6 errors during
+# collection` while the sealed inventory went on certifying the 62 ids inside
+# them. Setting it here fixes every invocation at once rather than one Makefile
+# target at a time, and needs no root conftest.py.
+pythonpath = ["."]
 markers = [
     "integration",
     # W7: fast input/output boundary CONTRACTS (W1 sandbox-error typing, W2 task supervision,

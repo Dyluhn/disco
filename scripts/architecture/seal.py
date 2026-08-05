@@ -42,6 +42,7 @@ PROTECTED: tuple[str, ...] = (
     "scripts/check_public_api.py",
     "scripts/check_test_inventory.py",
     "scripts/check_ci_contract.py",
+    "scripts/check_inventory_execution.py",
     "scripts/check_tool_schemas.py",
     "scripts/gen_arch_diagram.py",
     "packages/core/tests/test_build_platform_nonweb_conformance.py",
@@ -57,6 +58,16 @@ PROTECTED: tuple[str, ...] = (
     "scripts/architecture/ts_scan.mjs",
     "scripts/architecture/seal.py",
     "scripts/architecture/ci_contract.py",
+    # PKG-19-CERT-STRUCTURAL (F7): the ordered-gate comparator and the
+    # ordered-list position helpers moved here when ci_contract.py hit its
+    # 700-line budget. Every _parts module of a protected gate is protected
+    # (public_api_parts, test_inventory_parts, generate_debt_parts); leaving
+    # this one out would move load-bearing gate logic out from under the seal.
+    "scripts/architecture/ci_contract_sealed.py",
+    # PKG-19-CERT-STRUCTURAL (F1/F2/F6): the inventory execution-coverage
+    # comparator — the gate that fails when the inventory certifies an id no
+    # sanctioned command can collect.
+    "scripts/architecture/inventory_execution.py",
     "scripts/architecture/diagram.py",
     "scripts/architecture/public_api.py",
     "scripts/architecture/public_surface.py",

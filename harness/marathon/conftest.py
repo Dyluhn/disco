@@ -24,6 +24,26 @@ import pytest
 from common import API, RECORD_DIR, ROOT, SHOT_DIR, UI
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Mark every marathon test `live`.
+
+    PKG-19-CERT-STRUCTURAL finding F6-b: these phases require a reachable
+    agent-server (and VM-201, and vite, and Firefox — see the module docstring),
+    but carried **no marker**, so a deterministic battery had no contractual way
+    to exclude them. `pytest -q harness -m "not live and not sandbox_integration"`
+    still collected them, phases A and B ERRORed at fixture setup, and C then
+    failed on the phase log the earlier phases never wrote.
+
+    Applied here rather than as a `pytestmark` in each `test_phase_*.py` so a
+    future phase file cannot be added without it. It is also why this costs the
+    recorded-marker baseline nothing: the inventory scanner counts
+    skip/xfail/todo/only *decorators in source text*, and `live` is a selection
+    marker applied at collection, not a suppression.
+    """
+    for item in items:
+        item.add_marker(pytest.mark.live)
+
+
 def _up(url: str, timeout: float = 3.0) -> bool:
     try:
         return httpx.get(url, timeout=timeout).status_code < 500

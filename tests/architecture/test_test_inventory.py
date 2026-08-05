@@ -290,8 +290,15 @@ class TestMappingStatic:
             # a `/tests/` directory as a test file. Here the two counts move by
             # the SAME amount — +31 static ids against +31 collected node ids —
             # because nothing in this package is parametrized.
-            "python_test_file_count": 815,
-            "python_static_test_id_count": 9830,
+            # 816 from PKG-19-CERT-STRUCTURAL (continuation): the adversarial
+            # suite for the new inventory execution-coverage gate
+            # (tests/architecture/test_inventory_execution.py). ONE file, +10
+            # static ids and +10 collected node ids — nothing parametrized. The
+            # gate it guards is the comparator that closes findings F1/F2/F6:
+            # it fails when the inventory certifies an id no sanctioned command
+            # can collect, which was true of 1213 ids at the parent identity.
+            "python_test_file_count": 816,
+            "python_static_test_id_count": 9840,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -580,11 +587,11 @@ class TestCollectedCounts:
             "packages": 10322,
             "harness": 1253,
             "integrations": 9,
-            "tests": 376,
+            "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11960 == sum(expected.values())
+        assert collected["total"] == 11970 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -600,7 +607,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11960}
+        assert result == {"collected_total": 11970}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -619,9 +626,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9830,
+            "python_static_ids": 9840,
             "typescript_static_ids": 1203,
-            "collected_total": 11960,
+            "collected_total": 11970,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
