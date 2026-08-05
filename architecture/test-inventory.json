@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8cbe2b0c5c2eef881a0ba359980da97ec8a3accb",
+  "source_identity": "5a83cbf4771702bdaa2f3b4c1cad6b99396487e2",
   "collected": {
     "counts": {
       "packages": 10072,
@@ -11731,7 +11731,7 @@
     }
   },
   "mapping_static": {
-    "identity": "8cbe2b0c5c2eef881a0ba359980da97ec8a3accb",
+    "identity": "5a83cbf4771702bdaa2f3b4c1cad6b99396487e2",
     "python_test_file_count": 803,
     "python_static_test_id_count": 9588,
     "python_test_files": [
@@ -27169,6 +27169,41 @@
         "tests": {
           "before_count": 333,
           "after_count": 333,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-16-GOVERNANCE-RIDER",
+      "root": "multiple",
+      "source_identity_before": "8cbe2b0c5c2eef881a0ba359980da97ec8a3accb",
+      "source_identity_after": "5a83cbf4771702bdaa2f3b4c1cad6b99396487e2",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10072,
+          "after_count": 10072,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1253,
+          "after_count": 1253,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 376,
+          "after_count": 376,
           "added_ids": []
         }
       },

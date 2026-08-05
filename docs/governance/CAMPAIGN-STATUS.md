@@ -2426,9 +2426,17 @@ attempt again; launch reruns into `seed-460000-attempt2/`, `-attempt3/`, … Two
 earlier infra-failure attempts were deleted before this rule; the ledger entries
 above are their only record.
 
-**P3: watchdog.** If `pgrep -f campaign_watchdog` is empty:
-`setsid nohup python3 .claude/hooks/campaign_watchdog.py >/dev/null 2>&1 &`.
-It exits on its own when the completion sentinel is truthfully asserted.
+**P3: watchdog — REMOVED 2026-08-05 (PKG-16 governance rider).** The
+out-of-session `campaign_watchdog.py` nudge daemon was deleted from the repo.
+Do not relaunch it and do not restore it from history. It was never wired into
+`.claude/settings.json`; it was launched by hand from this instruction, ran
+detached via `setsid nohup` so it survived session death, and re-injected
+"keep going" context through `post_tool_review.py` every 15 minutes until a
+completion sentinel was asserted. That is an autonomous pressure device, not a
+gate: it cannot make work correct, and on 2026-08-05 it was the instrument of a
+control-plane conflict between competing agents. The legitimate governance
+hooks (`session_start.py`, `governance_guard.py`, `post_tool_review.py`,
+`stop_gate.py`) are unaffected and remain wired.
 
 ## D. Epic 4 — the ten diagnostics
 
