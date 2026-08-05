@@ -266,8 +266,17 @@ class TestMappingStatic:
             # resolved production behavior. Its 38 static test ids are 38
             # collected node ids — nothing is parametrized — so both counts move
             # by the same amount.
-            "python_test_file_count": 803,
-            "python_static_test_id_count": 9588,
+            # 808 from PKG-16 steps 3–7: the shared R-LATENT/v1 classifier, the
+            # Library Recipe seam, the Reference Pack value surface, and the
+            # library composition/catalog suites — five files binding the whole
+            # 24-case frozen corpus (all three kinds) plus trust evaluation,
+            # capability intersection, precedence, provenance/BOM, ejection,
+            # progressive disclosure and guided authoring. Here the two counts
+            # move by DIFFERENT amounts: +118 static ids against +125 collected
+            # node ids, because the Library Recipe mount and namespace tests are
+            # parametrized (4 + 5 cases from 2 static ids).
+            "python_test_file_count": 808,
+            "python_static_test_id_count": 9706,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -553,14 +562,14 @@ class TestCollectedCounts:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         collected = baseline["collected"]
         expected = {
-            "packages": 10072,
+            "packages": 10197,
             "harness": 1253,
             "integrations": 9,
             "tests": 376,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11710 == sum(expected.values())
+        assert collected["total"] == 11835 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -576,7 +585,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11710}
+        assert result == {"collected_total": 11835}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -595,9 +604,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9588,
+            "python_static_ids": 9706,
             "typescript_static_ids": 1203,
-            "collected_total": 11710,
+            "collected_total": 11835,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
