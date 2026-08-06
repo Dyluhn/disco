@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ed22505f4faf514c348cfe7c757899176b649ced",
+  "source_identity": "9f6dca94f69b9ba30fcbda7851a7ce57654c3afc",
   "collected": {
     "counts": {
       "packages": 10333,
@@ -12061,7 +12061,7 @@
     }
   },
   "mapping_static": {
-    "identity": "ed22505f4faf514c348cfe7c757899176b649ced",
+    "identity": "9f6dca94f69b9ba30fcbda7851a7ce57654c3afc",
     "python_test_file_count": 820,
     "python_static_test_id_count": 9899,
     "python_test_files": [
@@ -25694,6 +25694,13 @@
       },
       {
         "framework": "vitest/playwright",
+        "path": "frontend/e2e-live/bp-15-screenshots.spec.ts",
+        "line": 104,
+        "marker": "test.skip(",
+        "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start it and re-run`);"
+      },
+      {
+        "framework": "vitest/playwright",
         "path": "frontend/e2e-live/bp-06-feed-unmasked.spec.ts",
         "line": 108,
         "marker": "test.skip(",
@@ -25892,13 +25899,6 @@
         "framework": "vitest/playwright",
         "path": "frontend/e2e-live/bp-08-kernel.spec.ts",
         "line": 91,
-        "marker": "test.skip(",
-        "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start it and re-run`);"
-      },
-      {
-        "framework": "vitest/playwright",
-        "path": "frontend/e2e-live/bp-15-screenshots.spec.ts",
-        "line": 97,
         "marker": "test.skip(",
         "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start it and re-run`);"
       }
@@ -28480,6 +28480,41 @@
         "harness": {
           "before_count": 1290,
           "after_count": 1290,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 386,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-02-GATE-E2ELIVE-TYPECHECK",
+      "root": "multiple",
+      "source_identity_before": "ed22505f4faf514c348cfe7c757899176b649ced",
+      "source_identity_after": "9f6dca94f69b9ba30fcbda7851a7ce57654c3afc",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10333,
+          "after_count": 10333,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1312,
+          "after_count": 1312,
           "added_ids": []
         },
         "integrations": {

@@ -190,7 +190,12 @@ test("Build survives pause/close/resume, steers, exports, rolls back, then build
         (event) => event.kind === "workspace_version" && (event.seq ?? 0) > finishedSeq,
       );
       if (committed?.kind === "workspace_version") {
-        originalSeq = committed.version_seq;
+        // `?? null` is a real conversion, not a silencer: an event that arrived
+        // without version_seq must FAIL the assertion below. Assigning the raw
+        // value left `undefined` here, and `.not.toBeNull()` passes on
+        // `undefined` — so a malformed commit event would have sailed past the
+        // gate and into `originalSeq!` at the isolated-preview read.
+        originalSeq = committed.version_seq ?? null;
         break;
       }
       await page.waitForTimeout(250);

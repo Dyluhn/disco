@@ -539,10 +539,21 @@ def _f9_dedupable_read(
 # any-path variant (_w39_latest_mutation_seq) because a shell verify can
 # depend on the whole workspace.
 #
-# GATED on the assist tier by its caller (mirrors F9). Assist OFF
-# (capable-model default) → never invoked; byte-identical to today. Even when
-# ON the command ALWAYS executes — the only observable change is one extra
-# advisory MessageEvent before the (still-executed) call.
+# NOT gated on the assist tier — deliberately, and unlike F9's read-dedup
+# above. The caller's guard is
+# `if not loop._assist and call.tool_name not in _W39_SHELL_TOOLS: return`
+# (`loop/observation_execution.py::_prepare_observation`), so a SHELL call
+# reaches this memo with assist OFF; only non-shell calls take the early
+# return. A6.3/A11 un-gated it on purpose: assist is OFF for capable models,
+# which is exactly the population register #5's three firings came from, so an
+# assist-gated memo would have been dead code in every canary that reproduced
+# the defect. That caller's docstring is the authority for the split.
+# Either way the command ALWAYS executes — the only observable change is one
+# extra advisory MessageEvent before the (still-executed) call.
+#
+# This block said the opposite until 2026-08-06e (finding F26): it claimed the
+# memo was assist-gated and "never invoked" on the capable-model default. Do
+# not restore that reading from memory — check the caller.
 # ---------------------------------------------------------------------------
 
 # The shell-exec tools whose re-run is a redundant verify when idempotent.
