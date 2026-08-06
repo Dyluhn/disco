@@ -22,6 +22,12 @@ export type EventJson = {
   error?: string | null;
   source?: string;
   action_id?: string;
+  // WorkspaceVersionEvent's commit sequence (`version_seq: int` in
+  // _event_control.py, mirrored as a required `number` in @/types/agent). It is
+  // enumerated here rather than left to the index signature below so callers get
+  // `number | undefined` instead of `unknown` — build-lifecycle.spec.ts reads it
+  // as the durable-commit signal.
+  version_seq?: number;
   message?: { role?: string; content?: string };
   tool_call?: { tool_name?: string; arguments?: Record<string, unknown> };
   tool_result?: {
