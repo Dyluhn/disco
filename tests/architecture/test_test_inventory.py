@@ -310,8 +310,17 @@ class TestMappingStatic:
             # `module_split_transitions`, whose contract states "a rename is not
             # a relocation", so renaming would have meant inventing governance
             # authority or weakening the ratchet.
-            "python_test_file_count": 818,
-            "python_static_test_id_count": 9860,
+            # 819 from PKG-03-EDIT-EVIDENCE: ONE file,
+            # `harness/build_soak/tests/test_edit_evidence_producer.py` — the
+            # acceptance of the five P8D edit-evidence producers, the producer
+            # the oracles' own docstrings name and that had never been built.
+            # +22 static ids against +22 collected node ids: nothing is
+            # parametrized, so the two counts move together for once. Five of
+            # the 22 are the NEGATIVE CONTROLS — one per producer — which are
+            # what make the other adjudications mean anything: each nullifies a
+            # single observed behaviour and asserts the oracle's verdict flips.
+            "python_test_file_count": 819,
+            "python_static_test_id_count": 9882,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -598,13 +607,20 @@ class TestCollectedCounts:
         collected = baseline["collected"]
         expected = {
             "packages": 10333,
-            "harness": 1266,
+            # 1288 from PKG-03-EDIT-EVIDENCE: +22 in the `harness` root, the
+            # edit-evidence producer acceptance. The new ids land here and not
+            # under `packages` because the producer is harness code; the
+            # sanctioned lane that owns them is `make harness`
+            # (`PYTHONPATH=. uv run pytest harness`), and
+            # check_inventory_execution confirms all 12016 certified ids stay
+            # reachable by a sanctioned command.
+            "harness": 1288,
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 11994 == sum(expected.values())
+        assert collected["total"] == 12016 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -620,7 +636,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 11994}
+        assert result == {"collected_total": 12016}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -639,9 +655,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9860,
+            "python_static_ids": 9882,
             "typescript_static_ids": 1203,
-            "collected_total": 11994,
+            "collected_total": 12016,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

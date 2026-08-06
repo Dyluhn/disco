@@ -18,7 +18,11 @@ _TS = (
     / "productEvidence.ts"
 )
 
-# Every field each browser oracle READS (audited from oracles/browser_evidence.py).
+# Every field each oracle READS — audited from oracles/browser_evidence.py and, for the
+# five PKG-03-EDIT-EVIDENCE slices, from oracles/targeted_edit.py +
+# manual_edit_preservation.py. The edit rows are here for the same reason the browser rows
+# are: without them the coverage guard below silently does not apply to the new oracles,
+# which is how a field an oracle adjudicates can go untyped by the writer.
 _ORACLE_READS: dict[str, set[str]] = {
     "browser_ws": {"connections"},
     "lifecycle": {"terminal", "statuses"},
@@ -35,6 +39,11 @@ _ORACLE_READS: dict[str, set[str]] = {
         "volume_orphans",
         "volume_scope",
     },
+    "targeted_edit": {"edited_files", "expected_files"},
+    "rewrite_avoidance": {"edit_scope", "changed_lines", "total_lines", "max_churn_ratio"},
+    "manual_edit": {"overrides", "final_files"},
+    "comment_anchors": {"before", "after"},
+    "screen_labels": {"edited_sections", "before", "after"},
 }
 
 
