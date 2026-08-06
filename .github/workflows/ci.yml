@@ -91,6 +91,29 @@ jobs:
         working-directory: frontend
         run: npm run typecheck:build
 
+      # PKG-02-GATE-E2ELIVE-TYPECHECK (finding F24). `frontend/e2e-live` was
+      # type-checked by NO tsconfig project: app includes only `src`, node only
+      # `vite.config.ts`, build excludes tests, and the root project references
+      # just app+node — so the advisory job's `npx tsc -b` could not reach the 38
+      # live specs either. Playwright transpiles rather than type-checks, so
+      # `test:e2e` never saw their types. Two real errors shipped in that vacuum.
+      # Required, not advisory, on the same reasoning recorded below for the
+      # ESLint promotion: a gate that runs only in the advisory job
+      # (continue-on-error: true) cannot hold a line. Doubly so here — measured
+      # 2026-08-06e, the advisory `npx tsc -b` step is itself already red on 13
+      # pre-existing errors under src/, so its exit code carries no signal to
+      # add a gate to. Verified green BEFORE being made required — never
+      # wired-then-silenced.
+      # Invoked directly rather than through an npm script, matching how
+      # tsconfig.closeout-g11.json is driven (scripts/closeout_verify_parts/
+      # _lanes.py). frontend/package.json is one of the 15 change-controlled
+      # contract files in architecture/public-api.json, and non-diagram contract
+      # bytes cannot be rebaselined by any sanctioned path — so a dedicated
+      # type-check scope is wired at its call sites, never by amending it.
+      - name: Frontend live-e2e typecheck (F24 — e2e-live had no project)
+        working-directory: frontend
+        run: npx tsc -p tsconfig.e2e-live.json --noEmit
+
       - name: Frontend production build
         working-directory: frontend
         run: npx vite build
