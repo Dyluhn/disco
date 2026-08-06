@@ -17,14 +17,21 @@ import { decideVerification } from "../src/lib/harness/verificationCapture";
  * append-only and runs are strictly sequential, so provider_calls_after_terminal = (relay line
  * count at settle) − (relay line count captured the moment /state first showed a terminal).
  *
- * Env: STAB_RUN_INDEX, STAB_REPORT_DIR (per-run record out-dir), PMX_RELAY_LOG, PMX_VENV_PY,
- * PMX_REPO_ROOT.
+ * Env: STAB_RUN_INDEX, STAB_REPORT_DIR (per-run record out-dir), DISCO_RELIABILITY_AGENT_URL,
+ * DISCO_PROVIDER_LEDGER (governed) / MINIMAX_RELAY_LOG / PMX_RELAY_LOG, PMX_VENV_PY,
+ * PMX_REPO_ROOT, DISCO_RELIABILITY_PAIRING_TOKEN.
  */
 
-const API = "http://127.0.0.1:8000";
+// The agent-server base is ENV-FIRST: a governed run stands up an ISOLATED stack on its own
+// port, so a hardcoded :8000 silently drives whatever happens to occupy that port on the host
+// — or nothing at all. The literal stays only as the split-origin dev default.
+const API = process.env.DISCO_RELIABILITY_AGENT_URL ?? "http://127.0.0.1:8000";
 const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
 // relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); primary, with PMX_RELAY_LOG legacy alias.
-const RELAY_LOG = process.env.MINIMAX_RELAY_LOG ?? process.env.PMX_RELAY_LOG ?? "";
+// DISCO_PROVIDER_LEDGER is the GOVERNED runner's ledger var — without it a governed run reads
+// no ledger, skips as "relay down", and the provider-identity assertions never adjudicate.
+const RELAY_LOG =
+  process.env.MINIMAX_RELAY_LOG ?? process.env.PMX_RELAY_LOG ?? process.env.DISCO_PROVIDER_LEDGER ?? "";
 const VENV_PY = process.env.PMX_VENV_PY ?? "python3";
 const RUN_INDEX = process.env.STAB_RUN_INDEX ?? "0";
 const REPORT_DIR = process.env.STAB_REPORT_DIR ?? path.join(os.tmpdir(), "disclaude-stability");
@@ -51,6 +58,96 @@ function relayLineCount(): number {
 function relayWindow(nStart: number, nEnd: number): Array<{ host: string; model: string }> {
   const lines = fs.readFileSync(RELAY_LOG, "utf-8").split("\n").filter(Boolean);
   return lines.slice(nStart, nEnd).map((l) => JSON.parse(l)).map((r) => ({ host: r.host, model: r.model }));
+}
+
+/**
+ * Pair this API context when the agent-server challenges it.
+ *
+ * A governed ISOLATED stack is fresh, so its first `POST /conversations` returns 401 and the
+ * JSON parse blows up with a misleading SyntaxError. This is the product's own documented dev
+ * pairing flow — the same one `reliability-helpers.ts` uses — and it is a NO-OP when the
+ * context is already authorized. It authenticates the harness; it does not weaken auth.
+ */
+type SessionJson = { authenticated?: boolean; csrf_token?: string };
+
+/** The paired session's CSRF token — every mutating request must carry it plus an Origin. */
+let CSRF = "";
+
+async function readSession(request: APIRequestContext): Promise<SessionJson> {
+  const probe = await request.get(`${API}/api/auth/session`, { timeout: 10_000 });
+  return probe.ok() ? ((await probe.json()) as SessionJson) : {};
+}
+
+async function ensurePaired(request: APIRequestContext): Promise<void> {
+  // `/api/auth/session` is a PUBLIC route: it answers 200 `{authenticated:false}` for an
+  // unauthenticated caller. Gating on `.ok()` would therefore always short-circuit and never
+  // pair — read the flag, not the status.
+  let session = await readSession(request);
+  if (session.authenticated !== true) {
+    let pairingToken = process.env.DISCO_RELIABILITY_PAIRING_TOKEN?.trim() ?? "";
+    if (!pairingToken) {
+      const pairing = await request.get(`${API}/api/auth/pairing-token`, { timeout: 10_000 });
+      if (pairing.ok()) pairingToken = String((await pairing.json()).pairing_token ?? "");
+    }
+    const minted = await request.post(`${API}/api/auth/mint`, {
+      data: pairingToken ? { pairing_token: pairingToken } : {},
+      headers: { Origin: new URL(API).origin },
+      timeout: 10_000,
+    });
+    expect(minted.ok(), `agent-server pairing failed: ${minted.status()} ${await minted.text()}`).toBe(true);
+    session = await readSession(request);
+  }
+  expect(session.authenticated === true && Boolean(session.csrf_token), "no CSRF session").toBe(true);
+  CSRF = String(session.csrf_token);
+}
+
+/** A mutating call carrying the paired session's Origin + CSRF (the product's own contract). */
+async function postAuthed(request: APIRequestContext, url: string, data: unknown, timeout: number) {
+  return request.fetch(url, {
+    method: "POST",
+    ...(data === undefined ? {} : { data }),
+    headers: { Origin: new URL(API).origin, "X-Disco-CSRF": CSRF },
+    timeout,
+  });
+}
+
+type CleanupObservation = { orphans: number; workspace_released: boolean; scope: string };
+
+/**
+ * Release the conversation and observe cleanup the way the governed build_soak runner does:
+ * `workspace_released` comes from the PRODUCT'S OWN kill response (2xx + killed + IDLE), never
+ * from the absence of containers, and the orphan count is scoped to THIS conversation.
+ *
+ * Deriving release from an empty container list is a false affordance: it reads TRUE on a host
+ * where podman is simply unavailable, and on the process backend where no container is ever
+ * created. `scope` names what was actually probed, so the slice is self-describing.
+ */
+async function killConversation(request: APIRequestContext, cid: string): Promise<CleanupObservation> {
+  let released = false;
+  try {
+    const res = await postAuthed(request, `${API}/conversations/${cid}/kill`, undefined, 15_000);
+    const body = (await res.json().catch(() => ({}))) as { killed?: boolean; state?: { execution_status?: string } };
+    released = res.ok() && body.killed === true && String(body.state?.execution_status ?? "") === "IDLE";
+  } catch {
+    released = false;
+  }
+  await new Promise((r) => setTimeout(r, 5_000));
+  let containerNames: string[] | null = null;
+  try {
+    containerNames = execFileSync("podman", ["ps", "-a", "--format", "{{.Names}}"], {
+      encoding: "utf-8",
+      timeout: 15_000,
+    })
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    containerNames = null; // podman unavailable — the probe was NOT run
+  }
+  return {
+    orphans: (containerNames ?? []).filter((n) => n.includes(cid)).length,
+    workspace_released: released,
+    scope: containerNames === null ? "container-probe-unavailable" : "conversation",
+  };
 }
 
 async function getJson(request: APIRequestContext, url: string) {
@@ -92,20 +189,26 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
     return;
   }
 
+  await ensurePaired(request);
+
+  // Count the conversation socket by its PATH (`/ws/conversations/`), not by a port: the UI
+  // reaches the agent-server either split-origin (ws://host:8000/ws/conversations/…) or through
+  // the same-origin proxy prefix (ws://host:<ui-port>/svc/agent/ws/conversations/…). A port
+  // match silently counts ZERO in the proxied topology, failing the slice closed for a TOPOLOGY
+  // reason rather than a product one. The path excludes vite HMR and `/ws/research` alike.
   const wsUrls = new Set<string>();
   page.on("websocket", (ws) => {
-    if (ws.url().includes(":8000")) wsUrls.add(ws.url());
+    if (ws.url().includes("/ws/conversations/")) wsUrls.add(ws.url());
   });
 
   // ── drive ONE build; capture the relay offset at the MOMENT a terminal is first observed.
   const nStart = relayLineCount();
-  const created = await (await request.post(`${API}/conversations`, {
-    data: { surface: "build", autonomous: true },
-    timeout: 15_000,
-  })).json();
+  const created = await (
+    await postAuthed(request, `${API}/conversations`, { surface: "build", autonomous: true }, 15_000)
+  ).json();
   const cid: string = created.conversation_id;
   record.cid = cid;
-  await request.post(`${API}/conversations/${cid}/messages`, { data: { content: PROMPT }, timeout: 20_000 });
+  await postAuthed(request, `${API}/conversations/${cid}/messages`, { content: PROMPT }, 20_000);
 
   let terminal = "";
   let nTerminal = -1;
@@ -172,17 +275,8 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
   await page.screenshot({ path: screenshot, fullPage: true });
   const browserWsConnections = wsUrls.size;
 
-  // ── cleanup + orphan check (kill, then no podman container for the cid survives).
-  await request.post(`${API}/conversations/${cid}/kill`, { timeout: 15_000 }).catch(() => {});
-  await new Promise((r) => setTimeout(r, 5_000));
-  let orphans = 0;
-  try {
-    orphans = execFileSync("podman", ["ps", "-a", "--format", "{{.Names}}"], { encoding: "utf-8", timeout: 15_000 })
-      .split("\n")
-      .filter((n) => n.includes(cid)).length;
-  } catch {
-    orphans = 0;
-  }
+  // ── cleanup: release observed from the product's own kill response, orphans scoped to this cid.
+  const cleanup = await killConversation(request, cid);
 
   // ── per-run provider ledger window (THIS run only) — minimax-only / 0 openrouter.
   const providerRecords = relayWindow(nStart, nSettle);
@@ -200,7 +294,7 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
     preview: { owner: "platform", manual_port: manualPort },
     shown: { artifact_shown: artifactShown, preview_shown: previewShown },
     verification,
-    cleanup: { orphans, workspace_released: orphans === 0 },
+    cleanup,
   };
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "disclaude-stab-"));
