@@ -17,27 +17,33 @@ if TYPE_CHECKING:  # static visibility for __all__ without a runtime disco impor
     from .evidence_writer import write_dossier
     from .scenario_runner import (
         EXPORT_SMOKE,
+        STATIC_SITE_EDIT_GOVERNED,
         STATIC_SITE_SMOKE,
         STATIC_SITE_SMOKE_GOVERNED,
         STATIC_SMOKE_STRICT,
+        EditContract,
         ProductScenario,
         classify_dossier,
     )
 
 __all__ = [
     "write_dossier",
+    "EditContract",
     "ProductScenario",
     "STATIC_SITE_SMOKE",
     "STATIC_SITE_SMOKE_GOVERNED",
+    "STATIC_SITE_EDIT_GOVERNED",
     "STATIC_SMOKE_STRICT",
     "EXPORT_SMOKE",
     "classify_dossier",
 ]
 
 _SCENARIO_NAMES = (
+    "EditContract",
     "ProductScenario",
     "STATIC_SITE_SMOKE",
     "STATIC_SITE_SMOKE_GOVERNED",
+    "STATIC_SITE_EDIT_GOVERNED",
     "STATIC_SMOKE_STRICT",
     "EXPORT_SMOKE",
     "classify_dossier",

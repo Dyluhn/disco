@@ -20,6 +20,34 @@ from harness.build_soak.product_evidence import PRODUCT_EVIDENCE_NAME
 
 
 @dataclass(frozen=True)
+class EditContract:
+    """What a scenario's EDIT phase is scoped to, and the bound its churn is judged against.
+
+    ``max_churn_ratio`` is evidence-supplied BY DESIGN: RewriteAvoidanceOracle deliberately
+    reads the bound from the dossier rather than holding a hidden opinion, so it has to be
+    declared somewhere governed and visible — here — and merely MEASURED by the producer.
+    The producer may not invent it.
+    """
+
+    target_path: str
+    """The workspace file whose churn, anchors and labels are measured."""
+
+    expected_files: tuple[str, ...]
+    """The files the edit is scoped to; touching any other file is a targeting failure."""
+
+    edited_sections: tuple[str, ...]
+    """The sections the edit targets; every OTHER section's screen label must hold."""
+
+    edit_scope: str = "small"
+    """Only ``small`` is adjudicated for churn (RewriteAvoidanceOracle's own rule)."""
+
+    max_churn_ratio: float = 0.25
+    """A one-section in-place text edit measures a few percent; a full rewrite measures
+    ~1.0. 0.25 sits far from both, so the bound discriminates rewrite-vs-edit rather than
+    grading how tidy the edit was."""
+
+
+@dataclass(frozen=True)
 class ProductScenario:
     """A browser product-harness scenario: the build prompt + the classifier contract it
     must satisfy + the product_evidence slices it requires to be present."""
@@ -29,6 +57,11 @@ class ProductScenario:
     kind: str
     requires_export: bool = False
     required_slices: tuple[str, ...] = ()
+    # Present only on scenarios with an EDIT phase; None everywhere else, so no existing
+    # scenario changes shape or behaviour.
+    edit_contract: EditContract | None = None
+    override_prompt: str = ""
+    edit_prompt: str = ""
     # The provider identity this scenario pins. The defaults are the P17 MiniMax-DIRECT
     # topology (relay -> api.minimaxi.chat) the first product scenarios were authored
     # against. A scenario driven through a DIFFERENT DEPLOYMENT of the same owner-settled
@@ -83,6 +116,70 @@ STATIC_SITE_SMOKE_GOVERNED = ProductScenario(
     kind="static.site",
     requires_export=False,
     required_slices=STATIC_SITE_SMOKE.required_slices,
+    provider_host_substr="opencode.ai",
+    provider_model="minimax-m3",
+)
+
+
+# PKG-03-EDIT-EVIDENCE (2026-08-05n) — the governed EDIT scenario. The first scenario in either
+# campaign whose required slices include the five P8D edit slices, so TargetedEdit /
+# RewriteAvoidance / ManualEditPreservation / CommentAnchor / ScreenLabel ADJUDICATE instead of
+# SKIPping for want of a producer that was never built.
+#
+# It declares ONLY evidence its runner actually produces — the no-false-affordances rule applies
+# to scenario declarations exactly as to product surfaces. `edit_evidence_run.py` drives the
+# product over HTTP and reads workspace SOURCE bytes, so it observes the five edit slices plus
+# lifecycle and cleanup. It opens no browser session and requests no export, so browser_ws /
+# preview / shown / verification / export / sidecar are legitimately ABSENT and those oracles SKIP
+# under the documented optional-slice contract. Declaring them here would be exactly the false
+# affordance that left five slices with no producer in the first place.
+#
+# Provider identity: the owner-settled canary pin, with the same enforcement shape as the governed
+# static smoke (ledger required, model matched exactly, openrouter forbidden, every host checked).
+STATIC_SITE_EDIT_GOVERNED = ProductScenario(
+    id="static_site_edit_governed",
+    build_prompt=(
+        "Build a simple one-page static website for a neighbourhood coffee shop as "
+        "`index.html` (plain HTML and CSS, no framework). Give it four sections, each a "
+        '`<section>` with an `id` and an `<h2>` heading: `id="about"`, `id="hours"`, '
+        '`id="menu"` and `id="contact"`. Immediately before each of those four section '
+        "tags, put an HTML comment of exactly this form naming that section: "
+        "`<!-- anchor: about -->`, `<!-- anchor: hours -->`, `<!-- anchor: menu -->`, "
+        "`<!-- anchor: contact -->`. Choose the headings and the copy yourself. "
+        "Serve it on the preview and finish."
+    ),
+    # The USER'S OWN change, made through the product's own follow-up surface. It has to be a
+    # product surface: there is no user-facing path to hand-edit workspace source between
+    # turns (measured — run r3, 2026-08-05o: a host-side edit to the ProjectStore workspace is
+    # silently discarded when the next turn materializes from its own durable capture).
+    override_prompt=(
+        "Please add this line to the `about` section of `index.html`, exactly as written, "
+        "as the last paragraph of that section, and change nothing else:\n"
+        '<p class="owner-note">Hand-written by the owner — MANUAL-OVERRIDE-7Q4X — '
+        "please keep this line exactly as it is.</p>\n"
+        "Then finish."
+    ),
+    edit_prompt=(
+        "Now change ONLY the copy inside the `hours` section of `index.html`, editing "
+        "precisely IN PLACE — do not rewrite the whole file, and do not touch any other "
+        "section. Read the file first, apply the change with a targeted edit tool, then finish."
+    ),
+    kind="static.site",
+    requires_export=False,
+    required_slices=(
+        "lifecycle",
+        "cleanup",
+        "targeted_edit",
+        "rewrite_avoidance",
+        "manual_edit",
+        "comment_anchors",
+        "screen_labels",
+    ),
+    edit_contract=EditContract(
+        target_path="index.html",
+        expected_files=("index.html",),
+        edited_sections=("hours",),
+    ),
     provider_host_substr="opencode.ai",
     provider_model="minimax-m3",
 )

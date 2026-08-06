@@ -7,6 +7,10 @@ an oracle would silently mis-adjudicate. The live Playwright harness captures th
 browser data and calls these to serialize ``product-evidence.json`` and
 ``provider-call-ledger.jsonl`` into the run folder.
 
+Two producers feed it: the live browser spec (``frontend/e2e-live/``) for the eight
+browser/lifecycle slices, and ``harness/product_build/edit_evidence.py`` for the five
+P8D edit slices (PKG-03-EDIT-EVIDENCE).
+
 This is pure + unit-tested; it does not drive a browser (that is HARN-1b's live spec).
 """
 
@@ -42,6 +46,22 @@ _SLICE_FIELDS: dict[str, dict[str, type]] = {
         "volume_orphans": int,
         "volume_scope": str,
     },
+    # PKG-03-EDIT-EVIDENCE — the five P8D edit slices. Admitted together with their
+    # producer (harness/product_build/edit_evidence.py) and never ahead of it: a slice the
+    # writer accepts but nothing produces is a false affordance, and it is what let these
+    # five oracles SKIP unnoticed across 2082 frozen classifications.
+    "targeted_edit": {"edited_files": list, "expected_files": list},
+    # max_churn_ratio is float here though the oracle also accepts an int: the writer is the
+    # stricter gate, and the producer emits an explicit float.
+    "rewrite_avoidance": {
+        "edit_scope": str,
+        "changed_lines": int,
+        "total_lines": int,
+        "max_churn_ratio": float,
+    },
+    "manual_edit": {"overrides": dict, "final_files": dict},
+    "comment_anchors": {"before": list, "after": list},
+    "screen_labels": {"edited_sections": list, "before": dict, "after": dict},
 }
 
 PRODUCT_EVIDENCE_NAME = "product-evidence.json"

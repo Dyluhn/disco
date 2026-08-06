@@ -28,6 +28,7 @@ from typing import Any
 
 from harness.product_build import (
     EXPORT_SMOKE,
+    STATIC_SITE_EDIT_GOVERNED,
     STATIC_SITE_SMOKE,
     STATIC_SITE_SMOKE_GOVERNED,
     STATIC_SMOKE_STRICT,
@@ -40,7 +41,13 @@ from harness.product_build import (
 # scenario — e.g. a typo'd export run must NOT be classified as the no-export static smoke).
 _SCENARIOS = {
     s.id: s
-    for s in (STATIC_SITE_SMOKE, STATIC_SITE_SMOKE_GOVERNED, STATIC_SMOKE_STRICT, EXPORT_SMOKE)
+    for s in (
+        STATIC_SITE_SMOKE,
+        STATIC_SITE_SMOKE_GOVERNED,
+        STATIC_SITE_EDIT_GOVERNED,
+        STATIC_SMOKE_STRICT,
+        EXPORT_SMOKE,
+    )
 }
 
 
