@@ -201,6 +201,16 @@ class HttpTransport:
             )
             return r.status_code, _safe_json(r)
 
+    async def patch_json(self, path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        import httpx
+
+        await self._ensure_session()
+        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+            r = await client.patch(
+                f"{self.base_url}{path}", json=body, headers=self._headers(unsafe=True)
+            )
+            return r.status_code, _safe_json(r)
+
     async def get_json(self, path: str) -> tuple[int, dict[str, Any]]:
         import httpx
 

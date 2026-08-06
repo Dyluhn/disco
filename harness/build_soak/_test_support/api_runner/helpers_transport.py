@@ -77,12 +77,19 @@ class FakeTransport:
         self.cid = cid
         self.ws_frames = []
         self.posts = []
+        self.patches = []
         self._killed = False
 
     async def health(self):
         if self.health_exc is not None:
             raise self.health_exc
         return self.health_status, {"ok": True}
+
+    async def patch_json(self, path, body) -> tuple[int, dict[str, Any]]:
+        self.patches.append((path, body))
+        if path.endswith("/settings"):
+            return 200, {"ok": True, "model_override": body.get("model_override")}
+        return 404, {}
 
     async def post_json(self, path, body) -> tuple[int, dict[str, Any]]:
         self.posts.append((path, body))

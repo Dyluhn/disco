@@ -159,27 +159,15 @@ class _ConversationMixin(_ClientBase):
         if surface not in {"build", "agent"}:
             raise ValueError(f"unsupported soak conversation surface: {surface!r}")
         if import_fixture is not None:
-            if surface != "build" or appkit:
-                raise ValueError("import fixtures are supported only for Freeform Build")
-            if autonomous:
-                raise ValueError("import fixtures must use the interactive approval path")
-            cid = await self._create_imported_conversation(import_fixture)
-            self.last_conversation_id = cid
-            await self.start_inspect_collection(cid)
-            mstatus, _ = await self._t.post_json(
-                f"/conversations/{cid}/messages",
-                {
-                    "content": prompt,
-                    **(
-                        {"verification_requirements": verification_requirements}
-                        if verification_requirements is not None
-                        else {}
-                    ),
-                },
+            return await self._create_via_import(
+                prompt,
+                import_fixture,
+                model=model,
+                autonomous=autonomous,
+                appkit=appkit,
+                surface=surface,
+                verification_requirements=verification_requirements,
             )
-            if mstatus >= 400:
-                raise RuntimeError(f"post_message failed: HTTP {mstatus}")
-            return cid
 
         body: dict[str, Any] = {"surface": surface, "autonomous": autonomous}
         if appkit:
@@ -213,6 +201,60 @@ class _ConversationMixin(_ClientBase):
         if mstatus >= 400:
             raise RuntimeError(f"post_message failed: HTTP {mstatus}")
         return cid
+
+    async def _create_via_import(
+        self,
+        prompt: str,
+        import_fixture: dict[str, Any],
+        *,
+        model: str | None,
+        autonomous: bool,
+        appkit: bool,
+        surface: str,
+        verification_requirements: dict[str, Any] | None,
+    ) -> str:
+        """Seed a real imported project, pin its driver, then post the kicking message."""
+        if surface != "build" or appkit:
+            raise ValueError("import fixtures are supported only for Freeform Build")
+        if autonomous:
+            raise ValueError("import fixtures must use the interactive approval path")
+        cid = await self._create_imported_conversation(import_fixture)
+        self.last_conversation_id = cid
+        await self.start_inspect_collection(cid)
+        # `/api/projects/import` creates a PRISTINE conversation and takes no model
+        # field, so the requested driver was silently dropped on this path — every
+        # imported-fixture scenario ran on the stack's configured default while its
+        # manifest recorded the model it had ASKED for. Apply the pick through the
+        # product's own pre-kick settings route BEFORE the message below kicks the
+        # loop (the loop caches these at first kick), and fail loudly rather than
+        # run on a driver the scenario did not ask for.
+        if model:
+            await self._apply_imported_model_override(cid, model)
+        mbody: dict[str, Any] = {"content": prompt}
+        if verification_requirements is not None:
+            mbody["verification_requirements"] = verification_requirements
+        mstatus, _ = await self._t.post_json(f"/conversations/{cid}/messages", mbody)
+        if mstatus >= 400:
+            raise RuntimeError(f"post_message failed: HTTP {mstatus}")
+        return cid
+
+    async def _apply_imported_model_override(self, conversation_id: str, model: str) -> None:
+        """Pin an imported conversation's driver through the product's own route.
+
+        `PATCH /conversations/{cid}/settings` is what the Build surface uses to
+        apply the user's model pick to a pre-created cid "right before the loop is
+        kicked (the loop caches these at first kick)" — exactly this situation. A
+        non-2xx is fatal: continuing would run the scenario on a driver it did not
+        ask for, which is the failure this method exists to end.
+        """
+        status, data = await self._t.patch_json(
+            f"/conversations/{conversation_id}/settings",
+            {"model_override": model},
+        )
+        if not 200 <= status < 300:
+            raise RuntimeError(
+                f"imported-conversation model override failed: HTTP {status} {data}"
+            )
 
     async def _create_imported_conversation(self, fixture: dict[str, Any]) -> str:
         """Seed a real imported project through ``/api/projects/import``.
