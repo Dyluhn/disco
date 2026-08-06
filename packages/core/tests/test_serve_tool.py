@@ -178,6 +178,63 @@ async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
     assert "target-owned delivery contract" in refusals[0].message.content
 
 
+async def test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat():
+    """F41 (counted wave-1 FAIL, `diag_script_run` seed 7, ACTIONLESS_THRASH).
+
+    The refusal used to say the handoff "does not match" and to use "the
+    requested interactive app or artifact-files shape" — never WHICH one, though
+    the gate had just computed it. An agent whose deliverable is a CLI script
+    could only re-send the same shape, byte-identically, 13 times, until the
+    loop-breaker graded the retries as thrash.
+
+    Two facts are asserted, and BOTH fail on the pre-repair bytes: the first
+    refusal names the admitted kind, and a second refusal is not byte-identical
+    to the first.
+    """
+
+    files_serve = {
+        "tool_calls": [
+            ProposedToolCall(
+                tool_name="serve",
+                arguments={"title": "Primes", "path": "primes.py", "kind": "files"},
+            )
+        ]
+    }
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "python3 x"})]},
+            files_serve,
+            files_serve,
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    await loop._emit(_platform_admission(claims=default_structured_web_claims()))
+
+    await loop.send_message("write primes.py, run it, and confirm the output")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    refusals = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_target_shape_refused"
+    ]
+    assert len(refusals) == 2
+    contents = [event.message.content for event in refusals]
+
+    # The fact that makes a corrective move possible: which kind IS admitted.
+    assert 'kind="app"' in contents[0]
+    assert 'kind="files"' in contents[0]
+    assert refusals[0].meta["expected_kind"] == "app"
+    assert refusals[0].meta["offered_kind"] == "files"
+
+    # An identical second refusal is what produced the thrash; it must escalate.
+    assert contents[1] != contents[0]
+    assert "STOP" in contents[1]
+    assert refusals[1].meta["shape_refusals"] == 2
+
+
 async def test_governed_nonbrowser_target_keeps_files_handoff() -> None:
     target_claim = HostVerificationClaim(
         claim_id="target.report",

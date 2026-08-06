@@ -226,6 +226,60 @@ def test_diagnostic_protocol_examples_are_metadata_not_dictated_content():
     assert extract_dictated_content_literals(text) == ["Live Server Up"]
 
 
+_DIAG_DEVSERVER_PROMPT = (
+    "DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "
+    '"PREDICT: <expected result>", and AFTER one line "OBSERVED: match" or '
+    '"OBSERVED: mismatch — <what about THE TOOL\'S behavior surprised you>" '
+    "(focus on the tool, not your mistakes). One sentence each.\n"
+    "TASK: Create a minimal Python HTTP server (server.py using only the standard "
+    "library) that serves a page with the h1 'Live Server Up'. The program must read "
+    "its assigned port with int(os.environ.get('PORT', '8000')), preserving 8000 only "
+    "as the no-environment default. Start it only through preview_start with command "
+    "'python3 server.py' (never launch or kill a web server through shell), verify the "
+    "returned platform preview in the browser, then finish."
+)
+
+
+def test_dictated_code_argument_literals_are_not_page_content():
+    """F42 (counted wave-1 FAIL, `diag_devserver` seed 8, identical-tool-call thrash).
+
+    The prompt dictates the port lookup verbatim. Both call arguments were mined
+    as REQUIRED visible-text claims, so the host verifier demanded a page showing
+    'PORT' — which no correct implementation of this task can ever render. It
+    failed identically, and the model's re-probing was graded as thrash.
+
+    This is the VERBATIM harness prompt (`harness/build_soak/scenarios.yaml`,
+    `diag_devserver`). The pre-existing coverage above used an abbreviated form
+    that dropped the `os.environ.get(...)` clause, which is exactly why the
+    defect survived to a counted cell.
+    """
+
+    assert extract_dictated_content_literals(_DIAG_DEVSERVER_PROMPT) == ["Live Server Up"]
+
+    conditions = dictated_content_conditions_from_events(
+        [_user(_DIAG_DEVSERVER_PROMPT, 1), _plan(1, 2), _status("plan_approved", 3)]
+    )
+    assert [condition.literal for condition in conditions] == ["Live Server Up"]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # An English parenthetical is NOT a call: the opener is not bound tight
+        # to an identifier, so the literal stays dictated page content.
+        ("Add a button (labeled 'Sign Up') to the hero.", ["Sign Up"]),
+        ("Show the h1 'Live Server Up' on the page.", ["Live Server Up"]),
+        # Nested and multi-argument calls: every argument is code, none is copy.
+        ("Read the port with int(os.environ.get('PORT', '8000')).", []),
+        ("Call render('Home', 'index.html') at startup.", []),
+        # A literal AFTER a closed call is page copy again.
+        ("Use os.environ.get('PORT') and title the page 'Atlas Home'.", ["Atlas Home"]),
+    ],
+)
+def test_code_argument_discrimination(text: str, expected: list[str]):
+    assert extract_dictated_content_literals(text) == expected
+
+
 @pytest.mark.parametrize(
     ("protocol", "task", "expected"),
     [

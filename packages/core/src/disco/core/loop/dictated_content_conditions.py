@@ -138,14 +138,56 @@ def _skip_dictated_literal(text: str) -> bool:
     return _looks_like_shell_command(s)
 
 
+def _mask_quoted_spans(text: str) -> str:
+    """Blank out quoted spans, preserving length so offsets stay comparable."""
+    return re.sub(r"'[^'\n]*'|\"[^\"\n]*\"", lambda match: " " * len(match.group(0)), text)
+
+
+_CALL_PREFIX_RE = re.compile(r"[\w.\]\)]\($")
+
+
+def _is_code_expression_literal(instruction: str, quote_start: int) -> bool:
+    """A quoted literal that is an ARGUMENT of a code call the user dictated.
+
+    Counted wave-1 FAIL 2026-08-06 (`diag_devserver` seed 8,
+    TOOL_CALL_THRASH_IDENTICAL_STREAK). The prompt dictated the server's port
+    lookup verbatim — ``int(os.environ.get('PORT', '8000'))`` — and both
+    arguments were mined as REQUIRED visible-text claims on the rendered page.
+    A page that says 'Live Server Up' can never also show 'PORT', so the host
+    verifier failed a claim no correct implementation could satisfy, refused
+    identically, and the model's re-probing was graded as thrash.
+
+    Same family as the `application.title` slot collapse (seed 406431) and the
+    `document_artifact` guard (seed 460009): a literal the user assigned to
+    something OTHER than the served page must not become page content. Here the
+    "something other" is a code expression, and the syntactic evidence is exact
+    — the literal sits inside an unclosed call parenthesis whose opener is bound
+    tight to an identifier (``get(``), never an English parenthetical (``page (``).
+    """
+
+    window = instruction[max(0, quote_start - 240) : quote_start]
+    # Mask sibling literals so an earlier argument cannot lend this one its
+    # parenthesis: in `get('PORT', '8000')` the evidence for '8000' must come
+    # from `get(`, not from the quotes of 'PORT'.
+    masked = _mask_quoted_spans(window)
+    depth = 0
+    for idx in range(len(masked) - 1, -1, -1):
+        char = masked[idx]
+        if char == "\n":
+            break
+        if char == ")":
+            depth += 1
+        elif char == "(":
+            if depth:
+                depth -= 1
+                continue
+            return _CALL_PREFIX_RE.search(masked[: idx + 1]) is not None
+    return False
+
+
 def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
     prefix = instruction[max(0, quote_start - 480) : quote_start]
-    boundary_view = re.sub(
-        r"'[^'\n]*'|\"[^\"\n]*\"",
-        lambda match: " " * len(match.group(0)),
-        prefix,
-    )
-    return _SERVE_METADATA_PREFIX_RE.search(boundary_view) is not None
+    return _SERVE_METADATA_PREFIX_RE.search(_mask_quoted_spans(prefix)) is not None
 
 
 def _is_diagnostic_protocol_metadata_literal(
@@ -190,6 +232,7 @@ def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
             or _skip_dictated_literal(literal)
             or _is_serve_metadata_literal(text, mt.start())
             or _is_diagnostic_protocol_metadata_literal(text, mt.start(), literal)
+            or _is_code_expression_literal(text, mt.start())
         ):
             continue
         if literal in seen:
