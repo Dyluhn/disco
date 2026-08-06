@@ -392,6 +392,17 @@ scenarios:
       browser_verification: {required: true}
 
   - id: p4_ff_context_catalog
+    # Engineered context pressure. `require_compaction` asserts the product
+    # condenses under pressure; the condenser's trigger and the read/snip caps are
+    # BOTH derived from the driver's configured window (`derive_context_caps`,
+    # `LLMSummarizingCondenser`). Above a ~55k window the per-file read cap clamps
+    # at 48k chars while the soft trigger keeps rising to its own 96k-token clamp,
+    # so three bounded ranged reads can no longer reach it and compaction never
+    # fires — measured 0 on a 1,000,000-token driver (F20). Pinning the window
+    # restores the pressure the assertion was written for, model-independently.
+    driver_context_window:
+      model: prov-opencode-go-2-minimax-m3-cw32k
+      window: 32768
     import_fixture:
       filename: context-catalog-{{seed}}.zip
       files:
@@ -421,6 +432,10 @@ scenarios:
       browser_verification: {required: true}
 
   - id: p4_ff_context_ledger
+    # Same engineered pressure as p4_ff_context_catalog; see the note there.
+    driver_context_window:
+      model: prov-opencode-go-2-minimax-m3-cw32k
+      window: 32768
     import_fixture:
       filename: context-ledger-{{seed}}.zip
       files:

@@ -23,6 +23,7 @@ from .scenario_io import (
     _browser_verification_required,
     _declared_workspace_paths,
     _preview_required,
+    _verify_driver_context_window_pin,
 )
 from .thrash import (
     _confirmed_live_thrash_stop,
@@ -548,6 +549,16 @@ async def collect_scenario_run(
         boundary,
         workspace,
     )
+    # Fail closed BEFORE any verdict is assembled: an override naming a catalogue
+    # key the stack does not carry resolves to the default driver silently, so an
+    # unverified pin would yield a green-looking measurement of the wrong window.
+    pin_facts = _verify_driver_context_window_pin(scenario, inspect_trace)
+    if pin_facts is not None:
+        product_evidence["driver_context_window_pin"] = {"schema_version": 1, **pin_facts}
+        audit.timeline.append(
+            "verified driver context-window pin from this run's own agent.step spans: "
+            f"{pin_facts['steps_observed']} step(s), windows={pin_facts['distinct_windows']}"
+        )
     await _add_export_evidence(
         client,
         start.conversation_id,
