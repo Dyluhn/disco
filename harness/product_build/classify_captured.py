@@ -29,6 +29,7 @@ from typing import Any
 from harness.product_build import (
     EXPORT_SMOKE,
     STATIC_SITE_SMOKE,
+    STATIC_SITE_SMOKE_GOVERNED,
     STATIC_SMOKE_STRICT,
     classify_dossier,
     write_dossier,
@@ -37,7 +38,10 @@ from harness.product_build import (
 # The product scenarios this bridge can adjudicate, keyed by id. The capture file names which
 # one it ran (`scenario_id`); an UNKNOWN id raises (never silently falls back to a laxer
 # scenario — e.g. a typo'd export run must NOT be classified as the no-export static smoke).
-_SCENARIOS = {s.id: s for s in (STATIC_SITE_SMOKE, STATIC_SMOKE_STRICT, EXPORT_SMOKE)}
+_SCENARIOS = {
+    s.id: s
+    for s in (STATIC_SITE_SMOKE, STATIC_SITE_SMOKE_GOVERNED, STATIC_SMOKE_STRICT, EXPORT_SMOKE)
+}
 
 
 def classify_capture(capture_path: str | Path, dossier_dir: str | Path) -> dict[str, Any]:
