@@ -18,6 +18,7 @@ if TYPE_CHECKING:  # static visibility for __all__ without a runtime disco impor
     from .scenario_runner import (
         EXPORT_SMOKE,
         STATIC_SITE_SMOKE,
+        STATIC_SITE_SMOKE_GOVERNED,
         STATIC_SMOKE_STRICT,
         ProductScenario,
         classify_dossier,
@@ -27,6 +28,7 @@ __all__ = [
     "write_dossier",
     "ProductScenario",
     "STATIC_SITE_SMOKE",
+    "STATIC_SITE_SMOKE_GOVERNED",
     "STATIC_SMOKE_STRICT",
     "EXPORT_SMOKE",
     "classify_dossier",
@@ -35,6 +37,7 @@ __all__ = [
 _SCENARIO_NAMES = (
     "ProductScenario",
     "STATIC_SITE_SMOKE",
+    "STATIC_SITE_SMOKE_GOVERNED",
     "STATIC_SMOKE_STRICT",
     "EXPORT_SMOKE",
     "classify_dossier",

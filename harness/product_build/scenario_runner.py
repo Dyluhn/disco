@@ -29,19 +29,28 @@ class ProductScenario:
     kind: str
     requires_export: bool = False
     required_slices: tuple[str, ...] = ()
+    # The provider identity this scenario pins. The defaults are the P17 MiniMax-DIRECT
+    # topology (relay -> api.minimaxi.chat) the first product scenarios were authored
+    # against. A scenario driven through a DIFFERENT DEPLOYMENT of the same owner-settled
+    # model declares its own host/model here rather than relaxing the constraint: the
+    # enforcement shape is identical (ledger required, exact model, openrouter forbidden,
+    # every host must match), only the pinned identity differs.
+    provider_host_substr: str = "minimax"
+    provider_model: str = "MiniMax-M3"
 
     def to_classifier_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "assertions": {
                 "event_chain": {"require_plan_before_execution": True},
-                # MiniMax-only provider enforcement (P17 constraint): a ledger is required, every
-                # host must contain "minimax", and an openrouter host is forbidden.
+                # Single-provider enforcement (P17 constraint): a ledger is required, every
+                # host must contain the pinned substring, the model must match EXACTLY, and
+                # an openrouter host is forbidden.
                 "provider": {
                     "require_ledger": True,
-                    "require_host_substr": "minimax",
+                    "require_host_substr": self.provider_host_substr,
                     "forbid_host_substr": ["openrouter"],
-                    "model": "MiniMax-M3",
+                    "model": self.provider_model,
                 },
             },
         }
@@ -56,6 +65,26 @@ STATIC_SITE_SMOKE = ProductScenario(
     kind="static.site",
     requires_export=False,
     required_slices=("browser_ws", "lifecycle", "preview", "shown", "verification", "cleanup"),
+)
+
+
+# A4-CLOSURE: the GOVERNED-topology static smoke. Byte-for-byte the same evidence contract as
+# STATIC_SITE_SMOKE — the same six required slices, so the same four browser oracles adjudicate
+# rather than SKIP — driven through the campaign's OWNER-SETTLED canary identity
+# (opencode.ai -> minimax-m3, standing handover §0, 2026-07-31) instead of the retired
+# MiniMax-direct relay. This is NOT a relaxation: `require_ledger` stays on, the model is still
+# matched exactly, openrouter is still forbidden, and every ledger host must still match. It
+# exists because the governed isolated stack reaches the same owner-settled model over a
+# different deployment, and pinning the OLD host would fail an honest run for a topology the
+# campaign left behind by owner decision.
+STATIC_SITE_SMOKE_GOVERNED = ProductScenario(
+    id="static_site_smoke_governed",
+    build_prompt=STATIC_SITE_SMOKE.build_prompt,
+    kind="static.site",
+    requires_export=False,
+    required_slices=STATIC_SITE_SMOKE.required_slices,
+    provider_host_substr="opencode.ai",
+    provider_model="minimax-m3",
 )
 
 

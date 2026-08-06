@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1873059f9f66a3bae541ca5ba7d818b109b8828e",
+  "source_identity": "36b940fcd7e4f452390c7632967fb1ffb77c5119",
   "collected": {
     "counts": {
       "packages": 10333,
@@ -12015,7 +12015,7 @@
     }
   },
   "mapping_static": {
-    "identity": "1873059f9f66a3bae541ca5ba7d818b109b8828e",
+    "identity": "36b940fcd7e4f452390c7632967fb1ffb77c5119",
     "python_test_file_count": 818,
     "python_static_test_id_count": 9860,
     "python_test_files": [
@@ -25656,20 +25656,6 @@
       },
       {
         "framework": "vitest/playwright",
-        "path": "frontend/e2e-live/build-artifact-runtime-smoke.spec.ts",
-        "line": 140,
-        "marker": "test.skip(",
-        "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start the live stack and re-run`);"
-      },
-      {
-        "framework": "vitest/playwright",
-        "path": "frontend/e2e-live/build-artifact-runtime-smoke.spec.ts",
-        "line": 141,
-        "marker": "test.skip(",
-        "source": "test.skip(!RELAY_LOG || !fs.existsSync(RELAY_LOG), \"PMX_RELAY_LOG (relay JSONL) not provided\");"
-      },
-      {
-        "framework": "vitest/playwright",
         "path": "frontend/e2e-live/dc-01-host-preview.spec.ts",
         "line": 141,
         "marker": "test.skip(",
@@ -25737,6 +25723,20 @@
         "line": 24,
         "marker": "test.skip(",
         "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start it and re-run`);"
+      },
+      {
+        "framework": "vitest/playwright",
+        "path": "frontend/e2e-live/build-artifact-runtime-smoke.spec.ts",
+        "line": 251,
+        "marker": "test.skip(",
+        "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start the live stack and re-run`);"
+      },
+      {
+        "framework": "vitest/playwright",
+        "path": "frontend/e2e-live/build-artifact-runtime-smoke.spec.ts",
+        "line": 252,
+        "marker": "test.skip(",
+        "source": "test.skip(!RELAY_LOG || !fs.existsSync(RELAY_LOG), \"PMX_RELAY_LOG (relay JSONL) not provided\");"
       },
       {
         "framework": "vitest/playwright",
@@ -28200,6 +28200,41 @@
         "tests": {
           "before_count": 376,
           "after_count": 376,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-02-GATE-A4CLOSURE",
+      "root": "multiple",
+      "source_identity_before": "1873059f9f66a3bae541ca5ba7d818b109b8828e",
+      "source_identity_after": "36b940fcd7e4f452390c7632967fb1ffb77c5119",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10333,
+          "after_count": 10333,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1266,
+          "after_count": 1266,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 386,
           "added_ids": []
         }
       },
