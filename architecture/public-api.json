@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "36b940fcd7e4f452390c7632967fb1ffb77c5119",
+  "source_identity": "956d982334873fcd52be01e7952dfc3688f5d13b",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -24219,6 +24219,11 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "CommentAnchorsObs",
+          "signature": "export interface CommentAnchorsObs { before: string[]; after: string[]; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "ExportObs",
           "signature": "export interface ExportObs { requested: boolean; download_present: boolean; download_bytes: number; workspace_match: boolean; }"
         },
@@ -24229,13 +24234,28 @@
         },
         {
           "kind": "InterfaceDeclaration",
+          "name": "ManualEditObs",
+          "signature": "export interface ManualEditObs { overrides: Record<string, string>; final_files: Record<string, string>; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
           "name": "PreviewObs",
           "signature": "export interface PreviewObs { owner: string; manual_port: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ProductObservations",
-          "signature": "export interface ProductObservations { browser_ws?: BrowserWsObs; lifecycle?: LifecycleObs; sidecar?: SidecarObs; preview?: PreviewObs; shown?: ShownObs; verification?: VerificationObs; export?: ExportObs; cleanup?: CleanupObs; }"
+          "signature": "export interface ProductObservations { browser_ws?: BrowserWsObs; lifecycle?: LifecycleObs; sidecar?: SidecarObs; preview?: PreviewObs; shown?: ShownObs; verification?: VerificationObs; export?: ExportObs; cleanup?: CleanupObs; targeted_edit?: TargetedEditObs; rewrite_avoidance?: RewriteAvoidanceObs; manual_edit?: ManualEditObs; comment_anchors?: CommentAnchorsObs; screen_labels?: ScreenLabelsObs; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "RewriteAvoidanceObs",
+          "signature": "export interface RewriteAvoidanceObs { edit_scope: string; changed_lines: number; total_lines: number; max_churn_ratio: number; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "ScreenLabelsObs",
+          "signature": "export interface ScreenLabelsObs { edited_sections: string[]; before: Record<string, string>; after: Record<string, string>; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -24246,6 +24266,11 @@
           "kind": "InterfaceDeclaration",
           "name": "SidecarObs",
           "signature": "export interface SidecarObs { stopped_at_terminal: boolean; provider_calls_after_terminal: number; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "TargetedEditObs",
+          "signature": "export interface TargetedEditObs { edited_files: string[]; expected_files: string[]; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -24265,7 +24290,7 @@
         {
           "kind": "variable",
           "name": "SLICE_FIELDS",
-          "signature": "export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = { browser_ws: [\"connections\"], lifecycle: [\"terminal\", \"statuses\"], sidecar: [\"stopped_at_terminal\", \"provider_calls_after_terminal\"], preview: [\"owner\", \"manual_port\"], shown: [\"artifact_shown\", \"preview_shown\"], verification: [\"ready_for_verification_called\", \"passed\"], export: [\"requested\", \"download_present\", \"download_bytes\", \"workspace_match\"], cleanup: [ \"orphans\", \"workspace_released\", \"scope\", \"container_orphans\", \"volume_orphans\", \"volume_scope\", ], };"
+          "signature": "export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = { browser_ws: [\"connections\"], lifecycle: [\"terminal\", \"statuses\"], sidecar: [\"stopped_at_terminal\", \"provider_calls_after_terminal\"], preview: [\"owner\", \"manual_port\"], shown: [\"artifact_shown\", \"preview_shown\"], verification: [\"ready_for_verification_called\", \"passed\"], export: [\"requested\", \"download_present\", \"download_bytes\", \"workspace_match\"], cleanup: [ \"orphans\", \"workspace_released\", \"scope\", \"container_orphans\", \"volume_orphans\", \"volume_scope\", ], targeted_edit: [\"edited_files\", \"expected_files\"], rewrite_avoidance: [\"edit_scope\", \"changed_lines\", \"total_lines\", \"max_churn_ratio\"], manual_edit: [\"overrides\", \"final_files\"], comment_anchors: [\"before\", \"after\"], screen_labels: [\"edited_sections\", \"before\", \"after\"], };"
         },
         {
           "kind": "variable",
@@ -26001,6 +26026,62 @@
     }
   ],
   "additive_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "CommentAnchorsObs",
+      "target_sha256": "b63c5bb5e310dd95957e4784166a6d88488fc56e39a953065302cadd24fad091",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "ManualEditObs",
+      "target_sha256": "879209f53426952d97896cc2c26e450f03d9e2a875faf76f7f26d992688656a8",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "ProductObservations",
+      "target_sha256": "78878011c93543d4da41e929e44390a431c055bf15fb784ab913ba1a2f723817",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "RewriteAvoidanceObs",
+      "target_sha256": "0b3713cc1456d0fb23d05f480065e6db18c0f1f4caf844151eee8052801befc7",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "SLICE_FIELDS",
+      "target_sha256": "578afdf2b75cdb06fe74b42ed284c0fde5d1769e5eb98b5516cb3abc5c37f943",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "ScreenLabelsObs",
+      "target_sha256": "a4190b1c1fcac8c3f558b75ecebc2c2b7bbb50824e009164ff653d973bab3410",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "TargetedEditObs",
+      "target_sha256": "6ce05b4022f3cd660c78036dd5639503953c061f14a983f3a305de769c3ac532",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "reason": "PKG-03-EDIT-EVIDENCE: the five P8D edit slices are admitted to the product_evidence schema together with their producer; this module is the TS mirror the Python parity test compares against, so the slices must exist on both sides or the mirror is drift."
+    },
     {
       "surface": "python",
       "path": "packages/agent-server/src/disco/agent_server/stripe_verification/__init__.py",
@@ -29514,6 +29595,32 @@
     }
   ],
   "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "ProductObservations",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProductObservations { browser_ws?: BrowserWsObs; lifecycle?: LifecycleObs; sidecar?: SidecarObs; preview?: PreviewObs; shown?: ShownObs; verification?: VerificationObs; export?: ExportObs; cleanup?: CleanupObs; }",
+      "new_signature": "export interface ProductObservations { browser_ws?: BrowserWsObs; lifecycle?: LifecycleObs; sidecar?: SidecarObs; preview?: PreviewObs; shown?: ShownObs; verification?: VerificationObs; export?: ExportObs; cleanup?: CleanupObs; targeted_edit?: TargetedEditObs; rewrite_avoidance?: RewriteAvoidanceObs; manual_edit?: ManualEditObs; comment_anchors?: CommentAnchorsObs; screen_labels?: ScreenLabelsObs; }",
+      "old_target_sha256": "639dc717fc4afac3d749f69f54c15ac3cd0116960fd9a453a1eec45de87a5e7a",
+      "new_target_sha256": "78878011c93543d4da41e929e44390a431c055bf15fb784ab913ba1a2f723817",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
+      "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/harness/productEvidence.ts",
+      "public_name": "SLICE_FIELDS",
+      "declaration_kind": "variable",
+      "old_signature": "export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = { browser_ws: [\"connections\"], lifecycle: [\"terminal\", \"statuses\"], sidecar: [\"stopped_at_terminal\", \"provider_calls_after_terminal\"], preview: [\"owner\", \"manual_port\"], shown: [\"artifact_shown\", \"preview_shown\"], verification: [\"ready_for_verification_called\", \"passed\"], export: [\"requested\", \"download_present\", \"download_bytes\", \"workspace_match\"], cleanup: [ \"orphans\", \"workspace_released\", \"scope\", \"container_orphans\", \"volume_orphans\", \"volume_scope\", ], };",
+      "new_signature": "export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = { browser_ws: [\"connections\"], lifecycle: [\"terminal\", \"statuses\"], sidecar: [\"stopped_at_terminal\", \"provider_calls_after_terminal\"], preview: [\"owner\", \"manual_port\"], shown: [\"artifact_shown\", \"preview_shown\"], verification: [\"ready_for_verification_called\", \"passed\"], export: [\"requested\", \"download_present\", \"download_bytes\", \"workspace_match\"], cleanup: [ \"orphans\", \"workspace_released\", \"scope\", \"container_orphans\", \"volume_orphans\", \"volume_scope\", ], targeted_edit: [\"edited_files\", \"expected_files\"], rewrite_avoidance: [\"edit_scope\", \"changed_lines\", \"total_lines\", \"max_churn_ratio\"], manual_edit: [\"overrides\", \"final_files\"], comment_anchors: [\"before\", \"after\"], screen_labels: [\"edited_sections\", \"before\", \"after\"], };",
+      "old_target_sha256": "0cd0603f6e292a464c539f4fd82736232dcdc244c01393e28522ca304cd0e445",
+      "new_target_sha256": "578afdf2b75cdb06fe74b42ed284c0fde5d1769e5eb98b5516cb3abc5c37f943",
+      "owner_package": "PKG-03-EDIT-EVIDENCE",
+      "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
+      "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
     {
       "surface": "frontend",
       "path": "frontend/src/types/agent.ts",
