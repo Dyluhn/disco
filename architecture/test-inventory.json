@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "f466b3ad5a72aa88c83a692e353b53db7c49d816",
+  "source_identity": "653d9d803e96f9d990b69ba30a9d964477501eb2",
   "collected": {
     "counts": {
-      "packages": 10333,
+      "packages": 10340,
       "harness": 1313,
       "integrations": 9,
       "tests": 386
     },
-    "total": 12041,
+    "total": 12048,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4701,6 +4701,11 @@
         "packages/core/tests/test_dictated_content_literals.py::test_build10_diagnostic_protocol_variants_keep_only_task_copy[for EVERY tool call, FIRST output one line \"PREDICT: <expected result>\", and AFTER one line \"OBSERVED: match\".-Create an index.html with h1 'Join the Waitlist' and button 'Sign Up'.-expected1]",
         "packages/core/tests/test_dictated_content_literals.py::test_build10_diagnostic_protocol_variants_keep_only_task_copy[for EVERY tool call, FIRST output one line \"PREDICT: <what you expect this tool call to return/do>\", and AFTER the result one line \"OBSERVED: match\".-Build pages with 'Atlas Home', 'Our Services', and 'Reach Us' sharing '.topnav'.-expected2]",
         "packages/core/tests/test_dictated_content_literals.py::test_build10_diagnostic_protocol_variants_keep_only_task_copy[you MUST follow this for EVERY tool call. BEFORE, output a line starting with \"PREDICT:\". AFTER, write \"OBSERVED: match\" or \"OBSERVED: mismatch \\u2014 <why>\".-Create an index.html whose h1 is 'Build Smoke OK'.-expected3]",
+        "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Add a button (labeled 'Sign Up') to the hero.-expected0]",
+        "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Call render('Home', 'index.html') at startup.-expected3]",
+        "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Read the port with int(os.environ.get('PORT', '8000')).-expected2]",
+        "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Show the h1 'Live Server Up' on the page.-expected1]",
+        "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Use os.environ.get('PORT') and title the page 'Atlas Home'.-expected4]",
         "packages/core/tests/test_dictated_content_literals.py::test_component_copy_is_not_misclassified_as_application_title[Build a dashboard with a card titled exactly \"Launch\".]",
         "packages/core/tests/test_dictated_content_literals.py::test_component_copy_is_not_misclassified_as_application_title[Build a site with a CTA named \"Launch\".]",
         "packages/core/tests/test_dictated_content_literals.py::test_component_copy_is_not_misclassified_as_application_title[Build an app with a button called \"Launch\".]",
@@ -4709,6 +4714,7 @@
         "packages/core/tests/test_dictated_content_literals.py::test_component_copy_is_not_misclassified_as_application_title[Create a tracker containing a panel named \"Launch\".]",
         "packages/core/tests/test_dictated_content_literals.py::test_diagnostic_protocol_examples_are_metadata_not_dictated_content",
         "packages/core/tests/test_dictated_content_literals.py::test_diagnostic_words_remain_dictated_when_requested_as_visible_copy",
+        "packages/core/tests/test_dictated_content_literals.py::test_dictated_code_argument_literals_are_not_page_content",
         "packages/core/tests/test_dictated_content_literals.py::test_direct_target_title_and_bare_title_change_share_identity_slot",
         "packages/core/tests/test_dictated_content_literals.py::test_explicit_application_title_change_replaces_only_same_exact_slot",
         "packages/core/tests/test_dictated_content_literals.py::test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths",
@@ -6769,6 +6775,7 @@
         "packages/core/tests/test_serve_tool.py::test_serve_malformed_arguments_are_explicit_and_actionable[arguments1-`path` is required]",
         "packages/core/tests/test_serve_tool.py::test_serve_malformed_arguments_are_explicit_and_actionable[arguments2-`title` is required]",
         "packages/core/tests/test_serve_tool.py::test_serve_offered_in_execution_not_planning",
+        "packages/core/tests/test_serve_tool.py::test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat",
         "packages/core/tests/test_skill_mount.py::test_appkit_mounts_only_its_declared_skills",
         "packages/core/tests/test_skill_mount.py::test_base_skills_union_but_default_empty",
         "packages/core/tests/test_skill_mount.py::test_contract_without_skills_mounts_nothing",
@@ -12062,9 +12069,9 @@
     }
   },
   "mapping_static": {
-    "identity": "f466b3ad5a72aa88c83a692e353b53db7c49d816",
+    "identity": "653d9d803e96f9d990b69ba30a9d964477501eb2",
     "python_test_file_count": 820,
-    "python_static_test_id_count": 9900,
+    "python_static_test_id_count": 9903,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -17698,9 +17705,11 @@
       "packages/core/tests/test_dictated_content_literals.py::test_ambiguous_application_title_history_fails_closed_on_replacement",
       "packages/core/tests/test_dictated_content_literals.py::test_an_unrelated_literal_never_claims_the_title_slot",
       "packages/core/tests/test_dictated_content_literals.py::test_build10_diagnostic_protocol_variants_keep_only_task_copy",
+      "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination",
       "packages/core/tests/test_dictated_content_literals.py::test_component_copy_is_not_misclassified_as_application_title",
       "packages/core/tests/test_dictated_content_literals.py::test_diagnostic_protocol_examples_are_metadata_not_dictated_content",
       "packages/core/tests/test_dictated_content_literals.py::test_diagnostic_words_remain_dictated_when_requested_as_visible_copy",
+      "packages/core/tests/test_dictated_content_literals.py::test_dictated_code_argument_literals_are_not_page_content",
       "packages/core/tests/test_dictated_content_literals.py::test_direct_target_title_and_bare_title_change_share_identity_slot",
       "packages/core/tests/test_dictated_content_literals.py::test_explicit_application_title_change_replaces_only_same_exact_slot",
       "packages/core/tests/test_dictated_content_literals.py::test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths",
@@ -19419,6 +19428,7 @@
       "packages/core/tests/test_serve_tool.py::test_serve_emits_a_deliverable_event_and_continues",
       "packages/core/tests/test_serve_tool.py::test_serve_malformed_arguments_are_explicit_and_actionable",
       "packages/core/tests/test_serve_tool.py::test_serve_offered_in_execution_not_planning",
+      "packages/core/tests/test_serve_tool.py::test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat",
       "packages/core/tests/test_skill_mount.py::test_appkit_mounts_only_its_declared_skills",
       "packages/core/tests/test_skill_mount.py::test_base_skills_union_but_default_empty",
       "packages/core/tests/test_skill_mount.py::test_contract_without_skills_mounts_nothing",
@@ -30791,6 +30801,38 @@
         "python_static_test_ids": [
           "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
           "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-THRASH-REPAIR",
+      "root": "packages",
+      "source_identity_before": "f466b3ad5a72aa88c83a692e353b53db7c49d816",
+      "source_identity_after": "653d9d803e96f9d990b69ba30a9d964477501eb2",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10333,
+          "after_count": 10340,
+          "added_ids": [
+            "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Add a button (labeled 'Sign Up') to the hero.-expected0]",
+            "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Call render('Home', 'index.html') at startup.-expected3]",
+            "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Read the port with int(os.environ.get('PORT', '8000')).-expected2]",
+            "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Show the h1 'Live Server Up' on the page.-expected1]",
+            "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination[Use os.environ.get('PORT') and title the page 'Atlas Home'.-expected4]",
+            "packages/core/tests/test_dictated_content_literals.py::test_dictated_code_argument_literals_are_not_page_content",
+            "packages/core/tests/test_serve_tool.py::test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_dictated_content_literals.py::test_code_argument_discrimination",
+          "packages/core/tests/test_dictated_content_literals.py::test_dictated_code_argument_literals_are_not_page_content",
+          "packages/core/tests/test_serve_tool.py::test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

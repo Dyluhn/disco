@@ -121,6 +121,58 @@ _SERVE_TARGET_SHAPE_GUIDANCE = (
     "interactive app or artifact-files shape; attachments cannot replace the "
     "canonical target handoff."
 )
+_SERVE_TARGET_SHAPE_KINDS = {
+    "app": 'kind="app" (the interactive app entry)',
+    "files": 'kind="files" (the artifact-files entry)',
+}
+
+
+def _serve_target_shape_guidance(expected_kind: str, offered_kind: str, repeats: int) -> str:
+    """Shape refusal that NAMES the admitted kind and ESCALATES.
+
+    Counted wave-1 FAIL 2026-08-06 (`diag_script_run` seed 7, ACTIONLESS_THRASH).
+    The agent finished the CLI task correctly, then offered a files-shaped
+    handoff against a contract admitting only the app shape. The refusal below
+    told it the kind "does not match" and to use "the requested interactive app
+    or artifact-files shape" — without ever saying WHICH of the two this target
+    requested, though `_expected_serve_kind` had just computed it. Byte-identical
+    13 times; retry was the only move left, and retry is what the loop-breaker
+    graded.
+
+    This is exactly the sin `host_claims.handoff_clauses` already names and fixes
+    one gate downstream: *"an agent told only that its handoff does not match ...
+    can do nothing but hand off the identical thing again ... Naming the fact is
+    what turns an unrecoverable loop into one corrective move."* The finish gate
+    got that doctrine; this serve-time gate never did. Applying it here.
+
+    Deliberately NOT a threshold change and not a relaxation of the contract: the
+    admitted shape still governs, a matching handoff is accepted exactly as
+    before, and the actionless cap is untouched. What changes is that the agent
+    is told the one fact that makes a corrective move possible, and that a
+    deliverable which genuinely cannot take the admitted shape reaches a NAMED
+    impasse instead of an unbounded identical loop.
+    """
+
+    admitted = _SERVE_TARGET_SHAPE_KINDS.get(expected_kind, f"kind={expected_kind!r}")
+    offered = _SERVE_TARGET_SHAPE_KINDS.get(offered_kind, f"kind={offered_kind!r}")
+    named = (
+        f"{_SERVE_TARGET_SHAPE_GUIDANCE}\n"
+        f"This target admits {admitted}; you offered {offered}."
+    )
+    if repeats <= 1:
+        return f"{named}\nRe-send the same entry with {admitted}."
+    return (
+        "<system-reminder>\n"
+        f"STOP — `serve` has now been refused for the same shape mismatch "
+        f"{repeats} times, with the identical reason each time. {named}\n"
+        "`serve` is not counted as work, so each refused attempt spends one turn "
+        "toward the no-progress limit that ENDS this run.\n"
+        f"There are exactly two moves left: re-send the entry with {admitted}, or "
+        "— if this deliverable genuinely cannot take that shape — say so plainly "
+        "and call `finish`, which will record the exact unmet contract fact. "
+        "Do not repeat the refused shape again.\n"
+        "</system-reminder>"
+    )
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
 # the user can always pick at the circuit-breaker gate to reset the failure streak
@@ -501,6 +553,21 @@ def _duplicate_serve(
     )
 
 
+def _prior_diagnostic_count(events: list[Event], diagnostic: str) -> int:
+    """How many times this refusal has already been emitted, plus this one.
+
+    Read from the DURABLE log rather than an instance counter so an escalation
+    survives a restart or condensation exactly as the run's own evidence does.
+    Shared by the duplicate-serve and shape-refusal escalations, which had
+    byte-identical copies of this walk.
+    """
+    return 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent) and event.meta.get("diagnostic") == diagnostic
+    )
+
+
 async def _record_serve_handoff(  # noqa: ANN001
     loop,
     step: AgentStep,
@@ -512,11 +579,20 @@ async def _record_serve_handoff(  # noqa: ANN001
     expected_kind = _expected_serve_kind(admission)
     if expected_kind is not None and request.kind != expected_kind:
         loop._invisible_steps += 1
+        repeats = _prior_diagnostic_count(events, _SERVE_TARGET_SHAPE_DIAGNOSTIC)
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_SERVE_TARGET_SHAPE_GUIDANCE),
-                meta={"diagnostic": _SERVE_TARGET_SHAPE_DIAGNOSTIC},
+                message=LLMMessage(
+                    role="user",
+                    content=_serve_target_shape_guidance(expected_kind, request.kind, repeats),
+                ),
+                meta={
+                    "diagnostic": _SERVE_TARGET_SHAPE_DIAGNOSTIC,
+                    "expected_kind": expected_kind,
+                    "offered_kind": request.kind,
+                    "shape_refusals": repeats,
+                },
             )
         )
         return await loop._post_noop_valve()
@@ -524,15 +600,7 @@ async def _record_serve_handoff(  # noqa: ANN001
     if _duplicate_serve(events, request, admitted_contract):
         _LOG.debug("Skipping duplicate deliverable: %s (%s)", request.path, request.kind)
         loop._invisible_steps += 1
-        # Count prior duplicate refusals from the DURABLE log rather than an
-        # instance counter, so the escalation survives a restart or condensation
-        # exactly as the run's own evidence does.
-        repeats = 1 + sum(
-            1
-            for event in events
-            if isinstance(event, MessageEvent)
-            and event.meta.get("diagnostic") == _SERVE_DUPLICATE_DIAGNOSTIC
-        )
+        repeats = _prior_diagnostic_count(events, _SERVE_DUPLICATE_DIAGNOSTIC)
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
