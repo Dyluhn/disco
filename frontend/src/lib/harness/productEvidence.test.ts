@@ -29,6 +29,27 @@ function greenObservations(): ProductObservations {
       volume_orphans: 0,
       volume_scope: "conversation",
     },
+    // PKG-03-EDIT-EVIDENCE — the five P8D edit slices. Their live producer is the Python
+    // runner, but they are part of the ONE schema this module mirrors, so the fixture
+    // carries them too: the field-exactness loop below iterates SLICE_KEYS, and a slice
+    // missing from the fixture would silently stop being checked.
+    targeted_edit: { edited_files: ["index.html"], expected_files: ["index.html"] },
+    rewrite_avoidance: {
+      edit_scope: "small",
+      changed_lines: 2,
+      total_lines: 80,
+      max_churn_ratio: 0.25,
+    },
+    manual_edit: {
+      overrides: { "index.html": "<p>hand-written</p>" },
+      final_files: { "index.html": "<html><p>hand-written</p></html>" },
+    },
+    comment_anchors: { before: ["hero", "foot"], after: ["hero", "foot"] },
+    screen_labels: {
+      edited_sections: ["hours"],
+      before: { about: "Our Story" },
+      after: { about: "Our Story" },
+    },
   };
 }
 

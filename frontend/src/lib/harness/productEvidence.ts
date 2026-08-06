@@ -50,6 +50,39 @@ export interface CleanupObs {
   volume_scope?: "conversation" | "global_dangling" | string;
 }
 
+/**
+ * PKG-03-EDIT-EVIDENCE — the five P8D edit slices. Their live producer is the PYTHON
+ * runner (`harness/product_build/edit_evidence_run.py`), because the behaviours they
+ * observe — a targeted edit over a hand-written override, comment anchors, screen labels —
+ * are workspace-source facts, not browser-session facts. They are mirrored here anyway so
+ * the two schemas stay one schema: the Python parity test compares this object with
+ * `_SLICE_FIELDS` exactly, and a slice known to only one side is precisely the drift the
+ * mirror exists to prevent.
+ */
+export interface TargetedEditObs {
+  edited_files: string[];
+  expected_files: string[];
+}
+export interface RewriteAvoidanceObs {
+  edit_scope: string;
+  changed_lines: number;
+  total_lines: number;
+  max_churn_ratio: number;
+}
+export interface ManualEditObs {
+  overrides: Record<string, string>;
+  final_files: Record<string, string>;
+}
+export interface CommentAnchorsObs {
+  before: string[];
+  after: string[];
+}
+export interface ScreenLabelsObs {
+  edited_sections: string[];
+  before: Record<string, string>;
+  after: Record<string, string>;
+}
+
 /** Captured observations — a slice is present iff that part of the run was observed. */
 export interface ProductObservations {
   browser_ws?: BrowserWsObs;
@@ -60,6 +93,11 @@ export interface ProductObservations {
   verification?: VerificationObs;
   export?: ExportObs;
   cleanup?: CleanupObs;
+  targeted_edit?: TargetedEditObs;
+  rewrite_avoidance?: RewriteAvoidanceObs;
+  manual_edit?: ManualEditObs;
+  comment_anchors?: CommentAnchorsObs;
+  screen_labels?: ScreenLabelsObs;
 }
 
 export type ProductEvidence = ProductObservations;
@@ -89,6 +127,11 @@ export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = {
     "volume_orphans",
     "volume_scope",
   ],
+  targeted_edit: ["edited_files", "expected_files"],
+  rewrite_avoidance: ["edit_scope", "changed_lines", "total_lines", "max_churn_ratio"],
+  manual_edit: ["overrides", "final_files"],
+  comment_anchors: ["before", "after"],
+  screen_labels: ["edited_sections", "before", "after"],
 };
 
 /** All slice keys, DERIVED from SLICE_FIELDS — never a hand-maintained parallel list. */
