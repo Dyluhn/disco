@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e669fd5d6069b601c9c213955aa47b2237a02888",
+  "source_identity": "bb562bfc01ea13af00adf174c53ffbc107041211",
   "collected": {
     "counts": {
       "packages": 10333,
-      "harness": 1312,
+      "harness": 1313,
       "integrations": 9,
       "tests": 386
     },
-    "total": 12040,
+    "total": 12041,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11235,6 +11235,7 @@
         "harness/build_soak/tests/test_promotion.py::test_all_pass_is_eligible",
         "harness/build_soak/tests/test_promotion.py::test_invalid_run_blocks",
         "harness/build_soak/tests/test_promotion.py::test_no_runs_is_not_eligible",
+        "harness/build_soak/tests/test_promotion.py::test_product_harness_is_required_by_default",
         "harness/build_soak/tests/test_promotion.py::test_product_harness_not_required_is_informational",
         "harness/build_soak/tests/test_promotion.py::test_product_harness_required_and_green_passes",
         "harness/build_soak/tests/test_promotion.py::test_product_harness_required_but_absent_blocks",
@@ -12061,9 +12062,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e669fd5d6069b601c9c213955aa47b2237a02888",
+    "identity": "bb562bfc01ea13af00adf174c53ffbc107041211",
     "python_test_file_count": 820,
-    "python_static_test_id_count": 9899,
+    "python_static_test_id_count": 9900,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -13571,6 +13572,7 @@
       "harness/build_soak/tests/test_promotion.py::test_all_pass_is_eligible",
       "harness/build_soak/tests/test_promotion.py::test_invalid_run_blocks",
       "harness/build_soak/tests/test_promotion.py::test_no_runs_is_not_eligible",
+      "harness/build_soak/tests/test_promotion.py::test_product_harness_is_required_by_default",
       "harness/build_soak/tests/test_promotion.py::test_product_harness_not_required_is_informational",
       "harness/build_soak/tests/test_promotion.py::test_product_harness_required_and_green_passes",
       "harness/build_soak/tests/test_promotion.py::test_product_harness_required_but_absent_blocks",
@@ -27772,6 +27774,30 @@
           "harness/build_soak/tests/test_edit_evidence_producer.py::test_the_line_the_user_asks_for_is_the_line_the_producer_checks_for",
           "harness/build_soak/tests/test_edit_evidence_producer.py::test_the_pre_edit_state_carries_the_anchors_and_exactly_one_override",
           "harness/build_soak/tests/test_edit_evidence_producer.py::test_without_the_producer_all_five_skip"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-03-F28-LEG-C-A4FLIP",
+      "root": "harness",
+      "source_identity_before": "e669fd5d6069b601c9c213955aa47b2237a02888",
+      "source_identity_after": "bb562bfc01ea13af00adf174c53ffbc107041211",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1312,
+          "after_count": 1313,
+          "added_ids": [
+            "harness/build_soak/tests/test_promotion.py::test_product_harness_is_required_by_default"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/build_soak/tests/test_promotion.py::test_product_harness_is_required_by_default"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

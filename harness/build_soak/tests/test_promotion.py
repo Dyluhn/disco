@@ -18,7 +18,12 @@ def _check(result, name):
 
 
 def test_all_pass_is_eligible():
-    r = evaluate_product_promotion([_pass(), _pass()])
+    # Scoped to the run-classification gates, which is what this test is about. The
+    # product-harness gate is opted out EXPLICITLY because it defaults to required as of
+    # A4 step 4; without the opt-out this would assert "eligible" while silently
+    # depending on that gate staying informational. The gate's own behaviour is pinned by
+    # `test_product_harness_is_required_by_default` and the three tests below it.
+    r = evaluate_product_promotion([_pass(), _pass()], require_product_harness=False)
     assert r["eligible"] is True
 
 
@@ -62,10 +67,27 @@ def test_provider_call_after_terminal_blocks():
 
 # --- product-harness gate -----------------------------------------------------
 def test_product_harness_not_required_is_informational():
-    r = evaluate_product_promotion([_pass()])
+    # The opt-out is now EXPLICIT. Before A4 step 4 this called
+    # `evaluate_product_promotion([_pass()])` bare and relied on the default being
+    # False; the default is True as of the flip, so the bare call is covered by
+    # `test_product_harness_is_required_by_default` below instead. The informational
+    # branch itself is unchanged and still reachable — that is what this pins.
+    r = evaluate_product_promotion([_pass()], require_product_harness=False)
     ph = _check(r, "product harness green")
     assert ph["ok"] is None  # not blocking
     assert r["eligible"] is True
+
+
+def test_product_harness_is_required_by_default():
+    """A4 step 4: `require_product_harness` defaults to True.
+
+    Pinned as its own test because the DEFAULT is the thing A4 authorized changing, and
+    a default is exactly the kind of behaviour that regresses silently — every other
+    test in this file passes the flag explicitly and would stay green if it flipped back.
+    """
+    r = evaluate_product_promotion([_pass()])
+    assert _check(r, "product harness green")["ok"] is False
+    assert r["eligible"] is False
 
 
 def test_product_harness_required_but_absent_blocks():

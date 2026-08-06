@@ -82,7 +82,11 @@ def _check_product_harness(
         return {
             "check": "product harness green",
             "ok": None,
-            "detail": "not required yet (HARN-1b browser harness pending)",
+            # Reached only when a caller opts out EXPLICITLY: the default is True as of
+            # A4 step 4. The previous wording ("not required yet — HARN-1b browser
+            # harness pending") described a world that no longer exists; HARN-1b landed
+            # at `a9daf96d` and the ten adjudicated green at one sealed sha.
+            "detail": "not required — caller opted out explicitly (default is required)",
         }
     if not product_harness:
         return {
