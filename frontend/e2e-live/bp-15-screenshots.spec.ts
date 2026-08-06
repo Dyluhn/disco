@@ -44,6 +44,13 @@ const PROMPT =
 interface ConversationState {
   execution_status: string;
   sandbox_backend?: string;
+  // The sandbox-liveness overlay `_handle_get_state` writes onto the response
+  // (routes/conversations.py: `state.extras["sandbox"] = sstate`, the same
+  // overlay the WS state frame carries). Step 6 below polls it. This member was
+  // missing from this file's copy of the shape while bp-13-suspend.spec.ts —
+  // which reads the identical field off the identical endpoint — declared it;
+  // no tsconfig project compiled e2e-live, so nothing caught the divergence.
+  extras?: { sandbox?: string };
 }
 
 async function getJson<T>(request: APIRequestContext, url: string): Promise<T> {
