@@ -320,7 +320,7 @@ class TestMappingStatic:
             # what make the other adjudications mean anything: each nullifies a
             # single observed behaviour and asserts the oracle's verdict flips.
             "python_test_file_count": 820,
-            "python_static_test_id_count": 9899,
+            "python_static_test_id_count": 9900,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -612,7 +612,7 @@ class TestCollectedCounts:
             # under `packages` because the producer is harness code; the
             # sanctioned lane that owns them is `make harness`
             # (`PYTHONPATH=. uv run pytest harness`), and
-            # check_inventory_execution confirms all 12040 certified ids stay
+            # check_inventory_execution confirms all 12041 certified ids stay
             # reachable by a sanctioned command.
             #
             # 1312 from PKG-03-F20-CONTEXT-PRESSURE: +22 in the `harness` root,
@@ -622,13 +622,19 @@ class TestCollectedCounts:
             # pin that changes mid-run must both RAISE, because the product
             # resolves an unknown model_override by silently falling back to the
             # default driver.
-            "harness": 1312,
+            # 1313 from PKG-03-F28-LEG-C-A4FLIP: +1 in the `harness` root,
+            # `test_promotion.py::test_product_harness_is_required_by_default`. A4
+            # step 4 flipped `require_product_harness` to True once the F28 set came
+            # back 10/10 green at one sealed sha; every other test in that file passes
+            # the flag EXPLICITLY, so without this one the default could silently
+            # regress to False and the whole file would stay green.
+            "harness": 1313,
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12040 == sum(expected.values())
+        assert collected["total"] == 12041 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -644,7 +650,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12040}
+        assert result == {"collected_total": 12041}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -663,9 +669,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9899,
+            "python_static_ids": 9900,
             "typescript_static_ids": 1203,
-            "collected_total": 12040,
+            "collected_total": 12041,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
