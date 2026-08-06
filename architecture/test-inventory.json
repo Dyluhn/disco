@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "956d982334873fcd52be01e7952dfc3688f5d13b",
+  "source_identity": "ee9e3ccefac9ed995e321d3a268e14bff0ec25aa",
   "collected": {
     "counts": {
       "packages": 10333,
@@ -12039,7 +12039,7 @@
     }
   },
   "mapping_static": {
-    "identity": "956d982334873fcd52be01e7952dfc3688f5d13b",
+    "identity": "ee9e3ccefac9ed995e321d3a268e14bff0ec25aa",
     "python_test_file_count": 819,
     "python_static_test_id_count": 9884,
     "python_test_files": [
@@ -25740,6 +25740,13 @@
       },
       {
         "framework": "vitest/playwright",
+        "path": "frontend/e2e-live/stability-run.spec.ts",
+        "line": 188,
+        "marker": "test.skip(",
+        "source": "test.skip(true, \"stack or relay not available\");"
+      },
+      {
+        "framework": "vitest/playwright",
         "path": "frontend/e2e-live/bp-05-verify-gate.spec.ts",
         "line": 190,
         "marker": "test.skip(",
@@ -25849,13 +25856,6 @@
         "line": 91,
         "marker": "test.skip(",
         "source": "test.skip(!healthy, `agent-server not reachable at ${API} \u2014 start it and re-run`);"
-      },
-      {
-        "framework": "vitest/playwright",
-        "path": "frontend/e2e-live/stability-run.spec.ts",
-        "line": 91,
-        "marker": "test.skip(",
-        "source": "test.skip(true, \"stack or relay not available\");"
       },
       {
         "framework": "vitest/playwright",
@@ -28346,6 +28346,41 @@
         "harness": {
           "before_count": 1266,
           "after_count": 1266,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 386,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-02-GATE-STABRUN",
+      "root": "multiple",
+      "source_identity_before": "956d982334873fcd52be01e7952dfc3688f5d13b",
+      "source_identity_after": "ee9e3ccefac9ed995e321d3a268e14bff0ec25aa",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10333,
+          "after_count": 10333,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1290,
+          "after_count": 1290,
           "added_ids": []
         },
         "integrations": {
