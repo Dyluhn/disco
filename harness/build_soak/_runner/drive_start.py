@@ -9,6 +9,7 @@ from ..efficiency import LiveEfficiencyProgress
 from ..ports import ProductClient
 from .bindings import ScenarioBindings
 from .common import _TRIGGER_AFTER_FIRST_FILE_WRITE
+from .scenario_io import _driver_context_window_pin
 
 
 @dataclass
@@ -95,8 +96,14 @@ async def start_scenario(
     import_fixture = _optional_mapping(scenario, "import_fixture")
     verification = _optional_mapping(scenario, "verification_requirements")
     surface = str(scenario.get("surface") or "build")
+    # A scenario that needs engineered context pressure pins the driver by naming
+    # the catalogue key that carries the smaller window; it overrides the run-level
+    # --model for THIS conversation only, so the rest of the matrix keeps the
+    # standing driver. The pin is verified from the run's own spans at capture.
+    pin = _driver_context_window_pin(scenario)
+    driver_model = pin[0] if pin is not None else model
     options: dict[str, Any] = {
-        "model": model,
+        "model": driver_model,
         "autonomous": autonomous,
         "appkit": bool(scenario.get("appkit")),
         "surface": surface,
@@ -109,6 +116,10 @@ async def start_scenario(
         f"created {surface} conversation {cid} "
         f"(autonomous={autonomous}, appkit={options['appkit']})"
     )
+    if pin is not None:
+        audit.timeline.append(
+            f"pinned driver context window: model={pin[0]} declared_window={pin[1]}"
+        )
     mid_run, after_terminal = _scenario_followups(scenario)
     pause_trigger = lifecycle.get("pause_resume_at")
     pause_at = (

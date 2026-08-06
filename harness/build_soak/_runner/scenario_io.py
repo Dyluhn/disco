@@ -78,6 +78,107 @@ def _driver_catalog_contains(payload: dict[str, Any], model: str) -> bool:
     )
 
 
+class ContextWindowPinError(RuntimeError):
+    """A scenario's declared driver context-window pin was not the window the run used.
+
+    Raised instead of returning an unpinned measurement: the product resolves an
+    unknown ``model_override`` by silently falling back to the configured default
+    driver (``driver_runtime.context_window``), so a missing or misconfigured
+    catalogue entry would otherwise yield a run that LOOKS pinned and is not.
+    """
+
+    def __init__(self, reason: str, facts: dict[str, Any]) -> None:
+        super().__init__(f"{reason}: {facts}")
+        self.reason = reason
+        self.facts = facts
+
+
+def _driver_context_window_pin(scenario: dict[str, Any]) -> tuple[str, int] | None:
+    """The scenario's declared driver context-window pin, or None.
+
+    Shape (both keys required)::
+
+        driver_context_window:
+          model: <catalogue key>   # the per-conversation model_override to send
+          window: <positive int>   # the window that key MUST advertise
+
+    Two keys rather than one because the product exposes no per-conversation
+    context-window field: the only per-conversation driver selector is the
+    catalogue key (``CreateConversationBody.model_override``), and the window
+    lives on that key's ``ModelEntry.context_window``. ``model`` selects; ``window``
+    is the claim the run's own spans are checked against. A malformed declaration
+    raises rather than being ignored — silently dropping the pin would produce
+    exactly the unpressured measurement the pin exists to prevent.
+    """
+    declared = scenario.get("driver_context_window")
+    if declared is None:
+        return None
+    if not isinstance(declared, dict):
+        raise ValueError("driver_context_window must be an object with 'model' and 'window'")
+    model = declared.get("model")
+    window = declared.get("window")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("driver_context_window.model must be a nonempty catalogue key")
+    # bool is an int subclass — exclude it explicitly.
+    if type(window) is not int or window <= 0:
+        raise ValueError("driver_context_window.window must be a positive int")
+    return model.strip(), window
+
+
+def _observed_driver_context_windows(inspect_trace: dict[str, Any]) -> list[int]:
+    """Every ``driver_context_window`` the run's own ``agent.step`` spans recorded.
+
+    The loop stamps the resolved window on each driver call
+    (``agent.py``'s ``log_span("agent.step", …, driver_context_window=…)``), so the
+    trace is the run's own record of the window it actually budgeted against —
+    stronger evidence than the catalogue, which only says what was configured.
+    """
+    spans = inspect_trace.get("spans")
+    if not isinstance(spans, list):
+        return []
+    observed: list[int] = []
+    for span in spans:
+        if not isinstance(span, dict) or span.get("span") != "agent.step":
+            continue
+        value = span.get("driver_context_window")
+        if type(value) is int:
+            observed.append(value)
+    return observed
+
+
+def _verify_driver_context_window_pin(
+    scenario: dict[str, Any],
+    inspect_trace: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Prove from the run's own spans that a declared pin is the window it used.
+
+    Returns the recorded facts, or None when the scenario declares no pin. Raises
+    ``ContextWindowPinError`` when the pin is declared and the trace contradicts
+    it. A run with NO driver calls is not an error here: it made no measurement to
+    be fooled by, and any assertion that needed the pin fails on its own terms.
+    """
+    pin = _driver_context_window_pin(scenario)
+    if pin is None:
+        return None
+    model, window = pin
+    if inspect_trace is None:
+        raise ContextWindowPinError(
+            "driver context-window pin cannot be proven without an inspect trace",
+            {"model": model, "declared_window": window},
+        )
+    observed = _observed_driver_context_windows(inspect_trace)
+    distinct = sorted(set(observed))
+    facts = {
+        "model": model,
+        "declared_window": window,
+        "steps_observed": len(observed),
+        "distinct_windows": distinct,
+    }
+    if observed and distinct != [window]:
+        raise ContextWindowPinError("driver context-window pin was not honoured", facts)
+    return facts
+
+
 def _declared_workspace_paths(scenario: dict[str, Any]) -> list[str]:
     files = ((scenario.get("assertions") or {}).get("workspace") or {}).get("files") or []
     return [str(f["path"]) for f in files if f.get("path")]
