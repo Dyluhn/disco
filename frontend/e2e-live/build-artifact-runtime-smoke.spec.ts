@@ -338,7 +338,19 @@ test("live MiniMax build → product-evidence dossier classifies PASS", async ({
       run_id: cid,
       scenario_id: SCENARIO_ID,
     };
-    const work = fs.mkdtempSync(path.join(os.tmpdir(), "disclaude-dossier-"));
+    // F33 (2026-08-06g): this dossier is the browser four's ONLY verdict artifact. It was
+    // written to `fs.mkdtempSync(os.tmpdir())` and preserved by NEITHER runner script, so a
+    // green `capture.exit` could coexist with the evidence sitting in /tmp awaiting a
+    // cleaner — 2026-08-05m and 2026-08-06g both recovered it by an unrecorded manual step.
+    // When the governed runner sets DISCO_RELIABILITY_SUITE_OUT (which the live Playwright
+    // config already requires) write it INTO the evidence tree instead, one directory per
+    // attempt so a later retry cannot overwrite the attempt that produced the verdict.
+    // Falls back to the old mkdtemp behaviour when the variable is unset (ad-hoc local runs).
+    const suiteOut = process.env.DISCO_RELIABILITY_SUITE_OUT;
+    const work = suiteOut
+      ? path.join(suiteOut, `dossier-attempt-${attempt}`)
+      : fs.mkdtempSync(path.join(os.tmpdir(), "disclaude-dossier-"));
+    fs.mkdirSync(work, { recursive: true });
     const capPath = path.join(work, "captured.json");
     fs.writeFileSync(capPath, JSON.stringify(capture), "utf-8");
 
