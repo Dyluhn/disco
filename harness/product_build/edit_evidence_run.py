@@ -15,7 +15,7 @@ Sequence — every step OBSERVES; none synthesizes:
 2. **BUILD** (turn 1) the scenario's page — four id-carrying sections, each with a heading
    and a comment anchor — with a real autonomous build.
 3. **OVERRIDE** (turn 2): the USER'S OWN change, asking for one exact verbatim line in a
-   section the later edit will not touch. This goes through the product's own follow-up
+   section the later edit will not touch. This goes through the product's own steer
    surface, because there is **no** user-facing path to hand-edit workspace source between
    turns: measured in run r3 (2026-08-05o), a host-side edit to the ProjectStore workspace is
    silently discarded when the next turn materializes from its own durable capture. Seeding
@@ -24,7 +24,7 @@ Sequence — every step OBSERVES; none synthesizes:
 4. **SNAPSHOT `before`** by reading the file BACK from the workspace, never from what we
    believe was written, and REFUSE to continue if the user's line is not actually there:
    with no override in place there is nothing to preserve, and a later PASS would be vacuous.
-5. **EDIT** (turn 3) with a targeted follow-up scoped to ONE other section — the later agent
+5. **EDIT** (turn 3) with a targeted steer scoped to ONE other section — the later agent
    edit that must not take the user's line, the anchors, or the other labels with it.
 6. **SNAPSHOT `after`**, and read the successful edit calls out of the run's own event log,
    counting only calls after turn 2's last seq so the measurement is of the LATER edit.
@@ -44,6 +44,7 @@ Usage (see the boundary's ``run_edit_evidence.sh`` for the governed invocation):
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -145,11 +146,82 @@ def _poll_terminal(
     return "TIMEOUT", statuses
 
 
+def _ws_url(agent: str, cid: str) -> str:
+    base = agent.rstrip("/")
+    if base.startswith("https://"):
+        base = "wss://" + base[len("https://") :]
+    elif base.startswith("http://"):
+        base = "ws://" + base[len("http://") :]
+    return f"{base}/ws/conversations/{cid}"
+
+
+def _cookie_header(session: ApiSession) -> str:
+    return "; ".join(f"{cookie.name}={cookie.value}" for cookie in session.jar)
+
+
+async def _send_steer_frame(session: ApiSession, agent: str, cid: str, prompt: str) -> None:
+    """Send exactly the frame the UI's steer affordance sends (`routes/ws.py:95`).
+
+    Header shape and the drain-then-send order are the harness's already-proven
+    WS control pattern (`build_soak/adapters/_api_transport.py:ws_control`); the
+    truth is the event log, so no ack is awaited.
+    """
+    import websockets
+
+    headers = [("Origin", session.origin), ("Cookie", _cookie_header(session))]
+    async with websockets.connect(
+        _ws_url(agent, cid), open_timeout=30, max_size=None, additional_headers=headers
+    ) as ws:
+        try:
+            await asyncio.wait_for(ws.recv(), timeout=30)  # the initial state frame
+        except TimeoutError:
+            pass
+        await ws.send(json.dumps({"type": "steer", "steer_text": prompt}))
+        await asyncio.sleep(3)  # let the server append + kick before the socket closes
+
+
 def _run_turn(
     session: ApiSession, agent: str, cid: str, prompt: str, timeout_s: int
 ) -> tuple[str, list[str]]:
-    """Send one follow-up turn and poll it to a terminal."""
-    session.json("POST", agent, f"/conversations/{cid}/followup", data={"content": prompt})
+    """Send one REVISION turn over the product's sanctioned steer path, then poll
+    to a terminal.
+
+    **Why not `POST /conversations/{cid}/followup`** (what this did until
+    PKG-03-F28-LEG-C). Both of this runner's turns are mid-build *revision*
+    instructions on an already-approved plan, and the route decides whether the
+    product can complete the re-plan it is about to force:
+
+    * The re-plan is NOT a model choice. `replanning.py:90
+      _maybe_reenter_planning_for_followup` re-enters PLANNING for any user turn
+      satisfying `signals.is_revision_intent` — which both prompts do. Writes are
+      then gated until a revised plan is approved.
+    * Approving that revision requires retaining every existing `done_condition`
+      (`plan_revisions.py:assert_plan_revision_approvable`), unless an owner
+      weakening decision exists. The product supplies exactly one such decision
+      for a live client: `user_steer_authorizes_weakening`, keyed on a
+      `revision_steer_pending` marker.
+    * That marker is appended by the kernel ingress `disco_kernel.py:195` **only
+      under `if steer:`**. Neither REST route can set it — `_handle_post_followup`
+      and `_handle_post_message` both call `send_user_turn` without `steer`, and
+      `SendMessageBody` has no such field. It is WS-only, as
+      `build_soak/adapters/disco_api.py:4` already records.
+
+    So `/followup` delivered the *obligation* to re-plan without the *authority*
+    to complete it. Measured at 2026-08-06g r2: ~30 consecutive refusals of the
+    revised plan, all naming the same dropped `command:` predicate, then STUCK —
+    the exact deadlock signature `user_steer_authorizes_weakening`'s own docstring
+    was written to remove. `/followup` additionally 409s `not_finished` on a STUCK
+    conversation (`conversations.py:504-514`), which aborted 2026-08-06g r1 and
+    2026-08-05o r6 with no classification at all; and its docstring scopes it to
+    "a finished **Deep Research report**", not a build.
+
+    The steer frame is the same ingress the product's own UI uses and the same one
+    `build_soak`'s client already uses for follow-ups
+    (`_client_conversation.py:422 send_followup(kind="steer")`). Nothing about the
+    scenario, its prompts, its oracles or any threshold changes — only the route
+    the instruction arrives on.
+    """
+    asyncio.run(_send_steer_frame(session, agent, cid, prompt))
     return _poll_terminal(session, agent, cid, timeout_s)
 
 
@@ -301,7 +373,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     print(f"[edit-evidence] built sections: {require_sections(built)}")
 
-    # TURN 2 — the USER'S OWN change, through the product's own follow-up surface.
+    # TURN 2 — the USER'S OWN change, through the product's own steer surface.
     override_terminal, override_statuses = _run_turn(
         session, agent, cid, scenario.override_prompt, args.edit_timeout
     )
