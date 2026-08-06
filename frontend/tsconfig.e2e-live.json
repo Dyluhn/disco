@@ -1,0 +1,36 @@
+{
+  // Live-e2e type-check scope (mirrors tsconfig.closeout-g11.json /
+  // tsconfig.downloadBinding-guard.json, one directory wider).
+  //
+  // Why a separate config: BEFORE this file, `frontend/e2e-live` was type-checked
+  // by NO tsconfig project at all. `tsconfig.app.json` includes only `src`;
+  // `tsconfig.node.json` only `vite.config.ts`; `tsconfig.build.json` (the
+  // `npm run typecheck:build` gate) extends app and additionally EXCLUDES tests;
+  // and the root `tsconfig.json` references only app and node, so even the
+  // advisory job's `npx tsc -b` could not reach the 38 live specs. Playwright
+  // transpiles rather than type-checks, so their TYPE errors were invisible to
+  // `npm run test:e2e` as well. That vacuum shipped two real errors.
+  //
+  // `include` here OVERRIDES the inherited `["src"]`, so tsc roots ONLY at
+  // e2e-live; it still follows the `@/*` imports (reliability-helpers.ts pulls in
+  // `@/lib/harness/thrashOracle`) to type-check the real production types those
+  // specs assert against, which is the point — the specs must agree with the
+  // product's own contract, not with a private copy of it.
+  //
+  // `types` is narrowed to ["node"]: these specs are Playwright, not vitest, and
+  // they use node builtins (node:fs, node:path, node:child_process, process.env).
+  // Playwright's own types arrive by import from "@playwright/test", not globally.
+  // Everything else — strict, noUnusedLocals, noUnusedParameters, the @/* paths —
+  // is inherited unchanged from tsconfig.app.json so this gate is exactly as
+  // strict as the shipping one.
+  //
+  // Invoked by `npm run typecheck:e2e-live` (see package.json), which is wired
+  // into ci.yml's REQUIRED job. Required, not advisory, on the same reasoning
+  // ci.yml already records for the ESLint promotion: a gate that runs only in the
+  // advisory job (continue-on-error: true) cannot hold a line.
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["e2e-live"]
+}
