@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
+  "source_identity": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
   "collected": {
     "counts": {
-      "packages": 10428,
+      "packages": 10432,
       "harness": 1320,
       "integrations": 9,
       "tests": 386
     },
-    "total": 12143,
+    "total": 12147,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7578,6 +7578,10 @@
         "packages/core/tests/test_w2_stale_snapshot.py::test_tracker_record_str_content",
         "packages/core/tests/test_w2_stale_snapshot.py::test_tracker_stale_paths_swallows_file_not_found",
         "packages/core/tests/test_w2_stale_snapshot.py::test_unchanged_file_is_present_in_each_stateless_request",
+        "packages/core/tests/test_w39_shell_escalation.py::test_count_agrees_with_the_fingerprint_owner_the_oracle_grades_with",
+        "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
+        "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
+        "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence",
         "packages/core/tests/test_w39_shell_verify_reminder.py::test_anti_spam_mutation_resets_streak",
         "packages/core/tests/test_w39_shell_verify_reminder.py::test_anti_spam_one_reminder_per_streak",
         "packages/core/tests/test_w39_shell_verify_reminder.py::test_assist_off_never_reminds",
@@ -12164,9 +12168,9 @@
     }
   },
   "mapping_static": {
-    "identity": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
-    "python_test_file_count": 826,
-    "python_static_test_id_count": 9996,
+    "identity": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
+    "python_test_file_count": 827,
+    "python_static_test_id_count": 10000,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12770,6 +12774,7 @@
       "packages/core/tests/test_vision_wiring.py",
       "packages/core/tests/test_w1_read_breaker.py",
       "packages/core/tests/test_w2_stale_snapshot.py",
+      "packages/core/tests/test_w39_shell_escalation.py",
       "packages/core/tests/test_w39_shell_verify_reminder.py",
       "packages/core/tests/test_w3_c2_dod_in_sandbox.py",
       "packages/core/tests/test_w5_execution_nudge_cap.py",
@@ -20214,6 +20219,10 @@
       "packages/core/tests/test_w2_stale_snapshot.py::test_tracker_record_str_content",
       "packages/core/tests/test_w2_stale_snapshot.py::test_tracker_stale_paths_swallows_file_not_found",
       "packages/core/tests/test_w2_stale_snapshot.py::test_unchanged_file_is_present_in_each_stateless_request",
+      "packages/core/tests/test_w39_shell_escalation.py::test_count_agrees_with_the_fingerprint_owner_the_oracle_grades_with",
+      "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
+      "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
+      "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence",
       "packages/core/tests/test_w39_shell_verify_reminder.py::test_anti_spam_mutation_resets_streak",
       "packages/core/tests/test_w39_shell_verify_reminder.py::test_anti_spam_one_reminder_per_streak",
       "packages/core/tests/test_w39_shell_verify_reminder.py::test_assist_off_never_reminds",
@@ -31750,6 +31759,38 @@
           "packages/core/tests/test_store_schema_contract.py::test_tools_ensure_mcp_approval_tables_functional",
           "packages/core/tests/test_store_schema_contract.py::test_tools_mcp_migrations_imports_core_schema",
           "tests/architecture/test_public_api.py::test_type_checking_class_declarations_preserve_static_surface"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-SEAL-AND-DRAW",
+      "root": "packages",
+      "source_identity_before": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
+      "source_identity_after": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10428,
+          "after_count": 10432,
+          "added_ids": [
+            "packages/core/tests/test_w39_shell_escalation.py::test_count_agrees_with_the_fingerprint_owner_the_oracle_grades_with",
+            "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
+            "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
+            "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_w39_shell_escalation.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_w39_shell_escalation.py::test_count_agrees_with_the_fingerprint_owner_the_oracle_grades_with",
+          "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
+          "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
+          "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
