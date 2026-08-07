@@ -299,6 +299,74 @@ def test_the_harness_re_exports_the_owner_rather_than_copying_it():
     assert _thrash_shell.static_tee_sinks is script_identity.static_tee_sinks
 
 
+# ---------------------------------------------------------------------------
+# F47 (2026-08-07f) — the REACH duty. The tests above prove the two sides share
+# an identity FUNCTION; they cannot prove a notice is REACHABLE for the tools the
+# oracle actually grades, and that is what failed next.
+# ---------------------------------------------------------------------------
+
+
+def test_identical_streak_is_graded_over_every_tool_not_a_tool_subset():
+    """The premise of the reach duty, asserted rather than assumed.
+
+    `SHAPE_IDENTICAL_STREAK` keys on `tool_call_fingerprint`, which encodes the
+    tool NAME but excludes no tool. If this oracle ever gained a tool allowlist,
+    the reach duty below would be measuring against the wrong population — so the
+    premise is pinned here, next to the duty that depends on it.
+    """
+    for tool in ("shell", "update_plan_progress", "file_write", "some_future_tool"):
+        assert _fingerprint(
+            {"kind": "action", "tool_call": {"tool_name": tool, "arguments": {"a": 1}}}
+        ) == tool_call_fingerprint(tool, {"a": 1})
+
+
+def test_every_tool_class_the_campaign_has_brought_under_notice_stays_reachable():
+    """A RATCHET on notice reach — the enforcement F47's own green was missing.
+
+    `test_every_repetition_shape_declares_a_shared_identity_owner` passed at
+    `4ce28e50` and the guarantee was still false: the oracle counted identical
+    repeats over EVERY tool while `_prepare_observation` early-returned for
+    anything outside `_W39_SHELL_TOOLS`. The shape had an owner; the notice had no
+    route. `update_plan_progress` @98651 was charged at seqs 229/232/235 against a
+    cap of 2, first feedback at seq 237.
+
+    Deliberately a RATCHET, not a claim of completeness. `SHAPE_IDENTICAL_STREAK`
+    is graded over every tool, so nothing short of universal coverage closes the
+    class, and asserting universal coverage here would be exactly the overclaim the
+    Enumerated-Class Invariant was written against. What this pins is that a class
+    already brought under notice can never silently lose its route again.
+    """
+    from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS, _W39_SHELL_TOOLS
+
+    # The gate `_prepare_observation` actually reads — referenced, never copied.
+    from disco.core.loop.observation_execution import _W39_NOTICE_TOOLS as GATE
+
+    assert GATE is _W39_NOTICE_TOOLS, "the loop must gate on the declared set, not a copy"
+    assert _W39_SHELL_TOOLS <= _W39_NOTICE_TOOLS, "the 06x shell/script class"
+    assert _W39_PLAN_TOOLS <= _W39_NOTICE_TOOLS, "the 07f plan-tracking class (98651)"
+    assert "update_plan_progress" in _W39_NOTICE_TOOLS
+
+
+def test_the_notice_reach_residue_is_declared_rather_than_implied():
+    """The delta between the graded class and the covered class, stated in code.
+
+    The oracle grades identical repeats over every tool; notice reaches four tool
+    names. That gap is REAL and this boundary does not close it. Recording it as an
+    assertion rather than only as receipt prose means a future boundary that
+    widens coverage must come here and say so — which is the habit whose absence
+    produced F39, F47 and F51.
+    """
+    from disco.core.loop.dedup import _W39_NOTICE_TOOLS
+
+    assert _W39_NOTICE_TOOLS == frozenset(
+        {"shell", "shell_exec", "plan_step", "update_plan_progress"}
+    ), (
+        "notice reach changed — update this pin AND the receipt's residue note. "
+        "Tools the oracle counts but no notice reaches remain culpable without "
+        "notice, which is the F47 defect for those classes."
+    )
+
+
 def test_loop_and_oracle_group_the_97903_spellings_identically():
     """The measured 06v failure, as a cross-side agreement check.
 

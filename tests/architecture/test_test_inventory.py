@@ -337,8 +337,24 @@ class TestMappingStatic:
             # invariant is ENFORCED (a repetition shape with no declared
             # `disco.core` identity owner fails there). `python_test_file_count`
             # advances 820 → 822 for the two new files.
-            "python_test_file_count": 823,
-            "python_static_test_id_count": 9943,
+            #
+            # 9965 from PKG-19-CONSTRAINT4-DYNAMIC-REPAIR: +22 static ids against
+            # +24 collected node ids. The gap is the ONE parametrized case
+            # (`test_repeat_preamble_names_the_count_and_the_cost`, three repeat
+            # counts) counted once statically and three times when collected.
+            # ONE new file, `packages/core/tests/test_f51_constraint4_multifire.py`
+            # (15 ids) — the twice-rule regression evidence for the five F51
+            # surfaces that emitted byte-identical bodies across 24 live cells at
+            # 2026-08-07d, one of them fifteen times in a single run. The other
+            # nine extend two existing files: +6 in
+            # `test_f47_answered_question_notice.py` for the plan-tracking notice
+            # class, and +3 in `test_thrash_shapes.py` for the notice-REACH duty —
+            # the file whose own green hid F47's asymmetry, because it proved the
+            # two sides share an identity OWNER while the notice remained
+            # unreachable for every non-shell tool. `python_test_file_count`
+            # advances 823 -> 824 for the one new file.
+            "python_test_file_count": 824,
+            "python_static_test_id_count": 9965,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -642,7 +658,12 @@ class TestCollectedCounts:
             # receipt evidence. Both are product bytes, so they land here; the
             # remaining 4 ids of that seal's 28 land under `harness` below, because
             # F47's invariant is enforced by the ORACLE, not by the product.
-            "packages": 10376,
+            # 10397 from PKG-19-CONSTRAINT4-DYNAMIC-REPAIR: +21 under `packages` —
+            # 15 for the new `test_f51_constraint4_multifire.py` (three of which
+            # are one parametrized case) and 6 extending
+            # `test_f47_answered_question_notice.py` with the plan-tracking notice
+            # class. The other 3 of this seal's 24 land under `harness` below.
+            "packages": 10397,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -674,13 +695,22 @@ class TestCollectedCounts:
             # identity owner, so a fifth shape cannot silently re-open the gap that
             # produced the 2026-08-06v pilot reds. The 06t seal's note that repairs
             # land under `packages` described that repair, not a rule.
-            "harness": 1317,
+            # 1320 from PKG-19-CONSTRAINT4-DYNAMIC-REPAIR: +3 in the `harness`
+            # root, all in `test_thrash_shapes.py`, and for the same reason the
+            # 06x seal moved it — F47's invariant is enforced against the ORACLE.
+            # These three add the REACH duty the 06x enforcement could not carry:
+            # that file's green was true and the guarantee was still false,
+            # because `ThrashOracle` counts identical repeats over EVERY tool
+            # while the notice was emitted only for `_W39_SHELL_TOOLS`. One pins
+            # that premise, one ratchets the covered classes, one declares the
+            # residue the oracle counts but no notice reaches.
+            "harness": 1320,
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12088 == sum(expected.values())
+        assert collected["total"] == 12112 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -696,7 +726,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12088}
+        assert result == {"collected_total": 12112}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -715,9 +745,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9943,
+            "python_static_ids": 9965,
             "typescript_static_ids": 1203,
-            "collected_total": 12088,
+            "collected_total": 12112,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

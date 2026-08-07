@@ -29,6 +29,62 @@ from ..common import (
 )
 
 
+def _verify_marker_fire_count(events: list[Event], fingerprint: str) -> int:
+    """How many times THIS exact governed failure has been surfaced, plus this one.
+
+    GROUNDED FEEDBACK constraint 4 (the twice-rule), F51 (2026-08-07d/e). The two
+    governed refusal seams below stamp a durable
+    ``verify_no_progress:<fingerprint>`` marker after every emit, so the run's own
+    log already records how many times the agent has been told this exact thing.
+    Nothing read it. `_prior_verify_marker_fp` deliberately scans only markers
+    ABOVE the authority floor — that is the loop breaker's question ("same failure,
+    no productive change since?") — and every productive edit moves the floor, so a
+    run that churns productively while failing host verification identically resets
+    that window on every pass. `pilota/001` at 2026-08-07d did exactly that and was
+    told the identical sentence **fifteen times**.
+
+    This is the OTHER question, and it needs the WHOLE log: "how many times have we
+    said this, ever, in this run?" Ledger-derived, not an instance counter, so the
+    count survives a restart or condensation exactly as the run's own evidence does
+    — the same reason `turn_control_support._prior_diagnostic_count` reads the log.
+
+    **It changes no decision.** The loop breaker's comparison is untouched; this
+    feeds the MESSAGE only. Constraints 1 and 4 are independent: a surface can be
+    genuinely state-derived and still emit identical bytes on every fire, because in
+    a repeat loop the state it renders has not changed by construction.
+    """
+    marker = f"{_VERIFY_MARKER_PREFIX}{fingerprint}"
+    return 1 + sum(
+        1 for ev in events if isinstance(ev, StatusEvent) and ev.detail == marker
+    )
+
+
+def _repeat_preamble(repeats: int, cost: str) -> str:
+    """The escalation line for a governed refusal that has fired before.
+
+    GROUNDED FEEDBACK constraint 4 (F51). The owner's rule for any surface that
+    can fire more than once per run is "repetition-aware at minimum (count
+    acknowledged, escalating), ledger-derived where state exists" — and here the
+    state exists, in the run's own durable markers.
+
+    The shape is `turn_control_support._serve_duplicate_guidance`'s, written by
+    this campaign ten lines below one of the F51 defects: name the COUNT, then
+    name the COST. Repeating a sentence to a model that already mis-read it gives
+    it nothing new to act on; the count and the consequence are information the
+    host already holds, and withholding them is what turns one misread into a
+    terminal.
+
+    ``cost`` is passed in rather than templated because the three seams below do
+    genuinely different things on the next repeat — the governed seams HALT, the
+    legacy shadow-verify seam releases UNVERIFIED. A shared sentence would have to
+    be vague enough to be wrong about one of them.
+    """
+    return (
+        f"REPEAT {repeats} — you have now been told this same verification failure "
+        f"{repeats} times in this run, and nothing about it has changed. {cost}\n"
+    )
+
+
 async def host_verify_failure_disposition(
     gate: Any, deliverable: HostVerificationDeliverable, verdict: dict
 ) -> Disp:
@@ -41,9 +97,26 @@ async def host_verify_failure_disposition(
     )
     if gate._loop._browser_verify_refusals < 3:
         gate._loop._browser_verify_refusals += 1
+        # Constraint 4 (F51): this seam is capped at 3 fires per streak and its
+        # payload is a pure function of the verdict, so three identical verdicts
+        # produced three identical bodies. The refusal ordinal is already in hand
+        # — it is the cap's own counter — so no new state is needed to say it.
+        refusals = gate._loop._browser_verify_refusals
         payload = (
             "<system-reminder>\n"
-            f"Host verification did not pass for {deliverable.artifact_kind} "
+            + (
+                _repeat_preamble(
+                    refusals,
+                    f"After {3 - refusals} more failed attempt"
+                    f"{'' if 3 - refusals == 1 else 's'} the run is RELEASED "
+                    "UNVERIFIED — finished with a deliverable that may be "
+                    "incomplete — rather than blocked. Change something the "
+                    "verifier measures, or finish and say plainly what is broken.",
+                )
+                if refusals > 1
+                else ""
+            )
+            + f"Host verification did not pass for {deliverable.artifact_kind} "
             f"artifact {deliverable.artifact_path!r} ({label}). {summary}\n"
             + (f"first failure: {first_failure}\n" if first_failure else "")
             + (
@@ -193,9 +266,30 @@ async def governed_non_pass_disposition(
         )
         return Disp.HALT
 
+    # Constraint 4 (F51) — the 15× surface. This body is genuinely state-derived
+    # (artifact kind, path, host label, and a guidance projected from the typed
+    # receipt's own claim results) and it STILL emitted fifteen byte-identical
+    # sentences in `pilota/001` at 2026-08-07d while the run failed to progress.
+    # The reason is structural: the loop breaker above scans only markers above
+    # the authority floor, every productive edit raises that floor, so a run that
+    # keeps editing while failing verification identically never trips the breaker
+    # and never hears anything new. The whole-log count is the missing signal, and
+    # the run's own markers already carry it.
+    repeats = _verify_marker_fire_count(events, fingerprint)
     payload = (
         "<system-reminder>\n"
-        f"Host verification did not pass for {deliverable.artifact_kind} "
+        + (
+            _repeat_preamble(
+                repeats,
+                "Repeating `finish` cannot change this: the same failure with no "
+                "productive change between attempts ENDS the run. Make the one "
+                "change named below before finishing again, or finish and state "
+                "plainly that it is blocked.",
+            )
+            if repeats > 1
+            else ""
+        )
+        + f"Host verification did not pass for {deliverable.artifact_kind} "
         f"artifact {deliverable.artifact_path!r} ({host_label}). {guidance}\n"
         "The task is NOT complete until a current, complete typed PASS "
         "receipt covering every required claim exists.\n"
@@ -238,6 +332,13 @@ async def governed_contract_refusal(
             legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
         )
         return Disp.HALT
+    # Constraint 4 (F51). Same seam shape and same durable marker as the governed
+    # non-pass disposition above, so the same whole-log count applies. This is the
+    # surface that composes `host_claims.handoff_refusal_detail`'s text (F51's
+    # fifth surface) into an emitted body — that helper is a pure describer with no
+    # access to the log, so repetition-awareness belongs HERE, at the seam that
+    # emits, which is the only place the run's own history is reachable.
+    repeats = _verify_marker_fire_count(events, fingerprint)
     await gate._loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -245,7 +346,18 @@ async def governed_contract_refusal(
                 role="user",
                 content=(
                     "<system-reminder>\n"
-                    f"Target verification did not pass. {guidance}\n"
+                    + (
+                        _repeat_preamble(
+                            repeats,
+                            "Handing off or finishing again without changing what "
+                            "the claim measures cannot change the result: a repeat "
+                            "with no productive change between attempts ENDS the "
+                            "run.",
+                        )
+                        if repeats > 1
+                        else ""
+                    )
+                    + f"Target verification did not pass. {guidance}\n"
                     "The task is NOT complete until every admitted mandatory "
                     "claim has a current trusted result.\n"
                     "</system-reminder>"

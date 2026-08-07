@@ -954,6 +954,22 @@ def _w39_validate_candidate(
     return (True, prior_seq, sentinel, key)
 
 
+# F47 (2026-08-07f) — the plan-tracking tools brought under the notice invariant.
+# The RENDERING lives in `dedup_plan_notice.py`; only the class declarations stay
+# here, beside `_W39_SHELL_TOOLS`, so every tool class the notice covers is
+# declared in one place. See that module for why this class exists at all.
+#
+# `propose_plan_update` and `submit_plan` are deliberately excluded:
+# `meta_tool_planning._auto_approve_revision` already emits its own
+# identical-revision nudge, and a second notice would double-fire on one event.
+_W39_PLAN_TOOLS = frozenset({"plan_step", "update_plan_progress"})
+
+# Every tool class that can produce an answered-question notice. This is the set
+# `_prepare_observation` gates on, so widening the notice means adding here — one
+# place, rather than a second guard that can drift from this one.
+_W39_NOTICE_TOOLS = _W39_SHELL_TOOLS | _W39_PLAN_TOOLS
+
+
 def _w39_shell_verify_reminder(
     current_tool: str | None,
     current_args: dict | None,

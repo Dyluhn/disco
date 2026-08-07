@@ -47,8 +47,18 @@ from disco.core import (
 from disco.core.loop.dedup import (
     _W39_REMINDER_SENTINEL,
     _W39_SCRIPT_REMINDER_SENTINEL,
+    _W39_SHELL_TOOLS,
     _w39_shell_verify_reminder,
 )
+
+# NOTE: the 2026-08-07f plan-tracking symbols (`_W39_PLAN_TOOLS`,
+# `_W39_NOTICE_TOOLS`, `_W39_PLAN_REMINDER_SENTINEL`,
+# `_w39_plan_progress_reminder`) are imported INSIDE the test bodies below, not
+# here. They do not exist at `4ce28e50`, and a module-level import of them turns
+# the entire file — including the five pre-existing 06x regression tests — into
+# one collection error when the suite is run against the old bytes. That is a
+# much weaker red than each new body failing on the property it actually asserts,
+# and it would have hidden whether the OLD tests still pass on the OLD tree.
 from disco.core.script_identity import (
     describe_script_fingerprint,
     foreground_script_fingerprints,
@@ -318,3 +328,194 @@ def test_97601_negative_control_notice_given_then_repeated_is_not_excused():
     should, _prior_seq, _text = _remind(events)
 
     assert should is False, "already told inside the group — the repeat is the agent's"
+
+
+# ---------------------------------------------------------------------------
+# F47, 2026-08-07f — the PLAN-TRACKING class. The notice half's REACH, not its
+# identity owner.
+#
+# The 2026-08-06x repair proved the two sides SHARE an identity owner, and that
+# was true and is still true. What it did not prove is that a notice can actually
+# be REACHED for every class the oracle counts. `ThrashOracle` counts
+# SHAPE_IDENTICAL_STREAK over every tool; the notice was emitted only for
+# `_W39_SHELL_TOOLS`. So the coverage test passed while the guarantee was false
+# for every non-shell tool — the same Enumerated-Class Invariant shape as F51.
+#
+# Measured live at 2026-08-07d: `p4_ff_node_restart`@98651 issued an IDENTICAL
+# `update_plan_progress` at seqs 229/232/235 against a cap of 2, each returning
+# `success=True` / `plan progress: 2/2 done`, and the FIRST feedback body arrived
+# at seq 237 — after the cap was already exceeded.
+# ---------------------------------------------------------------------------
+
+PLAN_ARGS = {"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "done"}]}
+PLAN_RESULT = "plan progress: 2/2 done"
+
+
+def _plan_call(call_id: str, tool: str = "update_plan_progress", args: dict | None = None):
+    return ActionEvent(
+        thought="marking progress",
+        tool_call=ToolCall(
+            tool_name=tool, call_id=call_id, arguments=dict(PLAN_ARGS if args is None else args)
+        ),
+    )
+
+
+def _plan_obs(action: ActionEvent, *, success: bool = True) -> ObservationEvent:
+    return ObservationEvent(
+        tool_result=ToolResult(
+            call_id=action.tool_call.call_id,
+            tool_name=action.tool_call.tool_name,
+            success=success,
+            content=PLAN_RESULT if success else "",
+            error=None if success else "plan update failed",
+        ),
+        action_id=action.id,
+    )
+
+
+def _plan_remind(events: list[Event]) -> tuple[bool, int, str]:
+    from disco.core.loop.dedup_plan_notice import _w39_plan_progress_reminder
+
+    current = events[-1]
+    assert isinstance(current, ActionEvent) and current.tool_call is not None
+    return _w39_plan_progress_reminder(
+        current.tool_call.tool_name, current.tool_call.arguments, events
+    )
+
+
+def test_98651_shape_notice_precedes_the_cap_exceeding_plan_repeat():
+    """The live defect, as its own regression: notice BEFORE culpability.
+
+    Three identical `update_plan_progress` calls against a cap of 2. The second
+    call is the one the notice must precede — before this repair the memo could
+    not fire for a non-shell tool at all, so the agent reached the third call
+    having been told nothing.
+    """
+    from disco.core.loop.dedup_plan_notice import _W39_PLAN_REMINDER_SENTINEL
+
+    first = _plan_call("p1")
+    second = _plan_call("p2")
+    events = with_seqs([user_msg("finish the plan"), first, _plan_obs(first), second])
+
+    should, prior_seq, text = _plan_remind(events)
+
+    assert should is True, "answered-question repetition must be given notice BEFORE the cap"
+    assert prior_seq == 2, "the notice names the actual prior step"
+    assert _W39_PLAN_REMINDER_SENTINEL in text
+    assert "update_plan_progress" in text
+    assert PLAN_RESULT in text, "hand back the answer the agent already has, not just its existence"
+
+
+def test_the_plan_notice_is_repetition_aware_and_escalates(monkeypatch):
+    """GROUNDED FEEDBACK constraint 4 — this surface can fire more than once per
+    run, so its body must carry the count and the two fires must differ."""
+    first = _plan_call("p1")
+    second = _plan_call("p2")
+    events = with_seqs([user_msg("go"), first, _plan_obs(first), second])
+    _should, _seq, second_text = _plan_remind(events)
+
+    third = _plan_call("p3")
+    events2 = with_seqs(
+        [
+            user_msg("go"),
+            first,
+            _plan_obs(first),
+            second,
+            _plan_obs(second),
+            _reminder_msg(second_text),
+            third,
+        ]
+    )
+    should3, _seq3, third_text = _plan_remind(events2)
+
+    assert should3 is True, "the occurrence pivot must re-arm for the NEXT repeat"
+    assert second_text != third_text, (
+        "constraint 4: a surface that can fire twice per run must not emit the same "
+        "bytes twice — this is exactly the F51 defect one level down"
+    )
+    assert "2 times" in second_text and "3 times" in third_text
+
+
+def test_the_plan_notice_requires_the_prior_call_to_have_SUCCEEDED():
+    """A FAILED prior call is broken-tool repetition, which F47 says is culpable
+    immediately. Dressing it as "you already have this answer" would be a false
+    assurance — the agent holds a failure, not an answer."""
+    first = _plan_call("p1")
+    second = _plan_call("p2")
+    events = with_seqs(
+        [user_msg("go"), first, _plan_obs(first, success=False), second]
+    )
+
+    should, _seq, _text = _plan_remind(events)
+
+    assert should is False
+
+
+def test_the_plan_notice_respects_the_shared_currency_predicate():
+    """Constraint 2 — one currency predicate, two consumers. A real workspace
+    mutation after the prior call ends its currency, so the notice must go
+    silent rather than assert "no change since then" across a boundary the
+    grader has already closed."""
+    first = _plan_call("p1")
+    write = ActionEvent(
+        thought="edit",
+        tool_call=ToolCall(
+            tool_name="file_write", call_id="w1", arguments={"path": "a.py", "content": "x"}
+        ),
+    )
+    second = _plan_call("p2")
+    events = with_seqs(
+        [
+            user_msg("go"),
+            first,
+            _plan_obs(first),
+            write,
+            ObservationEvent(
+                tool_result=ToolResult(
+                    call_id="w1", tool_name="file_write", success=True, content="written"
+                ),
+                action_id=write.id,
+            ),
+            second,
+        ]
+    )
+
+    should, _seq, _text = _plan_remind(events)
+
+    assert should is False, "a closed currency boundary must silence the echo, not widen it"
+
+
+def test_a_DIFFERENT_plan_call_is_a_different_question():
+    """Identity is `tool_call_fingerprint`, the owner the oracle grades with — so
+    marking a different step is not a repeat and gets no notice."""
+    first = _plan_call("p1")
+    second = _plan_call(
+        "p2", args={"steps": [{"index": 1, "state": "done"}, {"index": 2, "state": "pending"}]}
+    )
+    events = with_seqs([user_msg("go"), first, _plan_obs(first), second])
+
+    should, _seq, _text = _plan_remind(events)
+
+    assert should is False
+
+
+def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
+    """The REACH duty, which is what actually failed at 98651.
+
+    `_prepare_observation` gates on `_W39_NOTICE_TOOLS`. A tool class that the
+    oracle counts identical repeats on but that is absent from this set is a
+    class where culpability is charged with no notice reachable — and nothing
+    else in the suite would go red. Asserted against the set the loop ACTUALLY
+    gates on, never a copy of it.
+    """
+    from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS
+
+    assert _W39_SHELL_TOOLS <= _W39_NOTICE_TOOLS
+    assert _W39_PLAN_TOOLS <= _W39_NOTICE_TOOLS
+    assert "update_plan_progress" in _W39_NOTICE_TOOLS, "the 98651 class"
+    # The two proposal tools are deliberately OUT: `_auto_approve_revision`
+    # already emits `_IDENTICAL_PLAN_NUDGE_TEXT` for a byte-identical revision and
+    # a second notice would double-fire on one event. Pinned so the exclusion
+    # stays a stated decision rather than drifting into an accident.
+    assert "propose_plan_update" not in _W39_NOTICE_TOOLS
+    assert "submit_plan" not in _W39_NOTICE_TOOLS

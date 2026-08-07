@@ -54,6 +54,32 @@ def _single_correlated_observation(
     return correlated[0]
 
 
+def _prior_reuse_count(events: list[Event], fingerprint: str) -> int:
+    """How many times THIS command's receipt has already been reused, plus this one.
+
+    GROUNDED FEEDBACK constraint 4 (the twice-rule), F51 (2026-08-07d/e). This
+    surface fired 2× byte-identically in `canary/000` and 2× in `pilota/001`: the
+    reuse notice names the command and the prior observation id, and when `finish`
+    is attempted twice with no intervening action BOTH are unchanged, so the two
+    bodies are identical.
+
+    Ledger-derived, and the ledger already exists — the reuse notice has stamped
+    ``finish_verify_receipt_reused`` plus ``command_fingerprint_sha256`` into its
+    own ``meta`` since the seam was written. Nothing read it back. Keying on the
+    COMMAND fingerprint rather than the observation id is deliberate: the question
+    the agent needs answered is "how many times has this run leaned on the same
+    verify result", which is a property of the command, not of which observation
+    happened to carry it.
+    """
+    return 1 + sum(
+        1
+        for ev in events
+        if isinstance(ev, MessageEvent)
+        and ev.meta.get("finish_verify_receipt_reused") is True
+        and ev.meta.get("command_fingerprint_sha256") == fingerprint
+    )
+
+
 def _plan_verifier_failed_after(events: list[Event], since_index: int) -> bool:
     """True when a ``plan_verifier_failure`` marker followed the given index."""
     for ev in events[since_index + 1 :]:
@@ -100,6 +126,22 @@ async def reuse_finish_verify_receipt(
         return False
 
     fingerprint = hashlib.sha256(verify_cmd.encode()).hexdigest()
+    reuses = _prior_reuse_count(events, fingerprint)
+    # Constraint 4 (F51). A repeat here is a real signal and the agent was never
+    # given it: the verify command is passing and being carried forward, so
+    # whatever is refusing the finish is something ELSE. Restating the reuse
+    # verbatim invites the agent to keep re-running the one thing that already
+    # works.
+    escalation = (
+        ""
+        if reuses <= 1
+        else (
+            f"This is reuse {reuses} of the same receipt in this run — the verify "
+            "command is NOT what is blocking the finish. Read the refusal that "
+            "follows this message and address that instead; re-running the verify "
+            "will keep producing this same carried-forward result.\n"
+        )
+    )
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -111,6 +153,7 @@ async def reuse_finish_verify_receipt(
                     f"successful shell execution recorded at {observation.id} — that "
                     "correlated observation's success is carried forward without "
                     "re-executing the command.\n"
+                    f"{escalation}"
                     "</system-reminder>"
                 ),
             ),
@@ -118,6 +161,7 @@ async def reuse_finish_verify_receipt(
                 "finish_verify_receipt_reused": True,
                 "prior_action_id": most_recent_action.id,
                 "command_fingerprint_sha256": fingerprint,
+                "receipt_reuses": reuses,
             },
         )
     )
