@@ -124,7 +124,26 @@ def largest_semantic_shell_repeat_group(
     events: list[dict[str, Any]],
     outcomes: dict[str, tuple[bool, str, str]],
 ) -> tuple[int, str, list[int]]:
-    """Find repeated successful direct-script executions in one verifier scope."""
+    """Find repeated successful direct-script executions in one verifier scope.
+
+    UNCHANGED at 2026-08-06z, deliberately and on evidence. The currency
+    unification briefly added the shared currency epoch to this group key, on the
+    theory that "the cap must not count a re-verification made legitimate by
+    intervening workspace change" meant ANY intervening write. Three standing
+    guard tests refuted it —
+    `test_documentation_write_does_not_hide_repeated_script_verification`,
+    `test_failed_semantic_script_rewrite_does_not_hide_repeated_verification`,
+    `test_same_predicate_reapproval_cannot_reset_cosmetic_wrapper_thrash` — and
+    they are right: a doc write does not legitimize re-running a Python test, and
+    a FAILED write changes nothing at all.
+
+    The operative word in the owner's clause is *legitimate*, and the
+    legitimating rules already exist and are narrower than "a write happened":
+    the family generation below, and the trusted mutation receipt in the shared
+    owner. The defect was never that the cap counted too much; it was that the
+    ECHO went silent on a cruder rule than the one the cap counts by. So the echo
+    moved onto this predicate and this predicate did not move.
+    """
     generations: Counter[str] = Counter()
     plan_scope = ("<no-approved-plan>",)
     groups: dict[tuple[str, int, tuple[str, ...]], list[int]] = {}

@@ -32,8 +32,10 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    StatusEvent,
     WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
+from ..receipt_currency import latest_currency_boundary_seq
 from ..script_identity import (
     SHELL_TOOLS,
     describe_script_fingerprint,
@@ -615,10 +617,19 @@ _W39_RESULT_MAX_CHARS = 800
 # Advisory reminder text. ADVISORY ONLY — it never asserts "nothing changed"
 # in absolute terms; it puts the judgment on the model ("re-run only if you
 # changed something"). format-only (single source of truth).
+#
+# 2026-08-06z (GROUNDED FEEDBACK constraints 1 and 3): the claim is now scoped to
+# what the sentence can actually support. It used to read "and nothing has
+# changed since", which is an absolute claim about the world; what the product
+# knows is that the RECORD shows no currency boundary since that run — the same
+# predicate, and the same evidence, the repeat-cap will be graded by. Saying the
+# larger thing was the F49 error one dimension over (a claim asserted wider than
+# its warrant), and the narrower sentence is strictly more useful to the agent
+# because it names WHERE the assurance comes from.
 _W39_REMINDER_TEMPLATE = (
     "<system-reminder>\n"
     "{sentinel} You already ran `{command}` earlier (step {step}) and it "
-    "passed, and nothing has changed since. Re-run it "
+    "passed, and this run's record shows no change since then. Re-run it "
     "only if you have changed something relevant — otherwise act on the "
     "result you already have instead of re-verifying.{result}\n"
     "</system-reminder>"
@@ -632,9 +643,10 @@ _W39_REMINDER_TEMPLATE = (
 _W39_SCRIPT_REMINDER_TEMPLATE = (
     "<system-reminder>\n"
     "{sentinel} You already ran `{script}` at step {step} (as `{command}`) and it "
-    "passed, and nothing has changed since. Spelling the command differently asks "
-    "the same question. Re-run it only if you have changed something relevant — "
-    "otherwise act on the result you already have instead of re-verifying.{result}\n"
+    "passed, and this run's record shows no change since then. Spelling the command "
+    "differently asks the same question. Re-run it only if you have changed "
+    "something relevant — otherwise act on the result you already have instead of "
+    "re-verifying.{result}\n"
     "</system-reminder>"
 )
 
@@ -675,48 +687,100 @@ def _w39_prior_result_excerpt(events: list[Event], action_id: str) -> str:
     return ""
 
 
-def _w39_freshness_boundary_seq(events: list[Event], *, before_seq: int | None = None) -> int:
-    """A6.3 §3.2 — seq of the most recent event that reset "nothing has changed".
+def _currency_view(event: Event) -> dict[str, object]:
+    """Project ONE typed event into the serialized shape the shared currency
+    owner reads (`disco.core.receipt_currency`).
 
-    This is the loop-side counterpart of the oracle's `progress_epoch_boundary`.
-    It counts the three boundary kinds that are observable from the typed event
-    log without importing harness adjudication policy:
-
-    * a **workspace mutation** (the A8 mutating-tool set) — the original W-39
-      signal;
-    * a **user message** — the user said something, so the world the earlier
-      verification described may no longer be the world the model is in;
-    * a **blocking environment message** — the environment interrupted.
-
-    The last two are the ones plain `_w39_latest_mutation_seq` missed, and the
-    miss was not cosmetic: without them the memo would tell a model "nothing has
-    been written to the workspace since" immediately after a user turn that
-    changed the goal. The predicate is **fail-safe by construction** — if
-    anything did change, no memo is emitted and the model re-runs exactly as it
-    does today. Its failure mode is silence, never a false assurance.
-
-    NOT covered, and deliberately: the oracle additionally treats an approved
-    plan predicate scope change and a trusted mutation receipt as boundaries.
-    Both are harness adjudication over serialized events; reproducing them here
-    would be the second implementation A6.3 §3 forbids. The consequence is that
-    this predicate is STRICTLY MORE CONSERVATIVE than the oracle's in those two
-    cases — it can only suppress a memo the oracle would have allowed, never
-    emit one the oracle would have refused.
+    An adapter, not a rule: it moves values, it never decides anything. Every
+    decision belongs to the owner, so the memo and the oracle cannot disagree.
+    Only the keys the owner reads are projected — this runs per event per shell
+    call, and a full `model_dump()` would pay for the whole payload to answer a
+    six-field question.
     """
-    latest = _w39_latest_mutation_seq(events, before_seq=before_seq)
-    for e in events:
-        seq = e.seq or 0
-        if before_seq is not None and seq >= before_seq:
-            continue
-        if not isinstance(e, MessageEvent):
-            continue
-        if e.source == EventSource.USER:
-            latest = max(latest, seq)
-            continue
-        blocking = e.meta.get("blocking") if isinstance(e.meta, dict) else None
-        if e.source == EventSource.ENVIRONMENT and isinstance(blocking, str) and blocking:
-            latest = max(latest, seq)
-    return latest
+    view: dict[str, object] = {"kind": event.kind.value, "seq": event.seq or 0, "id": event.id}
+    source = getattr(event, "source", None)
+    if source is not None:
+        view["source"] = source.value if isinstance(source, EventSource) else str(source)
+    if isinstance(event, ActionEvent) and event.tool_call is not None:
+        view["tool_call"] = {
+            "tool_name": event.tool_call.tool_name,
+            "arguments": event.tool_call.arguments,
+        }
+    if isinstance(event, ObservationEvent):
+        view["action_id"] = event.action_id
+        result = event.tool_result
+        view["tool_result"] = {
+            "success": result.success,
+            "tool_name": result.tool_name,
+            "structured": result.structured if isinstance(result.structured, dict) else None,
+        }
+    if isinstance(event, MessageEvent):
+        view["meta"] = event.meta if isinstance(event.meta, dict) else {}
+    if isinstance(event, StatusEvent):
+        view["detail"] = event.detail
+        transition = event.plan_verification_transition
+        view["plan_verification_transition"] = (
+            transition.model_dump(mode="json") if transition is not None else None
+        )
+    return view
+
+
+def _w39_freshness_boundary_seq(events: list[Event], *, before_seq: int | None = None) -> int:
+    """A6.3 §3.2 — seq of the most recent event that ended the prior result's currency.
+
+    **This is no longer a loop-side counterpart of the oracle's boundary — it is
+    the SAME predicate** (`disco.core.receipt_currency`, 2026-08-06z, GROUNDED
+    FEEDBACK constraint 2: *"one currency predicate, two consumers"*).
+
+    It previously counted three boundary kinds and deliberately skipped two the
+    oracle had (approved plan-predicate scope, trusted mutation receipt) on the
+    grounds that reproducing harness adjudication here would be the second
+    implementation A6.3 §3 forbids. That reasoning was right about the hazard and
+    wrong about the remedy: the answer is not for the memo to know less, it is
+    for neither side to own the rule. Both now import it.
+
+    Two gaps close, and neither was hypothetical. Skipping those two kinds let the
+    memo assert "nothing has changed since" across an epoch the grader had already
+    closed — a false assurance, which W-39's own contract forbids. And treating a
+    bare workspace-mutating ACTION as a boundary silenced the memo while the cap,
+    which resets only on a TRUSTED mutation receipt, kept counting: silent because
+    the answer looked stale, counted because the cap disagreed. That is the F47
+    shape, and it is the gap that actually fired.
+
+    Note the direction. The echo now goes stale LESS eagerly, which means it
+    speaks in exactly the window it is graded against. It does not thereby claim
+    more than it knows: the reminder text is a projection of this decision (see
+    `_W39_REMINDER_TEMPLATE`), and it now says what the record establishes — no
+    change OF RECORD since the earlier run — rather than the absolute "nothing has
+    changed" it used to assert.
+
+    The remaining conservatism is the ``window`` bound in
+    `_w39_shell_verify_reminder`, which is a scan limit, not a disagreement about
+    the world.
+    """
+    return latest_currency_boundary_seq(
+        (_currency_view(e) for e in events),
+        before_seq=before_seq,
+        failed_action_ids=_failed_action_ids(events),
+    )
+
+
+def _failed_action_ids(events: list[Event]) -> frozenset[str]:
+    """Ids of actions whose failure is ON THE RECORD.
+
+    The loop's half of the outcome map the oracle already builds
+    (`_thrash_checks.action_outcomes`). The shared currency owner needs it because
+    "did that write actually land?" is not answerable from the action event alone.
+
+    Positively-recorded failures ONLY. An action with no observation yet is
+    UNKNOWN, and unknown must not be read as "changed nothing" — that is the
+    false-assurance direction W-39 promises never to take.
+    """
+    return frozenset(
+        e.action_id
+        for e in events
+        if isinstance(e, ObservationEvent) and not e.tool_result.success and e.action_id
+    )
 
 
 def _w39_latest_mutation_seq(events: list[Event], *, before_seq: int | None = None) -> int:

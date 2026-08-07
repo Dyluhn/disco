@@ -13,6 +13,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from disco.core.receipt_currency import CurrencyBoundaries
 from disco.core.tool_fingerprint import tool_call_fingerprint
 
 from .. import failure_codes as fc
@@ -94,17 +95,21 @@ def _failed_action_signature(action: dict[str, Any], error_signature: str) -> st
 def progress_epoch_boundary(
     event: dict[str, Any], *, action_ids: frozenset[str] | None = None
 ) -> bool:
-    if approved_plan_predicate_scope(event) is not None:
-        return True
-    if trusted_mutation_receipt_outcome(event, action_ids=action_ids):
-        return True
-    if kind_of(event) != "message":
-        return False
-    if event.get("source") == "user":
-        return True
-    meta = event.get("meta")
-    blocking = meta.get("blocking") if isinstance(meta, dict) else None
-    return event.get("source") == "environment" and isinstance(blocking, str) and bool(blocking)
+    """Whether ONE event is a progress-epoch boundary.
+
+    2026-08-06z: delegates to the shared owner (`disco.core.receipt_currency`)
+    rather than re-deciding. Behaviour is unchanged — a fresh classifier per call
+    means the generation-CHANGE member cannot fire here, exactly as it could not
+    before, since that member needs the prior value and this is a single-event
+    predicate. Every production caller goes through `ProgressEpochs`, which keeps
+    one classifier across the stream and therefore does see it.
+    """
+    return (
+        CurrencyBoundaries(include_workspace_mutation=False).crossing(
+            event, action_ids=action_ids
+        )
+        is not None
+    )
 
 
 def action_outcomes(events: list[dict[str, Any]]) -> dict[str, tuple[bool, str, str]]:
@@ -314,7 +319,16 @@ def check_streak_thrash(
         for event in events
         if kind_of(event) == KIND_ACTION and action_id_of(event)
     )
-    streak, fingerprint, streak_seqs = longest_streak_fn(events, action_ids=known_action_ids)
+    # The shared currency owner needs to know which mutations are RECORDED as
+    # having failed — those changed nothing and must not end a prior result's
+    # currency. `outcomes` is already keyed by action id, so this is a
+    # projection, not a second walk of the log.
+    failed_action_ids = frozenset(
+        action_id for action_id, outcome in outcomes.items() if not outcome[0]
+    )
+    streak, fingerprint, streak_seqs = longest_streak_fn(
+        events, action_ids=known_action_ids, failed_action_ids=failed_action_ids
+    )
     if streak > limits["max_identical_action_repeats"]:
         return (
             shapes.repetition_red(
