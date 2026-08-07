@@ -12,11 +12,17 @@ classification of older frozen dossiers.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
+from disco.core.receipt_currency import (
+    CurrencyBoundaries,
+)
+from disco.core.receipt_currency import (
+    preview_generation_of as preview_generation_of,
+)
+
 from .. import failure_codes as fc
-from ..events import KIND_ACTION, KIND_OBSERVATION, kind_of, seq_of
+from ..events import KIND_ACTION, kind_of, seq_of
 from ._thrash_checks import (
     action_outcomes,
     build_passing_facts,
@@ -25,13 +31,14 @@ from ._thrash_checks import (
     check_streak_thrash,
     check_thrash_markers,
     check_tool_error_thrash,
-    progress_epoch_boundary,
+)
+from ._thrash_checks import (
+    progress_epoch_boundary as progress_epoch_boundary,  # re-export: tests + callers name it here
 )
 from ._thrash_helpers import approved_plan_predicate_scope
 from .schema import OracleResult, failing, passing, skipping
 
 _ORACLE = "ThrashOracle"
-_PREVIEW_GENERATION_RE = re.compile(r"^pv_[0-9a-f]{32}$")
 
 
 def _limits(scenario: dict[str, Any] | None) -> dict[str, int] | None:
@@ -68,49 +75,70 @@ def repair_spans(spans: Any) -> list[dict[str, Any]]:
     ]
 
 
-def preview_generation_of(event: dict[str, Any]) -> str | None:
-    """The preview generation a successful, typed preview receipt establishes."""
-    if kind_of(event) != KIND_OBSERVATION:
-        return None
-    result = event.get("tool_result") or {}
-    if result.get("success") is not True:
-        return None
-    structured = result.get("structured")
-    if not isinstance(structured, dict):
-        return None
-    generation = structured.get("generation")
-    if not isinstance(generation, str) or _PREVIEW_GENERATION_RE.fullmatch(generation) is None:
-        return None
-    if structured.get("projection_id") != generation:
-        return None
-    return generation
+# `preview_generation_of` is the re-export at the top of this module; its body
+# moved to `disco.core.receipt_currency` with the rest of the currency rules
+# (2026-08-06z, GROUNDED FEEDBACK constraint 2). Kept importable from here
+# because `tests/test_preview_generation_epoch.py` and frozen artifacts name it.
 
 
 class ProgressEpochs:
-    """Stateful progress-epoch boundaries: typed events AND authority replacement."""
+    """Stateful progress-epoch boundaries: typed events AND authority replacement.
+
+    Progress is not currency. This answers "has the run moved forward since that
+    FAILED call?" for `check_tool_error_thrash`, which skips successes outright,
+    so its boundary set is `PROGRESS_BOUNDARY_KINDS` — every currency rule EXCEPT
+    a bare workspace mutation. `test_receiptless_success_is_not_a_progress_
+    boundary` pins that exclusion: a hollow edit must not launder a repeated tool
+    error. Byte-identical in behaviour to the pre-2026-08-06z implementation; the
+    rules are no longer implemented here, they are the shared owner's.
+    """
 
     def __init__(self) -> None:
-        self._preview_generation: str | None = None
+        self._boundaries = CurrencyBoundaries(include_workspace_mutation=False)
 
     def crosses(self, event: dict[str, Any], *, action_ids: frozenset[str] | None = None) -> bool:
-        generation = preview_generation_of(event)
-        if generation is not None:
-            previous, self._preview_generation = self._preview_generation, generation
-            if previous is not None and previous != generation:
-                return True
-        return progress_epoch_boundary(event, action_ids=action_ids)
+        return self._boundaries.crossing(event, action_ids=action_ids) is not None
 
 
 def _longest_identical_streak(
-    events: list[dict[str, Any]], *, action_ids: frozenset[str]
+    events: list[dict[str, Any]],
+    *,
+    action_ids: frozenset[str],
+    failed_action_ids: frozenset[str] | None = None,
 ) -> tuple[int, str, list[int]]:
-    """Return the longest exact-action streak within one trusted progress epoch."""
+    """Return the longest exact-action streak that is still CURRENT.
+
+    2026-08-06z, GROUNDED FEEDBACK constraint 2 ("one currency predicate, two
+    consumers"): the window is the shared owner's
+    (`disco.core.receipt_currency`), the same one the loop's W-39 echo uses to
+    decide whether to hand an earlier answer back. This is the ONE permitted
+    oracle-adjudication change, and it is exactly the owner's clause *"the cap
+    must not count a re-verification made legitimate by intervening workspace
+    change"*: a workspace mutation now breaks the streak, where before only a
+    TRUSTED typed receipt did.
+
+    The direction matters and is stated as a refusal, not a requirement — a
+    mutation ends currency UNLESS its failure is on the record. A write proven to
+    have failed changed nothing and must not launder a repeat; a write whose
+    outcome is not yet known must not be read as having changed nothing either.
+
+    This is the exact-repeat class ONLY. The semantic-shell class keeps its
+    narrower per-language generation counter — three standing guard tests show a
+    documentation write must not launder a repeated script verification there,
+    and that class groups three different spellings of one script, so its notion
+    of relevance is genuinely finer than "the workspace changed".
+
+    Replay-proven over the preserved wave-1 and 06v corpora (38 cells):
+    ZERO classification flips, with all five reds reproduced live — including the
+    97601 negative control, which stays red because nothing in fact changed
+    between its three repeats.
+    """
     from ._thrash_checks import _fingerprint
 
     best_count, best_fp, best_seqs = 0, "", []
     current_fp, current_seqs = "", []
     approved_scope: tuple[str, ...] | None = None
-    epochs = ProgressEpochs()
+    boundaries = CurrencyBoundaries()
     for event in events:
         next_scope = approved_plan_predicate_scope(event)
         if next_scope is not None:
@@ -118,7 +146,14 @@ def _longest_identical_streak(
                 current_fp, current_seqs = "", []
                 approved_scope = next_scope
             continue
-        if epochs.crosses(event, action_ids=action_ids):
+        if (
+            boundaries.crossing(
+                event,
+                action_ids=action_ids,
+                failed_action_ids=failed_action_ids,
+            )
+            is not None
+        ):
             current_fp, current_seqs = "", []
             continue
         if kind_of(event) != KIND_ACTION:

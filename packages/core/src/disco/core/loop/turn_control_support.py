@@ -64,23 +64,72 @@ _IDENTICAL_PLAN_NUDGE_TEXT = (
 
 _SERVE_HANDOFF_DIAGNOSTIC = "serve_handoff_recorded"
 _SERVE_DUPLICATE_DIAGNOSTIC = "serve_duplicate_ignored"
-_SERVE_HANDOFF_GUIDANCE = (
-    "<system-reminder>\n"
-    "Handoff recorded. `serve` does not complete the run. Do not serve this "
-    "artifact again. If verification and plan work are complete, call `finish` "
-    "now; otherwise perform the remaining work, then call `finish`.\n"
-    "</system-reminder>"
-)
-_SERVE_DUPLICATE_GUIDANCE = (
-    "<system-reminder>\n"
-    "This artifact was already handed off, so the duplicate `serve` call was "
-    "ignored. Do not serve it again. If verification and plan work are complete, "
-    "call `finish` now; otherwise perform the remaining work, then call `finish`.\n"
-    "</system-reminder>"
-)
 
 
-def _serve_duplicate_guidance(repeats: int) -> str:
+def _serve_next_move(events: list[Event]) -> str:
+    """The ONE next move after a handoff, PROJECTED from the loop's own state.
+
+    GROUNDED FEEDBACK constraint 3 (the projection rule), and this seam is the
+    owner's named canonical counter-example. Both serve guidances used to end:
+
+        "If verification and plan work are complete, call `finish` now;
+         otherwise perform the remaining work, then call `finish`."
+
+    That sentence hands the done-determination back to the agent — the one
+    determination the agent is worst placed to make and the platform already
+    holds. `_plan_done_and_verified` sits forty lines below and answers it from
+    the durable log; `effective_plan_progress` is the single source of truth for
+    per-step completion. The message asked the model to re-derive, from memory,
+    a fact the host had computed. The 97903 cell took that fork into its F47 red.
+
+    So the fork is gone. This returns exactly one move, drawn from the SAME
+    projection the loop grades with, or says plainly that nothing is outstanding.
+    Message and enforcement cannot drift because they read one source.
+    """
+    from ..view import effective_plan_progress
+
+    plan, states = effective_plan_progress(events)
+    if plan is not None and plan.steps:
+        pending = [
+            index for index in range(1, len(plan.steps) + 1) if states.get(index) != "done"
+        ]
+        if pending:
+            index = pending[0]
+            title = (plan.steps[index - 1].title or "").strip()
+            named = f" ({title})" if title else ""
+            return (
+                f"Next move: plan step {index}{named} is not marked done. Do that "
+                "step, then call `finish`."
+            )
+    if not _last_verify_web_app_passed(events):
+        if plan is None or not plan.steps:
+            return (
+                "Next move: call `finish`. The record shows no plan step "
+                "outstanding and no passing `verify_web_app` on file — if this "
+                "deliverable needs one, run it first."
+            )
+        return (
+            "Next move: every plan step is marked done, but there is no passing "
+            "`verify_web_app` result on record. Run that verification, then call "
+            "`finish`."
+        )
+    return (
+        "Next move: call `finish`. Every plan step is marked done and the latest "
+        "`verify_web_app` passed."
+    )
+
+
+def _serve_handoff_guidance(events: list[Event]) -> str:
+    """Handoff-recorded reminder. Derived at the moment of use (constraint 1)."""
+    return (
+        "<system-reminder>\n"
+        "Handoff recorded. `serve` does not complete the run. Do not serve this "
+        f"artifact again.\n{_serve_next_move(events)}\n"
+        "</system-reminder>"
+    )
+
+
+def _serve_duplicate_guidance(repeats: int, events: list[Event]) -> str:
     """Duplicate-serve guidance that ESCALATES instead of repeating verbatim.
 
     Counted-promotion failure 2026-07-27 (`p4_ff_static_continue` seed 600002,
@@ -97,18 +146,26 @@ def _serve_duplicate_guidance(repeats: int) -> str:
 
     Deliberately NOT a threshold change: the actionless cap is untouched, and a
     genuinely stuck agent still lands in the same valve at the same count.
+
+    2026-08-06z: the escalation used to offer "exactly two moves" — finish IF
+    complete, or do remaining work — which is the same delegated fork the
+    first-fire text carried, restated more urgently. Both branches now project
+    the ONE move `_serve_next_move` derives from the plan/verification record.
+    An escalation that repeats the platform's uncertainty is not an escalation.
     """
     if repeats <= 1:
-        return _SERVE_DUPLICATE_GUIDANCE
+        return (
+            "<system-reminder>\n"
+            "This artifact was already handed off, so the duplicate `serve` call "
+            f"was ignored. Do not serve it again.\n{_serve_next_move(events)}\n"
+            "</system-reminder>"
+        )
     return (
         "<system-reminder>\n"
         f"STOP — `serve` has now been ignored as a duplicate {repeats} times. "
         "The handoff is already recorded; serving cannot change anything and is "
         "not counted as work, so each attempt spends one turn toward the "
-        "no-progress limit that ENDS this run.\n"
-        "There are exactly two moves left: call `finish` if the plan and its "
-        "verification are complete, or perform a concrete remaining step "
-        "(file_write / file_edit / shell) and then call `finish`. "
+        f"no-progress limit that ENDS this run.\n{_serve_next_move(events)}\n"
         "Do not call `serve` again.\n"
         "</system-reminder>"
     )
@@ -604,7 +661,9 @@ async def _record_serve_handoff(  # noqa: ANN001
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_serve_duplicate_guidance(repeats)),
+                message=LLMMessage(
+                    role="user", content=_serve_duplicate_guidance(repeats, events)
+                ),
                 meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC, "duplicate_serves": repeats},
             )
         )
@@ -644,7 +703,7 @@ async def _record_serve_handoff(  # noqa: ANN001
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_SERVE_HANDOFF_GUIDANCE),
+                message=LLMMessage(role="user", content=_serve_handoff_guidance(events)),
                 meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC},
             )
         )
