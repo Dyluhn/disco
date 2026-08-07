@@ -329,12 +329,20 @@ def _plan_nudge(repeats: int = 1) -> str:
     byte-identical to the historical constant on purpose: event logs written
     before 2026-08-07b carry that exact content and the nudge counters still
     recognise those events by it.
+
+    2026-08-07i: the count the caller passes is now whole-RUN rather than
+    per-segment, so the wording says "run". It previously read "of this
+    segment", which was accurate for a counter that reset at every re-entry
+    into planning — and that reset is precisely what let this surface render
+    the identical body twice in one run (`p4_ff_node_restart@99603`, seqs
+    11/86). A segment-scoped count cannot satisfy a constraint scoped to the
+    run.
     """
     prefix = (
         ""
         if repeats <= 1
         else (
-            f"This is planning nudge {repeats} of this segment — the previous "
+            f"This is planning nudge {repeats} in this run — the previous "
             f"{repeats - 1} did not produce a plan, and a prose-only reply "
             "cannot advance the run.\n"
         )
