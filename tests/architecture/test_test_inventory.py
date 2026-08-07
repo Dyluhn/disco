@@ -386,8 +386,27 @@ class TestMappingStatic:
             # text and the `repeats <= 1` branch of each ordinal seam must not move
             # at all.
             # `python_test_file_count` advances 825 -> 826 for the one new file.
-            "python_test_file_count": 826,
-            "python_static_test_id_count": 9996,
+            #
+            # 10000 from PKG-19-SEAL-AND-DRAW: +4 static ids against +4 collected
+            # node ids — nothing parametrized, so the two move together and there
+            # is no gap to explain. ONE new file,
+            # `packages/core/tests/test_w39_shell_escalation.py`, the guard for the
+            # 2026-08-07n repair this seal carries: the answered-question notice
+            # and the repeat cap are ONE STEP OUT OF PHASE, so occurrence 2 is
+            # never warned and the notice's single shot lands immediately before
+            # the occurrence `allowed=2` already fails the run on. That shot cannot
+            # be moved earlier, so it was made to CARRY — the shell/script notice
+            # is now repetition-aware and names the consequence, as the plan class
+            # has since F47.
+            # Three of the four are red on `f0a0fb29` (the old text names no
+            # consequence, renders no count, and is byte-static across firings once
+            # the moving `(step N)` back-pointer is normalized); the fourth is an
+            # invariance guard that must be green on BOTH trees, because the repair
+            # is additive rendering and the notice must stay advisory rather than
+            # become a suppressor.
+            # `python_test_file_count` advances 826 -> 827 for the one new file.
+            "python_test_file_count": 827,
+            "python_static_test_id_count": 10000,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -702,7 +721,10 @@ class TestCollectedCounts:
             # 10428 from PKG-19-CONSTRAINT4-REACH: +13 under `packages`, the whole
             # of that seal's delta — one new file,
             # `test_f55_f56_weakening_repeats_and_ordinals.py`, and no harness id.
-            "packages": 10428,
+            # 10432 from PKG-19-SEAL-AND-DRAW: +4 under `packages`, the whole of
+            # this seal's delta — one new file,
+            # `test_w39_shell_escalation.py`, and no harness id.
+            "packages": 10432,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -758,12 +780,20 @@ class TestCollectedCounts:
             # only the TEXT a surface renders on its repeat path and every oracle
             # that could care keys on the durable `blocking` label, which did not
             # move.
+            # 1320 UNCHANGED at PKG-19-SEAL-AND-DRAW for the same reason: all 4 of
+            # this seal's ids are product bytes under `packages`. The repair is a
+            # MESSAGE repair at two `disco.core.loop` rendering seams with the
+            # shared vocabulary moved to one owner; no oracle sees it.
+            # `max_identical_action_repeats` is still 2 and
+            # `_BOOKKEEPING_STREAK_NUDGE_AT` is still 3 — the cap the notice now
+            # names is the harness scenario's, and the notice deliberately quotes
+            # no number so product prose cannot couple to a grading threshold.
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12143 == sum(expected.values())
+        assert collected["total"] == 12147 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -779,7 +809,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12143}
+        assert result == {"collected_total": 12147}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -798,9 +828,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9996,
+            "python_static_ids": 10000,
             "typescript_static_ids": 1203,
-            "collected_total": 12143,
+            "collected_total": 12147,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

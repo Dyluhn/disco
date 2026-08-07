@@ -48,6 +48,11 @@ from .dedup import (
     _w39_reminder_emitted_after,
 )
 
+# 2026-08-07n: the consequence sentence and the identical-call counter moved to
+# `dedup_notice_common` so the shell/script class can share them. ONE owner, not
+# a copy — a second copy of a message a test then attests is the F58 defect.
+from .dedup_notice_common import _W39_CAP_CONSEQUENCE, _w39_identical_call_count
+
 # Distinct sentinel, for the same reason the script class got one: the anti-spam
 # scan is a substring match, and a bracketed suffix cannot collide with
 # `[W-39 verify-dedup]`.
@@ -56,34 +61,21 @@ _W39_PLAN_REMINDER_SENTINEL = "[W-39 verify-dedup:plan]"
 # Repetition-aware by construction (GROUNDED FEEDBACK constraint 4): the count is
 # in the template, so this surface cannot emit the same bytes twice in one run
 # without the run's own identical-call count having failed to advance.
+# 2026-08-07n: the consequence sentence is now the SHARED owner in `dedup`
+# (`_W39_CAP_CONSEQUENCE`), because the shell/script class says the same thing
+# and two copies of one sentence is the F58 pattern. The RENDERED BYTES of this
+# template are unchanged — this is a re-composition, not a message change, and
+# the plan class stays exactly as ratified under F47.
 _W39_PLAN_REMINDER_TEMPLATE = (
     "<system-reminder>\n"
     "{sentinel} You have already made this exact `{tool}` call {count} times in "
     "this run — the first, at step {step}, SUCCEEDED and this run's record shows "
     "no change since then.{result}\n"
     "Repeating it asks a question you already have the answer to, and it is "
-    "counted: identical repeats are capped, and the next one is held against the "
-    "run. Act on the state above, or do the next real step.\n"
+    "counted: " + _W39_CAP_CONSEQUENCE + ". Act on the state above, or do the "
+    "next real step.\n"
     "</system-reminder>"
 )
-
-
-def _w39_identical_call_count(events: list[Event], fingerprint: str) -> int:
-    """How many times this exact call has already been issued, plus this one.
-
-    Keyed on `disco.core.tool_fingerprint`, which is the SAME owner
-    `ThrashOracle._longest_identical_streak` counts SHAPE_IDENTICAL_STREAK with, so
-    the number the agent is shown and the number it is graded on cannot disagree
-    (A6.3 §3.1). Read from the durable log rather than an instance counter, so it
-    survives a restart or condensation as the run's own evidence does.
-    """
-    return 1 + sum(
-        1
-        for e in events
-        if isinstance(e, ActionEvent)
-        and e.tool_call is not None
-        and tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) == fingerprint
-    )
 
 
 def _w39_plan_progress_reminder(
