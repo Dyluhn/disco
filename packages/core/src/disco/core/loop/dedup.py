@@ -34,6 +34,11 @@ from ..events import (
     ObservationEvent,
     WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
+from ..script_identity import (
+    SHELL_TOOLS,
+    describe_script_fingerprint,
+    foreground_script_fingerprints,
+)
 from ..tool_fingerprint import tool_call_fingerprint
 from .resource_context import (  # noqa: F401 — compatibility facade bindings
     canonical_workspace_identifier,
@@ -529,9 +534,26 @@ def _f9_dedupable_read(
 # noting it already passed, then the command executes normally. The model
 # decides whether to proceed.
 #
-# Anti-spam: exactly one reminder per passed-and-unmutated streak for a given
-# command — once reminded, we do not remind again until a workspace mutation
-# resets the streak (a fresh write means re-verifying is legit again).
+# Anti-spam: one reminder per repetition OCCURRENCE. Once reminded about a given
+# prior run, we do not repeat that advice — but if the model repeats AGAIN after
+# being told, the repeat it just made is a new occurrence and the advisory
+# re-arms once more. A workspace mutation resets the whole streak regardless (a
+# fresh write means re-verifying is legit again).
+#
+# This read "exactly one reminder per passed-and-unmutated streak" until
+# 2026-08-06x, and that window was the F47 defect: the streak runs from the last
+# mutation, while `ThrashOracle` counts CONSECUTIVE identical actions. When the
+# two diverge the counted group can run silent — `p4_ff_node_restart` @97652 spent
+# its one shot at seq 261 and was then faulted for the group at 275/284/287,
+# having been told nothing inside it. Pivoting on the occurrence keeps the
+# advisory bounded while guaranteeing a notice precedes the repeat that trips
+# the cap.
+#
+# TWO classes are covered, not one (F47). Byte-identical calls
+# (`tool_call_fingerprint`), and re-runs of the same SCRIPT under a different
+# command spelling (`disco.core.script_identity`) — the class `ThrashOracle`
+# grades `repeated_semantic_shell_verification` on, which this memo could not
+# see until the identity owner moved down into `disco.core`.
 #
 # Mutation tracking is PATH-AGNOSTIC here (a shell command has no single
 # `path` arg): ANY mutating tool call after the prior successful run resets
@@ -560,7 +582,9 @@ def _f9_dedupable_read(
 # Both carry the `command` arg (see ShellTool / ShellExecTool in
 # packages/tools/.../builtin). code_exec is intentionally excluded — re-running
 # code is more often a deliberate re-execution and it uses a different arg key.
-_W39_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+# Bound to the shared owner (2026-08-06x, F47) rather than re-declared, so the
+# memo and the oracle cannot disagree about which tools carry a shell command.
+_W39_SHELL_TOOLS = SHELL_TOOLS
 
 # Window of recent shell calls to scan back through (mirrors _F9_WINDOW_SIZE):
 # a re-verify a model loops on is always recent, and a bounded window keeps
@@ -570,6 +594,12 @@ _W39_WINDOW_SIZE = 8
 # Stable marker so the anti-spam scan can recognize a prior W-39 reminder in
 # the event log (and so logs/tests have a single source of truth).
 _W39_REMINDER_SENTINEL = "[W-39 verify-dedup]"
+
+# F47 (2026-08-06x) — the sentinel for the SCRIPT-identity class. Deliberately a
+# distinct string rather than a suffix on the same one: the anti-spam scan is a
+# substring match, and `"[W-39 verify-dedup]" in "[W-39 verify-dedup:script]…"`
+# is False because of the bracket, so the two classes cannot suppress each other.
+_W39_SCRIPT_REMINDER_SENTINEL = "[W-39 verify-dedup:script]"
 
 # Length cap on the command echoed into the reminder so a giant heredoc/script
 # doesn't bloat it — the command is identifiable by its prefix. The SAME
@@ -591,6 +621,20 @@ _W39_REMINDER_TEMPLATE = (
     "passed, and nothing has changed since. Re-run it "
     "only if you have changed something relevant — otherwise act on the "
     "result you already have instead of re-verifying.{result}\n"
+    "</system-reminder>"
+)
+
+# F47 (2026-08-06x) — the SCRIPT-class reminder. The command the agent is about
+# to issue is NOT byte-identical to the one it repeats, so the text names the
+# SCRIPT (the question) and the earlier command (what it actually ran) rather
+# than pretending the two commands were the same. Same advisory posture: the
+# judgment stays with the model and the command still executes.
+_W39_SCRIPT_REMINDER_TEMPLATE = (
+    "<system-reminder>\n"
+    "{sentinel} You already ran `{script}` at step {step} (as `{command}`) and it "
+    "passed, and nothing has changed since. Spelling the command differently asks "
+    "the same question. Re-run it only if you have changed something relevant — "
+    "otherwise act on the result you already have instead of re-verifying.{result}\n"
     "</system-reminder>"
 )
 
@@ -696,22 +740,117 @@ def _w39_latest_mutation_seq(events: list[Event], *, before_seq: int | None = No
     return latest
 
 
-def _w39_reminder_emitted_after(events: list[Event], short_command: str, after_seq: int) -> bool:
-    """W-39 anti-spam — has a W-39 reminder for `short_command` already been
-    emitted with seq > after_seq? Keeps the advisory one-shot per
-    passed-and-unmutated streak (no spam if the model loops 3+ times)."""
+def _w39_reminder_emitted_after(
+    events: list[Event], sentinel: str, key: str, after_seq: int
+) -> bool:
+    """W-39 anti-spam — has a reminder of THIS class naming `key` already been
+    emitted with seq > after_seq?
+
+    **The pivot `after_seq` is the OCCURRENCE being pointed at, not the freshness
+    streak start (F47, 2026-08-06x).** The two are different windows and the gap
+    between them is what killed `p4_ff_node_restart` @97652: the streak start was
+    a workspace mutation far upstream, the memo spent its one shot at seq 261,
+    and the streak the oracle actually counted — 275/284/287 — ran silent, so the
+    run was faulted for ignoring advice the product never gave inside the group.
+
+    Pivoting on the occurrence keeps the advisory one-shot per repetition (no
+    spam when the model loops) while re-arming it whenever the model repeats
+    AGAIN after being told: the repeat it just made is a new occurrence, later
+    than the last reminder, so the guard opens exactly once more.
+    """
     for e in events:
         if (e.seq or 0) <= after_seq:
             continue
         if isinstance(e, MessageEvent) and e.message is not None:
             content = e.message.content
-            if (
-                isinstance(content, str)
-                and _W39_REMINDER_SENTINEL in content
-                and short_command in content
-            ):
+            if isinstance(content, str) and sentinel in content and key in content:
                 return True
     return False
+
+
+def _w39_candidate_command(e: ActionEvent, *, exclude_verify_probe: bool) -> str | None:
+    """The shell command of a prior action, or None if it is not a candidate.
+
+    ``exclude_verify_probe`` mirrors the oracle's `_script_command`, which drops
+    `verify_probe` actions from the semantic-shell group. The memo must group the
+    same population or the coverage duty is not met. The EXACT-call class carries
+    no such exclusion in the oracle (`_longest_identical_streak` counts every
+    action), so it passes False and stays byte-identical to pre-F47 behaviour.
+    """
+    if e.tool_call is None or e.tool_call.tool_name not in _W39_SHELL_TOOLS:
+        return None
+    if exclude_verify_probe:
+        meta = getattr(e, "meta", None)
+        if isinstance(meta, dict) and meta.get("verify_probe"):
+            return None
+    command = e.tool_call.arguments.get("command")
+    return command if isinstance(command, str) and command else None
+
+
+def _w39_matched_class(
+    e: ActionEvent,
+    *,
+    current_fingerprint: str,
+    current_script_fingerprints: frozenset[str],
+    short_command: str,
+) -> tuple[str, str] | None:
+    """Which answered-question class this prior call shares with the current one.
+
+    Returns ``(sentinel, anti_spam_key)``, or None. The two classes are exactly
+    the two `ThrashOracle` counts answered-question repetitions on, and both
+    resolve their identity through `disco.core` so the memo and the oracle cannot
+    group differently (A6.3 §3.1, extended to the second class at F47):
+
+    * **exact call** — `tool_call_fingerprint`. Checked first, so whenever the
+      pre-F47 memo would have fired, this one fires with the same text.
+    * **same script** — `foreground_script_fingerprints`. The class that faulted
+      `diag_script_run` @97903, where one script ran under three spellings and
+      the memo, keyed only on byte-identical calls, never saw it.
+    """
+    if e.tool_call is None:
+        return None
+    exact = _w39_candidate_command(e, exclude_verify_probe=False)
+    if exact is not None and (
+        tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) == current_fingerprint
+    ):
+        return (_W39_REMINDER_SENTINEL, short_command)
+    if not current_script_fingerprints:
+        return None
+    candidate = _w39_candidate_command(e, exclude_verify_probe=True)
+    if candidate is None:
+        return None
+    shared = current_script_fingerprints & foreground_script_fingerprints(candidate)
+    if not shared:
+        return None
+    return (_W39_SCRIPT_REMINDER_SENTINEL, describe_script_fingerprint(sorted(shared)[0]))
+
+
+def _w39_reminder_text(
+    e: ActionEvent,
+    events: list[Event],
+    *,
+    sentinel: str,
+    key: str,
+    prior_seq: int,
+    short_command: str,
+) -> str:
+    prior_result = _w39_prior_result_excerpt(events, e.id)
+    result = _W39_RESULT_BLOCK.format(result=prior_result) if prior_result else ""
+    if sentinel == _W39_REMINDER_SENTINEL:
+        return _W39_REMINDER_TEMPLATE.format(
+            sentinel=sentinel,
+            command=short_command,
+            step=prior_seq,
+            result=result,
+        )
+    prior_command = _w39_candidate_command(e, exclude_verify_probe=True) or ""
+    return _W39_SCRIPT_REMINDER_TEMPLATE.format(
+        sentinel=sentinel,
+        script=key,
+        command=_w39_short_command(prior_command),
+        step=prior_seq,
+        result=result,
+    )
 
 
 def _w39_validate_candidate(
@@ -720,28 +859,35 @@ def _w39_validate_candidate(
     current_fingerprint: str,
     streak_start_seq: int,
     short_command: str,
-) -> tuple[bool, int]:
-    """Validate a prior shell call; return (valid, prior_seq).
+    current_script_fingerprints: frozenset[str] = frozenset(),
+) -> tuple[bool, int, str, str]:
+    """Validate a prior shell call; return (valid, prior_seq, sentinel, key).
 
-    Identity is `tool_call_fingerprint`, the SHARED owner the `ThrashOracle`
-    grades runs with (A6.3 §3.1, binding). It replaced a private `tool_name` +
-    `arguments ==` comparison, which is a *second* notion of "the same call":
-    `==` treats `{"n": 1}` and `{"n": 1.0}` as equal where the canonical
-    rendering the oracle uses does not, and it cannot compare values that are
-    not directly comparable. A memo firing on a different equivalence class than
-    the oracle that grades the run is worse than no memo — the disagreement
-    would stay invisible until a canary fired on a class the memo never saw.
+    Identity comes from the SHARED owners the `ThrashOracle` grades runs with
+    (A6.3 §3.1, binding): `disco.core.tool_fingerprint` for the exact-call class
+    and `disco.core.script_identity` for the script class. Neither is
+    reimplemented here. A memo firing on a different equivalence class than the
+    oracle that grades the run is worse than no memo — the disagreement stays
+    invisible until a canary fires on a class the memo never saw, which is
+    precisely what 2026-08-06v measured.
     """
-    if tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) != current_fingerprint:
-        return (False, 0)
+    matched = _w39_matched_class(
+        e,
+        current_fingerprint=current_fingerprint,
+        current_script_fingerprints=current_script_fingerprints,
+        short_command=short_command,
+    )
+    if matched is None:
+        return (False, 0, "", "")
+    sentinel, key = matched
     if not _f9_has_successful_observation(events, e.id):
-        return (False, 0)
+        return (False, 0, "", "")
     prior_seq = e.seq or 0
     if streak_start_seq >= prior_seq:
-        return (False, 0)
-    if _w39_reminder_emitted_after(events, short_command, streak_start_seq):
-        return (False, 0)
-    return (True, prior_seq)
+        return (False, 0, "", "")
+    if _w39_reminder_emitted_after(events, sentinel, key, prior_seq):
+        return (False, 0, "", "")
+    return (True, prior_seq, sentinel, key)
 
 
 def _w39_shell_verify_reminder(
@@ -752,16 +898,29 @@ def _w39_shell_verify_reminder(
     window: int = _W39_WINDOW_SIZE,
 ) -> tuple[bool, int, str]:
     """W-39 — ADVISORY (never skip). Return ``(should_remind, prior_seq,
-    reminder_text)`` when the current shell call is byte-identical to a recent
-    SUCCESSFUL shell call AND no workspace mutation has happened since AND we
-    have not already reminded for this command in the current streak.
+    reminder_text)`` when the current shell call repeats a recent SUCCESSFUL
+    shell call — byte-identically, or by re-running the same script under a
+    different spelling — AND no workspace mutation has happened since AND we have
+    not already reminded for that occurrence.
 
     Pure function over ``events`` (the CURRENT action is ``events[-1]``; the
-    walk scans ``events[:-1]``). The caller (assist-gated) emits the reminder
-    MessageEvent and then executes the command normally — NOTHING is skipped.
+    walk scans ``events[:-1]``). The caller emits the reminder MessageEvent and
+    then executes the command normally — NOTHING is skipped.
 
-    Returns ``(False, 0, "")`` when no reminder should fire (not a shell tool,
-    no identical prior success, a mutation since, or already reminded).
+    **Bounded conservatism, stated rather than hidden.** Two things make this
+    predicate narrower than the oracle's counter, and both fail toward silence
+    rather than toward a false assurance:
+
+    * the freshness boundary resets on ANY workspace mutation, where the oracle's
+      semantic group resets only on a mutation of the script's own language
+      family;
+    * the walk gives up after ``window`` shell calls, where the oracle scans the
+      whole run.
+
+    So the memo can miss a repeat the oracle counts. It can never claim "nothing
+    has changed" when something has.
+
+    Returns ``(False, 0, "")`` when no reminder should fire.
     """
     if current_tool not in _W39_SHELL_TOOLS or not isinstance(current_args, dict):
         return (False, 0, "")
@@ -773,6 +932,7 @@ def _w39_shell_verify_reminder(
     streak_start_seq = _w39_freshness_boundary_seq(prior_events)
     short_command = _w39_short_command(command)
     current_fingerprint = tool_call_fingerprint(current_tool, current_args)
+    current_script_fingerprints = foreground_script_fingerprints(command)
     shell_calls_seen = 0
     for e in reversed(prior_events):
         if not isinstance(e, ActionEvent) or e.tool_call is None:
@@ -782,17 +942,26 @@ def _w39_shell_verify_reminder(
             shell_calls_seen += 1
             if shell_calls_seen > window:
                 break  # window exhausted — give up (mirrors F9 eviction)
-        valid, prior_seq = _w39_validate_candidate(
-            e, events, current_fingerprint, streak_start_seq, short_command
+        valid, prior_seq, sentinel, key = _w39_validate_candidate(
+            e,
+            events,
+            current_fingerprint,
+            streak_start_seq,
+            short_command,
+            current_script_fingerprints,
         )
         if not valid:
             continue
-        prior_result = _w39_prior_result_excerpt(events, e.id)
-        reminder = _W39_REMINDER_TEMPLATE.format(
-            sentinel=_W39_REMINDER_SENTINEL,
-            command=short_command,
-            step=prior_seq,
-            result=_W39_RESULT_BLOCK.format(result=prior_result) if prior_result else "",
+        return (
+            True,
+            prior_seq,
+            _w39_reminder_text(
+                e,
+                events,
+                sentinel=sentinel,
+                key=key,
+                prior_seq=prior_seq,
+                short_command=short_command,
+            ),
         )
-        return (True, prior_seq, reminder)
     return (False, 0, "")
