@@ -8,6 +8,7 @@ from ..security import RiskAssessment
 from .engine_contracts import (
     _FORCE_SUBMIT_DIAGNOSTIC,
     _PLAN_NUDGE_DIAGNOSTIC,
+    _PLAN_NUDGE,
     _PLANNING_TOOL_REFUSAL_ESCALATE_AT,
     _REVISION_FORCE_SUBMIT_K,
     _WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC,
@@ -178,7 +179,24 @@ async def _nudge_planner(loop: _LoopFacet) -> Disp:
         nudge = _workflow_router_plan_nudge(repeats)
     else:
         diagnostic = _PLAN_NUDGE_DIAGNOSTIC
-        repeats = signals.plan_nudges_since_current_planning(events) + 1
+        # Constraint 4 (2026-08-07i): the RENDER count must be durable and must
+        # never reset. `plan_nudges_since_current_planning` is a segment window
+        # by design — it restarts at each `planning` marker and hard-returns 0
+        # the moment a PlanEvent, a submit_plan action or `plan_approved` lands
+        # — so a run that re-enters planning renders "nudge 1" again. That is
+        # exactly what `p4_ff_node_restart@99603` did at seqs 11 and 86: two
+        # byte-identical nudges, the second after the run had cycled back
+        # through planning. Count the WHOLE durable log, symmetric with the
+        # router branch above, using the module's existing label-first identity
+        # test so pre-2026-08-07b events (no label) still count by content.
+        #
+        # The segment signal is deliberately left untouched: the gate at
+        # `_maybe_force_submit_prose` genuinely wants a window, and widening it
+        # there would change when force-submit fires. Only the rendered count
+        # moves here.
+        from ._signals_planning import _is_plan_nudge_event
+
+        repeats = 1 + sum(1 for event in events if _is_plan_nudge_event(event, _PLAN_NUDGE))
         nudge = _plan_nudge(repeats)
     await loop._emit(
         MessageEvent(

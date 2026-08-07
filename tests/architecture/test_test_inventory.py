@@ -353,8 +353,24 @@ class TestMappingStatic:
             # two sides share an identity OWNER while the notice remained
             # unreachable for every non-shell tool. `python_test_file_count`
             # advances 823 -> 824 for the one new file.
-            "python_test_file_count": 824,
-            "python_static_test_id_count": 9965,
+            #
+            # 9983 from PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: +18 static ids against
+            # +18 collected node ids — nothing parametrized this time, so the two
+            # move together and there is no gap to explain. ONE new file,
+            # `packages/core/tests/test_f53_constraint4_confirmed_repeats.py`, the
+            # regression evidence for the four repeats CONFIRMED on live cells at
+            # 2026-08-07h: `emit_plan_verifier_failure_notice` (twice, in two
+            # different cells), `_plan_nudge` (whose count reset on every re-entry
+            # into planning), `_blocked_prompt` (a pure function of its arguments),
+            # and F53's cross-seam leak, where a REPAIRED surface's authored text
+            # repeated byte-identically by riding an unrepaired rendering seam.
+            # Twelve of the eighteen are red on `2aa67140`; the other six are
+            # invariance guards that must be green on BOTH trees, because the
+            # first firing of every repaired surface is byte-identical to the
+            # pre-repair text and `_PLAN_NUDGE` must not move at all.
+            # `python_test_file_count` advances 824 -> 825 for the one new file.
+            "python_test_file_count": 825,
+            "python_static_test_id_count": 9983,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -663,7 +679,10 @@ class TestCollectedCounts:
             # are one parametrized case) and 6 extending
             # `test_f47_answered_question_notice.py` with the plan-tracking notice
             # class. The other 3 of this seal's 24 land under `harness` below.
-            "packages": 10397,
+            # 10415 from PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: +18 under `packages`,
+            # the whole of that seal's delta — one new file,
+            # `test_f53_constraint4_confirmed_repeats.py`, and no harness id.
+            "packages": 10415,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -705,12 +724,19 @@ class TestCollectedCounts:
             # that premise, one ratchets the covered classes, one declares the
             # residue the oracle counts but no notice reaches.
             "harness": 1320,
+            # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
+            # seal's ids are product bytes under `packages`. The repair is at four
+            # `disco.core.loop` emitting seams and the oracles were deliberately not
+            # touched — `_thrash_recovery._validate_blocked_meta` reads named keys
+            # rather than an exact key set, so the durable `blocked_guidance_fp`
+            # added to the landing meta does not move its verdict and needs no
+            # oracle change to stay true.
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12112 == sum(expected.values())
+        assert collected["total"] == 12130 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -726,7 +752,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12112}
+        assert result == {"collected_total": 12130}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -745,9 +771,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9965,
+            "python_static_ids": 9983,
             "typescript_static_ids": 1203,
-            "collected_total": 12112,
+            "collected_total": 12130,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

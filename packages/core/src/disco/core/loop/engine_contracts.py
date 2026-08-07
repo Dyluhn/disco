@@ -322,6 +322,19 @@ _PLAN_NUDGE_DIAGNOSTIC = "plan_nudge"
 _WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC = "workflow_router_plan_nudge"
 
 
+# 2026-08-07j — the count `_plan_nudge` receives is now whole-RUN rather than
+# per-segment, so its wording says "run". It previously read "of this segment",
+# which was accurate for a counter that reset at every re-entry into planning —
+# and that reset is precisely what let this surface render the identical body
+# twice in one run (`p4_ff_node_restart@99603`, seqs 11/86). A segment-scoped
+# count cannot satisfy a constraint scoped to the run. The caller
+# (`planning_gates._nudge_planner`) owns the fix; this renderer only had to
+# stop describing a scope it no longer receives.
+#
+# Written as a comment rather than in the docstring deliberately: the budget
+# gate counts multiline-string content as logical source and this module sits
+# at 697 of its 700-line cap, so design narration lives in `#` blocks here —
+# which is already this file's dominant idiom (see the C6 and HS-03 blocks).
 def _plan_nudge(repeats: int = 1) -> str:
     """The planning-mode nudge, REPETITION-AWARE (constraint 4).
 
@@ -334,7 +347,7 @@ def _plan_nudge(repeats: int = 1) -> str:
         ""
         if repeats <= 1
         else (
-            f"This is planning nudge {repeats} of this segment — the previous "
+            f"This is planning nudge {repeats} in this run — the previous "
             f"{repeats - 1} did not produce a plan, and a prose-only reply "
             "cannot advance the run.\n"
         )

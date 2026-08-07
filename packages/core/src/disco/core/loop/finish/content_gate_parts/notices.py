@@ -203,6 +203,14 @@ async def emit_plan_verifier_failure_notice(
     failure: PlanVerifierFailure,
     failed_results: list[Any],
 ) -> None:
+    # Constraint 4 (2026-08-07i). This notice carried the `blocking` label its
+    # three siblings in this module count on, and did not count. It fired
+    # byte-identically twice in TWO different cells of the 07h corpus
+    # (`p4_ff_react_steer@99201` seqs 114/131, `p4_ff_python_cancel_recovery@99704`
+    # seqs 71/74): a failing verifier re-run against an unchanged plan revision
+    # renders an unchanged body BY CONSTRUCTION, so only a count breaks the tie.
+    # The module's own durable helper fits — no second mechanism is introduced.
+    repeats = await _notice_repeat(loop, "plan_verifier_failed")
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -225,8 +233,9 @@ async def emit_plan_verifier_failure_notice(
                     "The task is NOT complete. These conditions belong only to the "
                     "current plan revision. Fix the deliverable and retry, or submit a "
                     "revised plan for approval; a newer approved plan may replace these "
-                    "plan-owned conditions but cannot alter external acceptance requirements.\n"
-                    "</system-reminder>"
+                    "plan-owned conditions but cannot alter external acceptance requirements."
+                    f"{_again(repeats, 'the plan verification conditions have failed')}"
+                    "\n</system-reminder>"
                 ),
             ),
             meta={
