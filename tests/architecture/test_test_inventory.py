@@ -319,8 +319,16 @@ class TestMappingStatic:
             # the 24 are the NEGATIVE CONTROLS — one per producer — which are
             # what make the other adjudications mean anything: each nullifies a
             # single observed behaviour and asserts the oracle's verdict flips.
-            "python_test_file_count": 820,
-            "python_static_test_id_count": 9903,
+            #
+            # 9931 from PKG-19-PILOT-REPAIR: +28 static ids against +28 collected
+            # node ids — again nothing parametrized, so the two move together. The
+            # two new files are the F47 and F49 regression evidence; the other four
+            # ids extend `test_thrash_shapes.py`, which is where F47's general
+            # invariant is ENFORCED (a repetition shape with no declared
+            # `disco.core` identity owner fails there). `python_test_file_count`
+            # advances 820 → 822 for the two new files.
+            "python_test_file_count": 822,
+            "python_static_test_id_count": 9931,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -612,13 +620,19 @@ class TestCollectedCounts:
             # shape refusal (`packages/core/tests/test_serve_tool.py`, +1) and the
             # dictated-literal extractor (`test_dictated_content_literals.py`, +1
             # plus a 5-case parametrization). Both fail on the pre-repair bytes.
-            "packages": 10340,
+            #
+            # 10364 from PKG-19-PILOT-REPAIR: +24 under `packages` — 10 for F47's
+            # answered-question notice evidence and 14 for F49's observation-scoped
+            # receipt evidence. Both are product bytes, so they land here; the
+            # remaining 4 ids of that seal's 28 land under `harness` below, because
+            # F47's invariant is enforced by the ORACLE, not by the product.
+            "packages": 10364,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
             # sanctioned lane that owns them is `make harness`
             # (`PYTHONPATH=. uv run pytest harness`), and
-            # check_inventory_execution confirms all 12048 certified ids stay
+            # check_inventory_execution confirms all 12076 certified ids stay
             # reachable by a sanctioned command.
             #
             # 1312 from PKG-03-F20-CONTEXT-PRESSURE: +22 in the `harness` root,
@@ -634,13 +648,23 @@ class TestCollectedCounts:
             # back 10/10 green at one sealed sha; every other test in that file passes
             # the flag EXPLICITLY, so without this one the default could silently
             # regress to False and the whole file would stay green.
-            "harness": 1313,
+            #
+            # 1317 from PKG-19-PILOT-REPAIR: +4 in the `harness` root, all in
+            # `test_thrash_shapes.py`. This is the first repair in the PKG-19 chain
+            # to move `harness`, and deliberately: F47's general invariant —
+            # answered-question repetition is culpable only after notice — is
+            # enforced against the ORACLE. One of the four enumerates every
+            # repetition shape and fails if any lacks a declared `disco.core`
+            # identity owner, so a fifth shape cannot silently re-open the gap that
+            # produced the 2026-08-06v pilot reds. The 06t seal's note that repairs
+            # land under `packages` described that repair, not a rule.
+            "harness": 1317,
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12048 == sum(expected.values())
+        assert collected["total"] == 12076 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -656,7 +680,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12048}
+        assert result == {"collected_total": 12076}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -675,9 +699,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9903,
+            "python_static_ids": 9931,
             "typescript_static_ids": 1203,
-            "collected_total": 12048,
+            "collected_total": 12076,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
