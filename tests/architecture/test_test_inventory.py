@@ -369,8 +369,25 @@ class TestMappingStatic:
             # first firing of every repaired surface is byte-identical to the
             # pre-repair text and `_PLAN_NUDGE` must not move at all.
             # `python_test_file_count` advances 824 -> 825 for the one new file.
-            "python_test_file_count": 825,
-            "python_static_test_id_count": 9983,
+            #
+            # 9996 from PKG-19-CONSTRAINT4-REACH: +13 static ids against +13
+            # collected node ids — nothing parametrized, so the two move together
+            # and there is no gap to explain. ONE new file,
+            # `packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py`,
+            # the regression evidence for the FIFTH surface confirmed multi-fire on
+            # live cells (F55: `reject_plan_weakening` rendering
+            # `weakening_guidance` verbatim, caught at 3x and 2x in 07j's own fresh
+            # corpus) and for the ungrammatical ordinal that repair would otherwise
+            # have shipped again (F56: "the 2th time", read out of the raw bodies of
+            # the one target 07j confirmed).
+            # Seven of the thirteen are red on `b8aa2554`; the other six are
+            # invariance guards that must be green on BOTH trees, because the first
+            # firing of the weakening refusal is byte-identical to the pre-repair
+            # text and the `repeats <= 1` branch of each ordinal seam must not move
+            # at all.
+            # `python_test_file_count` advances 825 -> 826 for the one new file.
+            "python_test_file_count": 826,
+            "python_static_test_id_count": 9996,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -682,7 +699,10 @@ class TestCollectedCounts:
             # 10415 from PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: +18 under `packages`,
             # the whole of that seal's delta — one new file,
             # `test_f53_constraint4_confirmed_repeats.py`, and no harness id.
-            "packages": 10415,
+            # 10428 from PKG-19-CONSTRAINT4-REACH: +13 under `packages`, the whole
+            # of that seal's delta — one new file,
+            # `test_f55_f56_weakening_repeats_and_ordinals.py`, and no harness id.
+            "packages": 10428,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -731,12 +751,19 @@ class TestCollectedCounts:
             # rather than an exact key set, so the durable `blocked_guidance_fp`
             # added to the landing meta does not move its verdict and needs no
             # oracle change to stay true.
+            # 1320 UNCHANGED at PKG-19-CONSTRAINT4-REACH for the same reason: all
+            # 13 of that seal's ids are product bytes under `packages`. F55 is
+            # repaired at one `disco.core.loop` emitting seam and F56 at two
+            # rendering helpers; no oracle sees either, because both repairs change
+            # only the TEXT a surface renders on its repeat path and every oracle
+            # that could care keys on the durable `blocking` label, which did not
+            # move.
             "integrations": 9,
             "tests": 386,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12130 == sum(expected.values())
+        assert collected["total"] == 12143 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -752,7 +779,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12130}
+        assert result == {"collected_total": 12143}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -771,9 +798,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 9983,
+            "python_static_ids": 9996,
             "typescript_static_ids": 1203,
-            "collected_total": 12130,
+            "collected_total": 12143,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "dcbcf7bfd7fc95fe32c4e0224804632dec49aa8f",
+  "source_identity": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
   "collected": {
     "counts": {
-      "packages": 10415,
+      "packages": 10428,
       "harness": 1320,
       "integrations": 9,
       "tests": 386
     },
-    "total": 12130,
+    "total": 12143,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5315,6 +5315,19 @@
         "packages/core/tests/test_f53_seo_primitive.py::test_sitemap_lists_every_page_absolute[directory]",
         "packages/core/tests/test_f53_seo_primitive.py::test_sitemap_lists_every_page_absolute[lead_gen]",
         "packages/core/tests/test_f53_seo_primitive.py::test_sitemap_lists_every_page_absolute[records]",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_the_observed_multiplicity",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_three_and_twentyone",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_first_firing_still_renders_nothing",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_ordinal_renders_english_not_naive_th",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_first_firing_is_unchanged",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_ordinal_is_grammatical",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_is_keyed_on_its_own_blocking_label",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_reads_the_durable_log",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_does_not_repeat_itself",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalates_at_the_observed_three_times",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
+        "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -12151,9 +12164,9 @@
     }
   },
   "mapping_static": {
-    "identity": "dcbcf7bfd7fc95fe32c4e0224804632dec49aa8f",
-    "python_test_file_count": 825,
-    "python_static_test_id_count": 9983,
+    "identity": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
+    "python_test_file_count": 826,
+    "python_static_test_id_count": 9996,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12603,6 +12616,7 @@
       "packages/core/tests/test_f53_blog_primitive.py",
       "packages/core/tests/test_f53_constraint4_confirmed_repeats.py",
       "packages/core/tests/test_f53_seo_primitive.py",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py",
       "packages/core/tests/test_f5_thinking_budget.py",
       "packages/core/tests/test_f62_feature_flags_primitive.py",
       "packages/core/tests/test_f8_arg_truncation.py",
@@ -18260,6 +18274,19 @@
       "packages/core/tests/test_f53_seo_primitive.py::test_seospec_oversize_and_empty_refused",
       "packages/core/tests/test_f53_seo_primitive.py::test_seospec_unknown_key_refused",
       "packages/core/tests/test_f53_seo_primitive.py::test_sitemap_lists_every_page_absolute",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_the_observed_multiplicity",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_three_and_twentyone",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_first_firing_still_renders_nothing",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_ordinal_renders_english_not_naive_th",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_first_firing_is_unchanged",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_ordinal_is_grammatical",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_is_keyed_on_its_own_blocking_label",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_reads_the_durable_log",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_does_not_repeat_itself",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalates_at_the_observed_three_times",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
+      "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -31377,6 +31404,56 @@
           "packages/core/tests/test_f53_constraint4_confirmed_repeats.py::test_plan_verifier_failure_notice_does_not_repeat_itself",
           "packages/core/tests/test_f53_constraint4_confirmed_repeats.py::test_plan_verifier_failure_notice_keeps_naming_what_it_derives",
           "packages/core/tests/test_f53_constraint4_confirmed_repeats.py::test_router_phase_nudge_still_keeps_its_own_separate_count"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CONSTRAINT4-REACH",
+      "root": "packages",
+      "source_identity_before": "dcbcf7bfd7fc95fe32c4e0224804632dec49aa8f",
+      "source_identity_after": "ecd8691ee5dfc042013f86ef38d9260d8e430f95",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10415,
+          "after_count": 10428,
+          "added_ids": [
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_the_observed_multiplicity",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_three_and_twentyone",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_first_firing_still_renders_nothing",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_ordinal_renders_english_not_naive_th",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_first_firing_is_unchanged",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_ordinal_is_grammatical",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_is_keyed_on_its_own_blocking_label",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_reads_the_durable_log",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_does_not_repeat_itself",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalates_at_the_observed_three_times",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
+            "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_the_observed_multiplicity",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_clause_is_grammatical_at_three_and_twentyone",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_again_first_firing_still_renders_nothing",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_ordinal_renders_english_not_naive_th",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_first_firing_is_unchanged",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_serve_handoff_guidance_ordinal_is_grammatical",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_is_keyed_on_its_own_blocking_label",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_count_reads_the_durable_log",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_does_not_repeat_itself",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalates_at_the_observed_three_times",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
+          "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

@@ -25,6 +25,7 @@ from ..verification import requires_structured_browser_runtime
 from . import signals
 from .boundaries import AgentStep
 from .control import Disp
+from .ordinals import ordinal
 from .turn_control_serve_refusals import (
     serve_target_shape_guidance as _serve_target_shape_guidance,
     questions_v2_attempts_since_last_plan as _questions_v2_attempts_since_last_plan,
@@ -159,7 +160,7 @@ def _serve_handoff_guidance(repeats: int, events: list[Event]) -> str:
         )
     return (
         "<system-reminder>\n"
-        f"Handoff recorded — this is the {repeats}th handoff of this run, and none "
+        f"Handoff recorded — this is the {ordinal(repeats)} handoff of this run, and none "
         "of them completes it. `serve` hands an artifact over; it is not counted as "
         "work, so each further handoff spends one turn toward the no-progress limit "
         f"that ENDS this run.\n{_serve_next_move(events)}\n"

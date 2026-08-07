@@ -41,6 +41,7 @@ from ..events import (
 )
 from . import signals
 from .control import Disp
+from .ordinals import ordinal
 from .plan_repair_detection import (  # noqa: F401 — re-exported for back-compat
     _agent_demonstrated_command_failure,
     _latest_repairable_failure,
@@ -355,13 +356,64 @@ async def redirect_idempotent_revision(
     return Disp.CONTINUE
 
 
+async def _weakening_refusals_so_far(loop: _LoopFacet) -> int:
+    """How many times this refusal has already fired, plus this one.
+
+    GROUNDED FEEDBACK constraint 4, F55. Counted off the DURABLE log via the
+    `blocking` label the refusal already carried before this repair, so the
+    escalation survives a restart or a condensation exactly as the run's own
+    evidence does. Deliberately NOT an instance counter and NOT a window: the
+    `_plan_nudge` defect repaired at 2026-08-07j was a correct renderer fed a
+    resetting segment count, which is the anti-pattern this campaign keeps
+    finding, and no new mechanism is invented where the existing one fits.
+    """
+    events = await loop._events()
+    return 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent) and event.meta.get("blocking") == PLAN_WEAKENING_BLOCKER
+    )
+
+
+def _weakening_escalation(repeats: int) -> str:
+    """The repetition clause, or nothing on a first firing.
+
+    At 1 this renders "" and the body is byte-identical to every weakening
+    refusal written before this repair, so the 07j corpus's own first firings
+    (`d2-r1` seq 109, `d3-r1` seq 31) still match by content.
+    """
+    if repeats <= 1:
+        return ""
+    return (
+        f"\n\nThis is the {ordinal(repeats)} time this run has proposed a plan "
+        f"revision that weakens the approved contract; the previous "
+        f"{repeats - 1} were refused for the same reason and re-proposing it "
+        "again will not approve it. Each attempt spends a turn toward the "
+        "no-progress limit that ENDS this run. Restore the conditions listed "
+        "above, or say plainly that you cannot meet them."
+    )
+
+
 async def reject_plan_weakening(
     loop: _LoopFacet,
     candidate: PlanEvent,
     diff: PlanPredicateDiff,
 ) -> Disp:
-    """Recoverably reject a silent acceptance-bar drop without a STUCK path."""
+    """Recoverably reject a silent acceptance-bar drop without a STUCK path.
+
+    F55 (2026-08-07l): `weakening_guidance` is a pure function of the predicate
+    diff with no access to run history, and this seam rendered it verbatim — so
+    a run that re-proposed the same weakening read the identical paragraph. The
+    07j corpus caught it at 3x (`d2-r1/p4_ff_react_continue` seqs 109/115/121)
+    and 2x (`d3-r1/p4_ff_python_cancel_recovery` seqs 31/34). That is F53's
+    shape at a different pair of seams, and it is answered the same way: the
+    count is read HERE, at the emitter, which is the only side of the pair that
+    can see the log.
+    """
     loop._planner.discard_plan_predicates(candidate.revision)
+    # Read BEFORE this refusal's own event is emitted, so the count is
+    # "prior fires + this one".
+    repeats = await _weakening_refusals_so_far(loop)
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -373,7 +425,12 @@ async def reject_plan_weakening(
             source=EventSource.ENVIRONMENT,
             message=LLMMessage(
                 role="user",
-                content=f"<system-reminder>\n{weakening_guidance(diff)}\n</system-reminder>",
+                content=(
+                    "<system-reminder>\n"
+                    f"{weakening_guidance(diff)}"
+                    f"{_weakening_escalation(repeats)}\n"
+                    "</system-reminder>"
+                ),
             ),
             meta={"blocking": PLAN_WEAKENING_BLOCKER},
         )
