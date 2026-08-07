@@ -136,10 +136,17 @@ from .image_gen_parts._backends import (
     httpx as httpx,
 )
 
-_SVG_FALLBACK_HINT = (
-    "Draw a bespoke inline SVG in the committed palette instead; do not leave the "
-    "slot empty or hotlink external images."
-)
+def _svg_fallback_hint() -> str:
+    """The image-less fallback instruction. Folded from a module constant into
+    its single renderer (its two consumers both splice it into f-strings), so no
+    canned fragment survives to be reused without its context."""
+    return (
+        "Draw a bespoke inline SVG in the committed palette instead; do not leave "
+        "the slot empty or hotlink external images."
+    )
+
+
+_SVG_FALLBACK_HINT = _svg_fallback_hint()
 
 # W-50: the operator-facing "no real image backend is configured" message, shared by
 # every caller (the tool's NOT-CONFIGURED outcome, the slides degrade path, probes).

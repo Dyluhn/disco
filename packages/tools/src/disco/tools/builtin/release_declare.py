@@ -57,24 +57,43 @@ from ..release_intent import ReleaseIntentWriteError
 # A STATIC, value-free rejection for a command that fails the runtime grammar
 # (WO-C5 §9.11/§9.2/§9.4). It names the RULE and never echoes the offending argv —
 # a rejected token can itself carry a secret, so the tool's output stays hygienic.
-_GRAMMAR_REJECTION = (
-    "release intent rejected — a start/build command did not parse through the "
-    "runtime grammar: an accepted command must head with a supported runtime "
-    "(node/npm/npx/yarn/pnpm, python, or uvicorn/gunicorn/hypercorn) and use known "
-    "flags only; an arbitrary executable/shell, an unknown flag, or an inline literal "
-    "value is rejected. Pass any secret or value as a WHOLE ${NAME} reference to a "
-    "declared env var (in required_env or the $PORT contract), never inline."
-)
+def _grammar_rejection(*fields: str) -> str:
+    """The runtime-grammar rejection, naming the FIELD(S) checked — never a value.
+
+    Constraint 4 applied under this module's standing hygiene rule: a rejected
+    token can itself be a secret, so the message still echoes NO argv. The field
+    name is not user data (it is one of `start_cmd` / `build_cmd` /
+    `install_cmd`), and naming it is the difference between an agent that can
+    fix the right field and one that re-submits the same intent.
+    """
+    named = " or ".join(f"`{field}`" for field in fields) if fields else "a start/build command"
+    return (
+        f"release intent rejected — {named} did not parse through the "
+        "runtime grammar: an accepted command must head with a supported runtime "
+        "(node/npm/npx/yarn/pnpm, python, or uvicorn/gunicorn/hypercorn) and use known "
+        "flags only; an arbitrary executable/shell, an unknown flag, or an inline literal "
+        "value is rejected. Pass any secret or value as a WHOLE ${NAME} reference to a "
+        "declared env var (in required_env or the $PORT contract), never inline."
+    )
+
+
+_GRAMMAR_REJECTION = _grammar_rejection()
 
 # A STATIC, value-free rejection for a resource `migrate_cmd` inline secret (WO-C5 #3
 # / F5). The runtime-head grammar does NOT apply to a migration tool (alembic /
 # wrangler), but a credential on a secret-bearing flag must be a declared ${NAME} ref.
-_MIGRATE_SECRET_REJECTION = (
-    "release intent rejected — a resource migrate_cmd carries an inline secret on a "
-    "credential-bearing flag (--token / --password / --api-key / --secret / "
-    "--credential / --access-token / …). A migration credential must be a WHOLE ${NAME} "
-    "reference to a declared env var, never an inline literal value."
-)
+def _migrate_secret_rejection(resource_id: str = "") -> str:
+    """The migrate_cmd inline-secret rejection, naming the RESOURCE — never a value."""
+    which = f"resource `{resource_id}`'s" if resource_id else "a resource"
+    return (
+        f"release intent rejected — {which} migrate_cmd carries an inline secret on a "
+        "credential-bearing flag (--token / --password / --api-key / --secret / "
+        "--credential / --access-token / …). A migration credential must be a WHOLE ${NAME} "
+        "reference to a declared env var, never an inline literal value."
+    )
+
+
+_MIGRATE_SECRET_REJECTION = _migrate_secret_rejection()
 
 
 class ReleaseDeclareArgs(BaseModel):
@@ -258,7 +277,9 @@ class ReleaseDeclareTool:
             check_declaration_argv(intent.build_cmd, declared_names=declared, field="build_cmd")
         except ValueError:
             return ToolOutcome(
-                success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION
+                success=False,
+                error="invalid_release_intent",
+                content=_grammar_rejection("start_cmd", "build_cmd"),
             )
 
         # R2 (G03): an explicit install_cmd legitimately heads with a NON-runtime-start
@@ -277,7 +298,9 @@ class ReleaseDeclareTool:
             )
         except ValueError:
             return ToolOutcome(
-                success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION
+                success=False,
+                error="invalid_release_intent",
+                content=_grammar_rejection("install_cmd"),
             )
 
         # WO-C5 #3 F5: a resource `migrate_cmd` is lowered verbatim into the compose
@@ -285,8 +308,10 @@ class ReleaseDeclareTool:
         # bundle. The runtime-head grammar does NOT apply (a migration heads with
         # alembic / wrangler), but the same HEAD-AGNOSTIC inline-secret hygiene must — a
         # credential-bearing flag's value must be a whole declared ${NAME} reference.
+        rejected_resource = ""
         try:
             for resource in intent.resources:
+                rejected_resource = resource.id
                 check_no_inline_secret_cli(
                     resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
                 )
@@ -300,7 +325,9 @@ class ReleaseDeclareTool:
                 )
         except ValueError:
             return ToolOutcome(
-                success=False, error="invalid_release_intent", content=_MIGRATE_SECRET_REJECTION
+                success=False,
+                error="invalid_release_intent",
+                content=_migrate_secret_rejection(rejected_resource),
             )
 
         # WO-C1: persist ONLY through the runtime-injected, host-owned intent writer,
@@ -313,8 +340,10 @@ class ReleaseDeclareTool:
                 success=False,
                 error="intent_writer_unavailable",
                 content=(
-                    "release intent was not recorded: this runtime did not provide the "
-                    "host-owned intent-writer capability, so nothing was persisted."
+                    "release intent was not recorded: this runtime "
+                    f"(runtime strategy {getattr(intent, 'runtime', None) or 'inferred'}) "
+                    "did not provide the host-owned intent-writer capability, so "
+                    "nothing was persisted."
                 ),
             )
         try:

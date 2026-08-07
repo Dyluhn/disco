@@ -21,6 +21,7 @@ from .control import Disp
 from .turn_control_support import (
     _normalize_clarify_options,
     _normalize_questions_v2_options,
+    _questions_v2_attempts_since_last_plan,
     _questions_v2_used_since_last_plan,
 )
 
@@ -117,9 +118,10 @@ class MetaToolQuestionMixin:
                 step,
                 "<system-reminder>\n"
                 "questions_v2 refused: structured intake is only available "
-                "before submit_plan, while the run is still in PLANNING. "
-                "If execution is blocked on human input, use ask_user; if "
-                "the plan itself is wrong, use propose_plan_update.\n"
+                "before submit_plan, while the run is still in PLANNING — this "
+                f"run is in {self._loop.mode.value.upper()}. Next move: if "
+                "execution is blocked on human input, use ask_user; if the plan "
+                "itself is wrong, use propose_plan_update.\n"
                 "</system-reminder>",
             )
         if _questions_v2_used_since_last_plan(events):
@@ -127,10 +129,11 @@ class MetaToolQuestionMixin:
                 step,
                 "<system-reminder>\n"
                 "questions_v2 refused: you already used the one allowed "
-                "structured intake round for this planning pass. Do not "
-                "ask another batch before submit_plan. Use the user's "
-                "answers, choose reasonable defaults for anything still "
-                "ambiguous, and log those assumptions in submit_plan.context.\n"
+                f"structured intake round for this planning pass, and this is "
+                f"attempt {_questions_v2_attempts_since_last_plan(events)}. Do not "
+                "ask another batch before submit_plan. Next move: use the user's "
+                "answers, choose reasonable defaults for anything still ambiguous, "
+                "and log those assumptions in submit_plan.context.\n"
                 "</system-reminder>",
             )
         question = (

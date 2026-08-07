@@ -382,8 +382,14 @@ async def prepare_typed_host_verdict(
     return host_verdict, typed_result, browser_unavailable
 
 
-async def emit_browser_unavailable_release(loop: Any) -> Disp:
+async def emit_browser_unavailable_release(loop: Any, host_verdict: dict | None = None) -> Disp:
     await loop._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_release"))
+    verdict = host_verdict or {}
+    observed = (
+        f" The host verifier reported failure_fingerprint="
+        f"{str(verdict.get('failure_fingerprint') or 'browser_unavailable')!r}"
+        f"{'; ' + str(verdict.get('summary')) if verdict.get('summary') else ''}."
+    )
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -392,7 +398,8 @@ async def emit_browser_unavailable_release(loop: Any) -> Disp:
                 content=(
                     "⚠ Finished WITHOUT browser-render verification — the host verifier "
                     "reported the structured browser claims unavailable. The deliverable "
-                    "is UNVERIFIED and may be INCOMPLETE; do not report it as a verified pass."
+                    "is UNVERIFIED and may be INCOMPLETE; do not report it as a verified "
+                    f"pass.{observed}"
                 ),
             ),
         )

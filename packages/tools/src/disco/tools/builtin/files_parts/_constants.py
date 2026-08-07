@@ -38,14 +38,32 @@ _PRESSURE_FILE_THRESHOLD = _READ_CHAR_BUDGET * 2
 # Prescriptive directive: "the file is big; don't read it whole, do this instead."
 # Static so a unit test can assert on it; worded so the weak-model tier picks
 # the cheap, deterministic path (grep → targeted read) over a full dump.
-_PRESSURE_DIRECTIVE = (
-    "file is large; the full page is suppressed. Do NOT re-read this file "
-    "whole — pick the symbol/class/section you need, then either:\n"
-    "  (a) run a grep/ripgrep tool to locate it (e.g. `rg -n 'Symbol' <path>`), "
-    "then file_read a targeted line range (`offset=<n>, limit=<m>`); or\n"
-    "  (b) file_read a small line range directly to scan structure.\n"
-    "Reading this file whole again will just be truncated the same way."
-)
+def _pressure_directive(path: str = "", shown: int = 0, total: int = 0) -> str:
+    """The large-file read directive, RENDERED for the file it suppressed.
+
+    Constraint 4: this fires on EVERY whole-file read of a large file, so an
+    agent re-reading three big files got the identical paragraph three times and
+    was never told which read had been truncated or by how much. The path and
+    the measured line counts come from the same slice the reader just built.
+    """
+    named = f"`{path}` " if path else ""
+    measured = (
+        f" You were shown lines 1-{shown} of {total}."
+        if shown and total
+        else ""
+    )
+    return (
+        f"{named}file is large; the full page is suppressed.{measured} Do NOT "
+        "re-read this file whole — pick the symbol/class/section you need, then "
+        "either:\n"
+        "  (a) run a grep/ripgrep tool to locate it (e.g. `rg -n 'Symbol' <path>`), "
+        "then file_read a targeted line range (`offset=<n>, limit=<m>`); or\n"
+        "  (b) file_read a small line range directly to scan structure.\n"
+        "Reading this file whole again will just be truncated the same way."
+    )
+
+
+_PRESSURE_DIRECTIVE = _pressure_directive()
 
 # A line-number prefix the model may have copied out of a numbered file_read
 # ("  123\t<code>"). file_edit strips it defensively so a paste-back still matches.

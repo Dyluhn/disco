@@ -119,8 +119,13 @@ async def test_assist_on_large_file_returns_head_only_with_directive():
     # The directive (the prescriptive hint) is present
     assert "file is large" in content
     assert "grep" in content.lower() or "ripgrep" in content.lower() or "rg -n" in content
-    # The static directive constant is embedded verbatim
-    assert _PRESSURE_DIRECTIVE in content
+    # 2026-08-07b (constraint 4): the directive is RENDERED for the file it
+    # suppressed, so it is no longer the module constant verbatim. The property
+    # that assertion stood for — the full prescriptive directive is present —
+    # is asserted here against the run, plus the run state it must now carry.
+    assert "big.py" in content  # names the file it truncated
+    assert "You were shown lines 1-" in content  # names how much it showed
+    assert "Reading this file whole again will just be truncated the same way." in content
     # The last line of the file is NOT shown — that's the whole point of head-only
     assert "line 000300:" not in content
     # And the output is materially smaller than today's full page
@@ -141,9 +146,10 @@ async def test_assist_on_head_only_respects_head_budget():
     # pressure head budget (the head itself is capped; the directive adds a
     # fixed ~400 chars on top).
     assert out.success is True
-    # Trim out the static directive for the size check — the head itself is
-    # what we care about.
-    head_part = out.content.split(_PRESSURE_DIRECTIVE)[0]
+    # Trim out the rendered directive for the size check — the head itself is
+    # what we care about. The directive is no longer a fixed constant
+    # (2026-08-07b), so split on its stable opening clause instead.
+    head_part = out.content.split("file is large; the full page is suppressed.")[0]
     # The head is a slice up to but not exceeding the pressure budget.
     # Allow a small slack for the header line + a final newline.
     assert len(head_part) < _PRESSURE_HEAD_BUDGET + 200

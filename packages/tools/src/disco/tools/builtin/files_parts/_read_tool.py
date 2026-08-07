@@ -26,7 +26,7 @@ from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ._canonical import _canonical
 from ._constants import (
     _FS,
-    _PRESSURE_DIRECTIVE,
+    _pressure_directive,
     _PRESSURE_FILE_THRESHOLD,
     _PRESSURE_HEAD_BUDGET,
     _READ_CHAR_BUDGET,
@@ -177,7 +177,12 @@ def _file_read_pressure_outcome(
         f"[lines 1-{head_to} of {total} (file: {len(text)} chars) — "
         f"HEAD-ONLY under context pressure]\n"
     )
-    content = header + "\n".join(head) + "\n\n" + _PRESSURE_DIRECTIVE
+    content = (
+        header
+        + "\n".join(head)
+        + "\n\n"
+        + _pressure_directive(args.path, head_to, total)
+    )
     return ToolOutcome(
         success=True,
         content=content,

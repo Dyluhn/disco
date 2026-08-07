@@ -259,14 +259,35 @@ _EXECUTION_NUDGE_CAP = 3
 # touching anything — the gate catches that and re-enters the loop. Phrased as a
 # `<system-reminder>` (ambient, implicit) rather than a user-tone scolding: the
 # model sees an automated environment notification, not a confrontation.
-_EXECUTION_NUDGE = (
-    "<system-reminder>\n"
-    "The approved plan has not been executed yet — no workspace files have been "
-    "written, edited, or run since approval. Continue by calling a tool "
-    "(file_write, file_edit, shell, code_exec, …) to carry out the plan's steps "
-    "in order. The plan is in your context above.\n"
-    "</system-reminder>"
-)
+def _execution_nudge(nudge: int = 1, cap: int = _EXECUTION_NUDGE_CAP) -> str:
+    """The execution gate's nudge, repetition-aware (constraint 4).
+
+    The gate ALREADY counts these (`_loop._execution_nudges`, capped at
+    `_EXECUTION_NUDGE_CAP`, after which the run terminalizes STUCK) and passed
+    the count straight past a constant message. So an agent one nudge from a
+    terminal STUCK read exactly what it read on nudge one, and nothing said the
+    run was about to end. The count and the remaining budget are now rendered.
+    """
+    remaining = max(cap - nudge, 0)
+    pressure = (
+        " This is the LAST nudge: one more finish without a workspace change "
+        "terminalizes this run as STUCK."
+        if remaining <= 0
+        else f" Nudge {nudge} of {cap}; {remaining} remain before this run "
+        "terminalizes as STUCK."
+    )
+    return (
+        "<system-reminder>\n"
+        "The approved plan has not been executed yet — no workspace files have been "
+        "written, edited, or run since approval. Continue by calling a tool "
+        "(file_write, file_edit, shell, code_exec, …) to carry out the plan's steps "
+        f"in order. The plan is in your context above.{pressure}\n"
+        "</system-reminder>"
+    )
+
+
+# First-firing value, retained as a module name for the re-export chain.
+_EXECUTION_NUDGE = _execution_nudge(1)
 
 # E4 — static-site verify. A static deliverable shouldn't have to curl a running
 # server to prove it's good; the honest post-condition is "the file exists and is

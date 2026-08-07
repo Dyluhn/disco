@@ -184,12 +184,22 @@ _LOG = logging.getLogger("disco.loop")
 # _FINISH_VERIFY_CAP / _DOD_REFUSAL_CAP moved to loop/finish.py (re-exported above).
 # _WS_* snapshot budget constants moved to loop/view_render.py with the snapshot fn.
 
-_DEFAULT_VETO_FEEDBACK = (
-    "<system-reminder>\n"
-    "The goal does not appear complete yet. Continue working toward it — a stop "
-    "hook refused the FINISHED transition.\n"
-    "</system-reminder>"
-)
+def _default_veto_feedback() -> str:
+    """The injectable DEFAULT text for a stop-hook veto — not the emit seam.
+
+    Constraint 4: the host may replace this wholesale, so it cannot carry run
+    state; the surface that fires more than once is `finish/finalize.py`'s veto
+    emission and that is where the repetition-aware rendering lives.
+    """
+    return (
+        "<system-reminder>\n"
+        "The goal does not appear complete yet. Continue working toward it — a stop "
+        "hook refused the FINISHED transition.\n"
+        "</system-reminder>"
+    )
+
+
+_DEFAULT_VETO_FEEDBACK = _default_veto_feedback()
 
 # Module-level constant so `ModelExecutionPolicy.standard()` is evaluated once
 # and the per-parameter call doesn't trip ruff's B008 rule (function call in
@@ -308,30 +318,75 @@ _TERMINAL_FOR_NOW = frozenset(
 # PROPOSE a structured plan OR ask the user for a detail you genuinely need
 # first. Reads (file_list/file_read/search/extract) fall through and never
 # trigger this — only a tool-less prose response does.
-_PLAN_NUDGE = (
-    "<system-reminder>\n"
-    "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
-    "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
-    "`context` block, or (b) if required details are genuinely missing and you "
-    "cannot plan well without them (the user named something only they know — a "
-    "color, a credential, a target, a file that isn't here), call `ask_user` with "
-    "a clear `question` (for ONE missing detail) or `questions_v2` (for ONE "
-    "batched structured intake round, up to four questions) to get them BEFORE "
-    "planning. Prefer asking over guessing on "
-    "details the user explicitly required. You may also keep reading (file_list, "
-    "file_read, search, extract) for more context, but a prose reply alone doesn't "
-    "advance the conversation.\n"
-    "</system-reminder>"
-)
+_PLAN_NUDGE_DIAGNOSTIC = "plan_nudge"
+_WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC = "workflow_router_plan_nudge"
 
-_WORKFLOW_ROUTER_PLAN_NUDGE = (
-    "<system-reminder>\n"
-    "Still in WORKFLOW ROUTER phase. Your next response must be exactly one tool "
-    "call: `enter_workflow`, `needs_input`, or `draft_workflow`. If you are "
-    "already inside a workflow run and the selected workflow cannot satisfy the "
-    "goal, call `workflow_abort`.\n"
-    "</system-reminder>"
-)
+
+def _plan_nudge(repeats: int = 1) -> str:
+    """The planning-mode nudge, REPETITION-AWARE (constraint 4).
+
+    `repeats` is read from the durable log by the caller. The FIRST firing is
+    byte-identical to the historical constant on purpose: event logs written
+    before 2026-08-07b carry that exact content and the nudge counters still
+    recognise those events by it.
+    """
+    prefix = (
+        ""
+        if repeats <= 1
+        else (
+            f"This is planning nudge {repeats} of this segment — the previous "
+            f"{repeats - 1} did not produce a plan, and a prose-only reply "
+            "cannot advance the run.\n"
+        )
+    )
+    return (
+        "<system-reminder>\n"
+        f"{prefix}"
+        "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
+        "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
+        "`context` block, or (b) if required details are genuinely missing and you "
+        "cannot plan well without them (the user named something only they know — a "
+        "color, a credential, a target, a file that isn't here), call `ask_user` with "
+        "a clear `question` (for ONE missing detail) or `questions_v2` (for ONE "
+        "batched structured intake round, up to four questions) to get them BEFORE "
+        "planning. Prefer asking over guessing on "
+        "details the user explicitly required. You may also keep reading (file_list, "
+        "file_read, search, extract) for more context, but a prose reply alone doesn't "
+        "advance the conversation.\n"
+        "</system-reminder>"
+    )
+
+
+def _workflow_router_plan_nudge(repeats: int = 1) -> str:
+    """The workflow-router phase nudge, repetition-aware (constraint 4).
+
+    Carries its OWN diagnostic: the planning-nudge counters have never counted
+    the router nudge, and distinct labels preserve that exactly.
+    """
+    prefix = (
+        ""
+        if repeats <= 1
+        else (
+            f"This is router nudge {repeats} of this phase — the previous "
+            f"{repeats - 1} did not produce one of the required tool calls.\n"
+        )
+    )
+    return (
+        "<system-reminder>\n"
+        f"{prefix}"
+        "Still in WORKFLOW ROUTER phase. Your next response must be exactly one tool "
+        "call: `enter_workflow`, `needs_input`, or `draft_workflow`. If you are "
+        "already inside a workflow run and the selected workflow cannot satisfy the "
+        "goal, call `workflow_abort`.\n"
+        "</system-reminder>"
+    )
+
+
+# The FIRST firing's text, kept as a module value because durable logs written
+# before 2026-08-07b carry it verbatim and the nudge counters recognise those
+# events by content. Computed from the renderer above so there is one owner.
+_PLAN_NUDGE = _plan_nudge(1)
+_WORKFLOW_ROUTER_PLAN_NUDGE = _workflow_router_plan_nudge(1)
 
 # Emitted when a REVISION re-plan has been narrated >= _REVISION_FORCE_SUBMIT_K times
 # without a submit_plan call (the soft _PLAN_NUDGE was ignored). This is paired with a
@@ -339,16 +394,53 @@ _WORKFLOW_ROUTER_PLAN_NUDGE = (
 # set is narrowed to submit_plan ONLY (driver.tools_for_step reads the marker) — the model
 # must submit the plan it has already described instead of looping in prose. The marker is
 # in the event log, so a RESUMED build replays it and stays forced (no soft-nudge loop).
-_FORCE_SUBMIT_DIRECTIVE = (
-    "<system-reminder>\n"
-    "Call the `submit_plan` tool NOW with a NON-EMPTY `steps` array — the plan you last "
-    "submitted had no steps, which cannot be executed. Give the concrete change(s) as "
-    'ordered steps, e.g. submit_plan(summary="…", steps=["Change every call-to-action '
-    "button label to 'Get Started'\"]). Even a SINGLE step is enough for a small revision — "
-    "one step naming the exact edit is a valid, complete plan. `submit_plan` is the only "
-    "available action; do not reply in prose and do not submit an empty steps list.\n"
-    "</system-reminder>"
-)
+_FORCE_SUBMIT_DIAGNOSTIC = "force_submit_plan_directive"
+
+
+def _force_submit_directive(repeats: int = 1) -> str:
+    """The forced-submit directive, repetition-aware (constraint 4).
+
+    Reachable from two seams, so one run can see it more than once.
+    """
+    prefix = (
+        ""
+        if repeats <= 1
+        else (
+            f"You have now been forced to submit a plan {repeats} times in this "
+            "run and each previous attempt still arrived with no steps.\n"
+        )
+    )
+    return (
+        "<system-reminder>\n"
+        f"{prefix}"
+        "Call the `submit_plan` tool NOW with a NON-EMPTY `steps` array — the plan you last "
+        "submitted had no steps, which cannot be executed. Give the concrete change(s) as "
+        'ordered steps, e.g. submit_plan(summary="…", steps=["Change every call-to-action '
+        "button label to 'Get Started'\"]). Even a SINGLE step is enough for a small revision — "
+        "one step naming the exact edit is a valid, complete plan. `submit_plan` is the only "
+        "available action; do not reply in prose and do not submit an empty steps list.\n"
+        "</system-reminder>"
+    )
+
+
+_FORCE_SUBMIT_DIRECTIVE = _force_submit_directive(1)
+
+
+def _force_submit_repeats(events: list[Event]) -> int:
+    """Forced-submit directives already emitted this run, plus one.
+
+    Label first, first-firing content second, so pre-2026-08-07b events still
+    count and a resumed run never restarts the escalation.
+    """
+    return 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent)
+        and (
+            event.meta.get("diagnostic") == _FORCE_SUBMIT_DIAGNOSTIC
+            or (event.message is not None and event.message.content == _FORCE_SUBMIT_DIRECTIVE)
+        )
+    )
 # After this many consecutive prose-only nudges during a REVISION re-plan, escalate to the
 # forced-submit recovery (narrow tools to submit_plan). Gated default-ON; kill switch
 # DISCO_REVISION_FORCE_SUBMIT=0.
@@ -358,15 +450,17 @@ _INVALID_PLAN_DONE_CONDITION_CAP = 3
 # Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
 # AFTER a change/revision steer landed mid-step (the in-flight write-through race).
 # The build has been put back into PLANNING; the model must submit a revised plan.
-_MIDSTEP_STEER_REFUSAL = (
-    "<system-reminder>\n"
-    "REFUSED: `{tool}` was not applied. A change request arrived while you were "
-    "mid-step, so this action would have landed on the OLD, now-stale plan. The "
-    "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
-    "call `submit_plan`; once it is approved you can apply the change. You may also "
-    "read (file_read/file_list/search/extract) or ask/questions_v2 first.\n"
-    "</system-reminder>"
-)
+def _midstep_steer_refusal(tool: str) -> str:
+    """Mid-step steer refusal, rendered from the refused call (constraint 1)."""
+    return (
+        "<system-reminder>\n"
+        f"REFUSED: `{tool}` was not applied. A change request arrived while you were "
+        "mid-step, so this action would have landed on the OLD, now-stale plan. The "
+        "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
+        "call `submit_plan`; once it is approved you can apply the change. You may also "
+        "read (file_read/file_list/search/extract) or ask/questions_v2 first.\n"
+        "</system-reminder>"
+    )
 
 
 def _out_of_phase_submit_plan_refusal(revision: int | None) -> str:

@@ -64,8 +64,9 @@ async def _render_verify_appkit_preflight(
             events,
             failure_key="appkit:strict_verifier_unavailable",
             guidance=(
-                "the admitted AppKit target requires verify_appkit_app, but that "
-                "strict verifier is not available in the current execution scope."
+                f"the admitted AppKit target {contract.target_id!r} requires "
+                "verify_appkit_app, but the current execution scope offers "
+                f"{gate._active_verify_tool() or 'no verify tool'}."
             ),
         )
         return disp, None, events
@@ -75,8 +76,10 @@ async def _render_verify_appkit_preflight(
             events,
             failure_key="appkit:typed_preflight_unavailable",
             guidance=(
-                "the strict AppKit target could not bind its canonical entry "
-                "and current managed runtime before verification."
+                f"the strict AppKit target {contract.target_id!r} could not bind its "
+                f"canonical entry ({contract.delivery.mode} delivery, "
+                f"{contract.preview_modality} preview) and current managed runtime "
+                "before verification."
             ),
         )
         return disp, None, events
@@ -117,6 +120,25 @@ async def _render_verify_missing_handoff_disposition(
     )
     if legacy_missing_web_handoff:
         gate._loop._invisible_steps += 1
+        # Constraint 4: this refusal fires on EVERY finish attempt until a
+        # handoff exists, and `serve` does not count as work — so a static body
+        # spends the run down without ever saying so. Counted off the durable
+        # log by the diagnostic label it already carried.
+        refusals = 1 + sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent)
+            and event.meta.get("diagnostic") == "finish_target_shape_refused"
+        )
+        escalation = (
+            ""
+            if refusals <= 1
+            else (
+                f"\nSTOP — finish has now been refused for a missing handoff "
+                f"{refusals} times in this run. Each refused finish spends one turn "
+                "toward the no-progress limit that ENDS this run."
+            )
+        )
         await gate._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -124,10 +146,11 @@ async def _render_verify_missing_handoff_disposition(
                     role="user",
                     content=(
                         "finish refused: the current target has no exact, current "
-                        "handoff matching its admitted delivery contract. Hand off "
-                        "the target-owned entry with `serve`, using the interactive "
-                        "app or artifact-files shape requested by the adapter, then "
-                        "verify and finish."
+                        "handoff matching its admitted delivery contract, and no "
+                        "app deliverable is on the record at all. Next move: hand "
+                        "off the target-owned entry with `serve` using "
+                        'kind="app" (the interactive app entry), then verify and '
+                        f"finish.{escalation}"
                     ),
                 ),
                 meta={"diagnostic": "finish_target_shape_refused"},
@@ -153,12 +176,21 @@ async def _render_verify_appkit_checks(
         else None
     )
     if appkit_prepared is None or appkit_result is None or not appkit_result.passed:
+        missing = (
+            "no typed AppKit preflight authority was prepared"
+            if appkit_prepared is None
+            else "no typed AppKit result is recorded for verifier run "
+            f"{appkit_prepared[0].id}"
+            if appkit_result is None
+            else f"the recorded typed AppKit result for verifier run "
+            f"{appkit_prepared[0].id} did not pass"
+        )
         disp = await gate._governed_contract_refusal(
             events,
             failure_key="appkit:typed_receipt_unavailable",
             guidance=(
-                "the strict AppKit verifier passed, but its result could not "
-                "be bound to the current typed target authority."
+                "the strict AppKit verifier passed, but its result could not be "
+                f"bound to the current typed target authority: {missing}."
             ),
         )
         return disp, events
@@ -211,8 +243,14 @@ async def _render_verify_appkit_postcheck(
             events,
             failure_key="appkit:foreign_materialized_handoff",
             guidance=(
-                "the strict verifier did not produce an exact current handoff "
-                "for the admitted AppKit delivery contract."
+                "the strict verifier did not produce an exact current handoff for "
+                f"the admitted AppKit delivery contract {contract.target_id!r} "
+                + (
+                    "— no handoff is on the record at all."
+                    if handoff is None
+                    else f"— the newest handoff on record is {handoff.id}, which "
+                    "does not match that contract."
+                )
             ),
         )
     typed_status = (
@@ -225,8 +263,9 @@ async def _render_verify_appkit_postcheck(
             events,
             failure_key="appkit:typed_receipt_unavailable",
             guidance=(
-                "the strict AppKit verifier passed, but its result could not "
-                "be bound to the current typed target authority."
+                "the strict AppKit verifier passed, but the typed target authority "
+                f"records claim status {getattr(typed_status, 'value', typed_status)!r} "
+                "for it, not `pass`."
             ),
         )
     return None

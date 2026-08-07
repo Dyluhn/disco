@@ -228,12 +228,11 @@ def plan_nudges_since_current_planning(events: list[Event]) -> int:
                 return 0
         if isinstance(e, StatusEvent) and e.detail == "plan_approved":
             return 0
-        if (
-            isinstance(e, MessageEvent)
-            and e.source == EventSource.ENVIRONMENT
-            and e.message is not None
-            and e.message.content == _PLAN_NUDGE
-        ):
+        # Label first, legacy content second — the nudge text is repetition-aware
+        # from 2026-08-07b, so byte-equality alone would undercount it.
+        from ._signals_planning import _is_plan_nudge_event
+
+        if _is_plan_nudge_event(e, _PLAN_NUDGE):
             count += 1
     return count
 

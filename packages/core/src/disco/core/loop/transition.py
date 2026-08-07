@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from .engine_contracts import (
     _LOG,
-    _MIDSTEP_STEER_REFUSAL,
+    _midstep_steer_refusal,
     _TERMINAL_FOR_NOW,
     ActionEvent,
     AgentErrorEvent,
@@ -146,11 +146,16 @@ class TransitionCoordinator:
                 "marking STUCK (in-loop exit invariant)",
                 self._loop.conversation_id,
             )
+            observed_status = (await self._loop.get_state()).execution_status
             await self._loop._land_blocked(
-                reason="loop ended without reaching a terminal state",
+                reason=(
+                    "the drive loop ended without reaching a terminal state "
+                    f"(it returned while the conversation was {observed_status.value})"
+                ),
                 guidance=(
                     "The drive loop returned cleanly while the conversation was "
-                    "still RUNNING, so the host could not prove what should happen next."
+                    f"still {observed_status.value}, so the host could not prove "
+                    "what should happen next."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="loop ended without reaching a terminal state",
@@ -385,7 +390,7 @@ class TransitionCoordinator:
         if steer_refused and stored.tool_call is not None:
             await self._loop._emit(
                 AgentErrorEvent(
-                    error=_MIDSTEP_STEER_REFUSAL.format(tool=stored.tool_call.tool_name),
+                    error=_midstep_steer_refusal(stored.tool_call.tool_name),
                     action_id=stored.id,
                     tool_call_id=stored.tool_call.call_id,
                 )

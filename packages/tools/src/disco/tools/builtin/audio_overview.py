@@ -242,9 +242,10 @@ class AudioOverviewTool:
             return None, ToolOutcome(
                 success=False,
                 content=(
-                    "Audio overview is disabled in Settings → Audio. Enable it "
-                    "(bundled in-process, self-host, or paid endpoint) to generate "
-                    "overviews."
+                    "Audio overview is disabled in Settings → Audio (the saved "
+                    f"provider is {getattr(tts, 'provider', 'unset')!r}). "
+                    "Enable it (bundled in-process, "
+                    "self-host, or paid endpoint) to generate overviews."
                 ),
                 error="tts disabled",
             )
@@ -269,8 +270,9 @@ class AudioOverviewTool:
                 return None, ToolOutcome(
                     success=False,
                     content=(
-                        "Audio overview remote endpoint is not operator-approved. "
-                        "Save the Audio settings to approve this exact origin."
+                        f"Audio overview remote endpoint {remote_base!r} is not "
+                        f"operator-approved for use {f'tts:{tts.provider}'!r}. Save "
+                        "the Audio settings to approve this exact origin."
                     ),
                     error="tts endpoint not approved",
                 )
@@ -286,7 +288,8 @@ class AudioOverviewTool:
                     return None, ToolOutcome(
                         success=False,
                         content=(
-                            "Audio overview secret_ref is not allowed for this endpoint origin."
+                            f"Audio overview secret_ref {tts.api_key_env!r} is not "
+                            f"allowed for endpoint origin {remote_base!r}."
                         ),
                         error="tts secret_ref origin mismatch",
                     )

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
-    _MIDSTEP_STEER_REFUSAL,
+    _midstep_steer_refusal,
     ActionEvent,
     AgentErrorEvent,
     AgentStep,
@@ -214,7 +214,7 @@ class ReplanningController:
         await self._loop._emit(action)
         await self._loop._emit(
             AgentErrorEvent(
-                error=_MIDSTEP_STEER_REFUSAL.format(tool=tc.tool_name),
+                error=_midstep_steer_refusal(tc.tool_name),
                 action_id=action.id,
                 tool_call_id=tc.call_id,
             )

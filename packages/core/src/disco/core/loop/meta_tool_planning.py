@@ -81,9 +81,11 @@ class MetaToolPlanningMixin:
                         content=(
                             "<system-reminder>\n"
                             "The proposed plan update was NOT accepted because "
-                            "`steps` was empty. Submit it again with at least one "
-                            "concrete step object. A single broad step is valid; "
-                            "preserve the current product and do not invent extra scope.\n"
+                            f"`steps` was empty (revision {new_plan.revision}, summary "
+                            f"{(new_plan.summary or '')[:80]!r}). Submit it again with "
+                            "at least one concrete step object. A single broad step is "
+                            "valid; preserve the current product and do not invent "
+                            "extra scope.\n"
                             "</system-reminder>"
                         ),
                     ),
@@ -102,9 +104,9 @@ class MetaToolPlanningMixin:
             await self._loop._land_blocked(
                 reason="revision_plan_no_concrete_steps",
                 guidance=(
-                    "The planner repeatedly submitted an empty plan update and no "
-                    "bounded user/model instruction was available for recovery. The "
-                    "empty revision was not approved."
+                    f"The planner submitted an empty plan update {prior + 1} times and "
+                    "no bounded user/model instruction was available for recovery. The "
+                    f"empty revision ({new_plan.revision}) was not approved."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="revision_plan_no_concrete_steps",
@@ -147,8 +149,11 @@ class MetaToolPlanningMixin:
             await self._loop._valve.land_blocked(
                 reason="bookkeeping_only",
                 guidance=(
-                    "Autonomous mode proposed the same plan revision repeatedly "
-                    "without doing real work."
+                    "Autonomous mode proposed a byte-identical plan revision "
+                    f"{self._loop._identical_plan_revisions} times in a row (the cap is "
+                    f"{_PROPOSE_PLAN_UPDATE_REPEAT_CAP}) without doing real work "
+                    f"between them; the repeated summary was "
+                    f"{(new_plan.summary or '')[:80]!r}."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="bookkeeping_only",

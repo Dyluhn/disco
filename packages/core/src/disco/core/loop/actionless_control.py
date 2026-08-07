@@ -30,6 +30,22 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger("disco.loop")
 
 
+def _undone_plan_steps(events: list[Event]) -> str:
+    """Name the plan steps the record still shows outstanding, or say none are.
+
+    GROUNDED FEEDBACK constraints 1 and 3: the actionless landings used to say
+    "plan steps remain undone" without naming one, though
+    `signals.plan_is_incomplete` had already computed exactly which. Reading it
+    here means the explanation and the valve's own decision cannot drift.
+    """
+    _incomplete, undone = signals.plan_is_incomplete(events)
+    if not undone:
+        return "no plan step is outstanding on the record"
+    listed = ", ".join(str(index) for index in undone[:5])
+    more = f" (+{len(undone) - 5} more)" if len(undone) > 5 else ""
+    return f"plan step(s) {listed}{more} are still not marked done"
+
+
 class ActionlessValveMixin(_ValveHost):
     @staticmethod
     def _actionless_auto_resume_total(events: list[Event]) -> int:
@@ -100,11 +116,14 @@ class ActionlessValveMixin(_ValveHost):
             signals.planning_turns_since_replan(events) < self._loop._max_consecutive_noops
         ):
             return False
+        stalled = signals.planning_turns_since_replan(events)
         await self.land_blocked(
             reason="actionless",
             guidance=(
-                "The agent stayed in planning for several turns without "
-                "submitting a revised plan while a re-plan is pending."
+                f"The agent stayed in planning for {stalled} turns without "
+                "submitting a revised plan while a re-plan is pending (the "
+                f"limit is {self._loop._max_consecutive_noops}); "
+                f"{_undone_plan_steps(events)}."
             ),
             legacy_status=ConversationStatus.PAUSED,
             legacy_detail="actionless",
@@ -161,8 +180,10 @@ class ActionlessValveMixin(_ValveHost):
             await self.land_blocked(
                 reason="actionless",
                 guidance=(
-                    "The agent produced repeated responses without submitting "
-                    "a revised plan while a re-plan is pending."
+                    f"The agent produced {noops} responses in a row without "
+                    "submitting a revised plan while a re-plan is pending (the "
+                    f"limit is {self._loop._max_consecutive_noops}); "
+                    f"{_undone_plan_steps(events)}."
                 ),
                 legacy_status=ConversationStatus.PAUSED,
                 legacy_detail="actionless",
@@ -171,7 +192,11 @@ class ActionlessValveMixin(_ValveHost):
         if incomplete and signals.actions_since_last_resume(events) == 0:
             await self.land_blocked(
                 reason="noop_limit",
-                guidance="Plan steps remain undone and no real work happened in this run segment.",
+                guidance=(
+                    f"The record shows {_undone_plan_steps(events)}, and no real "
+                    f"work happened in this run segment across {noops} "
+                    "consecutive responses."
+                ),
                 legacy_status=ConversationStatus.PAUSED,
                 legacy_detail="noop_limit",
             )
@@ -200,6 +225,13 @@ class ActionlessValveMixin(_ValveHost):
     async def _warn_actionless_limit(self, noops: int) -> None:
         if noops != self._loop._max_consecutive_noops - 1:
             return
+        # Constraint 4 + the projection rule: this warning can fire once per
+        # actionless streak and a run can have several. It used to say "several
+        # messages" and offer the agent the done-determination ("or `finish` if
+        # the task is complete") — the owner's named counter-example shape. It
+        # now states the measured count, what the next idle turn costs, and the
+        # ONE move the record says is outstanding.
+        events = await self._loop._events()
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -207,9 +239,11 @@ class ActionlessValveMixin(_ValveHost):
                     role="user",
                     content=(
                         "<system-reminder>\n"
-                        "You've sent several messages without acting. Call a "
-                        "tool to make progress, or `finish` if the task is "
-                        "complete.\n"
+                        f"You have sent {noops} messages in a row without calling "
+                        "a tool. One more and this run segment ENDS at the "
+                        f"no-progress limit of {self._loop._max_consecutive_noops}.\n"
+                        f"The record shows {_undone_plan_steps(events)}.\n"
+                        "Next move: call a tool that does that work in THIS turn.\n"
                         "</system-reminder>"
                     ),
                 ),
@@ -297,15 +331,28 @@ class ActionlessValveMixin(_ValveHost):
             return False
         # All gates passed → land a clean FINISHED (same message + detail as the
         # pre-W-32 force-finish, now EARNED rather than bypassed).
+        # Constraint 1: render the gates that actually cleared, from the record
+        # this branch just read, rather than the canned "all plan steps are
+        # complete" — which asserted a fact the message never checked and could
+        # repeat verbatim on a later notify in the same run.
+        events = await self._loop._events()
+        _incomplete, undone = signals.plan_is_incomplete(events)
+        step_state = (
+            "every plan step is marked done"
+            if not undone
+            else f"plan step(s) {', '.join(str(i) for i in undone)} are not marked done"
+        )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
                 message=LLMMessage(
                     role="user",
                     content=(
-                        "All plan steps are complete — the agent"
-                        " signaled completion without calling finish."
-                        " Marking the build finished."
+                        f"The record shows {step_state}, and the agent signaled"
+                        " completion without calling finish. The execution,"
+                        " render-verify, Definition-of-Done and seal gates all"
+                        " passed on this record, so the build is being marked"
+                        " finished."
                     ),
                 ),
             )

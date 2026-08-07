@@ -107,9 +107,10 @@ async def reuse_finish_verify_receipt(
                 role="user",
                 content=(
                     "<system-reminder>\n"
-                    "Finish verify receipt reused from prior successful "
-                    "shell execution — the correlated observation's success "
-                    "is carried forward without re-executing the command.\n"
+                    f"Finish verify receipt for `{verify_cmd}` reused from the prior "
+                    f"successful shell execution recorded at {observation.id} — that "
+                    "correlated observation's success is carried forward without "
+                    "re-executing the command.\n"
                     "</system-reminder>"
                 ),
             ),
