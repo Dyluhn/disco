@@ -212,7 +212,9 @@ async def _render_c1_deck_impl(
     if ctx.sandbox is None:
         return ToolOutcome(
             success=False,
-            content="No sandbox available to write the slide deck.",
+            content=(
+                f"No sandbox available to write the slide deck {args.filename!r}."
+            ),
         )
     sbx = ctx.sandbox
     out_filename = f"{args.filename}.{fmt}"

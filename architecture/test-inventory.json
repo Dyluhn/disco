@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a64ae81bd7eee41194fa7117fcf0009bd9094ff4",
+  "source_identity": "8991ea714ff2d04c8f7f295809ebcb9a57caab29",
   "collected": {
     "counts": {
       "packages": 10376,

@@ -53,10 +53,31 @@ def _route_for_governed(relpath: str) -> tuple[str | None, str]:
     return None, ""
 
 
-_HARNESS_BOOKKEEPING_MESSAGE = (
-    ".disco/ files are harness-managed bookkeeping — you never need to edit them. "
-    "Continue with the task's own deliverables."
-)
+def _harness_bookkeeping_message() -> str:
+    """The harness-bookkeeping `why` clause.
+
+    2026-08-07b, constraint 4 — recorded honestly as a FOLD, not a repair. This
+    is the `why` fragment of `_governed_route_text`, and its caller composes it
+    into a refusal that ALREADY renders the offending path twice, so the emitted
+    surface is path-derived and cannot repeat unless the agent retries the exact
+    same path — at which point the identical answer is the correct one.
+
+    No further run state is available to render, and the one fact that looked
+    addable — naming `context_memory` as the owning tool — is FORBIDDEN here:
+    `test_context_memory_route_suppressed_when_out_of_scope` pins that an
+    out-of-scope tool must never be named to the agent (the standing
+    no-false-affordance rule). An attempt to name it was made and reverted.
+
+    Folded into a single owner so the bytes have one home and nothing can splice
+    the clause somewhere it is not path-qualified.
+    """
+    return (
+        ".disco/ files are harness-managed bookkeeping — you never need to edit "
+        "them. Continue with the task's own deliverables."
+    )
+
+
+_HARNESS_BOOKKEEPING_MESSAGE = _harness_bookkeeping_message()
 
 
 def _governed_route_text(
@@ -69,7 +90,7 @@ def _governed_route_text(
         return None, "It is host-managed; do not edit it with a generic write tool."
     if allowed_tools is not None and tool not in allowed_tools:
         if relpath.startswith(".disco/context/") and tool == "context_memory":
-            return None, _HARNESS_BOOKKEEPING_MESSAGE
+            return None, _harness_bookkeeping_message()
         return None, "It is host-managed; do not edit it with a generic write tool."
     return tool, f"Use {tool} to change it ({why})."
 

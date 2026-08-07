@@ -65,6 +65,36 @@ if TYPE_CHECKING:
         counters, the event log, the plan lifecycle, tool execution, turn control.
         """
 
+_REMEMBER_FRESH_DIAGNOSTIC = "remember_fresh_session_refused"
+
+
+def _remember_fresh_refusal(events: list[Event], step: AgentStep) -> str:
+    """Fresh-session `remember` refusal, rendered and repetition-aware.
+
+    Constraint 4: `remember` is not counted as work, so a canned refusal let a
+    model spend the run down being told the same sentence.
+    """
+    repeats = 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.meta.get("diagnostic") == _REMEMBER_FRESH_DIAGNOSTIC
+    )
+    fact = str((step.tool_call.arguments or {}).get("fact") or "").strip() if step.tool_call else ""
+    tried = f" (you tried to pin {fact[:80]!r})" if fact else ""
+    escalation = (
+        f"\nThis is refusal {repeats} of this session; each attempt spends one turn "
+        "toward the no-progress limit."
+        if repeats > 1
+        else ""
+    )
+    return (
+        "remember refused: no real work has happened yet in this session, so there "
+        f"is nothing observed to pin{tried}.\nNext move: execute the next plan step "
+        f"with real tool calls, then remember what you learned.{escalation}"
+    )
+
+
 _LOG = logging.getLogger("disco.loop")
 
 
@@ -113,11 +143,8 @@ class MetaToolCommonMixin:
         ):
             return await self._loop._valve.refuse_fresh_session(
                 step,
-                "remember refused: no real work has happened "
-                "yet in this session. Facts worth pinning come "
-                "from real observations — execute the next plan "
-                "step with real tool calls first, then remember "
-                "what you learned.",
+                _remember_fresh_refusal(events, step),
+                diagnostic=_REMEMBER_FRESH_DIAGNOSTIC,
             )
         fact = str(step.tool_call.arguments.get("fact") or "").strip()
         if fact:
@@ -312,8 +339,10 @@ class MetaToolCommonMixin:
             await self._loop._valve.land_terminal_with_explanation(
                 reason=reason,
                 guidance=(
-                    "The workflow control tool `skip` was called. The run is "
-                    "ending honestly without producing the contracted output."
+                    f"The workflow control tool `skip` was called on workflow run "
+                    f"{getattr(workflow_run, 'run_id', '') or 'unknown'} with reason "
+                    f"{reason!r}. The run is ending honestly without producing the "
+                    "contracted output."
                 ),
                 status=ConversationStatus.FINISHED,
                 detail="workflow_skipped",
@@ -374,6 +403,13 @@ class MetaToolCommonMixin:
             # Nothing persisted — invisible to every event-derived detector, so
             # the instance counter has to carry it (same as handle_noop_step).
             self._loop._invisible_steps += 1
+        truncation_events = await self._loop._events()
+        truncations = 1 + sum(
+            1
+            for event in truncation_events
+            if isinstance(event, MessageEvent)
+            and event.meta.get("diagnostic") == "output_truncated"
+        )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -381,14 +417,23 @@ class MetaToolCommonMixin:
                     role="user",
                     content=(
                         "<system-reminder>\n"
-                        "Your previous message was cut off mid-sentence — it hit "
+                        + (
+                            f"This is truncation {truncations} of this run — the "
+                            f"previous {truncations - 1} continuation(s) also hit the "
+                            "limit, so shorten the remaining output sharply.\n"
+                            if truncations > 1
+                            else ""
+                        )
+                        + "Your previous message was cut off mid-sentence — it hit "
                         "the output length limit. Continue it from exactly where "
                         "it stopped; do NOT restart or repeat what you already "
-                        "wrote. Be more concise this time, and if you were about "
-                        "to take an action, take it now with a tool call.\n"
+                        f"wrote (it ended: ...{step.thought.strip()[-60:]!r}). Be "
+                        "more concise this time, and if you were about to take an "
+                        "action, take it now with a tool call.\n"
                         "</system-reminder>"
                     ),
                 ),
+                meta={"diagnostic": "output_truncated"},
             )
         )
         if await self._loop._post_noop_valve() is Disp.HALT:

@@ -53,8 +53,10 @@ async def _workflow_finish_verify_shell_guard(gate: Any) -> bool:
                 content=(
                     "<system-reminder>\n"
                     "The supplied finish verification was ignored because this "
-                    "sealed workflow does not grant the shell tool. Host-owned "
-                    "workflow output checks remain authoritative.\n"
+                    "sealed workflow does not grant the shell tool. This workflow "
+                    "grants: "
+                    f"{', '.join(workflow_tools) if workflow_tools else 'no tools'}. "
+                    "Host-owned workflow output checks remain authoritative.\n"
                     "</system-reminder>"
                 ),
             ),
@@ -161,10 +163,11 @@ async def finish_verify_passed(gate: Any, command: str) -> tuple[bool, bool]:
             call,
             (
                 "<system-reminder>\n"
-                "The verify command attached to finish needs confirmation to run "
-                "and won't be executed silently as a verification. Run that check "
-                "as a normal action first (it will go through the confirm gate), "
-                "then finish.\n"
+                f"The verify command attached to finish (`{command}`) assessed "
+                f"{getattr(risk, 'level', risk)} and needs confirmation to run, so "
+                "it won't be executed silently as a verification. Next move: run "
+                "that exact command as a normal action first (it will go through "
+                "the confirm gate), then finish.\n"
                 "</system-reminder>"
             ),
         )

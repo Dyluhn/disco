@@ -132,10 +132,10 @@ class DelegateExploreTool:
         return ToolOutcome(
             success=False,
             content=(
-                "delegate_explore: no subagent dispatcher is wired on this "
-                "executor. The loop's intercept path (engine.py) is the only "
-                "supported entry point — call from a model step inside the "
-                "loop, not from a direct tool invocation."
+                f"delegate_explore (task {str(getattr(args, 'task', ''))[:60]!r}): no "
+                "subagent dispatcher is wired on this executor. The loop's intercept "
+                "path (engine.py) is the only supported entry point — call from a "
+                "model step inside the loop, not from a direct tool invocation."
             ),
             error="no_dispatcher",
         )

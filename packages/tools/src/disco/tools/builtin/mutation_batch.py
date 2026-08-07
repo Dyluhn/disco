@@ -183,7 +183,11 @@ async def _resolve_planned_intents(
     if len(commit_last_resolved) != len(set(commit_last_resolved)):
         return _prevalidation_failure(
             error="BATCH_PLAN_CONFLICT",
-            message="deterministic batch refused before writing: commit_last contains aliases.",
+            message=(
+                "deterministic batch refused before writing: commit_last contains "
+                "aliases — these paths resolve to the same file: "
+                f"{sorted({p for p in commit_last_resolved if commit_last_resolved.count(p) > 1})}."
+            ),
         )
     unknown_last = [path for path in commit_last_resolved if path not in planned]
     if unknown_last:
@@ -231,8 +235,11 @@ def _check_delete_availability(
         return _prevalidation_failure(
             error="BATCH_DELETE_UNAVAILABLE",
             message=(
-                "deterministic batch refused before writing because this sandbox cannot delete "
-                "a stale generated file. Use a supported sandbox or a fresh workspace."
+                "deterministic batch refused before writing because this sandbox "
+                f"({type(sandbox).__name__}) cannot delete a stale generated file, and "
+                "the plan deletes "
+                f"{sorted(path for path in effective if planned[path] is None)}. "
+                "Use a supported sandbox or a fresh workspace."
             ),
         )
     return None

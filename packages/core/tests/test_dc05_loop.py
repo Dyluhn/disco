@@ -487,7 +487,17 @@ async def test_same_path_serve_is_recorded_again_for_a_new_run_intent():
 @pytest.mark.asyncio
 async def test_empty_serve_spam_trips_valve():
     """Empty-args serve persists NOTHING to the log — the instance counter is
-    the only witness, and it must still trip the valve."""
+    the only witness, and it must still trip the valve.
+
+    The id is KEPT; the body was strengthened at 2026-08-07b. It used to require
+    the string "provide both required string fields" to appear THREE TIMES —
+    that is, it pinned byte-identical repetition as correct, the exact defect
+    the GROUNDED FEEDBACK twice-rule (constraint 4) names. The property that
+    assertion stood for is that every malformed `serve` gets corrective feedback
+    and the valve still trips; that is asserted here against the run, plus the
+    twice-rule itself: the repeats must NOT be byte-identical, and the later
+    ones must acknowledge the count.
+    """
     agent = ScriptedAgent(
         [
             action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
@@ -510,9 +520,18 @@ async def test_empty_serve_spam_trips_valve():
         for e in events
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
-        and "provide both required string fields" in e.message.content
+        and e.meta.get("diagnostic") == "serve_argument_refused"
     ]
     assert len(malformed_feedback) == 3
+    bodies = [e.message.content for e in malformed_feedback]
+    # every refusal still names the missing contract and the one corrective move
+    for body in bodies:
+        assert "serve refused:" in body
+        assert "Next move:" in body
+    # the twice-rule: no two firings are the same bytes, and the repeats say so
+    assert len(set(bodies)) == 3
+    assert "2 times in this run" in bodies[1]
+    assert "3 times in this run" in bodies[2]
 
 
 @pytest.mark.asyncio

@@ -118,9 +118,6 @@ from .turn_control_support import (
     _SERVE_TARGET_SHAPE_DIAGNOSTIC as _SERVE_TARGET_SHAPE_DIAGNOSTIC,
 )
 from .turn_control_support import (
-    _SERVE_TARGET_SHAPE_GUIDANCE as _SERVE_TARGET_SHAPE_GUIDANCE,
-)
-from .turn_control_support import (
     _STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON as _STUCK_ESCAPE_BLOCKED_TOOLS_BY_REASON,
 )
 from .turn_control_support import (

@@ -707,6 +707,25 @@ def planning_turns_since_replan(events: list[Event]) -> int:
     return _count_planning_nudges(events, planning_seq, _PLAN_NUDGE)
 
 
+def _is_plan_nudge_event(event: Event, plan_nudge: str) -> bool:
+    """True for a planning nudge, by LABEL first and legacy content second.
+
+    Constraint 4 made the nudge text repetition-aware, so byte-equality with the
+    first firing can no longer be the identity test. Emissions carry a stable
+    `diagnostic` label; the content comparison is retained so events already
+    durable in logs written before 2026-08-07b (no label) still count exactly as
+    they did. Router-phase nudges carry a DIFFERENT label and have never been
+    counted here — that stays true.
+    """
+    from .engine_contracts import _PLAN_NUDGE_DIAGNOSTIC
+
+    if not isinstance(event, MessageEvent) or event.source != EventSource.ENVIRONMENT:
+        return False
+    if event.meta.get("diagnostic") == _PLAN_NUDGE_DIAGNOSTIC:
+        return True
+    return event.message is not None and event.message.content == plan_nudge
+
+
 def _count_planning_nudges(events: list[Event], planning_seq: int, plan_nudge: str) -> int:
     """Count ENVIRONMENT plan-nudge messages after ``planning_seq``."""
     count = 0
@@ -717,12 +736,7 @@ def _count_planning_nudges(events: list[Event], planning_seq: int, plan_nudge: s
             return 0
         if isinstance(e, StatusEvent) and e.detail == "plan_approved":
             return 0
-        if (
-            isinstance(e, MessageEvent)
-            and e.source == EventSource.ENVIRONMENT
-            and e.message is not None
-            and e.message.content == plan_nudge
-        ):
+        if _is_plan_nudge_event(e, plan_nudge):
             count += 1
     return count
 
