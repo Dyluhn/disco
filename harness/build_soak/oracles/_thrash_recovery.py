@@ -1,34 +1,41 @@
-"""Blocked-recovery, mutation-receipt, and plan-authority helpers."""
+"""Blocked-recovery, mutation-receipt, and plan-authority helpers.
+
+The mutation-receipt and plan-authority rules MOVED to
+`disco.core.receipt_currency` at 2026-08-06z (GROUNDED FEEDBACK constraint 2:
+"one currency predicate, two consumers"). They are RE-EXPORTED here, never
+copied — the loop's W-39 echo and this oracle must decide "is the prior result
+still current?" with the same code, or the two windows drift and the drift stays
+invisible until a canary fires on the gap between them. That is precisely what
+F47 measured, one dimension over, and `_thrash_shell.py` re-exports
+`disco.core.script_identity` for the identical reason.
+
+`test_receipt_currency_shared.py` asserts OBJECT IDENTITY between these names and
+the core owner's, so a future copy-paste cannot silently reopen the gap.
+"""
 
 from __future__ import annotations
 
-import re
 from typing import Any
+
+from disco.core.receipt_currency import (
+    WORKSPACE_MUTATION_TOOLS as _FILE_MUTATION_TOOLS,
+)
+from disco.core.receipt_currency import (
+    approved_plan_predicate_scope as approved_plan_predicate_scope,
+)
+from disco.core.receipt_currency import (
+    trusted_mutation_receipt_outcome as trusted_mutation_receipt_outcome,
+)
 
 from ..events import (
     KIND_MESSAGE,
-    KIND_OBSERVATION,
     KIND_STATUS,
     SRC_USER,
     kind_of,
     seq_of,
 )
 
-_FILE_MUTATION_TOOLS = frozenset(
-    {
-        "exact_replace",
-        "file_append",
-        "file_edit",
-        "file_insert_lines",
-        "file_replace_lines",
-        "file_str_replace",
-        "file_write",
-        "safe_write_file",
-        "write_file",
-    }
-)
 _RECEIPT_FILE_TOOLS = _FILE_MUTATION_TOOLS
-_RECEIPT_APPLIED_TOOLS = frozenset({"run_project_script"})
 
 
 def _validate_blocked_meta(meta: Any, detail: str) -> bool:
@@ -103,89 +110,6 @@ def recovered_blocked_marker(marker: dict[str, Any], events: list[dict[str, Any]
     return user_seq is not None and _finished_after(user_seq, events)
 
 
-def _applied_paths_are_exact(structured: dict[str, Any]) -> bool:
-    applied = structured.get("applied")
-    return (
-        isinstance(applied, list)
-        and bool(applied)
-        and all(isinstance(item, str) and bool(item) for item in applied)
-    )
-
-
-def _file_receipt_is_exact(structured: dict[str, Any]) -> bool:
-    path = structured.get("path")
-    sha256 = structured.get("sha256")
-    return (
-        isinstance(path, str)
-        and bool(path.strip())
-        and isinstance(sha256, str)
-        and re.fullmatch(r"[0-9a-f]{64}", sha256) is not None
-    )
-
-
-def trusted_mutation_receipt_outcome(
-    event: dict[str, Any], *, action_ids: frozenset[str] | None = None
-) -> bool:
-    """Whether one observation event carries a trusted changed-state receipt."""
-    if kind_of(event) != KIND_OBSERVATION:
-        return False
-    action_id = event.get("action_id")
-    if not isinstance(action_id, str) or not action_id:
-        return False
-    if action_ids is not None and action_id not in action_ids:
-        return False
-    result = event.get("tool_result")
-    if not isinstance(result, dict) or result.get("success") is not True:
-        return False
-    structured = result.get("structured")
-    if not isinstance(structured, dict):
-        return False
-    if structured.get("state_changed") is True:
-        return True
-    tool_name = result.get("tool_name")
-    if tool_name in _RECEIPT_APPLIED_TOOLS:
-        return _applied_paths_are_exact(structured)
-    if tool_name in _RECEIPT_FILE_TOOLS:
-        return _file_receipt_is_exact(structured)
-    return False
-
-
-def _valid_plan_transition(transition: dict[str, Any]) -> bool:
-    revision = transition.get("new_plan_revision")
-    plan_event_id = transition.get("new_plan_event_id")
-    return all(
-        (
-            transition.get("new_authority") == "plan",
-            transition.get("reason") in {"approved_initial_plan", "approved_plan_revision"},
-            isinstance(revision, int),
-            not isinstance(revision, bool),
-            isinstance(revision, int) and revision >= 1,
-            isinstance(plan_event_id, str),
-            isinstance(plan_event_id, str) and bool(plan_event_id),
-        )
-    )
-
-
-def _predicate_fingerprints(transition: dict[str, Any]) -> tuple[str, ...] | None:
-    fingerprints = transition.get("new_predicate_fingerprints")
-    if not isinstance(fingerprints, list):
-        return None
-    if any(not isinstance(item, str) or not item for item in fingerprints):
-        return None
-    return tuple(sorted(fingerprints))
-
-
-def approved_plan_predicate_scope(
-    event: dict[str, Any],
-) -> tuple[str, ...] | None:
-    """Return one trusted approved plan-verifier authority scope."""
-    if (
-        kind_of(event) != KIND_STATUS
-        or event.get("source") != "system"
-        or event.get("detail") != "plan_approved"
-    ):
-        return None
-    transition = event.get("plan_verification_transition")
-    if not isinstance(transition, dict) or not _valid_plan_transition(transition):
-        return None
-    return _predicate_fingerprints(transition)
+# `trusted_mutation_receipt_outcome` and `approved_plan_predicate_scope` are the
+# re-exports at the top of this module. Their bodies — and the receipt-shape
+# helpers they use — live in `disco.core.receipt_currency`.
