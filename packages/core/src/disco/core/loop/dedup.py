@@ -36,6 +36,10 @@ from ..events import (
     WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
 from ..receipt_currency import latest_currency_boundary_seq
+# 2026-08-07n — shared notice vocabulary, one owner (see `dedup_notice_common`).
+from .dedup_notice_common import (
+    _W39_ESCALATION_CLAUSE, _W39_SCRIPT_ESCALATION_CLAUSE, _w39_identical_call_count,
+)
 from ..script_identity import (
     SHELL_TOOLS,
     describe_script_fingerprint,
@@ -631,7 +635,7 @@ _W39_REMINDER_TEMPLATE = (
     "{sentinel} You already ran `{command}` earlier (step {step}) and it "
     "passed, and this run's record shows no change since then. Re-run it "
     "only if you have changed something relevant — otherwise act on the "
-    "result you already have instead of re-verifying.{result}\n"
+    "result you already have instead of re-verifying.{escalation}{result}\n"
     "</system-reminder>"
 )
 
@@ -646,7 +650,7 @@ _W39_SCRIPT_REMINDER_TEMPLATE = (
     "passed, and this run's record shows no change since then. Spelling the command "
     "differently asks the same question. Re-run it only if you have changed "
     "something relevant — otherwise act on the result you already have instead of "
-    "re-verifying.{result}\n"
+    "re-verifying.{escalation}{result}\n"
     "</system-reminder>"
 )
 
@@ -897,14 +901,19 @@ def _w39_reminder_text(
     key: str,
     prior_seq: int,
     short_command: str,
+    current_fingerprint: str = "",
 ) -> str:
     prior_result = _w39_prior_result_excerpt(events, e.id)
     result = _W39_RESULT_BLOCK.format(result=prior_result) if prior_result else ""
     if sentinel == _W39_REMINDER_SENTINEL:
+        # `events[:-1]` is the log WITHOUT the call about to execute — the same
+        # window the plan class counts over.
+        count = _w39_identical_call_count(events[:-1] if events else [], current_fingerprint)
         return _W39_REMINDER_TEMPLATE.format(
             sentinel=sentinel,
             command=short_command,
             step=prior_seq,
+            escalation=_W39_ESCALATION_CLAUSE.format(count=count),
             result=result,
         )
     prior_command = _w39_candidate_command(e, exclude_verify_probe=True) or ""
@@ -913,6 +922,7 @@ def _w39_reminder_text(
         script=key,
         command=_w39_short_command(prior_command),
         step=prior_seq,
+        escalation=_W39_SCRIPT_ESCALATION_CLAUSE,
         result=result,
     )
 
@@ -1042,6 +1052,7 @@ def _w39_shell_verify_reminder(
                 key=key,
                 prior_seq=prior_seq,
                 short_command=short_command,
+                current_fingerprint=current_fingerprint,
             ),
         )
     return (False, 0, "")
