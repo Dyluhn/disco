@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "adfdf87ac84951776cba3d2dac6942746456fb81",
+  "source_identity": "78b24b3ef76024d760eb704669f5f8811996765f",
   "collected": {
     "counts": {
-      "packages": 10364,
+      "packages": 10376,
       "harness": 1317,
       "integrations": 9,
       "tests": 386
     },
-    "total": 12076,
+    "total": 12088,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6223,6 +6223,15 @@
         "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_allows_only_one_round_before_submit_plan",
         "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_answer_resumes_to_submit_plan",
         "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_yields_structured_intake_event_capped_to_four",
+        "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_PROVEN_to_have_failed_is_not_a_boundary",
+        "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_of_UNKNOWN_outcome_is_a_boundary",
+        "packages/core/tests/test_receipt_currency_shared.py::test_every_declared_boundary_kind_is_actually_reachable",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_cap_does_not_count_across_a_trusted_mutation_receipt",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_currency_rules_live_in_the_shared_lowest_layer",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_echo_fires_only_while_the_prior_result_is_still_current",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_harness_re_exports_the_owner_rather_than_copying_it",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_loop_echo_computes_its_boundary_through_the_shared_owner",
+        "packages/core/tests/test_receipt_currency_shared.py::test_the_two_consumers_agree_on_the_same_run",
         "packages/core/tests/test_records_auth.py::test_auth_records_emits_auth_schema_worker_and_approval_rbac",
         "packages/core/tests/test_records_auth.py::test_auth_records_schema_sql_round_trips_with_fk_enforcement",
         "packages/core/tests/test_records_auth.py::test_auth_records_worker_and_schema_outputs_stay_stable",
@@ -6764,9 +6773,12 @@
         "packages/core/tests/test_serve_duplicate_escalation.py::test_a_repeat_names_the_cost_and_the_remaining_moves",
         "packages/core/tests/test_serve_duplicate_escalation.py::test_a_repeat_stops_repeating_itself",
         "packages/core/tests/test_serve_duplicate_escalation.py::test_every_variant_stays_an_ambient_system_reminder",
+        "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
         "packages/core/tests/test_serve_duplicate_escalation.py::test_it_never_tells_the_agent_to_finish_unconditionally",
         "packages/core/tests/test_serve_duplicate_escalation.py::test_the_count_is_stated_so_each_repeat_carries_new_information",
         "packages/core/tests/test_serve_duplicate_escalation.py::test_the_first_refusal_is_unchanged",
+        "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
+        "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with",
         "packages/core/tests/test_serve_output_truth.py::test_serve_existing_path_emits_deliverable",
         "packages/core/tests/test_serve_output_truth.py::test_serve_missing_path_refused_no_deliverable",
         "packages/core/tests/test_serve_output_truth.py::test_serve_missing_workspace_absolute_path_reports_normalized_path",
@@ -12097,9 +12109,9 @@
     }
   },
   "mapping_static": {
-    "identity": "adfdf87ac84951776cba3d2dac6942746456fb81",
-    "python_test_file_count": 822,
-    "python_static_test_id_count": 9931,
+    "identity": "78b24b3ef76024d760eb704669f5f8811996765f",
+    "python_test_file_count": 823,
+    "python_static_test_id_count": 9943,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12613,6 +12625,7 @@
       "packages/core/tests/test_provider_ledger_emit.py",
       "packages/core/tests/test_provider_request_contract.py",
       "packages/core/tests/test_questions_v2_intake.py",
+      "packages/core/tests/test_receipt_currency_shared.py",
       "packages/core/tests/test_records_auth.py",
       "packages/core/tests/test_records_primitive.py",
       "packages/core/tests/test_recoverable_excerpts.py",
@@ -18975,6 +18988,15 @@
       "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_allows_only_one_round_before_submit_plan",
       "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_answer_resumes_to_submit_plan",
       "packages/core/tests/test_questions_v2_intake.py::test_questions_v2_yields_structured_intake_event_capped_to_four",
+      "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_PROVEN_to_have_failed_is_not_a_boundary",
+      "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_of_UNKNOWN_outcome_is_a_boundary",
+      "packages/core/tests/test_receipt_currency_shared.py::test_every_declared_boundary_kind_is_actually_reachable",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_cap_does_not_count_across_a_trusted_mutation_receipt",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_currency_rules_live_in_the_shared_lowest_layer",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_echo_fires_only_while_the_prior_result_is_still_current",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_harness_re_exports_the_owner_rather_than_copying_it",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_loop_echo_computes_its_boundary_through_the_shared_owner",
+      "packages/core/tests/test_receipt_currency_shared.py::test_the_two_consumers_agree_on_the_same_run",
       "packages/core/tests/test_records_auth.py::test_auth_records_emits_auth_schema_worker_and_approval_rbac",
       "packages/core/tests/test_records_auth.py::test_auth_records_schema_sql_round_trips_with_fk_enforcement",
       "packages/core/tests/test_records_auth.py::test_auth_records_worker_and_schema_outputs_stay_stable",
@@ -19453,9 +19475,12 @@
       "packages/core/tests/test_serve_duplicate_escalation.py::test_a_repeat_names_the_cost_and_the_remaining_moves",
       "packages/core/tests/test_serve_duplicate_escalation.py::test_a_repeat_stops_repeating_itself",
       "packages/core/tests/test_serve_duplicate_escalation.py::test_every_variant_stays_an_ambient_system_reminder",
+      "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
       "packages/core/tests/test_serve_duplicate_escalation.py::test_it_never_tells_the_agent_to_finish_unconditionally",
       "packages/core/tests/test_serve_duplicate_escalation.py::test_the_count_is_stated_so_each_repeat_carries_new_information",
       "packages/core/tests/test_serve_duplicate_escalation.py::test_the_first_refusal_is_unchanged",
+      "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
+      "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with",
       "packages/core/tests/test_serve_output_truth.py::test_serve_existing_path_emits_deliverable",
       "packages/core/tests/test_serve_output_truth.py::test_serve_missing_path_refused_no_deliverable",
       "packages/core/tests/test_serve_output_truth.py::test_serve_missing_workspace_absolute_path_reports_normalized_path",
@@ -31230,6 +31255,54 @@
           "packages/core/tests/test_request_budget_loop.py::test_unavailable_emits_no_scalar_fields",
           "packages/core/tests/test_request_budget_loop.py::test_view_of_raises_only_when_condenser_attempted_still_calls_model",
           "packages/core/tests/test_request_budget_loop.py::test_within_budget_emits_scalar_event"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-GROUNDED-FEEDBACK",
+      "root": "packages",
+      "source_identity_before": "adfdf87ac84951776cba3d2dac6942746456fb81",
+      "source_identity_after": "78b24b3ef76024d760eb704669f5f8811996765f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10364,
+          "after_count": 10376,
+          "added_ids": [
+            "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_PROVEN_to_have_failed_is_not_a_boundary",
+            "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_of_UNKNOWN_outcome_is_a_boundary",
+            "packages/core/tests/test_receipt_currency_shared.py::test_every_declared_boundary_kind_is_actually_reachable",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_cap_does_not_count_across_a_trusted_mutation_receipt",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_currency_rules_live_in_the_shared_lowest_layer",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_echo_fires_only_while_the_prior_result_is_still_current",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_harness_re_exports_the_owner_rather_than_copying_it",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_loop_echo_computes_its_boundary_through_the_shared_owner",
+            "packages/core/tests/test_receipt_currency_shared.py::test_the_two_consumers_agree_on_the_same_run",
+            "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
+            "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
+            "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_receipt_currency_shared.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_PROVEN_to_have_failed_is_not_a_boundary",
+          "packages/core/tests/test_receipt_currency_shared.py::test_a_mutation_of_UNKNOWN_outcome_is_a_boundary",
+          "packages/core/tests/test_receipt_currency_shared.py::test_every_declared_boundary_kind_is_actually_reachable",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_cap_does_not_count_across_a_trusted_mutation_receipt",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_currency_rules_live_in_the_shared_lowest_layer",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_echo_fires_only_while_the_prior_result_is_still_current",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_harness_re_exports_the_owner_rather_than_copying_it",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_loop_echo_computes_its_boundary_through_the_shared_owner",
+          "packages/core/tests/test_receipt_currency_shared.py::test_the_two_consumers_agree_on_the_same_run",
+          "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
+          "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
+          "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

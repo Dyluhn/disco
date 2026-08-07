@@ -106,13 +106,13 @@ from .turn_control_support import (
     _SERVE_DUPLICATE_DIAGNOSTIC as _SERVE_DUPLICATE_DIAGNOSTIC,
 )
 from .turn_control_support import (
-    _SERVE_DUPLICATE_GUIDANCE as _SERVE_DUPLICATE_GUIDANCE,
+    _serve_handoff_guidance as _serve_handoff_guidance,
 )
 from .turn_control_support import (
     _SERVE_HANDOFF_DIAGNOSTIC as _SERVE_HANDOFF_DIAGNOSTIC,
 )
 from .turn_control_support import (
-    _SERVE_HANDOFF_GUIDANCE as _SERVE_HANDOFF_GUIDANCE,
+    _serve_next_move as _serve_next_move,
 )
 from .turn_control_support import (
     _SERVE_TARGET_SHAPE_DIAGNOSTIC as _SERVE_TARGET_SHAPE_DIAGNOSTIC,
