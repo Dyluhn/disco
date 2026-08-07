@@ -23,11 +23,13 @@ from ..events import (
 )
 from ..llm import LLMContextWindowExceeded
 from .dedup import (
-    _W39_SHELL_TOOLS,
+    _W39_NOTICE_TOOLS,
+    _W39_PLAN_TOOLS,
     _f8_confirmed_file_writes,
     _f9_dedupable_read,
     _w39_shell_verify_reminder,
 )
+from .dedup_plan_notice import _w39_plan_progress_reminder
 from .observation_dedup import (
     _has_confirmed_prior_append,
     _redirect_marker_write_with_read_provenance,
@@ -184,6 +186,42 @@ def _shell_reminder(
     return text
 
 
+def _answered_question_reminder(
+    action: ActionEvent,
+    events: list[Event],
+) -> str | None:
+    """The notice half of F47, across every tool class that carries one.
+
+    *"Answered-question repetition is culpable only after notice"* — so this is
+    the one place that decides whether a notice exists for the call about to
+    execute, and it dispatches by class rather than assuming the shell class is
+    the only one. Before 2026-08-07f the shell class WAS the only one, while
+    `ThrashOracle` counted identical repeats over every tool; `update_plan_progress`
+    @98651 was faulted at seqs 229/232/235 having been told nothing before seq 237.
+
+    Advisory in both branches: nothing is skipped, the call executes either way.
+    """
+    assert action.tool_call is not None
+    call = action.tool_call
+    if call.tool_name in _W39_PLAN_TOOLS:
+        remind, prior_seq, text = _w39_plan_progress_reminder(
+            call.tool_name,
+            call.arguments,
+            events,
+        )
+        if not remind:
+            return None
+        _LOG.info(
+            "F47 plan-tracking dedup notice: %s already succeeded at step %s "
+            "(call_id=%s) — advisory, executing anyway",
+            call.tool_name,
+            prior_seq,
+            call.call_id,
+        )
+        return text
+    return _shell_reminder(action, events)
+
+
 async def _prepare_observation(
     loop: _LoopFacet,
     action: ActionEvent,
@@ -210,15 +248,22 @@ async def _prepare_observation(
       executes and the only observable change is one advisory message.
 
     Cost of un-gating, bounded deliberately: the event log is read only when a
-    memo could actually fire — assist on (F9's path), or a shell tool (the only
-    channel the memo covers). A non-shell call with assist off takes the same
+    memo could actually fire — assist on (F9's path), or a tool class that carries
+    a notice (`_W39_NOTICE_TOOLS`). Any other call with assist off takes the same
     early return it always did and reads nothing, so the un-gating adds no work
     to the paths it cannot affect.
+
+    **2026-08-07f (F47).** That gate read `_W39_SHELL_TOOLS` until this boundary,
+    and the narrowing was invisible: `ThrashOracle` counts identical repeats over
+    EVERY tool, so every non-shell class was counted with no notice reachable.
+    It now reads `_W39_NOTICE_TOOLS`, the single set the notice classes are
+    declared in, so adding a class is one edit and cannot leave a second guard
+    behind.
     """
     if action.tool_call is None:
         return False, None
     call = action.tool_call
-    if not loop._assist and call.tool_name not in _W39_SHELL_TOOLS:
+    if not loop._assist and call.tool_name not in _W39_NOTICE_TOOLS:
         return False, None
     events = await loop._events()
     if loop._assist:
@@ -231,7 +276,7 @@ async def _prepare_observation(
         if deduped:
             await _emit_dedup_observation(loop, action, prior_id, pointer)
             return True, None
-    return False, _shell_reminder(action, events)
+    return False, _answered_question_reminder(action, events)
 
 
 def _marker_only_call(action: ActionEvent, tool_name: str) -> bool:

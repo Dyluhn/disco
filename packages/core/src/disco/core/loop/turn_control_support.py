@@ -125,12 +125,45 @@ def _serve_next_move(events: list[Event]) -> str:
     )
 
 
-def _serve_handoff_guidance(events: list[Event]) -> str:
-    """Handoff-recorded reminder. Derived at the moment of use (constraint 1)."""
+def _serve_handoff_guidance(repeats: int, events: list[Event]) -> str:
+    """Handoff-recorded reminder. Derived at the moment of use (constraint 1),
+    and repetition-aware since 2026-08-07f (constraint 4, F51).
+
+    This function used to take only ``events``, and that was the defect. Its
+    sibling `_serve_duplicate_guidance` sits TEN LINES BELOW, takes ``repeats``,
+    and escalates — written by this campaign against the 2026-07-27
+    counted-promotion failure in which the agent "received a BYTE-IDENTICAL
+    reminder each time". The two seams answer adjacent questions and only one of
+    them had learned the lesson: at 2026-08-07d this surface fired **3× byte
+    identically in `pilota/001` and 2× in `canary/000`**.
+
+    Constraint 1 was never the problem here — the body IS derived, and
+    `_serve_next_move` projects the one outstanding move from the plan and
+    verification record. Constraints 1 and 4 are independent: in a repeat loop
+    the state a derived surface renders has not changed *by construction*, so
+    "derived" and "byte-identical every fire" are perfectly compatible. Only a
+    count breaks that tie, and the count is ledger-derived
+    (`_prior_diagnostic_count`), not an instance counter, so it survives a restart
+    or condensation exactly as the run's own evidence does.
+
+    A repeat here means the agent handed off a DISTINCT artifact again rather than
+    finishing — so the escalation names the count and the real cost, which is that
+    `serve` is not counted as work and each attempt spends a turn.
+    """
+    if repeats <= 1:
+        return (
+            "<system-reminder>\n"
+            "Handoff recorded. `serve` does not complete the run. Do not serve this "
+            f"artifact again.\n{_serve_next_move(events)}\n"
+            "</system-reminder>"
+        )
     return (
         "<system-reminder>\n"
-        "Handoff recorded. `serve` does not complete the run. Do not serve this "
-        f"artifact again.\n{_serve_next_move(events)}\n"
+        f"Handoff recorded — this is the {repeats}th handoff of this run, and none "
+        "of them completes it. `serve` hands an artifact over; it is not counted as "
+        "work, so each further handoff spends one turn toward the no-progress limit "
+        f"that ENDS this run.\n{_serve_next_move(events)}\n"
+        "Do not serve again before doing that.\n"
         "</system-reminder>"
     )
 
@@ -641,6 +674,7 @@ async def _record_serve_handoff(  # noqa: ANN001
         # distinct serve spam remains capped at three and duplicate spam remains
         # capped after two duplicates.
         loop._invisible_steps = 0
+        handoffs = _prior_diagnostic_count(events, _SERVE_HANDOFF_DIAGNOSTIC)
         await loop._emit(
             DeliverableEvent(
                 source=EventSource.AGENT,
@@ -660,8 +694,10 @@ async def _record_serve_handoff(  # noqa: ANN001
         await loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_serve_handoff_guidance(events)),
-                meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC},
+                message=LLMMessage(
+                    role="user", content=_serve_handoff_guidance(handoffs, events)
+                ),
+                meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC, "serve_handoffs": handoffs},
             )
         )
     if await loop._post_noop_valve() is Disp.HALT:
