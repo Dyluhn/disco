@@ -22,6 +22,7 @@ from ....events import (
     PlanVerifierPass,
     StatusEvent,
 )
+from ...ordinals import ordinal
 from ...plan_conditions import DictatedContentCondition
 from .errors import _DictatedContentInspectionIncomplete
 
@@ -143,10 +144,19 @@ async def _notice_repeat(loop: _LoopFacet, blocking: str) -> int:
 
 
 def _again(repeats: int, what: str) -> str:
-    """The repetition clause, or nothing on a first firing."""
+    """The repetition clause, or nothing on a first firing.
+
+    F56 (2026-08-07l): the ordinal was a naive `{n}th` and rendered "the 2th
+    time" to a live agent in the 07j sealed corpus. Only the ordinal moved; the
+    first-firing branch and the rest of the sentence are byte-identical, so
+    pre-repair logs stay recognisable by content.
+    """
     if repeats <= 1:
         return ""
-    return f" This is the {repeats}th time {what} in this run; the previous {repeats - 1} did not clear it."
+    return (
+        f" This is the {ordinal(repeats)} time {what} in this run; "
+        f"the previous {repeats - 1} did not clear it."
+    )
 
 
 async def emit_dangling_plan_evidence_notice(loop: _LoopFacet) -> None:
