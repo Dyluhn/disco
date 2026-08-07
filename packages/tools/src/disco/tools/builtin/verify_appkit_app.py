@@ -170,6 +170,64 @@ def _composite_fingerprint(checks: list[dict[str, Any]], embedded_fp: str) -> st
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+# F49 (2026-08-06x) — the checks whose truth is an OBSERVATION of a running
+# preview, not a property of the bytes.
+#
+# `route_coverage` and `section_coverage` are the W-45 browser path; every
+# `primitive_live:*` check is a live host verification. Each of them is true
+# *at the moment it ran* and can lapse with no agent action at all — the preview
+# can stop, restart, or rotate generation. Every other check in this battery is
+# derived from the workspace tree and stays true until the agent changes it.
+#
+# The distinction exists because the receipt used to extend ONE validity licence
+# ("re-verify only after a material change") over both kinds, which told the
+# agent that a live observation was durable. `p4_appkit_semantic_edit` seed 97705
+# finished on this receipt and `OutputTruthOracle` faulted the run
+# (FALSE_FINISH_PREVIEW_BROKEN, preview health 409).
+_LIVE_OBSERVATION_CHECKS = frozenset({"route_coverage", "section_coverage"})
+_LIVE_OBSERVATION_PREFIX = "primitive_live:"
+
+
+def observation_scoped_checks(checks: list[dict[str, Any]]) -> list[str]:
+    """The names of the checks above that are present in this battery.
+
+    Returned in battery order and surfaced on the verdict so a consumer can see
+    WHICH claims are perishable rather than having to know the list.
+    """
+    return [
+        name
+        for check in checks
+        if (name := str(check["name"])) in _LIVE_OBSERVATION_CHECKS
+        or name.startswith(_LIVE_OBSERVATION_PREFIX)
+    ]
+
+
+def _live_observation_clause(live_names: list[str]) -> str:
+    """The sentence naming this battery's perishable claims, or "" if it has none.
+
+    Its own function rather than an expression inside `build_verdict`: that
+    callable sits at the McCabe budget, and the number/agreement branches below
+    would push it over — which is the arch budget doing its job, not an obstacle
+    to route around with a debt row.
+    """
+    if not live_names:
+        return ""
+    single = len(live_names) == 1
+    return (
+        " {names} {is_are} {a_live} of the preview as it was AT THIS CHECK "
+        "— not {a_durable} of the code. {It_They} can lapse without any "
+        "change of yours if the preview stops, restarts or changes "
+        "generation, so this receipt does not establish that the app is "
+        "still serving later; the finish gate settles that."
+    ).format(
+        names=", ".join(f"`{name}`" for name in live_names),
+        is_are="is" if single else "are",
+        a_live="a live observation" if single else "live observations",
+        a_durable="a durable property" if single else "durable properties",
+        It_They="It" if single else "They",
+    )
+
+
 def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble the W-45-compatible verdict from the per-check results + the
     embedded `verify_web_app` (structural) verdict."""
@@ -203,12 +261,29 @@ def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None)
         # Scoped to what THIS verifier actually establishes: structure. It does
         # not claim runtime behaviour, and it does not say "finish" — only the
         # finish gate knows whether plan steps remain.
+        #
+        # F49 (2026-08-06x): it used to say "finish" anyway. The clause
+        # "…if none are outstanding, finish; re-verify only after a material
+        # change" extended ONE validity licence over both kinds of check in the
+        # battery — and `route_coverage` / `section_coverage` / `primitive_live:*`
+        # are live observations of a running preview, not properties of the bytes.
+        # Telling the agent to re-verify them "only after a material change" tells
+        # it that a perishable observation is durable: they can lapse with no
+        # change of the agent's at all. Seed 97705 finished on this receipt while
+        # the preview was 409.
+        #
+        # The licence is now scoped to the durable checks, the perishable ones are
+        # named as observation-scoped, and the finish decision is left where the
+        # original comment already said it belongs — with the finish gate.
+        # `next_action` stays NON-EMPTY: an empty one is what caused the
+        # 2026-07-27 counted-promotion re-verify thrash this block was written for.
+        live_clause = _live_observation_clause(observation_scoped_checks(checks))
         next_action = (
             "Verified — the structural checks are now proven for this app and "
             "recorded. Re-running the same verification without changing the app "
-            "proves nothing new, including after a transient failure that has "
-            "since cleared. Move to your remaining plan steps, and if none are "
-            "outstanding, finish; re-verify only after a material change."
+            "proves nothing new about them, including after a transient failure "
+            "that has since cleared; re-verify the structure only after a material "
+            "change." + live_clause + " Move to your remaining plan steps."
         )
     else:
         summary = f"verify_appkit_app: {first_fail['name']} FAILED — {first_fail['evidence']}"
@@ -220,6 +295,9 @@ def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None)
         "verdict": "pass" if passed else "fail",
         "summary": summary,
         "next_action": next_action,
+        # F49 — which of this battery's claims are perishable, so a consumer
+        # never has to infer the scope from the prose.
+        "observation_scoped_checks": observation_scoped_checks(checks),
         "failure_fingerprint": fp,
         # W-45 surface (read by the finish gate's preview-binding + payload builder).
         "url": str(emb.get("url") or ""),
@@ -287,8 +365,11 @@ class VerifyAppKitAppTool:
             "errors, and every section's data-appkit-section marker is in the DOM. Embeds a "
             "verify_web_app verdict for the render part. Call ONCE when the app is built and "
             "the preview is running to decide if the structure is sound. When the verdict "
-            "PASSES all checks, the build is DONE — call finish immediately; do not keep "
-            "editing (further edits invalidate the verified state)."
+            "PASSES all checks the STRUCTURE is done — stop editing (further edits invalidate "
+            "the verified state) and move to your remaining plan steps. The route/section "
+            "coverage and primitive_live checks are observations of the preview AT THAT "
+            "MOMENT, so a PASS here is not by itself a finish condition: the finish gate "
+            "decides that."
         ),
         args_model=VerifyAppKitAppArgs,
         needs=frozenset(

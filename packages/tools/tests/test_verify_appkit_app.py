@@ -1575,12 +1575,29 @@ def test_it_names_the_transient_case_that_caused_the_failure():
 
 
 def test_it_does_NOT_tell_the_agent_to_finish():
-    # This tool cannot see the plan; only the finish gate knows whether steps
-    # remain. Same restraint as the web-app verifier.
+    """This tool cannot see the plan; only the finish gate knows whether steps
+    remain. Same restraint as the web-app verifier.
+
+    Until 2026-08-06x this test asserted the presence of the hedge
+    "…and if none are outstanding, finish" — which is the tool telling the agent
+    to finish, hedged. F49: `p4_appkit_semantic_edit` seed 97705 took the hedge
+    and finished while the preview was 409. The restraint the test's own name
+    describes is now enforced literally: the passing receipt does not use the
+    word at all.
+    """
     verdict = _build_verdict([_check("design_lint_clean", True)], {})
     text = verdict["next_action"].lower()
-    assert "if none are outstanding" in text
-    assert not text.startswith("finish")
+    assert "finish" not in text
+    assert "move to your remaining plan steps" in text
+
+    # With live checks present the receipt DOES name the finish gate — but only
+    # to say the gate decides, never to instruct a finish.
+    live = _build_verdict(
+        [_check("design_lint_clean", True), _check("route_coverage", True)], {}
+    )["next_action"].lower()
+    assert "the finish gate settles that" in live
+    for instruction in ("finish now", ", finish", "call finish", "then finish"):
+        assert instruction not in live
 
 
 def test_it_scopes_the_claim_to_STRUCTURE_not_runtime():
