@@ -25,6 +25,12 @@ from ..verification import requires_structured_browser_runtime
 from . import signals
 from .boundaries import AgentStep
 from .control import Disp
+from .turn_control_serve_refusals import (
+    serve_target_shape_guidance as _serve_target_shape_guidance,
+    questions_v2_attempts_since_last_plan as _questions_v2_attempts_since_last_plan,
+    serve_argument_refusal,
+    serve_spend_escalation,
+)
 from .stuck import (
     F6_FILE_MUTATING_TOOLS,
     VerifierFailureNoProgress,
@@ -172,65 +178,6 @@ def _serve_duplicate_guidance(repeats: int, events: list[Event]) -> str:
 
 
 _SERVE_TARGET_SHAPE_DIAGNOSTIC = "serve_target_shape_refused"
-_SERVE_TARGET_SHAPE_GUIDANCE = (
-    "serve refused: this handoff kind does not match the current target-owned "
-    "delivery contract. Hand off the exact admitted entry using the requested "
-    "interactive app or artifact-files shape; attachments cannot replace the "
-    "canonical target handoff."
-)
-_SERVE_TARGET_SHAPE_KINDS = {
-    "app": 'kind="app" (the interactive app entry)',
-    "files": 'kind="files" (the artifact-files entry)',
-}
-
-
-def _serve_target_shape_guidance(expected_kind: str, offered_kind: str, repeats: int) -> str:
-    """Shape refusal that NAMES the admitted kind and ESCALATES.
-
-    Counted wave-1 FAIL 2026-08-06 (`diag_script_run` seed 7, ACTIONLESS_THRASH).
-    The agent finished the CLI task correctly, then offered a files-shaped
-    handoff against a contract admitting only the app shape. The refusal below
-    told it the kind "does not match" and to use "the requested interactive app
-    or artifact-files shape" — without ever saying WHICH of the two this target
-    requested, though `_expected_serve_kind` had just computed it. Byte-identical
-    13 times; retry was the only move left, and retry is what the loop-breaker
-    graded.
-
-    This is exactly the sin `host_claims.handoff_clauses` already names and fixes
-    one gate downstream: *"an agent told only that its handoff does not match ...
-    can do nothing but hand off the identical thing again ... Naming the fact is
-    what turns an unrecoverable loop into one corrective move."* The finish gate
-    got that doctrine; this serve-time gate never did. Applying it here.
-
-    Deliberately NOT a threshold change and not a relaxation of the contract: the
-    admitted shape still governs, a matching handoff is accepted exactly as
-    before, and the actionless cap is untouched. What changes is that the agent
-    is told the one fact that makes a corrective move possible, and that a
-    deliverable which genuinely cannot take the admitted shape reaches a NAMED
-    impasse instead of an unbounded identical loop.
-    """
-
-    admitted = _SERVE_TARGET_SHAPE_KINDS.get(expected_kind, f"kind={expected_kind!r}")
-    offered = _SERVE_TARGET_SHAPE_KINDS.get(offered_kind, f"kind={offered_kind!r}")
-    named = (
-        f"{_SERVE_TARGET_SHAPE_GUIDANCE}\n"
-        f"This target admits {admitted}; you offered {offered}."
-    )
-    if repeats <= 1:
-        return f"{named}\nRe-send the same entry with {admitted}."
-    return (
-        "<system-reminder>\n"
-        f"STOP — `serve` has now been refused for the same shape mismatch "
-        f"{repeats} times, with the identical reason each time. {named}\n"
-        "`serve` is not counted as work, so each refused attempt spends one turn "
-        "toward the no-progress limit that ENDS this run.\n"
-        f"There are exactly two moves left: re-send the entry with {admitted}, or "
-        "— if this deliverable genuinely cannot take that shape — say so plainly "
-        "and call `finish`, which will record the exact unmet contract fact. "
-        "Do not repeat the refused shape again.\n"
-        "</system-reminder>"
-    )
-
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
 # the user can always pick at the circuit-breaker gate to reset the failure streak
 # and let the agent keep going. The frontend renders it as a distinct button;
@@ -505,6 +452,23 @@ class _ServeRequest:
     url: str
 
 
+_SERVE_ARGUMENT_DIAGNOSTIC = "serve_argument_refused"
+_SERVE_FRESH_DIAGNOSTIC = "serve_fresh_session_refused"
+
+
+async def _refuse_serve_argument(  # noqa: ANN001
+    loop, step: AgentStep, events: list[Event], defect: str, detail: str = ""
+) -> Disp:
+    """Emit one rendered serve-argument refusal through the shared valve."""
+    return await loop._valve.refuse_fresh_session(
+        step,
+        serve_argument_refusal(
+            _prior_diagnostic_count(events, _SERVE_ARGUMENT_DIAGNOSTIC), step, defect, detail
+        ),
+        diagnostic=_SERVE_ARGUMENT_DIAGNOSTIC,
+    )
+
+
 async def _fresh_serve_refusal(  # noqa: ANN001
     loop,
     step: AgentStep,
@@ -517,13 +481,23 @@ async def _fresh_serve_refusal(  # noqa: ANN001
     path, _, _ = await _coerce_serve_entry_path(loop, raw_path)
     if path and await _serve_path_verified_present(loop, path):
         return None
+    # Constraint 4: names the entry it could not find and the ONE move that
+    # changes the answer, and escalates rather than restating itself.
+    missing = (
+        f"`{path}` does not exist in the workspace yet"
+        if path
+        else "no entry path was resolvable from the arguments"
+    )
     return await loop._valve.refuse_fresh_session(
         step,
-        "serve refused: no real work has happened yet in "
-        "this session — the sandbox is fresh and nothing "
-        "is running. Execute the next plan step with real "
-        "tool calls (write files, run commands, start your "
-        "server), then serve the result.",
+        serve_spend_escalation(
+            _prior_diagnostic_count(events, _SERVE_FRESH_DIAGNOSTIC),
+            "before any real work exists in this session",
+            "serve refused: no real work has happened yet in this session — the "
+            f"sandbox is fresh and nothing is running, and {missing}.\n"
+            f"{_serve_next_move(events)}",
+        ),
+        diagnostic=_SERVE_FRESH_DIAGNOSTIC,
     )
 
 
@@ -539,41 +513,24 @@ async def _validate_serve_request(  # noqa: ANN001
 
     arguments = step.tool_call.arguments or {}
     if not arguments:
-        return await loop._valve.refuse_fresh_session(
-            step,
-            "serve refused: provide both required string fields `title` and "
-            "`path`; optionally set `kind` to exactly `app` or `files`.",
-        )
+        return await _refuse_serve_argument(loop, step, events, "no_arguments")
     title = str(arguments.get("title") or "").strip()
     raw_path = str(arguments.get("path") or "").strip()
     path, root_like, coerced_to_index = await _coerce_serve_entry_path(loop, raw_path)
     kind = str(arguments.get("kind") or "app").strip()
     url = _canonical_deployment_url(str(arguments.get("url") or ""))
     if not title:
-        return await loop._valve.refuse_fresh_session(
-            step,
-            "serve refused: `title` is required and must be a non-empty human-readable label.",
-        )
+        return await _refuse_serve_argument(loop, step, events, "title_missing")
     if not raw_path:
-        return await loop._valve.refuse_fresh_session(
-            step,
-            "serve refused: `path` is required and must be a non-empty "
-            "workspace-relative entry path.",
-        )
+        return await _refuse_serve_argument(loop, step, events, "path_missing")
     if kind not in ("app", "files"):
-        return await loop._valve.refuse_fresh_session(
-            step,
-            "serve refused: `kind` must be exactly `app` or `files`; omit it "
-            "only when the documented `app` default is intended.",
-        )
+        return await _refuse_serve_argument(loop, step, events, "kind_invalid", kind)
     if root_like and not coerced_to_index:
-        return await loop._valve.refuse_fresh_session(step, _serve_root_refusal())
-    if not path:
         return await loop._valve.refuse_fresh_session(
-            step,
-            "serve refused: normalized `path` is empty; provide a workspace-relative "
-            "entry file path.",
+            step, _serve_root_refusal(), diagnostic=_SERVE_ARGUMENT_DIAGNOSTIC
         )
+    if not path:
+        return await _refuse_serve_argument(loop, step, events, "path_unresolvable", raw_path)
     return _ServeRequest(title=title, path=path, kind=kind, url=url)
 
 

@@ -46,6 +46,7 @@ from .turn_control_support import (
     _no_progress_finish_hinted,
     _no_progress_marker_seq,
     _rewrite_directive_marker_active,
+    _serve_next_move,
     _verifier_no_progress_marker_seq,
 )
 from .valve_landing import _ValveHost
@@ -57,16 +58,25 @@ _LOG = logging.getLogger("disco.loop")
 
 
 class PhaseGateMixin(_ValveHost):
-    async def refuse_fresh_session(self, step: AgentStep, msg: str) -> Disp:
+    async def refuse_fresh_session(
+        self, step: AgentStep, msg: str, *, diagnostic: str = ""
+    ) -> Disp:
         """Shared fresh-session refusal: a virtual tool (remember / serve / ask /
         propose_plan_update) was called before any real action this session.
         Count the invisible step, surface actionable feedback, and route through
-        the actionless valve. Returns HALT if the valve trips, else CONTINUE."""
+        the actionless valve. Returns HALT if the valve trips, else CONTINUE.
+
+        `diagnostic` labels the emitted MessageEvent so a caller can count its
+        OWN prior refusals off the durable log (`_prior_diagnostic_count`) and
+        escalate — GROUNDED FEEDBACK constraint 4. Labelling only: it never
+        changes what is emitted or the valve's answer.
+        """
         self._loop._invisible_steps += 1
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
                 message=LLMMessage(role="user", content=msg),
+                meta={"diagnostic": diagnostic} if diagnostic else {},
             )
         )
         return await self.post_noop_valve()
@@ -193,7 +203,10 @@ class PhaseGateMixin(_ValveHost):
         detail = stuck_result.reason or "stuck"
         await self.land_blocked(
             reason=detail,
-            guidance="The stuck detector fired again after the one allowed stuck-escape retry.",
+            guidance=(
+                f"The stuck detector fired again ({detail}) after the one allowed "
+                "stuck-escape retry; the escape did not change the outcome."
+            ),
             legacy_status=ConversationStatus.STUCK,
             legacy_detail=detail,
         )
@@ -476,6 +489,9 @@ class ProgressGateMixin(_ValveHost):
         return Disp.HALT
 
     async def _emit_no_progress_finish_hint(self) -> Disp:
+        # Constraint 3: project the ONE next move from the same record the loop
+        # grades with, rather than restating a two-step recipe every time.
+        hint_events = await self._loop._events()
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -485,8 +501,8 @@ class ProgressGateMixin(_ValveHost):
                         "<system-reminder>\n"
                         "Every plan step is done and the app verify PASSES — "
                         "the outcome isn't changing because the work is already "
-                        "complete. Do not edit or re-verify again: call `serve` "
-                        "to hand off the deliverable, then `finish` NOW.\n"
+                        "complete. Do not edit or re-verify again.\n"
+                        f"{_serve_next_move(hint_events)}\n"
                         "</system-reminder>"
                     ),
                 ),
@@ -529,7 +545,10 @@ class ProgressGateMixin(_ValveHost):
             reason="no_progress",
             guidance=(
                 "The verifier outcome stayed the same after the corrective "
-                "no-progress nudge and another edit attempt."
+                "no-progress nudge and another edit attempt; the last "
+                f"`verify_web_app` on record still does not pass and "
+                f"{len([e for e in events if isinstance(e, ActionEvent) and e.seq is not None and e.seq > marker_seq])} "
+                "action(s) have been taken since the nudge."
             ),
             legacy_status=ConversationStatus.STUCK,
             legacy_detail="no_progress",
@@ -589,9 +608,10 @@ class ProgressGateMixin(_ValveHost):
                 await self.land_blocked(
                     reason="bookkeeping_only",
                     guidance=(
-                        "The agent kept updating the plan checklist without doing "
-                        "real work such as editing files, running commands, or "
-                        "otherwise changing state."
+                        f"The agent made {_bk_streak} consecutive plan-checklist "
+                        f"updates (the cap for this {_plan_steps}-step plan is "
+                        f"{_bk_halt_cap}) without doing real work such as editing "
+                        "files, running commands, or otherwise changing state."
                     ),
                     legacy_status=ConversationStatus.STUCK,
                     legacy_detail="bookkeeping_only",

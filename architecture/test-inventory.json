@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a64ae81bd7eee41194fa7117fcf0009bd9094ff4",
+  "source_identity": "8991ea714ff2d04c8f7f295809ebcb9a57caab29",
   "collected": {
     "counts": {
       "packages": 10376,
@@ -12109,7 +12109,7 @@
     }
   },
   "mapping_static": {
-    "identity": "a64ae81bd7eee41194fa7117fcf0009bd9094ff4",
+    "identity": "8991ea714ff2d04c8f7f295809ebcb9a57caab29",
     "python_test_file_count": 823,
     "python_static_test_id_count": 9943,
     "python_test_files": [
@@ -28756,6 +28756,41 @@
         "harness": {
           "before_count": 1312,
           "after_count": 1312,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 386,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-TWICE-RULE-DISCHARGE",
+      "root": "multiple",
+      "source_identity_before": "a64ae81bd7eee41194fa7117fcf0009bd9094ff4",
+      "source_identity_after": "8991ea714ff2d04c8f7f295809ebcb9a57caab29",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10376,
+          "after_count": 10376,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1317,
+          "after_count": 1317,
           "added_ids": []
         },
         "integrations": {

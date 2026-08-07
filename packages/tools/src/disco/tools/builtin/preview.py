@@ -205,7 +205,10 @@ class PreviewStartTool:
                 success=False,
                 content=(
                     "Specify what to serve: a serve_dir (e.g. 'dist'), a framework "
-                    "(e.g. 'vite'), or a start command. (You never specify a port.)"
+                    "(e.g. 'vite'), or a start command — this call supplied none of "
+                    f"the three (serve_dir={args.serve_dir!r}, "
+                    f"framework={args.framework!r}, command={args.command!r}). "
+                    "(You never specify a port.)"
                 ),
                 error="no_intent",
             )

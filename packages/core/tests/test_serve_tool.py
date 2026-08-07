@@ -132,9 +132,12 @@ async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
     invalid = [
         event
         for event in _environment_messages(events)
-        if "`kind` must be exactly `app` or `files`" in event.message.content
+        # 2026-08-07b: the refusal now NAMES the rejected kind rather than
+        # restating the rule in canned bytes (constraint 4). Id KEPT.
+        if "is neither `app` nor `files`" in event.message.content
     ]
     assert len(invalid) == 1
+    assert "`kind` was" in invalid[0].message.content
 
 
 async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
@@ -278,9 +281,18 @@ async def test_governed_nonbrowser_target_keeps_files_handoff() -> None:
 @pytest.mark.parametrize(
     ("arguments", "expected"),
     [
-        ({}, "provide both required string fields"),
-        ({"title": "x"}, "`path` is required"),
-        ({"path": "out.pdf"}, "`title` is required"),
+        # 2026-08-07b: the expected strings now name the DEFECT each refusal
+        # must state, not the byte-identical canned sentence the surface used to
+        # emit (constraint 4). The parametrize IDS are pinned to their historical
+        # values so this strengthening deletes ZERO test ids from the inventory.
+        ({}, "the call carried no arguments"),
+        ({"title": "x"}, "`path` was empty or missing"),
+        ({"path": "out.pdf"}, "`title` was empty or missing"),
+    ],
+    ids=[
+        "arguments0-provide both required string fields",
+        "arguments1-`path` is required",
+        "arguments2-`title` is required",
     ],
 )
 async def test_serve_malformed_arguments_are_explicit_and_actionable(arguments, expected):
@@ -301,6 +313,12 @@ async def test_serve_malformed_arguments_are_explicit_and_actionable(arguments, 
         event for event in _environment_messages(events) if expected in event.message.content
     ]
     assert len(feedback) == 1
+    # The refusal must be a projection of the call, not canned text: it names
+    # what was actually received and exactly ONE corrective move.
+    body = feedback[0].message.content
+    assert "You sent:" in body
+    assert "Next move:" in body
+    assert feedback[0].meta.get("diagnostic") == "serve_argument_refused"
 
 
 def test_serve_offered_in_execution_not_planning():

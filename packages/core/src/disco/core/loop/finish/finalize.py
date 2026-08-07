@@ -39,12 +39,34 @@ class _ResolvedVerify:
     ignored_reason: str | None = None
 
 
-_UNVERIFIED_RELEASE_FINAL_MESSAGE = (
-    "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
-    "or could not run. Browser rendering remains UNVERIFIED, and the deliverable "
-    "may be INCOMPLETE. Any model-authored verification claim is superseded by "
-    "this host-owned result."
-)
+def _unverified_release_final_message(events: list[Event]) -> str:
+    """The host-owned final message for an unverified release, RENDERED.
+
+    GROUNDED FEEDBACK constraints 1 and 4: this replaces the model's own closing
+    summary, so it is the last thing the reader sees — and it used to be one
+    canned paragraph that never said WHICH verification was missing, though the
+    verdict log holds exactly that. It now names the host verdict on record (or
+    states that none was produced), which is the same source the release marker
+    itself is derived from, so message and marker cannot drift.
+    """
+    latest = next(
+        (event for event in reversed(events) if isinstance(event, VerifierVerdictEvent)),
+        None,
+    )
+    if latest is None:
+        observed = "No host verifier verdict was produced at all for this run."
+    else:
+        verdict = (latest.verdict or "none").strip() or "none"
+        observed = (
+            f"The last host verifier verdict on record is {verdict!r} "
+            f"(verified={latest.verified})."
+        )
+    return (
+        "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
+        "or could not run. Browser rendering remains UNVERIFIED, and the deliverable "
+        "may be INCOMPLETE. Any model-authored verification claim is superseded by "
+        f"this host-owned result. {observed}"
+    )
 
 
 def _unverified_release_active(events: list[Event]) -> bool:
@@ -215,7 +237,9 @@ class _FinalizeService(_FinishGateComponent):
                 return Disp.CONTINUE
             unverified_release = _unverified_release_active(events)
             final_content = (
-                _UNVERIFIED_RELEASE_FINAL_MESSAGE if unverified_release else step.thought
+                _unverified_release_final_message(events)
+                if unverified_release
+                else step.thought
             )
             # Record the agent's final message (the answer) before
             # finishing — the deliverable text belongs on the log, not
@@ -254,10 +278,27 @@ class _FinalizeService(_FinishGateComponent):
             # caught by the verify gates above, not by a bookkeeping proxy.
             await self._loop._emit(StatusEvent(status=ConversationStatus.FINISHED))
             return Disp.HALT
+        # Constraint 4: the stop-hook veto can refuse FINISHED repeatedly in one
+        # run. `_veto_feedback` is host-injectable configuration and cannot carry
+        # run state, so the repetition is rendered HERE, at the seam that fires.
+        vetoes = 1 + sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent) and event.meta.get("diagnostic") == "finish_vetoed"
+        )
+        veto_content = self._loop._veto_feedback
+        if vetoes > 1:
+            veto_content = (
+                f"{veto_content}\n<system-reminder>\nThis is veto {vetoes} of this "
+                f"run: {vetoes - 1} earlier `finish` attempt(s) were refused by the "
+                "same stop hook. Repeating the same finish will be refused again — "
+                "change the deliverable, not the attempt.\n</system-reminder>"
+            )
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=self._loop._veto_feedback),
+                message=LLMMessage(role="user", content=veto_content),
+                meta={"diagnostic": "finish_vetoed"},
             )
         )
         return Disp.CONTINUE
@@ -313,10 +354,12 @@ class _FinalizeService(_FinishGateComponent):
                     content=(
                         "<system-reminder>\n"
                         "REL-RC-P SYNTHETIC FINISH: host is attempting completion: "
-                        "work appears done and the loop has paused actionless twice. "
-                        "Routing a synthetic finish(summary=...) through the normal "
-                        "finish gates; any refusal below is authoritative and should "
-                        "be fixed before finishing.\n"
+                        "work appears done and the loop has paused actionless "
+                        f"{signals.actionless_pause_count_current_execution_segment(events)} "
+                        "time(s) in this execution segment. Routing a synthetic "
+                        "finish(summary=...) through the normal finish gates; any "
+                        "refusal below is authoritative and should be fixed before "
+                        "finishing.\n"
                         "</system-reminder>"
                     ),
                 ),

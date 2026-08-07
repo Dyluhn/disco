@@ -441,10 +441,13 @@ async def maybe_emit_sandbox_restart(
                 content=(
                     "<system-reminder>\n"
                     "Your sandbox container was restarted mid-session (the prior "
-                    "container died and was transparently re-created). Files "
-                    "previously written to /workspace remain; any background "
-                    "processes or unsaved in-memory state are gone. If you relied "
-                    "on running state, re-establish it before continuing.\n"
+                    "container died and was transparently re-created); this run is "
+                    f"now on container generation "
+                    f"{getattr(sandbox, 'generation', generation_before)}, up from "
+                    f"{generation_before}. Files previously written to /workspace "
+                    "remain; any background processes or unsaved in-memory state "
+                    "are gone. If you relied on running state, re-establish it "
+                    "before continuing.\n"
                     "</system-reminder>"
                 ),
             ),

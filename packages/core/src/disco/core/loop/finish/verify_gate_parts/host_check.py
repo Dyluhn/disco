@@ -321,7 +321,7 @@ async def _gate_host_verify_unavailable_disposition(
     if typed_result is not None and _typed_result_has_unavailable_semantic_claim(typed_result):
         return await host_verify_failure_disposition(gate, check_deliverable, host_verdict)
     if browser_unavailable:
-        return await emit_browser_unavailable_release(gate._loop)
+        return await emit_browser_unavailable_release(gate._loop, host_verdict)
     return Disp.FALLTHROUGH
 
 
@@ -346,7 +346,9 @@ async def _gate_host_verify_unverifiable_disposition(
                 content=(
                     "⚠ Finished WITHOUT browser-render verification — "
                     "the host verifier reported the app UNVERIFIABLE "
-                    "because its browser infrastructure could not run. "
+                    "because its browser infrastructure could not run "
+                    f"(verdict {str(host_verdict.get('verdict') or 'unverifiable')!r}"
+                    f"{'; ' + str(host_verdict.get('summary')) if host_verdict.get('summary') else ''}). "
                     "The deliverable is UNVERIFIED and may be INCOMPLETE; "
                     "do not report it as a verified pass."
                 ),
@@ -462,8 +464,9 @@ async def _gate_host_verify_coverage_disposition(
             events,
             failure_key=("target:incomplete_aggregate:" + ",".join(coverage.missing_claim_ids)),
             guidance=(
-                "the target verifier set did not cover every mandatory claim "
-                "on one current execution generation."
+                "the target verifier set did not cover every mandatory claim on one "
+                "current execution generation. Uncovered claim(s): "
+                f"{', '.join(coverage.missing_claim_ids) or 'none reported'}."
             ),
         )
     current_events = await gate._loop._events()

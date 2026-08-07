@@ -215,8 +215,11 @@ class SlidesTool:
         if not clean:
             return ToolOutcome(
                 success=False,
-                content="filename is empty after removing invalid characters "
-                "(<>:\"|?* and control chars). Provide a plain base name like 'my-deck'.",
+                content=(
+                    f"filename {args.filename!r} is empty after removing invalid "
+                    "characters (<>:\"|?* and control chars). Provide a plain base "
+                    "name like 'my-deck'."
+                ),
                 error="invalid filename",
             )
 
@@ -242,7 +245,8 @@ class SlidesTool:
             return ToolOutcome(
                 success=False,
                 content=(
-                    "slides_generate has no deck content to render. Provide `goal` — a "
+                    f"slides_generate (mode={args.mode!r}) has no deck content to "
+                    "render. Provide `goal` — a "
                     "natural-language description AND the source content for the deck "
                     "(the C2 pipeline builds a structured, themed, image-bearing deck "
                     "from it) — OR `markdown` (Marp source with '---' slide separators). "

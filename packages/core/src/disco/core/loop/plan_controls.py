@@ -217,15 +217,22 @@ class PlanApprovalController:
             )
 
     async def _continue_anyway(self) -> ConversationState:
+        # Constraint 1: the user's bypass reaches the agent as a USER turn, so it
+        # must name what is being waived. `count_recent_failures` is the same
+        # streak the circuit breaker opened on, and the streak is reset below.
+        continue_events = await self._loop._events()
+        failures = signals.count_recent_failures(continue_events)
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.USER,
                 message=LLMMessage(
                     role="user",
                     content=(
-                        "Continue — keep working. I've reviewed the failures and "
-                        "want you to proceed with your own best next step. Don't just "
-                        "repeat the exact action that was failing; adjust your approach."
+                        "Continue — keep working. I've reviewed the "
+                        f"{failures} recent failure(s) that opened the circuit "
+                        "breaker and want you to proceed with your own best next "
+                        "step. Don't just repeat the exact action that was "
+                        "failing; adjust your approach."
                     ),
                 ),
             )

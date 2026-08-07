@@ -135,7 +135,10 @@ class HardwareIdentityTool:
                 reason = f"{reason}: {detail}"
             return ToolOutcome(
                 success=False,
-                content="PCI identity lookup failed; no identity claim is available.",
+                content=(
+                    f"PCI identity lookup for {args.vendor_id}:{args.device_id} "
+                    f"failed ({reason}); no identity claim is available."
+                ),
                 structured={
                     "bus": "pci",
                     "vendor_id": args.vendor_id,

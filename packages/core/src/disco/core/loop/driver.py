@@ -128,13 +128,83 @@ def _escalated_provider_prefs(n: int) -> dict:
     return {"allow_fallbacks": True}
 
 
-_EMPTY_REASONING_REPAIR_REMINDER = (
-    "Your previous response produced no visible text and no tool call — call exactly "
-    "one tool now, or say in plain text what you need."
-)
-_PROSE_NOOP_REPAIR_REMINDER = (
-    "You described the next action instead of performing it — call the tool for it in THIS turn."
-)
+def _empty_reasoning_repair_reminder(attempt: int = 1) -> str:
+    """Empty-response repair reminder, repetition-aware (constraint 4).
+
+    The repair ladder already COUNTS these — `empty_reasoning_repair_count` is a
+    parameter of `repair_degenerate_step`, passed in alongside the reminder — but
+    the reminder itself was a constant, so the second and third identical empty
+    responses drew the identical sentence. The count is now rendered.
+    """
+    if attempt <= 1:
+        return (
+            "Your previous response produced no visible text and no tool call — call exactly "
+            "one tool now, or say in plain text what you need."
+        )
+    return (
+        f"This is repair attempt {attempt}: your last {attempt} responses produced no "
+        "visible text and no tool call. Call exactly one tool now, or say in plain "
+        "text what you need — another empty response ends this turn."
+    )
+
+
+def _prose_noop_repair_reminder(attempt: int = 1) -> str:
+    """Prose-noop repair reminder, repetition-aware (constraint 4). See above."""
+    if attempt <= 1:
+        return (
+            "You described the next action instead of performing it — call the tool "
+            "for it in THIS turn."
+        )
+    return (
+        f"This is repair attempt {attempt}: you have now described the next action "
+        f"{attempt} times without performing it. Call the tool for it in THIS turn."
+    )
+
+
+# First-firing values, kept as module names for the durable-log content match in
+# the diagnostics below and for callers that hold the reminder as configuration.
+_EMPTY_REASONING_REPAIR_REMINDER = _empty_reasoning_repair_reminder(1)
+_PROSE_NOOP_REPAIR_REMINDER = _prose_noop_repair_reminder(1)
+
+
+async def _repair_attempt(loop: _LoopFacet, diagnostic: str) -> int:
+    """How many times this repair has already been persisted, plus this one.
+
+    Read from the durable log so the escalation survives a restart exactly as
+    the run's own evidence does. Module-level, not a `Driver` method: the class
+    is at its size cap.
+    """
+    events = await loop._events()
+    return 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent) and event.meta.get("diagnostic") == diagnostic
+    )
+
+
+async def _empty_reasoning_repair_event(loop: _LoopFacet, diagnostic: dict) -> MessageEvent:
+    """The empty-response repair reminder, escalated on the durable count."""
+    attempt = await _repair_attempt(loop, EMPTY_REASONING_ONLY_METADATA_KEY)
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content=_empty_reasoning_repair_reminder(attempt)),
+        meta={"diagnostic": EMPTY_REASONING_ONLY_METADATA_KEY, **diagnostic},
+    )
+
+
+async def _prose_noop_repair_event(loop: _LoopFacet, step: AgentStep) -> MessageEvent:
+    """The prose-noop repair reminder, escalated on the durable count."""
+    attempt = await _repair_attempt(loop, signals.PROSE_NOOP_REPAIR_DIAGNOSTIC)
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content=_prose_noop_repair_reminder(attempt)),
+        meta={
+            "diagnostic": signals.PROSE_NOOP_REPAIR_DIAGNOSTIC,
+            "content_len": len(step.thought),
+            "tool_call_count": 0,
+            "llm_response_id": step.llm_response_id,
+        },
+    )
 
 
 def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
@@ -177,30 +247,10 @@ class Driver:
         return await wait_retry_backoff(self, delay_s, _sleep)
 
     async def _persist_empty_reasoning_diagnostic(self, diagnostic: dict) -> None:
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_EMPTY_REASONING_REPAIR_REMINDER),
-                meta={
-                    "diagnostic": EMPTY_REASONING_ONLY_METADATA_KEY,
-                    **diagnostic,
-                },
-            )
-        )
+        await self._loop._emit(await _empty_reasoning_repair_event(self._loop, diagnostic))
 
     async def _persist_prose_noop_diagnostic(self, step: AgentStep) -> None:
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER),
-                meta={
-                    "diagnostic": signals.PROSE_NOOP_REPAIR_DIAGNOSTIC,
-                    "content_len": len(step.thought),
-                    "tool_call_count": 0,
-                    "llm_response_id": step.llm_response_id,
-                },
-            )
-        )
+        await self._loop._emit(await _prose_noop_repair_event(self._loop, step))
 
     def build_stream_hook(self) -> StreamHook | None:
         """Build the per-step watch-it-write hook when a sink is wired."""
@@ -275,7 +325,8 @@ class Driver:
             reason="driver-unavailable",
             guidance=(
                 "The model driver stayed unavailable after the bounded provider "
-                "retry path was exhausted."
+                "retry path was exhausted. Last provider error on record: "
+                f"{str(cause) if cause is not None else 'none recorded'}."
             ),
             legacy_status=ConversationStatus.PAUSED,
             legacy_detail="driver-unavailable",
@@ -398,8 +449,10 @@ class Driver:
             transient_messages=transient_messages,
             empty_reasoning_repair_count=empty_reasoning_repair_count,
             prose_noop_repair_count=prose_noop_repair_count,
-            empty_reasoning_reminder=_EMPTY_REASONING_REPAIR_REMINDER,
-            prose_noop_reminder=_PROSE_NOOP_REPAIR_REMINDER,
+            empty_reasoning_reminder=_empty_reasoning_repair_reminder(
+                empty_reasoning_repair_count + 1
+            ),
+            prose_noop_reminder=_prose_noop_repair_reminder(prose_noop_repair_count + 1),
         )
 
     async def _try_request_budget_preview(

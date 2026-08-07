@@ -67,10 +67,34 @@ from .verify_app_parts._trusted_components import (
     _merge_component_checks,
 )
 
-_VERIFY_WEB_APP_FAILURE_RECIPE = (
-    "Check preview_status (is a preview running?) and preview_logs, then re-run "
-    "verify_web_app once."
-)
+def _verify_web_app_failure_recipe(http_status: int | None = None) -> str:
+    """The verify_web_app recipe, PROJECTED from what the probe actually saw.
+
+    Constraint 3: a failure recipe that is identical whether the server was
+    unreachable or returned a 500 makes the agent re-derive the diagnosis the
+    probe already made. Naming the observed status picks the ONE next move.
+    """
+    if http_status is None or http_status == 0:
+        return (
+            "Nothing answered on that URL. Next move: run preview_status to see "
+            "whether a preview is running (and preview_logs if it is), start it "
+            "if not, then re-run verify_web_app once."
+        )
+    if http_status >= 500:
+        return (
+            f"The server answered HTTP {http_status}, so it is running but "
+            "erroring. Next move: read preview_logs for the traceback (preview_status "
+            "confirms which process is serving), fix it, then re-run verify_web_app "
+            "once."
+        )
+    return (
+        f"The server answered HTTP {http_status}. Next move: check "
+        "preview_status (is the right entry being served?) and preview_logs, "
+        "then re-run verify_web_app once."
+    )
+
+
+_VERIFY_WEB_APP_FAILURE_RECIPE = _verify_web_app_failure_recipe()
 
 
 def _failure_fingerprint(
@@ -240,7 +264,7 @@ class VerifyWebAppTool:
         return fail_outcome(
             (
                 f"verify_web_app render probe failed after HTTP {http_status}: "
-                f"{detail}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
+                f"{detail}\n{_verify_web_app_failure_recipe(http_status)}"
             ),
             structured={
                 "verdict": "unverifiable",

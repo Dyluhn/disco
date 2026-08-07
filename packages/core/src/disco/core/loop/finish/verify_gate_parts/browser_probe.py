@@ -244,8 +244,11 @@ async def maybe_honest_unverifiable_static_finish(gate: Any, verdict: dict) -> D
                     "⚠ Finished WITHOUT a live browser verification — the static "
                     "deliverable (index.html) exists but no preview server is "
                     "reachable and this backend cannot run a headless browser, so "
-                    "the render could not be checked here. The files are delivered; "
-                    "note clearly in your summary that the build is UNVERIFIED."
+                    "the render could not be checked here. The verifier verdict on "
+                    f"record is {str(verdict.get('verdict') or 'none')!r}"
+                    f"{': ' + str(verdict.get('summary')) if verdict.get('summary') else ''}. "
+                    "The files are delivered; note clearly in your summary that the "
+                    "build is UNVERIFIED."
                 ),
             ),
         )
@@ -316,7 +319,9 @@ async def maybe_honest_unverifiable_static_actionless_finish(
                     "deliverable (index.html) exists and a non-browser validation "
                     "passed, but this backend cannot run a headless browser and no "
                     "preview server is reachable, so the only remaining plan step "
-                    "(browser verification) could not run here. The files are "
+                    "(browser verification) could not run here. This run reached "
+                    f"the honest-unverifiable finish after {signals.actionless_pause_count_current_execution_segment(events)} "
+                    "actionless pause(s). The files are "
                     "delivered; note clearly in your summary that the render is "
                     "UNVERIFIED."
                 ),

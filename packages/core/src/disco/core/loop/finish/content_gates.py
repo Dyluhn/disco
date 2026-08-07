@@ -28,8 +28,8 @@ from ..plan_conditions import DictatedContentCondition, dictated_content_conditi
 from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
     _DOD_REFUSAL_CAP,
-    _EXECUTION_NUDGE,
     _EXECUTION_NUDGE_CAP,
+    _execution_nudge,
     _LOG,
     _appkit_scope_active,
     _deliverable_event_paths,
@@ -615,11 +615,12 @@ class _ContentGateService(_FinishGateComponent):
 
         if not failure.replan_allowed:
             await self._loop._land_blocked(
-                reason="unchanged plan verifier failed after approved replan",
+                reason=f"unchanged plan verifier failed again at revision {plan.revision}",
                 guidance=(
-                    "The same plan-owned predicate set failed again after a replacement "
-                    "plan was approved. External requirements remain intact; explicit "
-                    "user review is required before another unchanged plan can run."
+                    f"{len(failed_results)} plan-owned predicate(s) failed again on "
+                    f"attempt {failure.attempt_for_approved_plan} after replacement plan "
+                    f"revision {plan.revision} was approved. Explicit user review is "
+                    "required before another unchanged plan can run."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="plan_verifier_replan_exhausted",
@@ -700,7 +701,8 @@ class _ContentGateService(_FinishGateComponent):
             # persists nothing, so it's invisible to every event-derived
             # detector and the instance counter has to carry it (the (g)
             # no-op path does the same).
-            if not await emit_execution_nudge(self._loop, step.thought, _EXECUTION_NUDGE):
+            nudge = _execution_nudge(self._loop._execution_nudges, _EXECUTION_NUDGE_CAP)
+            if not await emit_execution_nudge(self._loop, step.thought, nudge):
                 self._loop._invisible_steps += 1
             # The execution-nudge cap (_EXECUTION_NUDGE_CAP) is the
             # backstop for this path: after N nudges the gate emits

@@ -133,9 +133,10 @@ class ScaffoldStarterTool:
                 success=False,
                 error="appkit_disabled",
                 content=(
-                    "the 'lead_form' starter seeds an AppKit app, and AppKit is "
-                    "disabled on this deployment (DISCO_APPKIT_ENABLED=0). Use "
-                    "'app_shell' and add a plain HTML form to it instead."
+                    f"the {starter_id!r} starter seeds an AppKit app, and AppKit is "
+                    "disabled on this deployment (DISCO_APPKIT_ENABLED=0). Next move: "
+                    "call scaffold_starter with 'app_shell' and add a plain HTML form "
+                    "to it instead."
                 ),
             )
         kit = StarterKitRegistry.default().get(starter_id)

@@ -209,7 +209,10 @@ async def exec_command(
         running=True,
         exit_code=None,
         output=cleaned_running[-shell_sessions._EXEC_RETURN_CHARS :],
-        note="still running after 15s — use shell_view / shell_wait",
+        note=(
+            f"still running after 15s in session {getattr(manager, 'session_id', '') or full[:40]!r}"
+            " — use shell_view / shell_wait"
+        ),
     )
     await record_persistent_if_match(
         manager,

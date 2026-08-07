@@ -6,11 +6,15 @@ from typing import TYPE_CHECKING, Protocol
 
 from ..security import RiskAssessment
 from .engine_contracts import (
-    _FORCE_SUBMIT_DIRECTIVE,
-    _PLAN_NUDGE,
+    _FORCE_SUBMIT_DIAGNOSTIC,
+    _PLAN_NUDGE_DIAGNOSTIC,
     _PLANNING_TOOL_REFUSAL_ESCALATE_AT,
     _REVISION_FORCE_SUBMIT_K,
-    _WORKFLOW_ROUTER_PLAN_NUDGE,
+    _WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC,
+    _force_submit_directive,
+    _force_submit_repeats,
+    _plan_nudge,
+    _workflow_router_plan_nudge,
     ActionEvent,
     AgentErrorEvent,
     AgentStep,
@@ -145,7 +149,11 @@ async def _maybe_force_submit_prose(
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
-            message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
+            message=LLMMessage(
+                role="user",
+                content=_force_submit_directive(_force_submit_repeats(events)),
+            ),
+            meta={"diagnostic": _FORCE_SUBMIT_DIAGNOSTIC},
         )
     )
     loop._plan_nudges = 0
@@ -154,15 +162,29 @@ async def _maybe_force_submit_prose(
 
 async def _nudge_planner(loop: _LoopFacet) -> Disp:
     loop._plan_nudges += 1
-    nudge = (
-        _WORKFLOW_ROUTER_PLAN_NUDGE
-        if loop._workflow_router_phase_active()
-        else _PLAN_NUDGE
-    )
+    # Constraint 4: both nudges escalate on the count READ FROM THE LOG, and
+    # each carries a stable `diagnostic` so the counters key on the label rather
+    # than on byte-equality of the prose they are now allowed to vary.
+    events = await loop._events()
+    router_phase = loop._workflow_router_phase_active()
+    if router_phase:
+        diagnostic = _WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC
+        repeats = 1 + sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent)
+            and event.meta.get("diagnostic") == _WORKFLOW_ROUTER_NUDGE_DIAGNOSTIC
+        )
+        nudge = _workflow_router_plan_nudge(repeats)
+    else:
+        diagnostic = _PLAN_NUDGE_DIAGNOSTIC
+        repeats = signals.plan_nudges_since_current_planning(events) + 1
+        nudge = _plan_nudge(repeats)
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
             message=LLMMessage(role="user", content=nudge),
+            meta={"diagnostic": diagnostic},
         )
     )
     if await loop._post_noop_valve() is Disp.HALT:
@@ -368,8 +390,9 @@ class PlanningGateController:
             await self._loop._land_blocked(
                 reason="stuck_escape_tool_quarantine",
                 guidance=(
-                    "The model selected the same withheld recovery target twice during "
-                    "the current escape episode. The action was not executed."
+                    f"The model selected the withheld recovery target `{tool_call.tool_name}` "
+                    f"{prior_refusals + 1} times during the current escape episode "
+                    "(the quarantine allows one). The action was not executed."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="stuck_escape_tool_quarantine",

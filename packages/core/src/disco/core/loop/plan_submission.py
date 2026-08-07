@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from .engine_contracts import (
-    _FORCE_SUBMIT_DIRECTIVE,
+    _FORCE_SUBMIT_DIAGNOSTIC,
+    _force_submit_directive,
+    _force_submit_repeats,
     _INVALID_PLAN_DONE_CONDITION_CAP,
     ConversationStatus,
     Disp,
@@ -155,8 +157,10 @@ class PlanSubmissionController:
                         content=(
                             "<system-reminder>\n"
                             "Your proposed plan was NOT accepted because `steps` was "
-                            "empty. Submit it again with at least one concrete step object, "
-                            'for example: {"summary":"Build the requested site",'
+                            f"empty (attempt {attempt}; the summary you sent was "
+                            f"{(plan.summary or '')[:80]!r}). Submit it again with at "
+                            "least one concrete step object, for example: "
+                            '{"summary":"Build the requested site",'
                             '"steps":[{"title":"Create and verify the requested site"}]}. '
                             "A single broad step is valid; do not invent extra scope.\n"
                             "</system-reminder>"
@@ -173,7 +177,7 @@ class PlanSubmissionController:
             await self._loop._land_blocked(
                 reason="initial_plan_no_concrete_steps",
                 guidance=(
-                    "The planner repeatedly submitted an empty initial plan and no "
+                    f"The planner submitted an empty initial plan {attempt} times and no "
                     "user-owned instruction was available for bounded recovery. No plan "
                     "was approved and no execution began."
                 ),
@@ -214,7 +218,11 @@ class PlanSubmissionController:
             await self._loop._emit(
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
+                    message=LLMMessage(
+                        role="user",
+                        content=_force_submit_directive(_force_submit_repeats(events)),
+                    ),
+                    meta={"diagnostic": _FORCE_SUBMIT_DIAGNOSTIC},
                 )
             )
             self._loop._plan_nudges = 0
@@ -232,9 +240,9 @@ class PlanSubmissionController:
             await self._loop._land_blocked(
                 reason="revision_no_concrete_steps",
                 guidance=(
-                    "The planner submitted an empty revision plan after the force-submit "
-                    "recovery, and there was no current revision instruction to "
-                    "synthesize a concrete step from."
+                    "The planner submitted an empty revision plan (revision "
+                    f"{plan.revision}) after the force-submit recovery, and there was no "
+                    "current revision instruction to synthesize a concrete step from."
                 ),
                 legacy_status=ConversationStatus.STUCK,
                 legacy_detail="revision_no_concrete_steps",

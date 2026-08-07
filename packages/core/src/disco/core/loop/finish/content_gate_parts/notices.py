@@ -125,7 +125,32 @@ async def emit_dictated_content_refusal_notice(
     )
 
 
+async def _notice_repeat(loop: _LoopFacet, blocking: str) -> int:
+    """How many times this fail-closed notice has already fired, plus this one.
+
+    GROUNDED FEEDBACK constraint 4. These notices pause the run fail-closed and
+    can each fire again after the user resumes, so a static body meant an agent
+    that had already failed to repair the condition read the identical paragraph.
+    Counted off the DURABLE log via the `blocking` label the notices already
+    carried, so the escalation survives a restart.
+    """
+    events = await loop._events()
+    return 1 + sum(
+        1
+        for event in events
+        if isinstance(event, MessageEvent) and event.meta.get("blocking") == blocking
+    )
+
+
+def _again(repeats: int, what: str) -> str:
+    """The repetition clause, or nothing on a first firing."""
+    if repeats <= 1:
+        return ""
+    return f" This is the {repeats}th time {what} in this run; the previous {repeats - 1} did not clear it."
+
+
 async def emit_dangling_plan_evidence_notice(loop: _LoopFacet) -> None:
+    repeats = await _notice_repeat(loop, "plan_verification_evidence_invalid")
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -141,7 +166,9 @@ async def emit_dangling_plan_evidence_notice(loop: _LoopFacet) -> None:
                     "<system-reminder>\nThe approved-plan verification record "
                     "does not match a complete persisted PlanEvent. The task is "
                     "NOT complete and has been paused fail-closed; repair the "
-                    "event evidence before continuing.\n</system-reminder>"
+                    "event evidence before continuing."
+                    f"{_again(repeats, 'the plan evidence has been rejected')}"
+                    "\n</system-reminder>"
                 ),
             ),
             meta={"blocking": "plan_verification_evidence_invalid"},
@@ -150,6 +177,7 @@ async def emit_dangling_plan_evidence_notice(loop: _LoopFacet) -> None:
 
 
 async def emit_dod_workspace_unavailable_notice(loop: _LoopFacet) -> None:
+    repeats = await _notice_repeat(loop, "dod_workspace_unavailable")
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -159,10 +187,12 @@ async def emit_dod_workspace_unavailable_notice(loop: _LoopFacet) -> None:
                     "<system-reminder>\nThe acceptance requirements "
                     "could not be evaluated because the sandbox evidence surface "
                     "is unavailable. The task is NOT complete and has been paused "
-                    "fail-closed; repair the sandbox before continuing.\n"
-                    "</system-reminder>"
+                    "fail-closed; repair the sandbox before continuing."
+                    f"{_again(repeats, 'the sandbox evidence surface has been unavailable')}"
+                    "\n</system-reminder>"
                 ),
             ),
+            meta={"blocking": "dod_workspace_unavailable"},
         )
     )
 
@@ -208,6 +238,12 @@ async def emit_plan_verifier_failure_notice(
 
 
 async def emit_plan_verifier_replan_required_notice(loop: _LoopFacet) -> None:
+    events = await loop._events()
+    failures = sum(
+        1
+        for event in events
+        if isinstance(event, StatusEvent) and event.plan_verifier_failure is not None
+    )
     await loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -221,8 +257,9 @@ async def emit_plan_verifier_replan_required_notice(loop: _LoopFacet) -> None:
                 role="user",
                 content=(
                     "<system-reminder>\nThe same unchanged plan-owned verifier "
-                    "has failed twice. Re-planning is now required. Submit a corrected "
-                    "plan; it must preserve every external requirement.\n"
+                    f"has failed {failures} times on this record. Re-planning is now "
+                    "required. Submit a corrected plan; it must preserve every "
+                    "external requirement.\n"
                     "</system-reminder>"
                 ),
             ),
@@ -252,6 +289,7 @@ async def emit_plan_verification_passed_notice(
 
 
 async def emit_external_dod_cap_pause_notice(loop: _LoopFacet) -> None:
+    repeats = await _notice_repeat(loop, "dod_unmet")
     await loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
@@ -261,7 +299,9 @@ async def emit_external_dod_cap_pause_notice(loop: _LoopFacet) -> None:
                     "<system-reminder>\nThe external Definition-of-Done is "
                     "still unmet after the bounded retry budget. The task is NOT "
                     "complete. This run is pausing for explicit user review rather "
-                    "than silently marking incomplete work done.\n</system-reminder>"
+                    "than silently marking incomplete work done."
+                    f"{_again(repeats, 'the Definition-of-Done has been reported unmet')}"
+                    "\n</system-reminder>"
                 ),
             ),
             meta={"blocking": "dod_unmet"},
