@@ -40,11 +40,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from disco.core import script_identity
 from disco.core.tool_fingerprint import tool_call_fingerprint
 
 from harness.build_soak import failure_codes as fc
 from harness.build_soak.oracles import _thrash_shapes as shapes
+from harness.build_soak.oracles import _thrash_shell
 from harness.build_soak.oracles._thrash_checks import _fingerprint
+from harness.build_soak.oracles._thrash_shell import largest_semantic_shell_repeat_group
 from harness.build_soak.oracles.thrash import ThrashOracle
 
 FIXTURES = Path(__file__).parent / "fixtures" / "thrash_shapes"
@@ -229,3 +232,105 @@ def test_loop_and_oracle_share_one_identity_function():
         "shell", {"b": 2, "a": 1}
     )
     assert tool_call_fingerprint("shell", {"n": 1}) != tool_call_fingerprint("shell", {"n": 1.0})
+
+
+# ---------------------------------------------------------------------------
+# F47 (2026-08-06x) — the general invariant, and the coverage duty that makes it
+# non-vacuous. The test above proved ONE class shared; these prove ALL of them.
+# ---------------------------------------------------------------------------
+
+# Every shape on which this oracle counts repetitions of SUCCESSFUL calls, with
+# the `disco.core` owner that computes its equivalence class. The loop's W-39
+# freshness memo imports the SAME owners, so it cannot group differently.
+#
+# `SHAPE_STUCK_VALVE` is deliberately absent: it is not a repetition class at all
+# (it reports the product's own no-progress valve), so it carries no notice duty.
+ANSWERED_QUESTION_IDENTITY_OWNERS = {
+    shapes.SHAPE_IDENTICAL_STREAK: tool_call_fingerprint,
+    shapes.SHAPE_SEMANTIC_SHELL: script_identity.direct_script_invocations,
+    shapes.SHAPE_BACKGROUND_RESTART: script_identity.direct_script_invocations,
+}
+
+
+def test_every_repetition_shape_declares_a_shared_identity_owner():
+    """A new repetition shape cannot be added without declaring its owner.
+
+    This is the enforcement clause of the F47 invariant — *answered-question
+    repetition is culpable only after notice* — and it exists because the
+    previous, narrower version of this guarantee was FALSE while reading as
+    true. `tool_fingerprint.py` and `_thrash_checks._fingerprint` both state
+    that the memo "can never fire on a different equivalence class than the
+    oracle that grades the run"; that held for the identical-call class only,
+    and `diag_script_run` @97903 was faulted on a class the memo had never seen.
+
+    So the table above is exhaustive over the oracle's repetition shapes, and
+    this asserts it. Adding a fifth shape without an owner fails here rather
+    than silently re-opening the gap.
+    """
+    repetition_shapes = set(shapes.SHAPES) - {shapes.SHAPE_STUCK_VALVE}
+    assert repetition_shapes == set(ANSWERED_QUESTION_IDENTITY_OWNERS), (
+        "a repetition shape exists with no declared identity owner — declare which "
+        "disco.core function computes its class, and make the loop's memo use it"
+    )
+
+
+def test_identity_owners_all_live_in_the_shared_lowest_layer():
+    """Owners must live in `disco.core`, importable by BOTH sides.
+
+    An owner defined in the harness is exactly the shape of the F47 defect: the
+    oracle can grade on it and the loop cannot compute it.
+    """
+    for shape, owner in ANSWERED_QUESTION_IDENTITY_OWNERS.items():
+        assert owner.__module__.startswith("disco.core"), (
+            f"{shape} resolves identity through {owner.__module__}, which the loop "
+            "cannot import — the memo would be blind to this class"
+        )
+
+
+def test_the_harness_re_exports_the_owner_rather_than_copying_it():
+    """`_thrash_shell.direct_script_invocations` must BE the core function.
+
+    Identity, not equality: a copy that agrees today is the drift the single-owner
+    rule exists to prevent, and it would stay invisible until a cell was graded on
+    a class the memo never saw.
+    """
+    assert _thrash_shell.direct_script_invocations is script_identity.direct_script_invocations
+    assert _thrash_shell.shell_segments is script_identity.shell_segments
+    assert _thrash_shell.static_tee_sinks is script_identity.static_tee_sinks
+
+
+def test_loop_and_oracle_group_the_97903_spellings_identically():
+    """The measured 06v failure, as a cross-side agreement check.
+
+    `diag_script_run` @97903 issued one script under three spellings. The oracle
+    grouped all three and reded the run at a cap of two; the memo grouped none of
+    them and said nothing. Both sides must now group all three.
+    """
+    commands = [
+        "cd /workspace && python3 primes.py",
+        "cd /workspace && python3 primes.py | wc -l && python3 primes.py | tail -1",
+        "python3 primes.py | tee /tmp/primes.out | wc -l && tail -n 1 /tmp/primes.out",
+    ]
+    events: list[dict[str, Any]] = []
+    outcomes: dict[str, tuple[bool, str, str]] = {}
+    for index, command in enumerate(commands):
+        action_id = f"a{index}"
+        events.append(
+            {
+                "kind": "action",
+                "seq": index * 2,
+                "id": action_id,
+                "action_id": action_id,
+                "tool_call": {"tool_name": "shell", "arguments": {"command": command}},
+            }
+        )
+        outcomes[action_id] = (True, "", "")
+
+    count, fingerprint, seqs = largest_semantic_shell_repeat_group(events, outcomes)
+
+    # The oracle's side: three occurrences, one identity — the cell's own value.
+    assert (count, fingerprint) == (3, '["python","/workspace/primes.py",[]]')
+    assert seqs == [0, 2, 4]
+    # The loop's side: the same identity, from the same owner, for every spelling.
+    for command in commands:
+        assert script_identity.foreground_script_fingerprints(command) == {fingerprint}

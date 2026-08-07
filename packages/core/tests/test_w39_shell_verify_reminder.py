@@ -30,8 +30,20 @@ the W-39 code path is never entered; byte-identical to today.
       passed" reminder; the command executes.
   (d) the command is NEVER skipped/blocked in any case (the executor is always
       called).
-  (e) anti-spam: looping the same passed command 3× emits at most ONE reminder
-      per passed-and-unmutated streak.
+  (e) anti-spam: bounded, and RE-ARMED per repetition occurrence.
+
+      This clause read "at most ONE reminder per passed-and-unmutated streak"
+      until 2026-08-06x, and that window was the F47 defect. The streak runs
+      from the last workspace mutation; the `ThrashOracle` counts *consecutive
+      identical actions*. When the two diverge the counted group can run silent:
+      `p4_ff_node_restart` @97652 spent its one shot at seq 261 and was then
+      faulted for the group at 275/284/287, having been told nothing inside it.
+
+      The invariant the anti-spam must satisfy is therefore not "one per streak"
+      but: **a notice always precedes the occurrence that exceeds the cap**,
+      while the advisory stays bounded. Pivoting on the occurrence rather than
+      the streak gives both — the model is told, and told again only if it
+      repeats after being told.
   (f) assist OFF → the W-39 path is never entered (no reminder ever).
 
 Plus pure-helper contracts for the byte-identical match, the mutation gate,
@@ -54,6 +66,7 @@ from disco.core import (
 from disco.core.llm import ModelExecutionPolicy, OperatingMode
 from disco.core.loop.dedup import (
     _W39_REMINDER_SENTINEL,
+    _W39_SCRIPT_REMINDER_SENTINEL,
     _w39_latest_mutation_seq,
     _w39_reminder_emitted_after,
     _w39_shell_verify_reminder,
@@ -297,15 +310,34 @@ async def test_command_always_executes_when_reminder_fires():
 
 
 async def test_anti_spam_one_reminder_per_streak():
+    """Bounded, and re-armed per occurrence — the F47 replacement for the old
+    one-per-streak rule (see the module docstring's clause (e)).
+
+    Four identical passing runs with no mutation between any:
+
+      run 1 — nothing to point at, no reminder
+      run 2 — repeats run 1 → REMINDER #1
+      run 3 — repeats run 2, but #1 already landed after run 2, so no second
+              copy of the same advice; the model HAS the notice
+      run 4 — repeats run 3, and no reminder has landed since run 3 → REMINDER #2
+
+    Two reminders for four runs: still bounded (never one per repeat), and the
+    notice always precedes the run that would exceed a cap of two.
+    """
     ex = _EchoExecutor()
     loop = _make_loop(model_policy=ModelExecutionPolicy(tier="weak"), executor=ex)
     events: list[Event] = []
+    per_run: list[int] = []
     for i in range(4):
         events = await _drive_execute(loop, _shell_action(f"call_shell_{i + 1}", "ls -la"))
-    # Four identical passing runs, no mutation between any → exactly ONE
-    # reminder across the whole streak (no spam).
-    assert len(_reminders(events)) == 1
-    # All four executed.
+        per_run.append(len(_reminders(events)))
+    # Bounded: strictly fewer reminders than repeats, and no two in a row.
+    assert per_run == [0, 1, 1, 2]
+    assert len(_reminders(events)) == 2
+    # THE INVARIANT: a notice precedes the third identical action — the one that
+    # exceeds `max_identical_action_repeats: 2` and reds the run.
+    assert per_run[1] >= 1, "the cap-exceeding repeat must be preceded by a notice"
+    # All four executed — the memo never suppresses a shell command.
     assert len([c for c in ex.calls if c.tool_name == "shell"]) == 4
 
 
@@ -477,9 +509,21 @@ def test_reminder_emitted_after_helper():
     )
     events = with_seqs([user_msg("hi"), env_msg])
     rem_seq = events[-1].seq or 0
-    assert _w39_reminder_emitted_after(events, "ls -la", after_seq=rem_seq - 1) is True
+    sentinel = _W39_REMINDER_SENTINEL
+    assert (
+        _w39_reminder_emitted_after(events, sentinel, "ls -la", after_seq=rem_seq - 1) is True
+    )
     # after_seq at/above the reminder's seq → not counted (already-emitted is
     # strictly-after).
-    assert _w39_reminder_emitted_after(events, "ls -la", after_seq=rem_seq) is False
+    assert _w39_reminder_emitted_after(events, sentinel, "ls -la", after_seq=rem_seq) is False
     # A different command → not matched.
-    assert _w39_reminder_emitted_after(events, "pytest -q", after_seq=0) is False
+    assert _w39_reminder_emitted_after(events, sentinel, "pytest -q", after_seq=0) is False
+    # F47 — the two classes carry DISTINCT sentinels and cannot suppress each
+    # other. The script sentinel is not a substring of an exact-class reminder
+    # (nor the reverse: the closing bracket breaks the prefix match).
+    assert (
+        _w39_reminder_emitted_after(
+            events, _W39_SCRIPT_REMINDER_SENTINEL, "ls -la", after_seq=0
+        )
+        is False
+    )
