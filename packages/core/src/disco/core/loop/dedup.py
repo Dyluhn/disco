@@ -974,10 +974,19 @@ def _w39_validate_candidate(
 # identical-revision nudge, and a second notice would double-fire on one event.
 _W39_PLAN_TOOLS = frozenset({"plan_step", "update_plan_progress"})
 
-# Every tool class that can produce an answered-question notice. This is the set
-# `_prepare_observation` gates on, so widening the notice means adding here — one
-# place, rather than a second guard that can drift from this one.
-_W39_NOTICE_TOOLS = _W39_SHELL_TOOLS | _W39_PLAN_TOOLS
+# F59 — the generic answered-question notice now covers EVERY other tool the
+# oracle counts. Shell and plan retain their richer renderers; this set is the
+# single gate `_prepare_observation` checks, so the notice's class set DERIVES
+# from the oracle's counted class rather than being a parallel list that can
+# drift. The oracle counts every tool (tool_call_fingerprint, no filter); the
+# generic notice fires for any tool not in the shell/plan sets, so the graded
+# class and the noticed class are co-extensive.
+# Any tool deliberately excluded must also be excluded by the oracle and proved
+# non-weakening — see `dedup_generic_notice._W39_GENERIC_EXCLUDED` and
+# `test_generic_notice_exclusion_is_oracle_owned`. A parallel silent list is
+# not acceptable.
+_W39_GENERIC_TOOLS: frozenset[str] = frozenset()  # placeholder — generic covers any tool not in shell/plan
+_W39_NOTICE_TOOLS = _W39_SHELL_TOOLS | _W39_PLAN_TOOLS  # + generic (any other tool via dedup_generic_notice)
 
 
 def _w39_shell_verify_reminder(

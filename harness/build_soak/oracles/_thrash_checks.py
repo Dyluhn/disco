@@ -330,6 +330,29 @@ def check_streak_thrash(
         events, action_ids=known_action_ids, failed_action_ids=failed_action_ids
     )
     if streak > limits["max_identical_action_repeats"]:
+        # F59 sub-case: a streak whose first occurrence has NO observation at all
+        # is not an answered-question thrash — it is ACTION_NO_OBSERVATION, a
+        # different failure the EventChainOracle owns. The oracle's own
+        # `ignored_prior_result` docstring says an action with no observation
+        # must not be rendered as an ignored result, and the product's notice
+        # only fires on a SUCCESSFUL prior run. Classifying a no-observation
+        # streak as thrash would make it an "unnoticed answered-question
+        # conviction" — exactly what F59 forbids. So we do not report thrash
+        # here; EventChain will report ACTION_NO_OBSERVATION.
+        if streak_seqs:
+            first_seq = streak_seqs[0]
+            first_action = next(
+                (e for e in events if kind_of(e) == KIND_ACTION and seq_of(e) == first_seq),
+                None,
+            )
+            if first_action is not None:
+                aid = str(action_id_of(first_action) or "")
+                if aid not in outcomes:
+                    # No observation — this is not a thrash streak, it is a
+                    # missing-observation failure. Do not return a thrash red;
+                    # let the caller try the next shape check and let
+                    # EventChain own the primary failure.
+                    return None, streak, 0, 0, 0
         return (
             shapes.repetition_red(
                 events,

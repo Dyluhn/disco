@@ -494,15 +494,26 @@ def _out_of_phase_submit_plan_refusal(revision: int | None) -> str:
 
 # _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
 
+# F63 — the planning-gate refusal's base sentence, now NAMED so the Attestation-Binding
+# gate (test_attestation_binding) can bind to it. Before F63 the sentence was composed
+# inline inside `_planning_tool_refusal_message` with no symbol owning it, so a test
+# restating it (181 chars vs 284) was invisible to the gate. Extracting it verbatim
+# makes the prose importable: a test must now `from ..engine_contracts import
+# _PLANNING_TOOL_REFUSAL_SUFFIX` or call the function, never retype. Verbatim
+# extraction proven byte-identical by the F63 composition-identity control
+# (`_PLANNING_GATE_REFUSAL == _planning_tool_refusal_message(...)` at streak=1).
+_PLANNING_TOOL_REFUSAL_SUFFIX = (
+    "No workspace mutation or execution is allowed before plan approval. Call `submit_plan`, "
+    "use a safe read tool (file_read/file_list/search/extract), or ask/questions_v2 "
+    "if details are missing."
+)
+
 
 def _planning_tool_refusal_message(
     tool_name: str, *, streak: int, read_calls_remaining: int
 ) -> str:
     detail = (
-        f"REFUSED: `{tool_name}` is not available in PLANNING mode. No workspace "
-        "mutation or execution is allowed before plan approval. Call `submit_plan`, "
-        "use a safe read tool (file_read/file_list/search/extract), or ask/questions_v2 "
-        "if details are missing."
+        f"REFUSED: `{tool_name}` is not available in PLANNING mode. {_PLANNING_TOOL_REFUSAL_SUFFIX}"
     )
     if streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
         detail += (

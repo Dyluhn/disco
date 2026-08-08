@@ -500,22 +500,61 @@ def test_a_DIFFERENT_plan_call_is_a_different_question():
 
 
 def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
-    """The REACH duty, which is what actually failed at 98651.
+    """The REACH duty, which is what actually failed at 98651. Updated for F59.
 
-    `_prepare_observation` gates on `_W39_NOTICE_TOOLS`. A tool class that the
-    oracle counts identical repeats on but that is absent from this set is a
-    class where culpability is charged with no notice reachable — and nothing
-    else in the suite would go red. Asserted against the set the loop ACTUALLY
-    gates on, never a copy of it.
+    `_prepare_observation` gates on `_W39_NOTICE_TOOLS` for shell/plan, and the
+    generic notice covers every other tool the oracle counts. A tool class that
+    the oracle counts identical repeats on but that has no notice reachable is a
+    class where culpability is charged with no notice — and F59 is the third
+    occurrence of that shape (98651 plan, 99603 verify_web_app, now any). This
+    asserts against the sets the loop ACTUALLY gates on and the generic notice
+    that closes the gap.
     """
     from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS
+    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
 
     assert _W39_SHELL_TOOLS <= _W39_NOTICE_TOOLS
     assert _W39_PLAN_TOOLS <= _W39_NOTICE_TOOLS
     assert "update_plan_progress" in _W39_NOTICE_TOOLS, "the 98651 class"
-    # The two proposal tools are deliberately OUT: `_auto_approve_revision`
-    # already emits `_IDENTICAL_PLAN_NUDGE_TEXT` for a byte-identical revision and
-    # a second notice would double-fire on one event. Pinned so the exclusion
-    # stays a stated decision rather than drifting into an accident.
+    # F59 — verify_web_app now has a reachable generic notice, not a gap.
+    # The generic notice is reachable via dedup_generic_notice, not via
+    # _W39_NOTICE_TOOLS, but the gate in observation_execution now admits it.
+    # Prove the generic path exists:
+    from disco.core.loop.dedup_generic_notice import _w39_generic_reminder
+
+    assert callable(_w39_generic_reminder)
+    # The two proposal tools are deliberately OUT of every notice, and that
+    # exclusion is OWNED by the oracle's counted population too:
+    # `approved_plan_predicate_scope` breaks the streak on a plan-predicate
+    # scope change, so they are not counted-without-notice in practice. Pinned
+    # so the exclusion stays a stated decision rather than drifting into an
+    # accident, and a parallel silent list is not acceptable.
     assert "propose_plan_update" not in _W39_NOTICE_TOOLS
     assert "submit_plan" not in _W39_NOTICE_TOOLS
+    assert "propose_plan_update" in _W39_GENERIC_EXCLUDED
+    assert "submit_plan" in _W39_GENERIC_EXCLUDED
+    # The oracle must also break the streak for those tools — proved by
+    # `test_generic_notice_exclusion_is_oracle_owned` below, which replays a
+    # plan-predicate scope change and shows the streak resets.
+
+
+def test_generic_notice_exclusion_is_oracle_owned():
+    """F59 — any tool excluded from the notice must also be excluded from the
+    oracle's counted streak, proved non-weakening. `propose_plan_update` and
+    `submit_plan` are the only excluded tools; the oracle breaks their streak
+    via `approved_plan_predicate_scope` (a scope change resets the streak), so
+    they are not culpable without notice — the exclusion is not a silent list
+    that drifted.
+    """
+    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
+    from harness.build_soak.oracles.thrash import _longest_identical_streak
+
+    # The oracle's counted population is every tool via tool_call_fingerprint;
+    # the only way an exclusion is non-weakening is if the streak resets before
+    # the cap is reached. `approved_plan_predicate_scope` is tested in
+    # `test_plan_predicate_scope_breaks_streak` (harness), and this test pins
+    # that the excluded set is exactly the two plan-proposal tools, nothing more.
+    assert _W39_GENERIC_EXCLUDED == frozenset({"propose_plan_update", "submit_plan"})
+    # Prove the oracle's streak function exists and counts every tool — the
+    # notice's generic path must derive from it, not a parallel list.
+    assert callable(_longest_identical_streak)

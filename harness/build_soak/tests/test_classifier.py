@@ -8,6 +8,7 @@ import json
 from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
 
 from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
+from disco.core.loop.engine_contracts import _planning_tool_refusal_message
 from harness.build_soak.classify import classify, classify_run_folder
 from harness.build_soak.evidence import (
     EvidenceManifest,
@@ -74,23 +75,27 @@ def test_write_in_planning_attempted_classifies():
 
 
 # The product's planning-gate refusal text (disco.core.loop.engine `_gate_planning_mode`,
-# only the tool name interpolated). Fixtures must carry the REAL marker the oracle keys
-# on — a generic "rejected" string is NOT a recognized gate rejection.
+# only the tool name interpolated). Fixtures must carry the REAL composition the
+# producer emits — not a hand-copied prefix. F63 measured this fixture at 181 chars
+# where production is 284, diverging at character 161: the fixture carried only
+# "Call `submit_plan`." while production continues "Call `submit_plan`, use a safe
+# read tool (file_read/file_list/search/extract), or ask/questions_v2 if details
+# are missing." The oracle keys on `_PLANNING_TOOL_REFUSAL_NEEDLE`, but the
+# surrounding sentence is the agent-facing guidance; a drift that changes it
+# silently stops testing the product. Deriving via
+# `engine_contracts._planning_tool_refusal_message` makes the fixture follow
+# production byte-for-byte — reword the production composition and this fixture
+# moves, and the test exercising the classifier's recognition of the real gate
+# (`test_rejected_write_in_planning_is_not_a_violation`) would need no edit yet
+# would fail if the needle changed without updating the derivation.
 #
-# The MARKER is DERIVED from the production symbol that owns it, not retyped (F62 / the
-# Attestation-Binding Invariant, F58): reword `_PLANNING_TOOL_REFUSAL_NEEDLE` and this
-# fixture follows instead of silently asserting on a marker the product stopped emitting.
-# The surrounding sentence is NOT bindable — production composes it inline in an f-string
-# inside `engine_contracts._planning_tool_refusal_message`, so no symbol owns it — and it
-# has ALREADY drifted from the product (F63): the real message continues "Call
-# `submit_plan`, use a safe read tool ..., or ask/questions_v2 if details are missing."
-# That drift is recorded rather than repaired here; only the marker is load-bearing for
-# this oracle, and rewriting the fixture body would change what this test feeds it.
-_PLANNING_GATE_REFUSAL = (
-    "<system-reminder>\n"
-    f"REFUSED: `file_write` {_PLANNING_TOOL_REFUSAL_NEEDLE}. No workspace mutation "
-    "or execution is allowed before plan approval. Call `submit_plan`.\n"
-    "</system-reminder>"
+# Independence preserved (F63): the classifier (`harness/build_soak/classify.py`)
+# still keys on the needle alone and imports nothing from `disco.core`; only the
+# TEST FIXTURE — not the classifier — imports the producer. The classifier's
+# independence is proven by `test_nongate_agent_error_write_in_planning_still_a_violation`
+# and `test_failed_write_in_planning_still_a_violation` which remain marker-negative.
+_PLANNING_GATE_REFUSAL = _planning_tool_refusal_message(
+    "file_write", streak=1, read_calls_remaining=999
 )
 
 
@@ -395,3 +400,50 @@ def test_governed_missing_terminal_still_fails_closed_without_thrash():
     assert c["status"] == "FAIL"
     assert c["code"] == "GOVERNED_ADMISSION_BYPASSED"
     assert c["first_broken_link"] == "event_chain -> terminal"
+
+
+def test_planning_gate_refusal_fixture_is_derived_from_production():
+    """F63 — the fixture must DERIVE from the production composition, not hand-copy.
+
+    Production composes the refusal via `engine_contracts._planning_tool_refusal_message`
+    (284 chars at streak=1); the pre-F63 fixture hand-copied only 181 chars and diverged
+    at character 161, missing "use a safe read tool (file_read/file_list/search/extract), "
+    "or ask/questions_v2 if details are missing." The classifier keys on the needle
+    `_PLANNING_TOOL_REFUSAL_NEEDLE`, so the drift never made the gate red — which is
+    exactly why F63 is load-bearing. This test proves the fixture now follows production:
+    reword the production composition and this assertion moves with it.
+    """
+    from disco.core.loop.engine_contracts import _planning_tool_refusal_message as prod_msg
+
+    expected = prod_msg("file_write", streak=1, read_calls_remaining=999)
+    assert _PLANNING_GATE_REFUSAL == expected, (
+        "fixture must be byte-identical to production's composition at streak=1; "
+        "rewording production must move the fixture or this fails"
+    )
+    # The load-bearing extension beyond the old 181-char prefix — the suffix the
+    # old fixture dropped is now present, proving the drift is repaired.
+    assert "use a safe read tool" in _PLANNING_GATE_REFUSAL
+    assert "ask/questions_v2" in _PLANNING_GATE_REFUSAL
+    # Length proves the widening: old was 181, production at streak=1 is 284.
+    assert len(_PLANNING_GATE_REFUSAL) >= 280
+    assert len(expected) >= 280
+
+
+def test_classifier_still_independent_of_producer():
+    """The classifier's detection must remain needle-based and not import the producer.
+
+    Only the FIXTURE imports the producer; the classifier (`classify`) must not.
+    Verify that a non-needle AgentError does not become a false PASS — the
+    classifier's independence is preserved.
+    """
+    # A planning write that fails with a generic error (no needle) is still a violation.
+    events = [
+        msg(1, "user", "build"),
+        action(2, "file_write", args={"path": "index.html", "content": "bad"}, action_id="a2"),
+        agent_error(3, "a2", error="ERROR: file_write raised OSError: disk full"),
+        plan(4, revision=1),
+        status(5, "AWAITING_PLAN_APPROVAL", "evt_4"),
+    ]
+    c = classify(events)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "WRITE_TOOL_ATTEMPTED_IN_PLANNING"

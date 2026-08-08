@@ -219,7 +219,29 @@ def _answered_question_reminder(
             call.call_id,
         )
         return text
-    return _shell_reminder(action, events)
+    # Shell tools have two reminder classes (exact + script identity); check them
+    # before falling through to generic.
+    if call.tool_name in _W39_SHELL_TOOLS:
+        return _shell_reminder(action, events)
+    # F59 — generic notice for every other tool the oracle counts. Shell and
+    # plan retain richer renderers; this covers verify_web_app and all
+    # non-shell, non-plan tools with a repetition-aware, consequence-naming
+    # template. The two excluded tools are owned by the oracle's scope change.
+    from .dedup_generic_notice import _w39_generic_reminder
+
+    remind, prior_seq, text = _w39_generic_reminder(
+        call.tool_name, call.arguments, events
+    )
+    if not remind:
+        return None
+    _LOG.info(
+        "F59 generic dedup notice: %s already succeeded at step %s "
+        "(call_id=%s) — advisory, executing anyway",
+        call.tool_name,
+        prior_seq,
+        call.call_id,
+    )
+    return text
 
 
 async def _prepare_observation(
@@ -263,7 +285,16 @@ async def _prepare_observation(
     if action.tool_call is None:
         return False, None
     call = action.tool_call
-    if not loop._assist and call.tool_name not in _W39_NOTICE_TOOLS:
+    # F59 — the generic notice covers every tool the oracle counts (every tool
+    # via tool_call_fingerprint). Shell and plan retain richer renderers; the
+    # generic path handles any other tool. The two deliberately excluded tools
+    # (propose_plan_update, submit_plan) are owned by the oracle's counted
+    # population too — they are broken by a scope change, so the exclusion is
+    # proved non-weakening. No parallel silent list remains.
+    from .dedup_generic_notice import _W39_GENERIC_EXCLUDED
+
+    is_generic = call.tool_name not in _W39_NOTICE_TOOLS and call.tool_name not in _W39_GENERIC_EXCLUDED
+    if not loop._assist and call.tool_name not in _W39_NOTICE_TOOLS and not is_generic:
         return False, None
     events = await loop._events()
     if loop._assist:
