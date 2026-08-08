@@ -32,6 +32,9 @@ from disco.core.loop import (
     VerifierContextSeed,
     host_verify_authoritative_enabled,
 )
+from disco.core.loop.finish.verify_gate_parts.host_claims import (
+    _UNCLASSIFIED_MODEL_VERIFIER_CAUSE,
+)
 from disco.core.loop.finish.verify_gates import _bounded_model_verifier_cause
 from disco.core.verification import (
     VerificationClaimKind,
@@ -192,9 +195,14 @@ def _statuses(events) -> list[tuple[str, str | None]]:
 
 
 def test_model_verifier_event_cause_rejects_untrusted_free_form_text() -> None:
+    # The fallback is DERIVED from the production constant that owns it, not retyped
+    # (F62 / F58). Deriving it by CALLING the same function on a second unclassifiable
+    # input was rejected deliberately: that would make the assertion `f(a) == f(b)`,
+    # which survives a mutation collapsing the classifier to one constant — a mutation
+    # the literal catches today. Binding must not weaken the oracle.
     assert (
         _bounded_model_verifier_cause("provider echoed TOP_SECRET_RESPONSE_CONTENT")
-        == "model verifier unavailable (unclassified structural failure)"
+        == _UNCLASSIFIED_MODEL_VERIFIER_CAUSE
     )
 
 

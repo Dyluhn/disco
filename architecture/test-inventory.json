@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
+  "source_identity": "a6fd68f148f7ea6c69351628d0a4991777897e53",
   "collected": {
     "counts": {
       "packages": 10439,
       "harness": 1320,
       "integrations": 9,
-      "tests": 391
+      "tests": 394
     },
-    "total": 12159,
+    "total": 12162,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11785,9 +11785,12 @@
         "integrations/messaging/test_disco_bot.py::test_url_for_routes_by_surface"
       ],
       "tests": [
+        "tests/architecture/test_attestation_binding.py::test_allowlist_entries_are_dated_and_explained",
+        "tests/architecture/test_attestation_binding.py::test_derived_population_covers_the_historical_family",
         "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
         "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
         "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+        "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete",
         "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
         "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_clean_command_passes",
@@ -12180,9 +12183,9 @@
     }
   },
   "mapping_static": {
-    "identity": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
+    "identity": "a6fd68f148f7ea6c69351628d0a4991777897e53",
     "python_test_file_count": 829,
-    "python_static_test_id_count": 10012,
+    "python_static_test_id_count": 10015,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -22646,9 +22649,12 @@
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_read_failures_are_not_mislabeled_as_absent",
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_receipt_uses_sandbox_resolved_resource_identity",
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_write_tool_success_emits_path_and_post_write_sha256",
+      "tests/architecture/test_attestation_binding.py::test_allowlist_entries_are_dated_and_explained",
+      "tests/architecture/test_attestation_binding.py::test_derived_population_covers_the_historical_family",
       "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
       "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
       "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+      "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete",
       "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
       "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
       "tests/architecture/test_ci_contract.py::test_bypass_pattern_in_ci_fails",
@@ -31906,6 +31912,34 @@
           "packages/tools/tests/test_shipped_standalone_artifacts.py::test_self_contained_artifacts_execute_standalone",
           "packages/tools/tests/test_shipped_standalone_artifacts.py::test_shipped_browser_daemon_executes_standalone",
           "packages/tools/tests/test_shipped_standalone_artifacts.py::test_standalone_runner_rejects_a_package_relative_import"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-F62-POPULATION",
+      "root": "tests",
+      "source_identity_before": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
+      "source_identity_after": "a6fd68f148f7ea6c69351628d0a4991777897e53",
+      "collected_roots": {
+        "tests": {
+          "before_count": 391,
+          "after_count": 394,
+          "added_ids": [
+            "tests/architecture/test_attestation_binding.py::test_allowlist_entries_are_dated_and_explained",
+            "tests/architecture/test_attestation_binding.py::test_derived_population_covers_the_historical_family",
+            "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "tests/architecture/test_attestation_binding.py::test_allowlist_entries_are_dated_and_explained",
+          "tests/architecture/test_attestation_binding.py::test_derived_population_covers_the_historical_family",
+          "tests/architecture/test_attestation_binding.py::test_test_files_glob_is_complete"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

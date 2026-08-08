@@ -12,6 +12,7 @@ import asyncio
 import pytest
 from disco.agent_server.verify.host import HostWebAppVerifier
 from disco.core.loop import HostVerificationDeliverable
+from disco.core.loop.finish.verify_gates import _GAME_INTERACTION_EXPECTED
 from disco.core.verification import (
     HostVerificationClaim,
     HostVerificationResult,
@@ -95,9 +96,12 @@ async def test_game_host_lowers_exact_interaction_probe_without_vision(
     interaction = HostVerificationClaim(
         claim_id="web.interaction:canvas-keyboard-smoke",
         kind=VerificationClaimKind.INTERACTION,
-        expected=(
-            "host browser completed canvas click, Space, ArrowRight, and post-interaction capture"
-        ),
+        # DERIVED from the production symbol that owns this sentence, not retyped
+        # (F62 / the Attestation-Binding Invariant, F58): the point of the test is
+        # that the host lowers the EXACT probe production declares, so a reword of
+        # the product must move this fixture rather than leave it asserting on a
+        # string nothing emits.
+        expected=_GAME_INTERACTION_EXPECTED,
         source_authority="target.game.functional_interaction@1",
     )
     deliverable = _deliverable().model_copy(

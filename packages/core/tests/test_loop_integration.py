@@ -30,18 +30,20 @@ from disco.core.llm import (
 )
 from disco.core.llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from disco.core.loop import BuildAgent, NeverConfirm, RouterAgent
+from disco.core.loop.driver import (
+    _EMPTY_REASONING_REPAIR_REMINDER,
+    _PROSE_NOOP_REPAIR_REMINDER,
+)
 from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
 from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
-_EMPTY_REASONING_REPAIR_REMINDER = (
-    "Your previous response produced no visible text and no tool call — call exactly "
-    "one tool now, or say in plain text what you need."
-)
+# Both reminders are DERIVED from the production module constants that own them
+# (F62 / the Attestation-Binding Invariant, F58). They were hand-copied here under
+# the SAME names, which is the defect at its most deceptive: the copy looked like a
+# binding. Reword either reminder now and these tests move with the product instead
+# of asserting on a sentence nothing emits.
 _PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
-_PROSE_NOOP_REPAIR_REMINDER = (
-    "You described the next action instead of performing it — call the tool for it in THIS turn."
-)
 _READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
 
 

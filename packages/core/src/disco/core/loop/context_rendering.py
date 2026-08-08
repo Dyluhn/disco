@@ -19,6 +19,11 @@ from ..events import PlanEvent
 _BLOCK_OPEN = "<context-pack>"
 _BLOCK_CLOSE = "</context-pack>"
 _DISCO_PATH_TOKENS = (".disco/", ".disco")
+# The redirect this module authors when a plan's own prose tells the agent to edit
+# harness bookkeeping directly, extracted from the bare `return` inside
+# `_sanitize_todo_seed_text` so its test can DERIVE it rather than retype it
+# (F62 / F58). Value verbatim.
+_TODO_PROGRESS_REDIRECT = "Mark progress via update_plan_progress"
 
 
 def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
@@ -44,7 +49,7 @@ def _sanitize_todo_seed_text(text: object) -> str:
         return raw
     lowered = raw.lower()
     if "todo" in lowered and any(verb in lowered for verb in ("mark", "update", "edit", "check")):
-        return "Mark progress via update_plan_progress"
+        return _TODO_PROGRESS_REDIRECT
     words: list[str] = []
     for word in raw.split():
         if ".disco" in word:

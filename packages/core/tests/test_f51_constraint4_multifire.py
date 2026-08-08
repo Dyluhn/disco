@@ -373,6 +373,7 @@ async def test_receipt_reuse_notice_does_not_repeat_itself():
     so both the command and the observation id are unchanged and the pre-repair
     bodies were byte-identical."""
     from disco.core.loop.finish.finalize_parts.verify_receipt import (
+        _RECEIPT_REUSE_NOT_BLOCKING,
         reuse_finish_verify_receipt,
     )
 
@@ -392,7 +393,13 @@ async def test_receipt_reuse_notice_does_not_repeat_itself():
 
     assert first != second
     assert "reuse 2" in second
-    assert "NOT what is blocking the finish" in second, (
+    # DERIVED from the production symbol that owns the clause (F61, repaired
+    # 2026-08-07t). This asserted a 31-char hand-picked SLICE of the sentence until
+    # then, because production held it only as a fragment of an f-string
+    # concatenation and there was no name to bind to. The assertion is now the WHOLE
+    # named clause — a deliberate and disclosed STRENGTHENING, not a like-for-like
+    # swap: the slice was only ever a slice because nothing could be derived.
+    assert _RECEIPT_REUSE_NOT_BLOCKING in second, (
         "a repeat here means something ELSE refuses the finish — say so, rather "
         "than inviting the agent to re-run the one thing that already works"
     )

@@ -50,6 +50,10 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import OperatingMode
+from disco.core.loop.plan_command_validation import (
+    _PROBE_LOOPBACK_PREVIEW_ISSUE,
+    _PROBE_RUNTIME_PREVIEW_ISSUE,
+)
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv-c18"
@@ -678,13 +682,16 @@ async def test_c18_placeholder_http_gate_is_rejected_before_plan_persistence(tmp
             "starts background work",
         ),
         ("sh -lc 'sleep 30 &'", "starts background work"),
-        ("curl -fsS http://[::1]", "probes a loopback/local preview URL"),
-        ("curl -fsS http://app:8080", "probes a loopback/local preview URL"),
+        # The two preview-probe reasons are DERIVED from the production symbols that
+        # own them (F62 / F58); the other reasons in this table sit below the gate's
+        # prose floor and are recorded as an F61-class residue, not bound here.
+        ("curl -fsS http://[::1]", _PROBE_LOOPBACK_PREVIEW_ISSUE),
+        ("curl -fsS http://app:8080", _PROBE_LOOPBACK_PREVIEW_ISSUE),
         ("npm run dev", "launches a local server"),
         ("sh -lc 'npm --prefix app run dev'", "launches a local server"),
         (
             '/usr/bin/curl -fsS "$PREVIEW_URL/health"',
-            "probes a runtime-selected preview URL",
+            _PROBE_RUNTIME_PREVIEW_ISSUE,
         ),
         ("timeout 5 npm run dev", "launches a local server"),
         ("env -u FOO npm run dev", "launches a local server"),

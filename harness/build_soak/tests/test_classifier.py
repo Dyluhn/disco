@@ -7,6 +7,7 @@ import json
 
 from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
 
+from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 from harness.build_soak.classify import classify, classify_run_folder
 from harness.build_soak.evidence import (
     EvidenceManifest,
@@ -75,9 +76,19 @@ def test_write_in_planning_attempted_classifies():
 # The product's planning-gate refusal text (disco.core.loop.engine `_gate_planning_mode`,
 # only the tool name interpolated). Fixtures must carry the REAL marker the oracle keys
 # on — a generic "rejected" string is NOT a recognized gate rejection.
+#
+# The MARKER is DERIVED from the production symbol that owns it, not retyped (F62 / the
+# Attestation-Binding Invariant, F58): reword `_PLANNING_TOOL_REFUSAL_NEEDLE` and this
+# fixture follows instead of silently asserting on a marker the product stopped emitting.
+# The surrounding sentence is NOT bindable — production composes it inline in an f-string
+# inside `engine_contracts._planning_tool_refusal_message`, so no symbol owns it — and it
+# has ALREADY drifted from the product (F63): the real message continues "Call
+# `submit_plan`, use a safe read tool ..., or ask/questions_v2 if details are missing."
+# That drift is recorded rather than repaired here; only the marker is load-bearing for
+# this oracle, and rewriting the fixture body would change what this test feeds it.
 _PLANNING_GATE_REFUSAL = (
     "<system-reminder>\n"
-    "REFUSED: `file_write` is not available in PLANNING mode. No workspace mutation "
+    f"REFUSED: `file_write` {_PLANNING_TOOL_REFUSAL_NEEDLE}. No workspace mutation "
     "or execution is allowed before plan approval. Call `submit_plan`.\n"
     "</system-reminder>"
 )

@@ -25,6 +25,7 @@ from disco.core.dod import FileExistsPredicate
 from disco.core.events import ConversationStatus, EventSource
 from disco.core.llm import OperatingMode
 from disco.core.loop import signals
+from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 from loop_fakes import ScriptedAgent, action_step
 
 
@@ -595,7 +596,7 @@ async def test_repeated_planning_shell_refusals_escalate_and_narrow_to_submit_or
     refusals = [
         e
         for e in events
-        if isinstance(e, AgentErrorEvent) and "is not available in PLANNING mode" in e.error
+        if isinstance(e, AgentErrorEvent) and _PLANNING_TOOL_REFUSAL_NEEDLE in e.error
     ]
     assert len(refusals) == 3
     assert "ONLY valid next action" not in refusals[0].error

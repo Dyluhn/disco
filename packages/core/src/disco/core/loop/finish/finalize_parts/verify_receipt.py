@@ -28,6 +28,14 @@ if TYPE_CHECKING:
         """The loop capability this module uses: the event log."""
 
 
+# The load-bearing clause of the reuse escalation, given a name so a test can DERIVE
+# it instead of retyping a slice of it (F61, 2026-08-07t; the Attestation-Binding
+# Invariant, F58). It was previously a FRAGMENT of a multi-part concatenation whose
+# whole value is an f-string, so no symbol owned it and the gate was silent about it
+# by construction. Composition below is byte-identical; only the ownership moved.
+_RECEIPT_REUSE_NOT_BLOCKING = "the verify command is NOT what is blocking the finish"
+
+
 def _latest_action_event(events: list[Event]) -> ActionEvent | None:
     """Return the most recent ActionEvent of any tool, or None."""
     for ev in reversed(events):
@@ -136,8 +144,8 @@ async def reuse_finish_verify_receipt(
         ""
         if reuses <= 1
         else (
-            f"This is reuse {reuses} of the same receipt in this run — the verify "
-            "command is NOT what is blocking the finish. Read the refusal that "
+            f"This is reuse {reuses} of the same receipt in this run — "
+            f"{_RECEIPT_REUSE_NOT_BLOCKING}. Read the refusal that "
             "follows this message and address that instead; re-running the verify "
             "will keep producing this same carried-forward result.\n"
         )

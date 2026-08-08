@@ -7,6 +7,7 @@ from _buildsoak_fakes import build_plan_loop
 from disco.core.context import ArtifactMemoryStore
 from disco.core.events import PlanEvent, PlanStep
 from disco.core.loop.context_builder import render_plan_as_todo_markdown
+from disco.core.loop.context_rendering import _TODO_PROGRESS_REDIRECT
 from loop_fakes import ScriptedAgent, action_step, finish_step
 
 
@@ -61,7 +62,12 @@ def test_render_plan_as_todo_markdown_sanitizes_disco_paths() -> None:
     )
     md = render_plan_as_todo_markdown(plan)
     assert ".disco" not in md
-    assert "Mark progress via update_plan_progress" in md
+    # DERIVED from the production constant that owns it (F62 / F58). The sibling
+    # assertion below stays a literal ON PURPOSE: production holds
+    # "harness-managed bookkeeping" only as a call argument inside
+    # `_sanitize_todo_seed_text`, so no symbol owns it and there is nothing to
+    # derive from — the F61 class, recorded rather than papered over.
+    assert _TODO_PROGRESS_REDIRECT in md
     assert "harness-managed bookkeeping" in md
 
 
