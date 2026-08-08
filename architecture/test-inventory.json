@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
+  "source_identity": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
   "collected": {
     "counts": {
-      "packages": 10432,
+      "packages": 10439,
       "harness": 1320,
       "integrations": 9,
-      "tests": 386
+      "tests": 391
     },
-    "total": 12147,
+    "total": 12159,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6590,6 +6590,13 @@
         "packages/core/tests/test_role_fallback.py::test_stream_aux_role_falls_back_before_any_chunk_is_yielded",
         "packages/core/tests/test_role_fallback.py::test_stream_midstream_transient_is_not_replayed_with_fallback",
         "packages/core/tests/test_role_fallback.py::test_vision_verifier_never_falls_back_to_json_only_auxiliary_model",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_MUTATION_CONTROL",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_fires_twice_in_one_run_and_does_not_repeat",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_first_firing_is_still_the_legacy_constant",
+        "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_survives_a_re_entry_into_planning",
         "packages/core/tests/test_router_conversation_header.py::test_router_omits_conversation_header_without_context_id",
         "packages/core/tests/test_router_conversation_header.py::test_router_threads_conversation_id_to_provider_header",
         "packages/core/tests/test_router_errors.py::test_auth_error_retries_once_then_terminal",
@@ -11778,6 +11785,11 @@
         "integrations/messaging/test_disco_bot.py::test_url_for_routes_by_surface"
       ],
       "tests": [
+        "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
+        "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
+        "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+        "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
+        "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_clean_command_passes",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_comment_line_not_extracted_as_command",
         "tests/architecture/test_ci_contract.py::TestBypassDetection::test_error_suppression_detected",
@@ -12168,9 +12180,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
-    "python_test_file_count": 827,
-    "python_static_test_id_count": 10000,
+    "identity": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
+    "python_test_file_count": 829,
+    "python_static_test_id_count": 10012,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12707,6 +12719,7 @@
       "packages/core/tests/test_restore_authorizes_weakening.py",
       "packages/core/tests/test_revision_force_submit.py",
       "packages/core/tests/test_role_fallback.py",
+      "packages/core/tests/test_route_b_driven_composition.py",
       "packages/core/tests/test_router_conversation_header.py",
       "packages/core/tests/test_router_errors.py",
       "packages/core/tests/test_router_extra.py",
@@ -12980,6 +12993,7 @@
       "packages/tools/tests/tool_fakes.py",
       "scripts/architecture/test_inventory.py",
       "tests/architecture/_helpers.py",
+      "tests/architecture/test_attestation_binding.py",
       "tests/architecture/test_ci_contract.py",
       "tests/architecture/test_debt.py",
       "tests/architecture/test_diagram.py",
@@ -19414,6 +19428,13 @@
       "packages/core/tests/test_role_fallback.py::test_stream_aux_role_falls_back_before_any_chunk_is_yielded",
       "packages/core/tests/test_role_fallback.py::test_stream_midstream_transient_is_not_replayed_with_fallback",
       "packages/core/tests/test_role_fallback.py::test_vision_verifier_never_falls_back_to_json_only_auxiliary_model",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_MUTATION_CONTROL",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_fires_twice_in_one_run_and_does_not_repeat",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_first_firing_is_still_the_legacy_constant",
+      "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_survives_a_re_entry_into_planning",
       "packages/core/tests/test_router_conversation_header.py::test_router_omits_conversation_header_without_context_id",
       "packages/core/tests/test_router_conversation_header.py::test_router_threads_conversation_id_to_provider_header",
       "packages/core/tests/test_router_errors.py::test_auth_error_retries_once_then_terminal",
@@ -22625,6 +22646,11 @@
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_read_failures_are_not_mislabeled_as_absent",
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_receipt_uses_sandbox_resolved_resource_identity",
       "packages/tools/tests/test_write_tool_artifact_emission.py::test_write_tool_success_emits_path_and_post_write_sha256",
+      "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
+      "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
+      "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+      "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
+      "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape",
       "tests/architecture/test_ci_contract.py::test_bypass_pattern_in_ci_fails",
       "tests/architecture/test_ci_contract.py::test_ci_passes",
       "tests/architecture/test_ci_contract.py::test_clean_command_passes",
@@ -31644,6 +31670,61 @@
           "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
           "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
           "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-ROUTE-B-AND-F58",
+      "root": "multiple",
+      "source_identity_before": "e9cc0c38007d5f7a61b23870ad9cbd7aac8d0a7d",
+      "source_identity_after": "15229ac8ae9da3a5574628e0980e4b6d10b5aa7b",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10432,
+          "after_count": 10439,
+          "added_ids": [
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_MUTATION_CONTROL",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_fires_twice_in_one_run_and_does_not_repeat",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_first_firing_is_still_the_legacy_constant",
+            "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_survives_a_re_entry_into_planning"
+          ]
+        },
+        "tests": {
+          "before_count": 386,
+          "after_count": 391,
+          "added_ids": [
+            "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
+            "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
+            "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+            "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
+            "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_route_b_driven_composition.py",
+          "tests/architecture/test_attestation_binding.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_MUTATION_CONTROL",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_fires_twice_in_one_run_and_does_not_repeat",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_halt_landing_preserves_the_authored_fact_on_both_fires",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_MUTATION_CONTROL",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_fires_twice_in_one_run_and_does_not_repeat",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_first_firing_is_still_the_legacy_constant",
+          "packages/core/tests/test_route_b_driven_composition.py::test_route_b_plan_nudge_survives_a_re_entry_into_planning",
+          "tests/architecture/test_attestation_binding.py::test_family_files_all_exist",
+          "tests/architecture/test_attestation_binding.py::test_no_constraint4_test_restates_a_named_production_sentence",
+          "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
+          "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
+          "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

@@ -220,10 +220,17 @@ def test_serve_handoff_guidance_ordinal_is_grammatical():
 
 def test_serve_handoff_guidance_first_firing_is_unchanged():
     """The `repeats <= 1` branch carries no ordinal at all and must not move."""
-    from disco.core.loop.turn_control_support import _serve_handoff_guidance
+    from disco.core.loop.turn_control_support import (
+        _SERVE_HANDOFF_OPENING,
+        _serve_handoff_guidance,
+    )
 
+    # ATTESTATION-BINDING INVARIANT (F58): the opening sentence is DERIVED from
+    # the constant the first-firing branch composes, not restated here. A
+    # restatement would keep this test green after a reword while the product
+    # emitted something else entirely.
     body = _serve_handoff_guidance(1, [])
-    assert "Handoff recorded. `serve` does not complete the run." in body
+    assert _SERVE_HANDOFF_OPENING in body
     assert "handoff of this run" not in body
 
 

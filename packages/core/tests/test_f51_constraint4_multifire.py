@@ -244,11 +244,16 @@ async def test_a_DIFFERENT_failure_restarts_the_count(monkeypatch):
 
 
 async def test_the_target_verification_surface_does_not_repeat_itself():
+    from disco.core.loop.finish.verify_gate_parts.host_claims import handoff_refusal_detail
     from disco.core.loop.finish.verify_gate_parts.host_disposition import (
         governed_contract_refusal,
     )
 
-    guidance = "there is no handoff for the current target at all"
+    # ATTESTATION-BINDING INVARIANT (F58): this was a hand-copied duplicate of
+    # `handoff_refusal_detail`'s no-handoff branch. Derived from the describer
+    # that owns it, so a reword moves the test with the product instead of
+    # leaving it asserting on a string nothing emits.
+    guidance = handoff_refusal_detail(None, None)
     loop = _FakeLoop()
     await governed_contract_refusal(
         _FakeGate(loop), [], failure_key="no_handoff", guidance=guidance
@@ -295,15 +300,50 @@ def test_serve_handoff_guidance_takes_a_repeat_count_like_its_sibling():
     assert "Handoff recorded" in first, "the first fire is unchanged in substance"
 
 
+def _retired_delegated_fork_clause() -> str:
+    """The delegated-fork clause the owner named, DERIVED — never retyped.
+
+    ATTESTATION-BINDING INVARIANT (F58), the hard case. This clause is asserted
+    ABSENT: production deleted it deliberately, so there is no live symbol to
+    import and there never will be. The invariant's own escape clause governs —
+    *where a value genuinely cannot be imported, the attestation must carry a
+    control that fails when the production value changes* — and the control here
+    is that production still RECORDS the retired sentence, verbatim, in
+    `_serve_next_move`'s docstring as the owner's canonical counter-example.
+
+    So the clause is extracted structurally from that docstring rather than
+    restated: the quoted block, the text after its semicolon, unwrapped. If
+    someone rewords or removes that counter-example, this raises instead of
+    silently guarding a string production no longer remembers — which is exactly
+    the failure mode F58 names, one level up.
+    """
+    from disco.core.loop.turn_control_support import _serve_next_move
+
+    doc = _serve_next_move.__doc__ or ""
+    # Non-Empty Population Rule: an absence proved over a corpus that vanished is
+    # not evidence of absence. Fail closed if the counter-example is not there.
+    assert doc.count('"') >= 2, (
+        "`_serve_next_move`'s docstring no longer carries the quoted "
+        "counter-example this guard derives from — re-derive it or retire the "
+        "guard deliberately, but do not let it rot back into a hand-copy"
+    )
+    quoted = doc.split('"')[1]
+    assert ";" in quoted, "the counter-example lost its delegated fork (the `;`)"
+    clause = " ".join(quoted.split(";", 1)[1].split()).split(",")[0].strip()
+    assert len(clause.split()) >= 4, f"extracted clause looks degenerate: {clause!r}"
+    return clause
+
+
 def test_serve_handoff_guidance_still_projects_exactly_one_next_move():
     """Constraint 3 (the projection rule) is not traded away for constraint 4:
     both branches must still end in the ONE move `_serve_next_move` derives."""
     from disco.core.loop.turn_control_support import _serve_handoff_guidance
 
+    retired = _retired_delegated_fork_clause()
     for repeats in (1, 4):
         body = _serve_handoff_guidance(repeats, [])
         assert "Next move:" in body
-        assert "otherwise perform the remaining work" not in body, (
+        assert retired not in body, (
             "the delegated-fork counter-example the owner named must not come back"
         )
 

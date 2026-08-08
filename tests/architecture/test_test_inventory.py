@@ -405,8 +405,31 @@ class TestMappingStatic:
             # is additive rendering and the notice must stay advisory rather than
             # become a suppressor.
             # `python_test_file_count` advances 826 -> 827 for the one new file.
-            "python_test_file_count": 827,
-            "python_static_test_id_count": 10000,
+            #
+            # 10012 from PKG-19-ROUTE-B-AND-F58: +12 static ids against +12
+            # collected node ids — nothing parametrized, so the two move together
+            # and there is no gap to explain. TWO new files, which is why
+            # `python_test_file_count` advances 827 -> 829 rather than by one:
+            #   * `packages/core/tests/test_route_b_driven_composition.py` (+7,
+            #     under `packages`) — constraint 4's route (B), driven
+            #     composition. The real caller reaches the real emitter twice in
+            #     ONE run for both remaining targets, with each fire reading the
+            #     previous fire's own emitted events rather than a hand-built
+            #     stand-in, and each target carries a MUTATION CONTROL that
+            #     removes the repair and shows the same drive going byte-identical
+            #     again. A renderer exercised in isolation would not have counted:
+            #     that is `_plan_nudge`'s own 07h defect.
+            #   * `tests/architecture/test_attestation_binding.py` (+5, under
+            #     `tests`) — the Attestation-Binding Invariant (F58), enforced. A
+            #     test may not carry a COPY of a named production sentence; it
+            #     must derive it from the symbol that owns it, because a copy
+            #     attests itself and keeps passing after the product is reworded.
+            #     Keyed on DERIVABILITY, not on length: the census measured the
+            #     longest legitimate fragment probe (44 chars) as LONGER than the
+            #     shortest in-scope restatement (36), so no length cut separates
+            #     the classes without gerrymandering.
+            "python_test_file_count": 829,
+            "python_static_test_id_count": 10012,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -724,7 +747,12 @@ class TestCollectedCounts:
             # 10432 from PKG-19-SEAL-AND-DRAW: +4 under `packages`, the whole of
             # this seal's delta — one new file,
             # `test_w39_shell_escalation.py`, and no harness id.
-            "packages": 10432,
+            # 10439 from PKG-19-ROUTE-B-AND-F58: +7 under `packages` — one new
+            # file, `test_route_b_driven_composition.py`, and no harness id. This
+            # seal's delta is NOT wholly here: its other 5 ids land under `tests`
+            # below, because the F58 enforcement is an architecture fitness test
+            # rather than product-adjacent unit coverage.
+            "packages": 10439,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -788,12 +816,22 @@ class TestCollectedCounts:
             # `_BOOKKEEPING_STREAK_NUDGE_AT` is still 3 — the cap the notice now
             # names is the harness scenario's, and the notice deliberately quotes
             # no number so product prose cannot couple to a grading threshold.
+            # 1320 UNCHANGED at PKG-19-ROUTE-B-AND-F58: that seal adds no harness
+            # id either. Its product-side change is an EXTRACTION — two inline
+            # agent-facing literals given names so tests can derive them — proven
+            # byte-identical by control, so no oracle and no harness pin can see
+            # it.
             "integrations": 9,
-            "tests": 386,
+            # 391 from PKG-19-ROUTE-B-AND-F58: +5 under `tests` for
+            # `tests/architecture/test_attestation_binding.py`, the F58
+            # enforcement. It belongs under `tests` and not `packages` because it
+            # is an architecture fitness gate over the repo's own test corpus,
+            # which is what the `tests` root collects.
+            "tests": 391,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12147 == sum(expected.values())
+        assert collected["total"] == 12159 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -809,7 +847,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12147}
+        assert result == {"collected_total": 12159}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -828,9 +866,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10000,
+            "python_static_ids": 10012,
             "typescript_static_ids": 1203,
-            "collected_total": 12147,
+            "collected_total": 12159,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

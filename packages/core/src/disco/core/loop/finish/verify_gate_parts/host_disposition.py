@@ -28,6 +28,24 @@ from ..common import (
     _prior_verify_marker_fp,
 )
 
+# ATTESTATION-BINDING INVARIANT (F58, 2026-08-07m; enforced 2026-08-07r). These
+# two sentences are the agent-facing prose the HALT branches below hand to
+# `_land_blocked`, and a test that asserts on them must DERIVE them from here
+# rather than restate them — a restatement is a copy, and a copy attests itself.
+# They were inline f-string literals inside the two branch bodies, so there was
+# no symbol to import and `test_f53_constraint4_confirmed_repeats._HALT_GUIDANCE`
+# was a hand-copied duplicate that would have kept passing had this prose been
+# reworded. Extracted verbatim: the composed guidance is byte-identical to what
+# the inline literals produced.
+_HOST_REPEAT_HALT_PREFIX = (
+    "Host verification repeated the same governed failure with no "
+    "productive authority change. "
+)
+_TARGET_REPEAT_HALT_PREFIX = (
+    "Target verification repeated the same governed failure with no "
+    "productive authority change. "
+)
+
 
 def _verify_marker_fire_count(events: list[Event], fingerprint: str) -> int:
     """How many times THIS exact governed failure has been surfaced, plus this one.
@@ -257,10 +275,7 @@ async def governed_non_pass_disposition(
     if _prior_verify_marker_fp(events, authority_seq) == fingerprint:
         await gate._loop._land_blocked(
             reason=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
-            guidance=(
-                "Host verification repeated the same governed failure with no "
-                f"productive authority change. {guidance}"
-            ),
+            guidance=f"{_HOST_REPEAT_HALT_PREFIX}{guidance}",
             legacy_status=ConversationStatus.STUCK,
             legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
         )
@@ -324,10 +339,7 @@ async def governed_contract_refusal(
     if _prior_verify_marker_fp(events, authority_seq) == fingerprint:
         await gate._loop._land_blocked(
             reason=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
-            guidance=(
-                "Target verification repeated the same governed failure with no "
-                f"productive authority change. {guidance}"
-            ),
+            guidance=f"{_TARGET_REPEAT_HALT_PREFIX}{guidance}",
             legacy_status=ConversationStatus.STUCK,
             legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fingerprint}",
         )
