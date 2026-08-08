@@ -134,6 +134,13 @@ _HTTPIE_METHODS = frozenset(
     }
 )
 
+# The two done-condition rejection reasons this module authors, extracted from the
+# bare `return` statements inside `_probe_target_issue` so a test can DERIVE them
+# instead of retyping them (F62 / the Attestation-Binding Invariant, F58). Values
+# verbatim; `_probe_target_issue`'s behaviour is unchanged.
+_PROBE_RUNTIME_PREVIEW_ISSUE = "probes a runtime-selected preview URL"
+_PROBE_LOOPBACK_PREVIEW_ISSUE = "probes a loopback/local preview URL"
+
 
 def _is_loopback_hostname(hostname: str | None) -> bool:
     if not hostname:
@@ -336,7 +343,7 @@ def _probe_target_issue(target: str) -> str | None:
     if not candidate:
         return None
     if any(marker in candidate for marker in ("$", "`", "<", ">", "{", "}")):
-        return "probes a runtime-selected preview URL"
+        return _PROBE_RUNTIME_PREVIEW_ISSUE
     parsed_target = candidate
     if "://" not in parsed_target:
         parsed_target = f"http://{parsed_target}"
@@ -345,7 +352,7 @@ def _probe_target_issue(target: str) -> str | None:
     except ValueError:
         return None
     if _is_local_preview_hostname(hostname):
-        return "probes a loopback/local preview URL"
+        return _PROBE_LOOPBACK_PREVIEW_ISSUE
     return None
 
 

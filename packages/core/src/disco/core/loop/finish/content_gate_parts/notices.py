@@ -143,6 +143,20 @@ async def _notice_repeat(loop: _LoopFacet, blocking: str) -> int:
     )
 
 
+# The `what` clause the plan-verifier notice hands `_again`, given a name so a test
+# can DERIVE it instead of retyping it (F61, 2026-08-07t; the Attestation-Binding
+# Invariant, F58). Value verbatim from the call argument it replaces.
+#
+# ONLY this one is named, deliberately. `_again` takes three sibling clauses in this
+# module — 'the plan evidence has been rejected', 'the sandbox evidence surface has
+# been unavailable', 'the Definition-of-Done has been reported unmet' — which no test
+# restates today and which F61's scope does not name. Naming them too would widen a
+# scope by drift, which is what F58's own scope section exists to prevent. They are
+# recorded as an F61-class residue instead: unnamed, so the gate is silent about them
+# by construction, and available to a boundary commissioned for them.
+_PLAN_VERIFICATION_CONDITIONS_FAILED = "the plan verification conditions have failed"
+
+
 def _again(repeats: int, what: str) -> str:
     """The repetition clause, or nothing on a first firing.
 
@@ -244,7 +258,7 @@ async def emit_plan_verifier_failure_notice(
                     "current plan revision. Fix the deliverable and retry, or submit a "
                     "revised plan for approval; a newer approved plan may replace these "
                     "plan-owned conditions but cannot alter external acceptance requirements."
-                    f"{_again(repeats, 'the plan verification conditions have failed')}"
+                    f"{_again(repeats, _PLAN_VERIFICATION_CONDITIONS_FAILED)}"
                     "\n</system-reminder>"
                 ),
             ),

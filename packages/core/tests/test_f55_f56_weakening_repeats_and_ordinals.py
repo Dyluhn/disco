@@ -181,9 +181,16 @@ def test_ordinal_renders_english_not_naive_th():
 def test_again_clause_is_grammatical_at_the_observed_multiplicity():
     """The exact body shipped to a live agent in 07j's sealed corpus
     (`e2-r1` seq 142) said "the 2th time"."""
-    from disco.core.loop.finish.content_gate_parts.notices import _again
+    # The `what` clause is DERIVED from the production symbol that owns it (F61,
+    # repaired 2026-08-07t). Until then it was a call argument at both ends —
+    # production passed the literal, this test retyped it — so nothing bound the
+    # two and the Attestation-Binding gate was silent about it BY CONSTRUCTION.
+    from disco.core.loop.finish.content_gate_parts.notices import (
+        _PLAN_VERIFICATION_CONDITIONS_FAILED,
+        _again,
+    )
 
-    clause = _again(2, "the plan verification conditions have failed")
+    clause = _again(2, _PLAN_VERIFICATION_CONDITIONS_FAILED)
     assert "2th" not in clause
     assert "the 2nd time" in clause
     # The rest of the sentence is unchanged — this repair is the prose only.

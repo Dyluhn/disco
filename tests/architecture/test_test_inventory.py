@@ -428,8 +428,28 @@ class TestMappingStatic:
             #     longest legitimate fragment probe (44 chars) as LONGER than the
             #     shortest in-scope restatement (36), so no length cut separates
             #     the classes without gerrymandering.
+            #
+            # 10015 from PKG-19-F62-POPULATION: +3 static ids against +3 collected
+            # node ids, nothing parametrized, so the two move together and there is
+            # no gap to explain. NO new file — `python_test_file_count` stays 829,
+            # because all three additions land in the EXISTING
+            # `tests/architecture/test_attestation_binding.py`:
+            #   * `test_derived_population_covers_the_historical_family`
+            #   * `test_test_files_glob_is_complete`
+            #   * `test_allowlist_entries_are_dated_and_explained`
+            # They exist because that gate's POPULATION was a hand-maintained tuple
+            # of five files out of 793 (F62). The gate was real — 07s proved it
+            # refusing three of F58's four in-scope restatements against the tree's
+            # actual pre-repair bytes — but the same routine over the other 788
+            # found TEN live instances of exactly the defect F58 named. The ten are
+            # bound to their production owners, F61's two as well, and the
+            # population is now DERIVED by glob rather than enumerated by hand, per
+            # the 2026-08-07s DERIVED-POPULATION RULE. The three new tests guard the
+            # derivation itself: that it still covers the original five, that the
+            # `test_*.py` glob is complete, and that any future allowlist entry is
+            # dated and explained.
             "python_test_file_count": 829,
-            "python_static_test_id_count": 10012,
+            "python_static_test_id_count": 10015,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -827,11 +847,15 @@ class TestCollectedCounts:
             # enforcement. It belongs under `tests` and not `packages` because it
             # is an architecture fitness gate over the repo's own test corpus,
             # which is what the `tests` root collects.
-            "tests": 391,
+            # 394 from PKG-19-F62-POPULATION: +3 under `tests` for the three
+            # derivation guards added to `test_attestation_binding.py` when that
+            # gate's population stopped being a hand-maintained five-file tuple and
+            # became a glob over the whole test tree (F62).
+            "tests": 394,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12159 == sum(expected.values())
+        assert collected["total"] == 12162 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -847,7 +871,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12159}
+        assert result == {"collected_total": 12162}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -866,9 +890,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10012,
+            "python_static_ids": 10015,
             "typescript_static_ids": 1203,
-            "collected_total": 12159,
+            "collected_total": 12162,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

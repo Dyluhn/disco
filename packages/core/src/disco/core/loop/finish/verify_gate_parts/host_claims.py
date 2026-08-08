@@ -58,6 +58,11 @@ _SAFE_MODEL_VERIFIER_CAUSE_RE = re.compile(
 )
 _HOST_VERDICT_SCREENSHOT_PATH_MAX_CHARS = 512
 
+# The fallback cause this module authors when a raw verifier cause cannot be
+# classified, extracted from the bare `return` inside `bounded_model_verifier_cause`
+# so its test can DERIVE it rather than retype it (F62 / F58). Value verbatim.
+_UNCLASSIFIED_MODEL_VERIFIER_CAUSE = "model verifier unavailable (unclassified structural failure)"
+
 
 def bounded_model_verifier_cause(value: object) -> str:
     clean = "".join(char for char in str(value or "") if char in "\n\t" or ord(char) >= 32)
@@ -65,7 +70,7 @@ def bounded_model_verifier_cause(value: object) -> str:
     clean = clean[:256]
     if _SAFE_MODEL_VERIFIER_CAUSE_RE.fullmatch(clean):
         return clean
-    return "model verifier unavailable (unclassified structural failure)"
+    return _UNCLASSIFIED_MODEL_VERIFIER_CAUSE
 
 
 def bounded_host_verdict_screenshot_path(value: object) -> str | None:
