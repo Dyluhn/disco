@@ -76,18 +76,19 @@ def test_write_in_planning_attempted_classifies():
 
 # The product's planning-gate refusal text (disco.core.loop.engine `_gate_planning_mode`,
 # only the tool name interpolated). Fixtures must carry the REAL composition the
-# producer emits — not a hand-copied prefix. F63 measured this fixture at 181 chars
-# where production is 284, diverging at character 161: the fixture carried only
+# producer emits — not a hand-copied prefix. F63 showed the fixture hand-copied only
 # "Call `submit_plan`." while production continues "Call `submit_plan`, use a safe
 # read tool (file_read/file_list/search/extract), or ask/questions_v2 if details
-# are missing." The oracle keys on `_PLANNING_TOOL_REFUSAL_NEEDLE`, but the
-# surrounding sentence is the agent-facing guidance; a drift that changes it
-# silently stops testing the product. Deriving via
-# `engine_contracts._planning_tool_refusal_message` makes the fixture follow
-# production byte-for-byte — reword the production composition and this fixture
-# moves, and the test exercising the classifier's recognition of the real gate
-# (`test_rejected_write_in_planning_is_not_a_violation`) would need no edit yet
-# would fail if the needle changed without updating the derivation.
+# are missing" — a silent divergence. The oracle keys on
+# `_PLANNING_TOOL_REFUSAL_NEEDLE`, but the surrounding sentence is the agent-facing
+# guidance; a drift that changes it silently stops testing the product. Deriving via
+# `engine_contracts._planning_tool_refusal_message` (which is repetition-aware per
+# constraint 4 — streak=1 now carries count/consequence/next move) makes the fixture
+# follow production byte-for-byte at the relevant streak — reword the production
+# composition and this fixture moves, and the test exercising the classifier's
+# recognition of the real gate (`test_rejected_write_in_planning_is_not_a_violation`)
+# would need no edit yet would fail if the needle changed without updating the
+# derivation.
 #
 # Independence preserved (F63): the classifier (`harness/build_soak/classify.py`)
 # still keys on the needle alone and imports nothing from `disco.core`; only the
@@ -405,14 +406,18 @@ def test_governed_missing_terminal_still_fails_closed_without_thrash():
 def test_planning_gate_refusal_fixture_is_derived_from_production():
     """F63 — the fixture must DERIVE from the production composition, not hand-copy.
 
-    Production composes the refusal via `engine_contracts._planning_tool_refusal_message`
-    (284 chars at streak=1); the pre-F63 fixture hand-copied only 181 chars and diverged
-    at character 161, missing "use a safe read tool (file_read/file_list/search/extract), "
-    "or ask/questions_v2 if details are missing." The classifier keys on the needle
+    Production composes the refusal via `engine_contracts._planning_tool_refusal_message`;
+    the pre-F63 fixture hand-copied a bare suffix-only prefix and diverged mid-sentence,
+    missing "use a safe read tool (file_read/file_list/search/extract), or "
+    "ask/questions_v2 if details are missing." The classifier keys on the needle
     `_PLANNING_TOOL_REFUSAL_NEEDLE`, so the drift never made the gate red — which is
-    exactly why F63 is load-bearing. This test proves the fixture now follows production:
-    reword the production composition and this assertion moves with it.
+    exactly why F63 is load-bearing. This test proves the fixture now follows
+    production byte-for-byte at streak=1 (the repetition-aware first refusal) and
+    would go red if shortened or decoupled.
     """
+    from disco.core.loop.engine_contracts import (
+        _PLANNING_TOOL_REFUSAL_SUFFIX as prod_suffix,
+    )
     from disco.core.loop.engine_contracts import _planning_tool_refusal_message as prod_msg
 
     expected = prod_msg("file_write", streak=1, read_calls_remaining=999)
@@ -420,18 +425,29 @@ def test_planning_gate_refusal_fixture_is_derived_from_production():
         "fixture must be byte-identical to production's composition at streak=1; "
         "rewording production must move the fixture or this fails"
     )
-    # The load-bearing extension beyond the old 181-char prefix — the suffix the
-    # old fixture dropped is now present, proving the drift is repaired.
+    # The former hand-copied fixture dropped the suffix tail — now it must be present.
     assert "use a safe read tool" in _PLANNING_GATE_REFUSAL
     assert "ask/questions_v2" in _PLANNING_GATE_REFUSAL
-    # Length proves the widening: old was 181, production at streak=1 is 284.
-    assert len(_PLANNING_GATE_REFUSAL) >= 280
-    assert len(expected) >= 280
-    # Full surrounding-message drift: old was 181, new is 284, delta is 103.
-    # The fixture must be within the production length band, proving the
-    # 284-vs-181 drift is repaired (not just the short marker).
-    assert 280 <= len(_PLANNING_GATE_REFUSAL) <= 300
-    assert abs(len(_PLANNING_GATE_REFUSAL) - 181) >= 100, "must cover the full 284-vs-181 drift"
+    assert prod_suffix in _PLANNING_GATE_REFUSAL
+    assert prod_suffix in expected
+    # F51: even the first refusal is repetition-aware — it must carry live
+    # count, consequence, and one next move, not just the bare suffix.
+    assert "refusal 1" in _PLANNING_GATE_REFUSAL.lower()
+    assert "read calls remaining" in _PLANNING_GATE_REFUSAL.lower()
+    assert "Your next move" in _PLANNING_GATE_REFUSAL
+    # Drift/binding without a stale fixed byte band: the repetition-aware
+    # composition must strictly extend the bare suffix-only refusal, and a
+    # shortened bare copy must not equal the fixture — proving the fixture
+    # is the full production composition, not a hand-copied prefix.
+    # Derive the bare suffix-only shape without restating the needle literal
+    # (the gate polices `driver_retry._PLANNING_TOOL_REFUSAL_NEEDLE`).
+    from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE as _needle
+
+    bare = f"<system-reminder>\nREFUSED: `file_write` {_needle}. {prod_suffix}\n</system-reminder>"
+    assert len(_PLANNING_GATE_REFUSAL) > len(bare), "repetition-aware streak-1 must extend the bare suffix composition"
+    assert len(expected) > len(bare)
+    assert _PLANNING_GATE_REFUSAL != bare
+    assert expected != bare
 
 
 def test_planning_gate_refusal_fixture_drift_would_fail_binding():
