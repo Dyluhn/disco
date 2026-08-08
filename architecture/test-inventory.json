@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a6fd68f148f7ea6c69351628d0a4991777897e53",
+  "source_identity": "c7a423d250672d82c6b26057377963d2b87a004f",
   "collected": {
     "counts": {
-      "packages": 10439,
-      "harness": 1320,
+      "packages": 10449,
+      "harness": 1324,
       "integrations": 9,
       "tests": 394
     },
-    "total": 12162,
+    "total": 12176,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5177,6 +5177,7 @@
         "packages/core/tests/test_f47_answered_question_notice.py::test_98651_shape_notice_precedes_the_cap_exceeding_plan_repeat",
         "packages/core/tests/test_f47_answered_question_notice.py::test_a_DIFFERENT_plan_call_is_a_different_question",
         "packages/core/tests/test_f47_answered_question_notice.py::test_background_starts_are_not_the_answered_question_class",
+        "packages/core/tests/test_f47_answered_question_notice.py::test_generic_notice_exclusion_is_oracle_owned",
         "packages/core/tests/test_f47_answered_question_notice.py::test_one_command_running_a_script_twice_is_one_identity_not_two",
         "packages/core/tests/test_f47_answered_question_notice.py::test_script_class_requires_the_prior_run_to_have_SUCCEEDED",
         "packages/core/tests/test_f47_answered_question_notice.py::test_script_class_respects_the_freshness_boundary",
@@ -5328,6 +5329,15 @@
         "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
         "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
         "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues",
+        "packages/core/tests/test_f59_generic_notice.py::test_every_generic_exclusion_is_owned_or_absent",
+        "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_anti_spam_one_per_occurrence",
+        "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle",
+        "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_is_repetition_aware_and_consequence_naming",
+        "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_negative_control_without_it_verify_web_app_is_silent",
+        "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_requires_successful_prior",
+        "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
+        "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
+        "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -10944,6 +10954,8 @@
         "harness/build_soak/tests/test_browser_evidence_oracles.py::test_verification_missing_passed_is_fail_closed",
         "harness/build_soak/tests/test_classifier.py::test_action_no_observation_from_fixture",
         "harness/build_soak/tests/test_classifier.py::test_agent_error_pairing_does_not_break_chain",
+        "harness/build_soak/tests/test_classifier.py::test_classifier_implementation_does_not_import_production",
+        "harness/build_soak/tests/test_classifier.py::test_classifier_still_independent_of_producer",
         "harness/build_soak/tests/test_classifier.py::test_classify_run_folder_detects_tamper",
         "harness/build_soak/tests/test_classifier.py::test_classify_run_folder_writes_classification",
         "harness/build_soak/tests/test_classifier.py::test_clean_run_passes",
@@ -10955,6 +10967,8 @@
         "harness/build_soak/tests/test_classifier.py::test_no_replan_classifies_p0_with_broken_link",
         "harness/build_soak/tests/test_classifier.py::test_nongate_agent_error_write_in_planning_still_a_violation",
         "harness/build_soak/tests/test_classifier.py::test_paused_incomplete_required_output_is_build_did_not_finish",
+        "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_drift_would_fail_binding",
+        "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_is_derived_from_production",
         "harness/build_soak/tests/test_classifier.py::test_rejected_write_in_planning_is_not_a_violation",
         "harness/build_soak/tests/test_classifier.py::test_row_shaped_events_normalize_identically",
         "harness/build_soak/tests/test_classifier.py::test_stuck_approve_no_execution_classifies_as_terminal_fail",
@@ -12183,9 +12197,9 @@
     }
   },
   "mapping_static": {
-    "identity": "a6fd68f148f7ea6c69351628d0a4991777897e53",
-    "python_test_file_count": 829,
-    "python_static_test_id_count": 10015,
+    "identity": "c7a423d250672d82c6b26057377963d2b87a004f",
+    "python_test_file_count": 830,
+    "python_static_test_id_count": 10029,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12636,6 +12650,7 @@
       "packages/core/tests/test_f53_constraint4_confirmed_repeats.py",
       "packages/core/tests/test_f53_seo_primitive.py",
       "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py",
+      "packages/core/tests/test_f59_generic_notice.py",
       "packages/core/tests/test_f5_thinking_budget.py",
       "packages/core/tests/test_f62_feature_flags_primitive.py",
       "packages/core/tests/test_f8_arg_truncation.py",
@@ -13360,6 +13375,8 @@
       "harness/build_soak/tests/test_browser_evidence_oracles.py::test_verification_missing_passed_is_fail_closed",
       "harness/build_soak/tests/test_classifier.py::test_action_no_observation_from_fixture",
       "harness/build_soak/tests/test_classifier.py::test_agent_error_pairing_does_not_break_chain",
+      "harness/build_soak/tests/test_classifier.py::test_classifier_implementation_does_not_import_production",
+      "harness/build_soak/tests/test_classifier.py::test_classifier_still_independent_of_producer",
       "harness/build_soak/tests/test_classifier.py::test_classify_run_folder_detects_tamper",
       "harness/build_soak/tests/test_classifier.py::test_classify_run_folder_writes_classification",
       "harness/build_soak/tests/test_classifier.py::test_clean_run_passes",
@@ -13371,6 +13388,8 @@
       "harness/build_soak/tests/test_classifier.py::test_no_replan_classifies_p0_with_broken_link",
       "harness/build_soak/tests/test_classifier.py::test_nongate_agent_error_write_in_planning_still_a_violation",
       "harness/build_soak/tests/test_classifier.py::test_paused_incomplete_required_output_is_build_did_not_finish",
+      "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_drift_would_fail_binding",
+      "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_is_derived_from_production",
       "harness/build_soak/tests/test_classifier.py::test_rejected_write_in_planning_is_not_a_violation",
       "harness/build_soak/tests/test_classifier.py::test_row_shaped_events_normalize_identically",
       "harness/build_soak/tests/test_classifier.py::test_stuck_approve_no_execution_classifies_as_terminal_fail",
@@ -18180,6 +18199,7 @@
       "packages/core/tests/test_f47_answered_question_notice.py::test_98651_shape_notice_precedes_the_cap_exceeding_plan_repeat",
       "packages/core/tests/test_f47_answered_question_notice.py::test_a_DIFFERENT_plan_call_is_a_different_question",
       "packages/core/tests/test_f47_answered_question_notice.py::test_background_starts_are_not_the_answered_question_class",
+      "packages/core/tests/test_f47_answered_question_notice.py::test_generic_notice_exclusion_is_oracle_owned",
       "packages/core/tests/test_f47_answered_question_notice.py::test_one_command_running_a_script_twice_is_one_identity_not_two",
       "packages/core/tests/test_f47_answered_question_notice.py::test_script_class_requires_the_prior_run_to_have_SUCCEEDED",
       "packages/core/tests/test_f47_answered_question_notice.py::test_script_class_respects_the_freshness_boundary",
@@ -18309,6 +18329,15 @@
       "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_escalation_names_the_cost_not_just_the_count",
       "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_first_firing_is_byte_identical_to_the_legacy_text",
       "packages/core/tests/test_f55_f56_weakening_repeats_and_ordinals.py::test_weakening_refusal_still_discards_and_still_continues",
+      "packages/core/tests/test_f59_generic_notice.py::test_every_generic_exclusion_is_owned_or_absent",
+      "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_anti_spam_one_per_occurrence",
+      "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle",
+      "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_is_repetition_aware_and_consequence_naming",
+      "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_negative_control_without_it_verify_web_app_is_silent",
+      "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_requires_successful_prior",
+      "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
+      "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
+      "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -27886,6 +27915,64 @@
           "harness/build_soak/tests/test_browser_capability.py::test_unknown_probe_state_degrades_to_unproven",
           "harness/build_soak/tests/test_browser_capability.py::test_unproven_capability_never_reads_evaluated",
           "harness/build_soak/tests/test_browser_capability.py::test_unreadable_probe_is_unproven_and_does_not_raise"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CLEAN-SLATE",
+      "root": "multiple",
+      "source_identity_before": "a6fd68f148f7ea6c69351628d0a4991777897e53",
+      "source_identity_after": "c7a423d250672d82c6b26057377963d2b87a004f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10439,
+          "after_count": 10449,
+          "added_ids": [
+            "packages/core/tests/test_f47_answered_question_notice.py::test_generic_notice_exclusion_is_oracle_owned",
+            "packages/core/tests/test_f59_generic_notice.py::test_every_generic_exclusion_is_owned_or_absent",
+            "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_anti_spam_one_per_occurrence",
+            "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle",
+            "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_is_repetition_aware_and_consequence_naming",
+            "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_negative_control_without_it_verify_web_app_is_silent",
+            "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_requires_successful_prior",
+            "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
+            "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
+            "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam"
+          ]
+        },
+        "harness": {
+          "before_count": 1320,
+          "after_count": 1324,
+          "added_ids": [
+            "harness/build_soak/tests/test_classifier.py::test_classifier_implementation_does_not_import_production",
+            "harness/build_soak/tests/test_classifier.py::test_classifier_still_independent_of_producer",
+            "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_drift_would_fail_binding",
+            "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_is_derived_from_production"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_f59_generic_notice.py"
+        ],
+        "python_static_test_ids": [
+          "harness/build_soak/tests/test_classifier.py::test_classifier_implementation_does_not_import_production",
+          "harness/build_soak/tests/test_classifier.py::test_classifier_still_independent_of_producer",
+          "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_drift_would_fail_binding",
+          "harness/build_soak/tests/test_classifier.py::test_planning_gate_refusal_fixture_is_derived_from_production",
+          "packages/core/tests/test_f47_answered_question_notice.py::test_generic_notice_exclusion_is_oracle_owned",
+          "packages/core/tests/test_f59_generic_notice.py::test_every_generic_exclusion_is_owned_or_absent",
+          "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_anti_spam_one_per_occurrence",
+          "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle",
+          "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_is_repetition_aware_and_consequence_naming",
+          "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_negative_control_without_it_verify_web_app_is_silent",
+          "packages/core/tests/test_f59_generic_notice.py::test_generic_notice_requires_successful_prior",
+          "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
+          "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
+          "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

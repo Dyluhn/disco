@@ -31,6 +31,7 @@ from .harness import run_scripted
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration
 async def test_file_write_then_finish_reaches_finished() -> None:
     """Smoke: scripted file_write → finish lands in FINISHED with real sandbox."""
     output_path = "smoke_output.txt"
