@@ -349,6 +349,8 @@ suites:
       - "32"
       - "--out"
       - "{suite_out}/soak"
+      - "--seed-base"
+      - "{seed_base}"
     claims: [build.api_shapes_live]
 
   - id: live-build-revisions
