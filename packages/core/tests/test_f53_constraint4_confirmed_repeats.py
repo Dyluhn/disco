@@ -437,27 +437,53 @@ async def test_landing_counts_the_environment_half_only():
 # ---------------------------------------------------------------------------
 
 
-_HALT_GUIDANCE = (
-    "Target verification repeated the same governed failure with no "
-    "productive authority change. there is no handoff for the current target at all"
-)
+def _halt_guidance() -> str:
+    """The EXACT guidance `governed_contract_refusal`'s HALT branch composes.
+
+    ATTESTATION-BINDING INVARIANT (F58, 2026-08-07m; enforced 2026-08-07r). This
+    was a hand-copied duplicate of production prose:
+
+        _HALT_GUIDANCE = (
+            "Target verification repeated the same governed failure with no "
+            "productive authority change. there is no handoff for the current target at all"
+        )
+
+    Nothing bound the copy to the original, so rewording the product would have
+    left this test passing while asserting on a string the product no longer
+    emits — a test that silently stops testing. Both halves are now DERIVED from
+    the symbols that own them: the prefix from the HALT branch itself, the detail
+    from the describer the branch composes. Reword either and this moves with it.
+
+    Imported inside the body, not at module scope, for the reason this file's
+    docstring gives: a module-level import of a symbol that post-dates the bytes
+    under test collapses the whole file into one collection error, and "the file
+    did not import" is much weaker evidence than a body asserting a property the
+    old bytes lack.
+    """
+    from disco.core.loop.finish.verify_gate_parts.host_claims import handoff_refusal_detail
+    from disco.core.loop.finish.verify_gate_parts.host_disposition import (
+        _TARGET_REPEAT_HALT_PREFIX,
+    )
+
+    return f"{_TARGET_REPEAT_HALT_PREFIX}{handoff_refusal_detail(None, None)}"
 
 
 async def test_handed_guidance_cannot_repeat_byte_identically():
     """F53's measured instance. The same authored guidance handed to the landing
     seam twice must not render the same body twice."""
     landing_cls = _landing()
+    halt_guidance = _halt_guidance()
 
     loop = _FakeLoop()
-    await landing_cls(loop).land_blocked(reason="host:fp1", guidance=_HALT_GUIDANCE)
+    await landing_cls(loop).land_blocked(reason="host:fp1", guidance=halt_guidance)
     first = loop.env_bodies()[0]
 
-    loop2 = _FakeLoop(with_seqs([user_msg("go"), _prior_landing("host:fp1", _HALT_GUIDANCE)]))
-    await landing_cls(loop2).land_blocked(reason="host:fp1", guidance=_HALT_GUIDANCE)
+    loop2 = _FakeLoop(with_seqs([user_msg("go"), _prior_landing("host:fp1", halt_guidance)]))
+    await landing_cls(loop2).land_blocked(reason="host:fp1", guidance=halt_guidance)
     second = loop2.env_bodies()[0]
 
     assert first != second
-    assert _HALT_GUIDANCE in first and _HALT_GUIDANCE in second, (
+    assert halt_guidance in first and halt_guidance in second, (
         "the authored fact survives — repetition-awareness is ADDED at the emitting "
         "seam, never traded against the upstream surface's content"
     )
@@ -472,9 +498,10 @@ async def test_handed_guidance_escalates_even_under_a_DIFFERENT_reason():
     landing reason differs (a different failure fingerprint). Keying only on the
     reason would miss exactly the leak F53 names."""
     landing_cls = _landing()
+    halt_guidance = _halt_guidance()
 
-    loop = _FakeLoop(with_seqs([user_msg("go"), _prior_landing("host:fp_OTHER", _HALT_GUIDANCE)]))
-    await landing_cls(loop).land_blocked(reason="host:fp_THIS", guidance=_HALT_GUIDANCE)
+    loop = _FakeLoop(with_seqs([user_msg("go"), _prior_landing("host:fp_OTHER", halt_guidance)]))
+    await landing_cls(loop).land_blocked(reason="host:fp_THIS", guidance=halt_guidance)
     body = loop.env_bodies()[0]
 
     assert "this same blocked context" in body, (
@@ -489,7 +516,7 @@ async def test_a_different_handed_text_does_not_inherit_the_escalation():
     landing_cls = _landing()
 
     loop = _FakeLoop(with_seqs([user_msg("go"), _prior_landing("host:fp1", "something else")]))
-    await landing_cls(loop).land_blocked(reason="host:fp1", guidance=_HALT_GUIDANCE)
+    await landing_cls(loop).land_blocked(reason="host:fp1", guidance=_halt_guidance())
     body = loop.env_bodies()[0]
 
     assert "this same blocked context" not in body
@@ -503,15 +530,16 @@ async def test_guidance_fingerprint_is_recorded_durably_on_the_landing():
     from disco.core.loop.valve_landing import _GUIDANCE_FP_META_KEY, _guidance_fingerprint
 
     landing_cls = _landing()
+    halt_guidance = _halt_guidance()
     loop = _FakeLoop()
-    await landing_cls(loop).land_blocked(reason="r", guidance=_HALT_GUIDANCE)
+    await landing_cls(loop).land_blocked(reason="r", guidance=halt_guidance)
 
     env = [
         e
         for e in loop.emitted
         if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT
     ]
-    assert env[0].meta.get(_GUIDANCE_FP_META_KEY) == _guidance_fingerprint(_HALT_GUIDANCE)
+    assert env[0].meta.get(_GUIDANCE_FP_META_KEY) == _guidance_fingerprint(halt_guidance)
 
 
 # ---------------------------------------------------------------------------
@@ -523,15 +551,16 @@ async def test_landing_repeats_reads_the_durable_log():
     from disco.core.loop.valve_landing import _guidance_fingerprint
 
     landing_cls = _landing()
-    fp = _guidance_fingerprint(_HALT_GUIDANCE)
+    halt_guidance = _halt_guidance()
+    fp = _guidance_fingerprint(halt_guidance)
 
     empty = landing_cls(_FakeLoop())
     assert await empty._landing_repeats(reason="r", guidance_fp=fp) == (1, 1)
 
     log = with_seqs(
         [
-            _prior_landing("r", _HALT_GUIDANCE),
-            _prior_landing("r", _HALT_GUIDANCE),
+            _prior_landing("r", halt_guidance),
+            _prior_landing("r", halt_guidance),
             _prior_landing("other", "other text"),
         ]
     )
