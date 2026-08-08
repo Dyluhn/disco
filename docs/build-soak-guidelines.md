@@ -1265,6 +1265,7 @@ python -m harness.build_soak.run \
   --mode api \
   --scenario static_html_minimal \
   --iterations 1 \
+  --seed-base 0 \
   --out test-record/build-soak
 ```
 
@@ -1275,6 +1276,7 @@ python -m harness.build_soak.run \
   --mode api \
   --scenario-set revisions \
   --iterations 25 \
+  --seed-base 100 \
   --model "$DISCO_SOAK_MODEL" \
   --out test-record/build-soak
 ```
@@ -1397,7 +1399,7 @@ harness/build_soak/scenarios.yaml
 Done when:
 
 ```bash
-python -m harness.build_soak.run --mode api --scenario static_html_minimal --iterations 1
+python -m harness.build_soak.run --mode api --scenario static_html_minimal --iterations 1 --seed-base 0
 ```
 
 produces a complete run folder.

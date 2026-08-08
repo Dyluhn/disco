@@ -103,6 +103,8 @@ def _select_scenarios(
         )
     if args.iterations <= 0:
         raise _CliFailure(2, "--iterations must be positive")
+    if args.seed_base < 0:
+        raise _CliFailure(2, "--seed-base must be nonnegative")
     return requested, {scenario_id: scenarios[scenario_id] for scenario_id in requested}
 
 
@@ -690,7 +692,7 @@ def _add_scenario_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--seed-base",
         type=int,
-        default=0,
+        required=True,
         help="first deterministic task seed; each iteration increments it by one",
     )
 

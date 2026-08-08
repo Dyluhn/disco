@@ -219,3 +219,16 @@ suites:
         match="provider_conversation_manifest requires provider_conversation_count",
     ):
         load_matrix(path)
+
+
+def test_every_build_soak_carries_explicit_seed_base_placeholder() -> None:
+    matrix = load_matrix(MATRIX)
+    for suite_id, suite in matrix.suites.items():
+        command = list(suite.command)
+        if suite.kind == "build_soak":
+            assert "--seed-base" in command, suite_id
+            index = command.index("--seed-base")
+            assert command[index + 1] == "{seed_base}", suite_id
+        else:
+            assert "{seed_base}" not in command, suite_id
+            assert "--seed-base" not in command, suite_id
