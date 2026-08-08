@@ -186,6 +186,21 @@ def host_speaks_chat_template_kwargs(base_url: str) -> bool:
     return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
 
 
+def host_requires_explicit_nonthinking(base_url: str) -> bool:
+    """Whether the provider requires an explicit non-thinking request policy.
+
+    DeepSeek enables thinking by default and requires its private
+    ``reasoning_content`` field to be replayed after assistant tool calls. The
+    provider-neutral Disco message/event contract deliberately does not retain
+    private reasoning traces, so this adapter must select DeepSeek's documented
+    non-thinking mode before the first turn rather than emit history it cannot
+    round-trip on the next one.
+    """
+    from urllib.parse import urlsplit
+
+    return (urlsplit(base_url).hostname or "").lower() == "api.deepseek.com"
+
+
 def requires_user_after_terminal_response(base_url: str) -> bool:
     """Whether this compatibility endpoint rejects a trailing response turn."""
     from urllib.parse import urlsplit
@@ -416,7 +431,9 @@ def build_payload(
             **(req.provider_prefs or {}),
         }
     et = _resolve_enable_thinking(req=req, enable_thinking=enable_thinking)
-    if et is not None and speaks_ctk:
+    if host_requires_explicit_nonthinking(base_url):
+        body["thinking"] = {"type": "disabled"}
+    elif et is not None and speaks_ctk:
         body["chat_template_kwargs"] = {"enable_thinking": et}
     if stream:
         body["stream_options"] = {"include_usage": True}

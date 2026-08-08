@@ -8,7 +8,10 @@ providers collapse into this single client pointed at different base URLs.
 Reasoning models (e.g. Qwen3.6): the ANSWER is `message.content`;
 `reasoning_content` (the thinking) is parsed separately and not treated as answer
 text. `enable_thinking` toggles it where the server honors `chat_template_kwargs`
-(llama.cpp does) — leave it None to use the server default.
+(llama.cpp does) — leave it None to use the server default. DeepSeek's public API
+is explicitly placed in its documented non-thinking mode because it otherwise
+requires private reasoning traces to be replayed after tool calls, while Disco's
+provider-neutral history deliberately does not persist those traces.
 
 Errors map to the typed hierarchy (errors.py §6), PRESERVING the provider's real
 message so it surfaces cleanly (the reactive-error rule). The context-window error
