@@ -195,6 +195,14 @@ async def _run_selected_campaign(
     if args.list or args.dry_run:
         _print_matrix(matrix, suites)
         return 0
+    if args.seed_base is None and any(
+        "{seed_base}" in part for suite in suites for part in suite.command
+    ):
+        print(
+            "--seed-base is required when live-build-shapes is selected",
+            file=sys.stderr,
+        )
+        return 2
 
     revision, commit, dirty = source_revision(repo)
     if dirty and any(suite.proof == "fresh_device" for suite in suites):
@@ -232,6 +240,8 @@ async def _run_selected_campaign(
         "commit": commit,
         "revision": revision,
     }
+    if getattr(args, "seed_base", None) is not None:
+        context["seed_base"] = str(args.seed_base)
     results = await asyncio.gather(
         *(
             _run_suite(suite, context=context, campaign_out=campaign_out, pool=pool)
