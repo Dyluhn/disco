@@ -508,10 +508,12 @@ def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
     class where culpability is charged with no notice — and F59 is the third
     occurrence of that shape (98651 plan, 99603 verify_web_app, now any). This
     asserts against the sets the loop ACTUALLY gates on and the generic notice
-    that closes the gap.
+    that closes the gap. Per binding correction #1, no silent exclusions remain.
     """
     from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS
-    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
+    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED, _w39_generic_reminder
+    from event_fakes import user_msg, with_seqs
+    from disco.core import ActionEvent, ToolCall, ToolResult, ObservationEvent
 
     assert _W39_SHELL_TOOLS <= _W39_NOTICE_TOOLS
     assert _W39_PLAN_TOOLS <= _W39_NOTICE_TOOLS
@@ -519,42 +521,38 @@ def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
     # F59 — verify_web_app now has a reachable generic notice, not a gap.
     # The generic notice is reachable via dedup_generic_notice, not via
     # _W39_NOTICE_TOOLS, but the gate in observation_execution now admits it.
-    # Prove the generic path exists:
-    from disco.core.loop.dedup_generic_notice import _w39_generic_reminder
-
     assert callable(_w39_generic_reminder)
-    # The two proposal tools are deliberately OUT of every notice, and that
-    # exclusion is OWNED by the oracle's counted population too:
-    # `approved_plan_predicate_scope` breaks the streak on a plan-predicate
-    # scope change, so they are not counted-without-notice in practice. Pinned
-    # so the exclusion stays a stated decision rather than drifting into an
-    # accident, and a parallel silent list is not acceptable.
+    # No silent exclusions: every tool not in shell/plan must reach generic
+    assert _W39_GENERIC_EXCLUDED == frozenset(), "prefer no silent exclusions"
     assert "propose_plan_update" not in _W39_NOTICE_TOOLS
     assert "submit_plan" not in _W39_NOTICE_TOOLS
-    assert "propose_plan_update" in _W39_GENERIC_EXCLUDED
-    assert "submit_plan" in _W39_GENERIC_EXCLUDED
-    # The oracle must also break the streak for those tools — proved by
-    # `test_generic_notice_exclusion_is_oracle_owned` below, which replays a
-    # plan-predicate scope change and shows the streak resets.
+    # Those planning tools now correctly reach the generic notice (no silent gap)
+    def _tool(tool: str, args: dict) -> ActionEvent:
+        return ActionEvent(thought="do", tool_call=ToolCall(tool_name=tool, call_id="c", arguments=args))
+
+    def _obs(a: ActionEvent) -> ObservationEvent:
+        return ObservationEvent(tool_result=ToolResult(call_id=a.tool_call.call_id, tool_name=a.tool_call.tool_name, success=True, content="ok"), action_id=a.id)
+
+    for tool in ("propose_plan_update", "submit_plan"):
+        first = _tool(tool, {"foo": "bar"})
+        second = _tool(tool, {"foo": "bar"})
+        events = with_seqs([user_msg("go"), first, _obs(first), second])
+        ok, _, text = _w39_generic_reminder(tool, {"foo": "bar"}, events)
+        assert ok is True, f"{tool} must now reach generic notice (no silent exclusion)"
+        assert tool in text
 
 
 def test_generic_notice_exclusion_is_oracle_owned():
     """F59 — any tool excluded from the notice must also be excluded from the
-    oracle's counted streak, proved non-weakening. `propose_plan_update` and
-    `submit_plan` are the only excluded tools; the oracle breaks their streak
-    via `approved_plan_predicate_scope` (a scope change resets the streak), so
-    they are not culpable without notice — the exclusion is not a silent list
-    that drifted.
+    oracle's counted streak, proved non-weakening. Per binding correction #1,
+    prefer no silent exclusions, so the excluded set is now EMPTY and every
+    tool has a notice (generic or richer). This test proves that invariant.
     """
     from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
     from harness.build_soak.oracles.thrash import _longest_identical_streak
 
-    # The oracle's counted population is every tool via tool_call_fingerprint;
-    # the only way an exclusion is non-weakening is if the streak resets before
-    # the cap is reached. `approved_plan_predicate_scope` is tested in
-    # `test_plan_predicate_scope_breaks_streak` (harness), and this test pins
-    # that the excluded set is exactly the two plan-proposal tools, nothing more.
-    assert _W39_GENERIC_EXCLUDED == frozenset({"propose_plan_update", "submit_plan"})
-    # Prove the oracle's streak function exists and counts every tool — the
-    # notice's generic path must derive from it, not a parallel list.
+    # No silent exclusions: the only load-bearing exclusions are the richer
+    # shell/plan renderers, which are proven separately. The generic excluded
+    # set is empty, so vacuously every exclusion is owned.
+    assert _W39_GENERIC_EXCLUDED == frozenset(), "prefer no silent exclusions"
     assert callable(_longest_identical_streak)

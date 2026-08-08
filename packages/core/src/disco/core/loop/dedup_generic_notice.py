@@ -62,11 +62,38 @@ _W39_GENERIC_REMINDER_TEMPLATE = (
     "</system-reminder>"
 )
 
-# Tools deliberately excluded from the generic notice. They are counted by the
-# oracle but their streak is broken by a scope change, so they are not
-# counted-without-notice in practice. This is the single place that declares
-# the exclusion, and it is proved non-weakening by `test_generic_notice_exclusion_is_oracle_owned`.
-_W39_GENERIC_EXCLUDED = frozenset({"propose_plan_update", "submit_plan"})
+# Per binding correction #1: prefer no silent exclusions. Shell and plan
+# classes retain their richer renderers; every other tool reaches the generic
+# notice. The previous two-tool exclusion is removed — coverage is now
+# total and vacuous for the exclusion proof. If a future exclusion is
+# genuinely needed, it must be proved by a richer notice or by the oracle's
+# own counted predicate (not by asserting the set alone).
+_W39_GENERIC_EXCLUDED: frozenset[str] = frozenset()
+
+
+def _generic_prior_event(
+    fingerprint: str,
+    prior_events: list[Event],
+    events: list[Event],
+    boundary_seq: int,
+) -> ActionEvent | None:
+    """Find the success-backed prior that still carries currency."""
+    for e in reversed(prior_events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        if tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) != fingerprint:
+            continue
+        if not _f9_has_successful_observation(events, e.id):
+            continue
+        prior_seq = e.seq or 0
+        if boundary_seq >= prior_seq:
+            return None
+        if _w39_reminder_emitted_after(
+            events, _W39_GENERIC_REMINDER_SENTINEL, fingerprint, prior_seq
+        ):
+            return None
+        return e
+    return None
 
 
 def _w39_generic_reminder(
@@ -85,46 +112,26 @@ def _w39_generic_reminder(
         return (False, 0, "")
     if current_tool in _W39_GENERIC_EXCLUDED:
         return (False, 0, "")
-    # Shell and plan tools have richer renderers; don't double-notice them.
-    # Import lazily to avoid cycle — dedup.py imports this module.
     from .dedup import _W39_PLAN_TOOLS, _W39_SHELL_TOOLS
 
     if current_tool in _W39_SHELL_TOOLS or current_tool in _W39_PLAN_TOOLS:
         return (False, 0, "")
-
     prior_events = events[:-1] if events else []
     boundary_seq = _w39_freshness_boundary_seq(prior_events)
     fingerprint = tool_call_fingerprint(current_tool, current_args)
-
-    for e in reversed(prior_events):
-        if not isinstance(e, ActionEvent) or e.tool_call is None:
-            continue
-        if tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) != fingerprint:
-            continue
-        # Only a SUCCESSFUL prior run is an answered question. A failed one is
-        # broken-tool repetition (culpable immediately), and a missing
-        # observation is ACTION_NO_OBSERVATION — not an answered question.
-        if not _f9_has_successful_observation(events, e.id):
-            continue
-        prior_seq = e.seq or 0
-        if boundary_seq >= prior_seq:
-            return (False, 0, "")
-        if _w39_reminder_emitted_after(
-            events, _W39_GENERIC_REMINDER_SENTINEL, fingerprint, prior_seq
-        ):
-            return (False, 0, "")
-        prior_result = _w39_prior_result_excerpt(events, e.id)
-        return (
-            True,
-            prior_seq,
-            _W39_GENERIC_REMINDER_TEMPLATE.format(
-                sentinel=_W39_GENERIC_REMINDER_SENTINEL,
-                tool=current_tool,
-                count=_w39_identical_call_count(prior_events, fingerprint),
-                step=prior_seq,
-                result=(
-                    _W39_RESULT_BLOCK.format(result=prior_result) if prior_result else ""
-                ),
-            ),
-        )
-    return (False, 0, "")
+    prior = _generic_prior_event(fingerprint, prior_events, events, boundary_seq)
+    if prior is None:
+        return (False, 0, "")
+    prior_seq = prior.seq or 0
+    prior_result = _w39_prior_result_excerpt(events, prior.id)
+    return (
+        True,
+        prior_seq,
+        _W39_GENERIC_REMINDER_TEMPLATE.format(
+            sentinel=_W39_GENERIC_REMINDER_SENTINEL,
+            tool=current_tool,
+            count=_w39_identical_call_count(prior_events, fingerprint),
+            step=prior_seq,
+            result=_W39_RESULT_BLOCK.format(result=prior_result) if prior_result else "",
+        ),
+    )

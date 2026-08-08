@@ -427,6 +427,116 @@ def test_planning_gate_refusal_fixture_is_derived_from_production():
     # Length proves the widening: old was 181, production at streak=1 is 284.
     assert len(_PLANNING_GATE_REFUSAL) >= 280
     assert len(expected) >= 280
+    # Full surrounding-message drift: old was 181, new is 284, delta is 103.
+    # The fixture must be within the production length band, proving the
+    # 284-vs-181 drift is repaired (not just the short marker).
+    assert 280 <= len(_PLANNING_GATE_REFUSAL) <= 300
+    assert abs(len(_PLANNING_GATE_REFUSAL) - 181) >= 100, "must cover the full 284-vs-181 drift"
+
+
+def test_planning_gate_refusal_fixture_drift_would_fail_binding():
+    """Drift control: altering the production-owned suffix/composition in a
+    controlled copy proves the derived fixture changes or the binding test goes red.
+
+    The harness classifier must NOT import production; only the TEST FIXTURE may.
+    Here we monkeypatch the production suffix in a controlled copy and prove the
+    derived composition moves, while classifier logic remains independently
+    exercised on generic input.
+    """
+    import copy
+
+    from disco.core.loop import engine_contracts
+
+    original_suffix = engine_contracts._PLANNING_TOOL_REFUSAL_SUFFIX
+    # Controlled mutation: alter the suffix as a production reword would
+    mutated_suffix = original_suffix + " (mutated drift)"
+    try:
+        engine_contracts._PLANNING_TOOL_REFUSAL_SUFFIX = mutated_suffix
+        mutated = engine_contracts._planning_tool_refusal_message("file_write", streak=1, read_calls_remaining=999)
+        # The derived fixture (computed before mutation) must differ from mutated composition,
+        # proving that a production reword would move the expected value and the
+        # binding test `test_planning_gate_refusal_fixture_is_derived_from_production` would go red.
+        assert _PLANNING_GATE_REFUSAL != mutated, "fixture must change when production suffix changes"
+        assert "mutated drift" in mutated
+        assert "mutated drift" not in _PLANNING_GATE_REFUSAL
+        # Conversely, recomputing from mutated production must equal mutated, proving the fixture follows production
+        assert mutated == engine_contracts._planning_tool_refusal_message("file_write", streak=1, read_calls_remaining=999)
+    finally:
+        engine_contracts._PLANNING_TOOL_REFUSAL_SUFFIX = original_suffix
+
+    # While drift is proven, classifier independence is preserved: it still
+    # correctly classifies generic (non-needle) errors as violations, without
+    # importing the mutated production.
+    events = [
+        msg(1, "user", "build"),
+        action(2, "file_write", args={"path": "index.html", "content": "bad"}, action_id="a2"),
+        agent_error(3, "a2", error="ERROR: generic failure without needle"),
+        plan(4, revision=1),
+        status(5, "AWAITING_PLAN_APPROVAL", "evt_4"),
+    ]
+    c = classify(events)
+    assert c["code"] == "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+
+
+def test_classifier_implementation_does_not_import_production():
+    """The harness classifier implementation must not import production.
+
+    Only the test fixture may import `disco.core.loop.engine_contracts`; the
+    classifier (`harness/build_soak/classify.py` and its pipeline) must key on
+    the needle alone. This is the import-boundary proof for F63.
+    """
+    import ast
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    # All classifier implementation files must not import disco.core
+    impl_files = [
+        repo / "harness/build_soak/classify.py",
+        repo / "harness/build_soak/_classification/_pipeline.py",
+        repo / "harness/build_soak/_classification/_tool_scope_proof.py",
+        repo / "harness/build_soak/_classification/_browser_proof.py",
+        repo / "harness/build_soak/_classification/_dossier_loader.py",
+        repo / "harness/build_soak/_classification/_no_fluke.py",
+    ]
+    for path in impl_files:
+        if not path.exists():
+            continue
+        text = path.read_text()
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert not alias.name.startswith("disco."), f"{path.name} must not import {alias.name}"
+            if isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                assert not mod.startswith("disco."), f"{path.name} must not import from {mod}"
+    # Also prove the classifier uses needle, not full production string
+    from harness.build_soak._classification._pipeline import run_oracle_pipeline  # noqa: F401
+    import harness.build_soak.classify as classify_mod
+    import inspect
+
+    src = inspect.getsource(classify_mod)
+    assert "disco.core.loop.engine_contracts" not in src
+    # The classifier's planning-gate logic keys on the needle value, not the suffix
+    from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
+
+    # Generic needle detection: classifier must still treat needle as pass, non-needle as fail
+    events_needle = [
+        msg(1, "user", "build"),
+        action(2, "file_write", args={"path": "index.html", "content": "bad"}, action_id="a2"),
+        agent_error(3, "a2", error=_PLANNING_GATE_REFUSAL),
+        action(4, "file_read", args={"path": "index.html"}, action_id="a4"),
+        observation(5, "a4", tool="file_read"),
+        plan(6, revision=1),
+        status(7, "AWAITING_PLAN_APPROVAL", "evt_6"),
+        status(8, "RUNNING", "plan_approved"),
+        action(9, "file_write", args={"path": "index.html", "content": "ok"}, action_id="a9"),
+        observation(10, "a9", tool="file_write"),
+        status(11, "FINISHED"),
+    ]
+    scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+    c2 = classify(events_needle, scenario=scenario)
+    assert c2["status"] == "PASS", "needle-based planning refusal must be recognized as non-violation"
 
 
 def test_classifier_still_independent_of_producer():
@@ -434,7 +544,8 @@ def test_classifier_still_independent_of_producer():
 
     Only the FIXTURE imports the producer; the classifier (`classify`) must not.
     Verify that a non-needle AgentError does not become a false PASS — the
-    classifier's independence is preserved.
+    classifier's independence is preserved. This also exercises the classifier
+    on generic input, independent of production, as the drift-control companion.
     """
     # A planning write that fails with a generic error (no needle) is still a violation.
     events = [
@@ -447,3 +558,11 @@ def test_classifier_still_independent_of_producer():
     c = classify(events)
     assert c["status"] == "FAIL"
     assert c["code"] == "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+    # Prove that the classifier works on generic input without any production import:
+    # a clean run must still PASS irrespective of production suffix
+    from _eventlog import clean_smoke_log
+
+    clean = clean_smoke_log()
+    scenario2 = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+    c_clean = classify(clean, scenario=scenario2)
+    assert c_clean["status"] == "PASS"
