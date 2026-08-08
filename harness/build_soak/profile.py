@@ -411,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
     f1 = sub.add_parser("f1", help="small live qualification profile")
     f1.add_argument("--out", default="test-record/qualification/f1")
     f1.add_argument("--model", default="")
-    f1.add_argument("--seed-base", type=int, default=470000)
+    f1.add_argument("--seed-base", type=int, required=True)
     f1.add_argument("--parallel", default="")
     f1.add_argument("--autonomous", action="store_true")
     f1.add_argument(

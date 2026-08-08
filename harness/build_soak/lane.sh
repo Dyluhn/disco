@@ -3,14 +3,14 @@
 # scenarios, each a full live run via harness.build_soak.run. Lanes run in
 # parallel (separate processes); this script is ONE lane.
 #
-#   lane.sh <lane_name> <out_root> <scenario> [<scenario> ...]
+#   lane.sh <lane_name> <out_root> <seed_base> <scenario> [<scenario> ...]
 #
 # Per run: a RAM guard (waits while MemAvailable < 12 GiB so lanes can never
 # push the box into pressure), then the runner with --autonomous. Every result
 # is appended to <out_root>/ledger.tsv (lane, scenario, exit code, run dir,
 # seconds). Lanes CONTINUE past failures — triage happens between waves.
 set -u
-LANE="$1"; OUT="$2"; shift 2
+LANE="$1"; OUT="$2"; SEED="$3"; shift 3
 REPO=/var/home/dylan/projects/disclaude
 PY="$REPO/.venv/bin/python"
 mkdir -p "$OUT"
@@ -30,6 +30,7 @@ for SCEN in "$@"; do
   start=$(date +%s)
   before=$(ls -1 "$OUT" 2>/dev/null | sort)
   "$PY" -m harness.build_soak.run --scenario "$SCEN" --autonomous --out "$OUT" \
+    --seed-base "$SEED" \
     > "$OUT/$LANE.$SCEN.$start.log" 2>&1
   rc=$?
   end=$(date +%s)
@@ -37,5 +38,6 @@ for SCEN in "$@"; do
   rundir=$(comm -13 <(echo "$before") <(echo "$after") | grep -v "\.log$\|ledger" | tail -1)
   printf "%s\t%s\t%s\t%s\t%s\n" "$LANE" "$SCEN" "$rc" "${rundir:-?}" "$((end-start))" >> "$LEDGER"
   echo "$(date +%T) [$LANE] $SCEN -> rc=$rc dir=${rundir:-?} ($((end-start))s)"
+  SEED=$((SEED + 1))
 done
 echo "[$LANE] playlist complete"

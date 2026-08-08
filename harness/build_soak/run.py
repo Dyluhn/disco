@@ -1,6 +1,7 @@
 """run.py — the headless live-API Build runner (PR S3, guidelines §25).
 
-    python -m harness.build_soak.run --scenario static_html_minimal --iterations 1
+    python -m harness.build_soak.run --scenario static_html_minimal --iterations 1 \
+        --seed-base <COMMISSIONED_SEED>
 
 Loads a scenario from scenarios.yaml, drives it against the LIVE agent-server
 (http://127.0.0.1:8000) via the disco_api adapter ACTING AS THE USER (approve the
