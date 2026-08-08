@@ -121,6 +121,20 @@ STATIC_SITE_SMOKE_GOVERNED = ProductScenario(
 )
 
 
+# PKG-19-CERT-REQUAL5: owner-authorized replacement for the exhausted OpenCode topology.
+# This is a separate exact identity contract, not a relaxation of the historical governed one:
+# ledger presence, exact host/model matching, and the OpenRouter prohibition remain unchanged.
+STATIC_SITE_SMOKE_DEEPSEEK_DIRECT = ProductScenario(
+    id="static_site_smoke_deepseek_direct",
+    build_prompt=STATIC_SITE_SMOKE.build_prompt,
+    kind="static.site",
+    requires_export=False,
+    required_slices=STATIC_SITE_SMOKE.required_slices,
+    provider_host_substr="api.deepseek.com",
+    provider_model="deepseek-v4-flash",
+)
+
+
 # PKG-03-EDIT-EVIDENCE (2026-08-05n) — the governed EDIT scenario. The first scenario in either
 # campaign whose required slices include the five P8D edit slices, so TargetedEdit /
 # RewriteAvoidance / ManualEditPreservation / CommentAnchor / ScreenLabel ADJUDICATE instead of
