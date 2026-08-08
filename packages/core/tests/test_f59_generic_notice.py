@@ -350,3 +350,113 @@ def test_shell_and_plan_richer_notices_preserved_and_anti_spam():
     remind_p, seq_p, text_p = _w39_plan_progress_reminder("update_plan_progress", {"step": "x"}, events_p)
     # plan notice may not fire for non-identical? At least check callable and that generic doesn't double-fire
     assert isinstance(remind_p, bool)
+
+
+async def test_verify_web_app_notice_via_real_observation_execution_integration_seam():
+    """F59 production-seam regression: verify_web_app must emit notice via the
+    real observation_execution production dispatcher and emission seam.
+
+    Small fake loop modeled on test_loop_transcript_authority.py — in-memory
+    events list/store, _assist=False, _readonly_tool_names,
+    _prepare_executor, _maybe_emit_plan_step_done_condition_note, and a
+    recording executor. Prior successful verify_web_app action+observation
+    and current second action are seeded with with_seqs. The test drives
+    the real `observation_execution.execute_and_observe` path and asserts
+    execution, primary observation, then environment notice.
+    """
+    from disco.core import MessageEvent, ObservationEvent, ToolResult
+    from disco.core.events import EventSource
+    from disco.core.loop import observation_execution
+    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_REMINDER_SENTINEL
+
+    first = _tool_call("verify_web_app", "v1", {"url": "http://127.0.0.1:8080/"})
+    second = _tool_call("verify_web_app", "v2", {"url": "http://127.0.0.1:8080/"})
+    events = with_seqs([user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second])
+    # second after with_seqs is the sequenced instance the store would have
+    second_seq = events[-1]
+    class _RecordingExecutor:
+        def __init__(self) -> None:
+            self.calls: list = []
+
+        async def execute(self, call):  # type: ignore[no-untyped-def]
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content="VERIFY_WEB_APP: PASS",
+            )
+
+    executor = _RecordingExecutor()
+
+    class _FakeLoop:
+        _assist = False
+        conversation_id = "conv-f59-verify-prod-seam"
+
+        def __init__(self, evts: list, exec_: _RecordingExecutor) -> None:
+            self.events: list = list(evts)
+            self.executor = exec_
+
+            class _Store:
+                def __init__(self, outer: _FakeLoop) -> None:
+                    self._outer = outer
+
+                async def get_events(self, _cid: str):  # type: ignore[no-untyped-def]
+                    return list(self._outer.events)
+
+            self.store = _Store(self)
+
+        async def _events(self):  # type: ignore[no-untyped-def]
+            return list(self.events)
+
+        async def _emit(self, event):  # type: ignore[no-untyped-def]
+            self.events.append(event)
+            return event
+
+        async def _prepare_executor(self) -> None:
+            return None
+
+        def _readonly_tool_names(self):  # type: ignore[no-untyped-def]
+            return frozenset()
+
+        async def _maybe_emit_plan_step_done_condition_note(self, _action) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+    loop = _FakeLoop(events, executor)
+
+    # Helper must fire at occurrence 2 before the production seam runs
+    should, _, helper_text = _w39_generic_reminder(
+        "verify_web_app", {"url": "http://127.0.0.1:8080/"}, list(loop.events)
+    )
+    assert should is True, "helper must fire at occurrence 2"
+
+    await observation_execution.execute_and_observe(loop, second_seq)  # type: ignore[arg-type]
+
+    # Real execution — not short-circuited
+    assert len(executor.calls) == 1, "executor must execute the second verify_web_app"
+    assert executor.calls[0].tool_name == "verify_web_app"
+    assert executor.calls[0].arguments == {"url": "http://127.0.0.1:8080/"}
+
+    # Primary observation for the second action
+    second_obs = [e for e in loop.events if isinstance(e, ObservationEvent) and getattr(e, "action_id", None) == second_seq.id]
+    assert len(second_obs) == 1, "primary ObservationEvent must be emitted for second action"
+    assert second_obs[0].tool_result.success is True
+
+    # Environment notice immediately after primary observation
+    obs_idx = loop.events.index(second_obs[0])
+    followups = loop.events[obs_idx + 1 :]
+    notice_msgs = [
+        e
+        for e in followups
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and isinstance(e.message.content, str)
+        and _W39_GENERIC_REMINDER_SENTINEL in e.message.content
+    ]
+    assert len(notice_msgs) >= 1, "generic notice MessageEvent must follow primary observation"
+    text = notice_msgs[0].message.content
+    assert isinstance(text, str)
+    assert "verify_web_app" in text
+    assert _W39_CAP_CONSEQUENCE in text
+    assert "2 times" in text
+    assert text == helper_text, "production-seam text must equal helper template bytes"
