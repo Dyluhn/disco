@@ -350,3 +350,74 @@ def test_shell_and_plan_richer_notices_preserved_and_anti_spam():
     remind_p, seq_p, text_p = _w39_plan_progress_reminder("update_plan_progress", {"step": "x"}, events_p)
     # plan notice may not fire for non-identical? At least check callable and that generic doesn't double-fire
     assert isinstance(remind_p, bool)
+
+
+async def test_verify_web_app_notice_via_real_observation_execution_integration_seam():
+    """The real execution seam emits F59's notice after the observation."""
+    from disco.core import MessageEvent, ObservationEvent, ToolResult
+    from disco.core.events import EventSource
+    from disco.core.loop.observation_execution import execute_and_observe
+    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_REMINDER_SENTINEL
+
+    url = "http://127.0.0.1:8080/"
+    first = _tool_call("verify_web_app", "v1", {"url": "http://127.0.0.1:8080/"})
+    second = _tool_call("verify_web_app", "v2", {"url": url})
+    seeded = with_seqs(
+        [user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second]
+    )
+
+    class Executor:
+        calls: list[ToolCall] = []
+
+        async def execute(self, call: ToolCall) -> ToolResult:
+            self.calls.append(call)
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content="VERIFY_WEB_APP: PASS",
+            )
+
+    class Loop:
+        _assist = False
+        conversation_id = "f59"
+
+        def __init__(self) -> None:
+            self.events = list(seeded)
+            self.executor = Executor()
+            self.store = self
+
+        async def get_events(self, _conversation_id: str) -> list[Event]:
+            return list(self.events)
+
+        async def _events(self) -> list[Event]:
+            return await self.get_events(self.conversation_id)
+
+        async def _emit(self, event: Event) -> Event:
+            self.events.append(event)
+            return event
+
+        async def _prepare_executor(self) -> None:
+            return None
+
+        def _readonly_tool_names(self) -> frozenset[str]:
+            return frozenset()
+
+        async def _maybe_emit_plan_step_done_condition_note(
+            self, _action: ActionEvent
+        ) -> None:
+            return None
+
+    loop = Loop()
+    current = seeded[-1]
+    assert isinstance(current, ActionEvent)
+    await execute_and_observe(loop, current)  # type: ignore[arg-type]
+
+    assert [call.tool_name for call in loop.executor.calls] == ["verify_web_app"]
+    observation, notice = loop.events[-2:]
+    assert isinstance(observation, ObservationEvent)
+    assert observation.action_id == current.id
+    assert isinstance(notice, MessageEvent) and notice.source == EventSource.ENVIRONMENT
+    assert _W39_GENERIC_REMINDER_SENTINEL in notice.message.content
+    assert "verify_web_app" in notice.message.content
+    assert _W39_CAP_CONSEQUENCE in notice.message.content

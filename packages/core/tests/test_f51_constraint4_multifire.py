@@ -493,3 +493,106 @@ def test_repeat_preamble_names_the_count_and_the_cost(repeats):
     text = _repeat_preamble(repeats, "COST-CLAUSE")
     assert str(repeats) in text
     assert "COST-CLAUSE" in text
+
+
+# ---------------------------------------------------------------------------
+# Unit 40 — host HALT is the real landing (Terra: no prior real test)
+# The 15x surface above tests the CONTINUE limb; its HALT sibling had no
+# genuine reach test. This drives the repeated-fingerprint HALT branch
+# through the real ValveLandingMixin seam and proves the prefix survives
+# to the complete landing and that a prior identical landing escalates.
+# ---------------------------------------------------------------------------
+
+
+class _RealLandingLoop:  # ValveLandingMixin facade over a durable log
+    """Minimal loop that lets `governed_non_pass_disposition`'s HALT branch
+    land through the real `ValveLandingMixin` path, not the capture stub."""
+
+    def __init__(self, prior: list[Event]) -> None:
+        # ValveLandingMixin expects `self._loop` to be the loop facade.
+        self._loop = self  # type: ignore[assignment]
+        self._prior = prior
+        self.emitted: list[Event] = []
+        self._autonomous = False
+        self._browser_verify_refusals = 0
+
+    async def _emit(self, event: Event) -> Event:
+        self.emitted.append(event)
+        return event
+
+    async def _events(self) -> list[Event]:
+        return self._prior
+
+    # The fallback path (autonomous=False) never reaches these, but they
+    # exist so a regression that flips autonomous still fails honestly.
+    async def _materialize_current_view(self):  # type: ignore[no-untyped-def]
+        raise AssertionError("materialize should not be reached in this test")
+
+    # ValveLandingMixin is a mixin, not a base with __init__ — inject its
+    # methods explicitly so `governed_non_pass_disposition`'s
+    # `gate._loop._land_blocked` is the REAL landing, not the stub.
+    from disco.core.loop.valve_landing import ValveLandingMixin as _Mixin
+
+    _blocked_meta = _Mixin._blocked_meta
+    _landing_repeats = _Mixin._landing_repeats
+    _blocked_prompt = _Mixin._blocked_prompt
+    _fallback_blocked_message = _Mixin._fallback_blocked_message
+    _blocked_model_message = _Mixin._blocked_model_message
+    land_blocked = _Mixin.land_blocked
+
+    # Alias the mixin name the production loop exposes: the disposition
+    # calls `gate._loop._land_blocked`.
+    _land_blocked = land_blocked  # type: ignore[assignment]
+
+
+async def test_host_repeat_halt_reaches_real_landing_and_escalates() -> None:
+    """Unit 40: `governed_non_pass_disposition` HALT lands through the real
+    `_land_blocked`/`ValveLandingMixin._blocked_prompt` and escalates on repeat.
+
+    First HALT's complete ENVIRONMENT landing must carry
+    `_HOST_REPEAT_HALT_PREFIX` (derived from production, not concatenated as
+    subject). A second identical HALT with the first landing durable must
+    render a different body with live count/consequence/one next move.
+    """
+    from disco.core.loop.control import Disp
+    from disco.core.loop.finish.verify_gate_parts.host_disposition import (
+        governed_non_pass_disposition,
+    )
+
+    fp = _expected_fingerprint()
+    prior1 = with_seqs([user_msg("start"), _marker(fp)])
+
+    loop1 = _RealLandingLoop(prior1)
+    gate1 = _FakeGate(loop1)  # type: ignore[arg-type]
+    disp1 = await governed_non_pass_disposition(gate1, _Deliverable(), VERDICT, None, prior1)
+    assert disp1 is Disp.HALT, "repeat fingerprint must take the HALT branch"
+
+    env1 = [e for e in loop1.emitted if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    assert env1, "HALT must land an ENVIRONMENT prompt via the real valve"
+    first_body = env1[0].message.content or ""
+    # Derive expected prefix from production only for the final assertion —
+    # never build the test subject by concatenating it.
+    from disco.core.loop.finish.verify_gate_parts.host_disposition import (
+        _HOST_REPEAT_HALT_PREFIX,
+    )
+
+    assert _HOST_REPEAT_HALT_PREFIX.strip() in first_body, "prefix must survive to the complete landing"
+    assert "Context:" in first_body
+
+    # Second HALT: same fingerprint, prior durable landing now on the log.
+    prior2 = with_seqs([*prior1, *loop1.emitted])
+    loop2 = _RealLandingLoop(prior2)
+    gate2 = _FakeGate(loop2)  # type: ignore[arg-type]
+    disp2 = await governed_non_pass_disposition(gate2, _Deliverable(), VERDICT, None, prior2)
+    assert disp2 is Disp.HALT
+
+    env2 = [e for e in loop2.emitted if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    assert env2
+    second_body = env2[0].message.content or ""
+
+    assert first_body != second_body, "identical handed HALT must not render byte-identically"
+    # Live count + consequence + one next move (the landing's escalation)
+    assert "2 times" in second_body or "2" in second_body
+    assert "did not clear it" in second_body
+    assert "ask_user" in second_body
+    assert _HOST_REPEAT_HALT_PREFIX.strip() in second_body
