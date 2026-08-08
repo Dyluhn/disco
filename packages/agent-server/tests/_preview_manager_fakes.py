@@ -415,13 +415,14 @@ class _UnattributedSharedSandbox(_FakeSandbox):
 
 
 class _DependencySession:
-    def __init__(self, prefix: str = "") -> None:
+    def __init__(self, prefix: str = "", *, produce_dependency_dir: bool = True) -> None:
         self.files = {
             f"{prefix}package.json": b'{"dependencies":{"vite":"1.0.0"}}',
             f"{prefix}package-lock.json": b"{}",
         }
         self.commands: list[str] = []
         self._prefix = prefix
+        self._produce_dependency_dir = produce_dependency_dir
 
     async def read_file(self, path: str) -> bytes:
         return self.files[path]
@@ -431,8 +432,9 @@ class _DependencySession:
 
     async def exec_shell(self, command: str, *, timeout_s: int) -> SimpleNamespace:
         self.commands.append(command)
-        self.files[f"{self._prefix}node_modules"] = b"directory-marker"
-        return SimpleNamespace(exit_code=0, timed_out=False, stdout="", stderr="")
+        is_dependency_probe = command.startswith("test -d ")
+        exit_code = 0 if not is_dependency_probe or self._produce_dependency_dir else 1
+        return SimpleNamespace(exit_code=exit_code, timed_out=False, stdout="", stderr="")
 
 
 def _manager_fixture(
