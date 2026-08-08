@@ -79,11 +79,12 @@ async def test_sealed_node_dependency_restore_uses_the_single_immutable_lockfile
     session = _DependencySession()
     contract = SimpleNamespace(command=None, framework="vite", cwd=None)
 
+    assert not await session.file_exists("node_modules")
     dependency_dir = await PreviewService._prepare_sealed_node_dependencies(session, contract)
 
     assert dependency_dir == "node_modules"
-    assert session.commands == ["npm ci --no-audit --no-fund"]
-
+    assert session.commands[0] == "npm ci --no-audit --no-fund"
+    assert session.commands[1] == "test -d node_modules && test ! -L node_modules"
 
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_refuses_unlocked_graph() -> None:
@@ -105,7 +106,8 @@ async def test_sealed_node_dependency_restore_honors_workspace_relative_cwd() ->
     )
 
     assert dependency_dir == "web/node_modules"
-    assert session.commands == ["npm --prefix ./web ci --no-audit --no-fund"]
+    assert session.commands[0] == "npm --prefix ./web ci --no-audit --no-fund"
+    assert session.commands[1] == "test -d web/node_modules && test ! -L web/node_modules"
 
 
 def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
