@@ -59,6 +59,7 @@ from .preview_browser import (
     _path_preview_bootstrap_url,
     _preview_bootstrap_url,
 )
+from .preview_finished import refresh_canonical_preview_port
 from .preview_static import (
     _committed_static_capability_available,
     _sealed_runtime_contract,
@@ -362,9 +363,14 @@ async def _selected_capability_port(
     selected_port = (
         _canonical_preview_port(runtime, conversation_id) if runtime is not None else PREVIEW_PORT
     )
-    if selected_port is None and body.transport == "canonical" and runtime is not None:
-        await runtime.preview.ensure_preview(conversation_id)
-        selected_port = _canonical_preview_port(runtime, conversation_id)
+    selected_port = await refresh_canonical_preview_port(
+        store,
+        runtime,
+        conversation_id,
+        selected_port,
+        canonical=body.transport == "canonical",
+        current=body.workspace_version is None,
+    )
     if (
         selected_port is None
         and body.transport in {"path", "canonical"}

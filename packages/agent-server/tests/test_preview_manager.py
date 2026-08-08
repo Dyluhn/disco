@@ -79,11 +79,12 @@ async def test_sealed_node_dependency_restore_uses_the_single_immutable_lockfile
     session = _DependencySession()
     contract = SimpleNamespace(command=None, framework="vite", cwd=None)
 
+    assert not await session.file_exists("node_modules")
     dependency_dir = await PreviewService._prepare_sealed_node_dependencies(session, contract)
 
     assert dependency_dir == "node_modules"
-    assert session.commands == ["npm ci --no-audit --no-fund"]
-
+    assert session.commands[0] == "npm ci --no-audit --no-fund"
+    assert session.commands[1] == "test -d node_modules && test ! -L node_modules"
 
 @pytest.mark.asyncio
 async def test_sealed_node_dependency_restore_refuses_unlocked_graph() -> None:
@@ -105,7 +106,8 @@ async def test_sealed_node_dependency_restore_honors_workspace_relative_cwd() ->
     )
 
     assert dependency_dir == "web/node_modules"
-    assert session.commands == ["npm --prefix ./web ci --no-audit --no-fund"]
+    assert session.commands[0] == "npm --prefix ./web ci --no-audit --no-fund"
+    assert session.commands[1] == "test -d web/node_modules && test ! -L web/node_modules"
 
 
 def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
@@ -127,6 +129,49 @@ async def test_sealed_node_dependency_restore_rejects_cwd_outside_workspace(cwd:
         await PreviewService._prepare_sealed_node_dependencies(
             _NeverReadSession(),
             SimpleNamespace(command=None, framework="vite", cwd=cwd),
+        )
+
+
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_skips_when_package_json_absent() -> None:
+    class _AbsentPackageSession:
+        async def file_exists(self, path: str) -> bool:
+            assert path == "package.json"
+            return False
+
+        async def read_file(self, path: str) -> bytes:  # pragma: no cover - must not be reached
+            raise AssertionError(f"unexpected read: {path}")
+
+        async def exec_shell(self, command: str, *, timeout_s: int):  # pragma: no cover
+            raise AssertionError(f"unexpected exec: {command}")
+
+    assert (
+        await PreviewService._prepare_sealed_node_dependencies(
+            _AbsentPackageSession(),
+            SimpleNamespace(command="node server.js", framework=None, cwd=None),
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_sealed_node_dependency_restore_rejects_malformed_package_json() -> None:
+    class _MalformedSession:
+        async def file_exists(self, path: str) -> bool:
+            assert path == "package.json"
+            return True
+
+        async def read_file(self, path: str) -> bytes:
+            assert path == "package.json"
+            return b"{not-json"
+
+        async def exec_shell(self, command: str, *, timeout_s: int):  # pragma: no cover
+            raise AssertionError(command)
+
+    with pytest.raises(RuntimeError, match="missing a valid package\\.json"):
+        await PreviewService._prepare_sealed_node_dependencies(
+            _MalformedSession(),
+            SimpleNamespace(command="node server.js", framework=None, cwd=None),
         )
 
 
