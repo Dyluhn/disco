@@ -495,13 +495,14 @@ def _out_of_phase_submit_plan_refusal(revision: int | None) -> str:
 # _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
 
 # F63 — the planning-gate refusal's base sentence, now NAMED so the Attestation-Binding
-# gate (test_attestation_binding) can bind to it. Before F63 the sentence was composed
-# inline inside `_planning_tool_refusal_message` with no symbol owning it, so a test
-# restating it (181 chars vs 284) was invisible to the gate. Extracting it verbatim
-# makes the prose importable: a test must now `from ..engine_contracts import
-# _PLANNING_TOOL_REFUSAL_SUFFIX` or call the function, never retype. Verbatim
-# extraction proven byte-identical by the F63 composition-identity control
-# (`_PLANNING_GATE_REFUSAL == _planning_tool_refusal_message(...)` at streak=1).
+# gate can bind to it. Before F63 the sentence was composed inline inside
+# `_planning_tool_refusal_message` with no symbol owning it, so a test restating it
+# was invisible to the gate. Extracting it verbatim makes the prose importable: a
+# test must now `from ..engine_contracts import _PLANNING_TOOL_REFUSAL_SUFFIX` or call
+# the function, never retype. The base suffix is stable; the full composition at
+# any streak is repetition-aware (constraint 4) and derived via
+# `_planning_tool_refusal_message` — tests must derive via that function, not retype
+# the surrounding refusal text, so a rewording moves the fixture or the test fails.
 _PLANNING_TOOL_REFUSAL_SUFFIX = (
     "No workspace mutation or execution is allowed before plan approval. Call `submit_plan`, "
     "use a safe read tool (file_read/file_list/search/extract), or ask/questions_v2 "
@@ -515,6 +516,18 @@ def _planning_tool_refusal_message(
     detail = (
         f"REFUSED: `{tool_name}` is not available in PLANNING mode. {_PLANNING_TOOL_REFUSAL_SUFFIX}"
     )
+    # Constraint 4 (F51): every planning-mode refusal is now repetition-aware,
+    # even the first. `planning_tool_refusal_streak` counts consecutive planning
+    # refusals (any tool) in this planning segment, not retries of one tool
+    # name — so the first and second consecutive refusals must differ in count/
+    # consequence/next move, otherwise the model has nothing new to act on.
+    if streak <= 1:
+        detail += (
+            f"\n\nThis is planning-mode refusal 1 of this run. "
+            f"You have {read_calls_remaining} read calls remaining before the "
+            f"allowed tools narrow. Your next move: call `submit_plan` with "
+            f"the current plan."
+        )
     if streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
         detail += (
             f"\n\nPlanning-mode refusal {streak}: You have {read_calls_remaining} "
