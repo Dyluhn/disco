@@ -349,6 +349,8 @@ suites:
       - "32"
       - "--out"
       - "{suite_out}/soak"
+      - "--seed-base"
+      - "{seed_base}"
     claims: [build.api_shapes_live]
 
   - id: live-build-revisions
@@ -396,6 +398,8 @@ suites:
       - "32"
       - "--out"
       - "{suite_out}/soak"
+      - "--seed-base"
+      - "{seed_base}"
     claims: [build.revisions_live]
 
   - id: live-build-lifecycle
@@ -479,6 +483,8 @@ suites:
       - "32"
       - "--out"
       - "{suite_out}/soak"
+      - "--seed-base"
+      - "{seed_base}"
     claims: [agent.general_tasks_live]
 
   - id: live-preview-manifest-assets

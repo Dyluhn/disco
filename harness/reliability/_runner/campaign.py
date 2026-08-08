@@ -111,6 +111,31 @@ def _campaign_parallelism(
     return max_parallel
 
 
+def _suite_seed_bases(
+    args: argparse.Namespace,
+    suites: list[Suite],
+) -> dict[str, str]:
+    build_soaks = [suite for suite in suites if suite.kind == "build_soak"]
+    if not build_soaks:
+        return {}
+    if args.seed_base is None:
+        raise ValueError("--seed-base is required when build-soak suites are selected")
+    next_seed = args.seed_base
+    assigned: dict[str, str] = {}
+    for suite in build_soaks:
+        assigned[suite.id] = str(next_seed)
+        next_seed += suite.units
+    return assigned
+
+
+def _suite_context(
+    context: dict[str, str], suite: Suite, seed_bases: dict[str, str]
+) -> dict[str, str]:
+    if suite.id not in seed_bases:
+        return context
+    return {**context, "seed_base": seed_bases[suite.id]}
+
+
 def _record_campaign_promotion(
     *,
     args: argparse.Namespace,
@@ -195,6 +220,7 @@ async def _run_selected_campaign(
     if args.list or args.dry_run:
         _print_matrix(matrix, suites)
         return 0
+    seed_bases = _suite_seed_bases(args, suites)
 
     revision, commit, dirty = source_revision(repo)
     if dirty and any(suite.proof == "fresh_device" for suite in suites):
@@ -234,7 +260,12 @@ async def _run_selected_campaign(
     }
     results = await asyncio.gather(
         *(
-            _run_suite(suite, context=context, campaign_out=campaign_out, pool=pool)
+            _run_suite(
+                suite,
+                context=_suite_context(context, suite, seed_bases),
+                campaign_out=campaign_out,
+                pool=pool,
+            )
             for suite in suites
         )
     )

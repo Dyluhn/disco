@@ -222,6 +222,8 @@ def test_f1_dry_run_writes_a_receipt_and_makes_no_provider_call(tmp_path):
             str(out),
             "--model",
             "test-model",
+            "--seed-base",
+            "470000",
         ]
     )
 
@@ -236,3 +238,10 @@ def test_f1_dry_run_writes_a_receipt_and_makes_no_provider_call(tmp_path):
     assert "--summary-name" in argv
     assert argv[argv.index("--summary-name") + 1] == prof._PROFILE_SUMMARY_NAME
     prof.assert_not_promotion_visible(out)
+
+
+def test_f1_requires_an_explicit_seed_base() -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        prof.main(["f1", "--dry-run", "--model", "test-model"])
+
+    assert exc_info.value.code == 2
