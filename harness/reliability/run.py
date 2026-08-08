@@ -146,6 +146,12 @@ def main(argv: list[str] | None = None) -> int:
         "--state", default=str(Path.home() / ".local/state/disco/reliability/state.json")
     )
     parser.add_argument("--require-promotion", action="store_true")
+    parser.add_argument(
+        "--seed-base",
+        type=int,
+        default=None,
+        help="nonnegative integer seed base for live-build-shapes (commissioned per campaign)",
+    )
     args = parser.parse_args(argv)
     try:
         if args.memory_reserve_gib <= 0 or args.disk_reserve_gib <= 0:
@@ -154,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("resource timing values must be positive")
         if args.parallel_suites != "auto":
             int(args.parallel_suites)
+        if args.seed_base is not None and args.seed_base < 0:
+            raise ValueError("--seed-base must be nonnegative")
         return asyncio.run(_amain(args))
     except (ValueError, OSError) as exc:
         print(f"reliability campaign configuration error: {exc}", file=sys.stderr)

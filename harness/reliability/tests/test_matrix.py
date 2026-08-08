@@ -219,3 +219,19 @@ suites:
         match="provider_conversation_manifest requires provider_conversation_count",
     ):
         load_matrix(path)
+
+
+def test_live_build_shapes_carries_explicit_seed_base_placeholder() -> None:
+    matrix = load_matrix(MATRIX)
+    shapes = matrix.suites["live-build-shapes"]
+    command = list(shapes.command)
+    assert "--seed-base" in command
+    assert "{seed_base}" in command
+    index = command.index("--seed-base")
+    assert command[index + 1] == "{seed_base}"
+    # Only the counted shapes suite is pin-gated; no other suite should carry the placeholder.
+    for suite_id, suite in matrix.suites.items():
+        if suite_id == "live-build-shapes":
+            continue
+        assert "{seed_base}" not in suite.command, suite_id
+        assert "--seed-base" not in list(suite.command), suite_id
