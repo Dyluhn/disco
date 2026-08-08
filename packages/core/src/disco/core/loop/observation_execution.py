@@ -25,6 +25,7 @@ from ..llm import LLMContextWindowExceeded
 from .dedup import (
     _W39_NOTICE_TOOLS,
     _W39_PLAN_TOOLS,
+    _W39_SHELL_TOOLS,
     _f8_confirmed_file_writes,
     _f9_dedupable_read,
     _w39_shell_verify_reminder,
