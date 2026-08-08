@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "c7a423d250672d82c6b26057377963d2b87a004f",
+  "source_identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
   "collected": {
     "counts": {
-      "packages": 10449,
+      "packages": 10453,
       "harness": 1324,
       "integrations": 9,
       "tests": 394
     },
-    "total": 12176,
+    "total": 12180,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5213,6 +5213,7 @@
         "packages/core/tests/test_f4_bootstrap.py::test_detect_pyproject_toml_surfaces_project_scripts",
         "packages/core/tests/test_f4_bootstrap.py::test_planning_mode_skips_bootstrap",
         "packages/core/tests/test_f51_constraint4_multifire.py::test_a_DIFFERENT_failure_restarts_the_count",
+        "packages/core/tests/test_f51_constraint4_multifire.py::test_host_repeat_halt_reaches_real_landing_and_escalates",
         "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_count_is_keyed_on_the_COMMAND_not_the_observation",
         "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_count_reads_the_durable_log",
         "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_notice_does_not_repeat_itself",
@@ -5338,6 +5339,7 @@
         "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
         "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
         "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam",
+        "packages/core/tests/test_f59_generic_notice.py::test_verify_web_app_notice_via_real_observation_execution_integration_seam",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
         "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -6113,6 +6115,8 @@
         "packages/core/tests/test_planner_gate.py::test_execution_mode_exposes_mutating_tools_plus_virtuals",
         "packages/core/tests/test_planner_gate.py::test_legacy_executor_without_readonly_falls_back_to_allowlist_only",
         "packages/core/tests/test_planner_gate.py::test_planning_with_no_allowlist_shows_only_readonly_tools",
+        "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_consecutive_second_planning_refusal_via_real_gate_changes_bytes_and_count",
+        "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_first_planning_refusal_via_real_gate_has_count_consequence_next_move",
         "packages/core/tests/test_planning_write_rejection.py::test_allowlist_read_tools_still_execute_in_planning",
         "packages/core/tests/test_planning_write_rejection.py::test_ask_user_allowed_in_planning_halts_for_input",
         "packages/core/tests/test_planning_write_rejection.py::test_empty_initial_plan_is_corrected_before_approval_and_seeds_design",
@@ -12197,9 +12201,9 @@
     }
   },
   "mapping_static": {
-    "identity": "c7a423d250672d82c6b26057377963d2b87a004f",
-    "python_test_file_count": 830,
-    "python_static_test_id_count": 10029,
+    "identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+    "python_test_file_count": 831,
+    "python_static_test_id_count": 10033,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12704,6 +12708,7 @@
       "packages/core/tests/test_plan_phase_projection.py",
       "packages/core/tests/test_plan_revision_boundary.py",
       "packages/core/tests/test_planner_gate.py",
+      "packages/core/tests/test_planning_refusal_unit22.py",
       "packages/core/tests/test_planning_write_rejection.py",
       "packages/core/tests/test_prefill_masking.py",
       "packages/core/tests/test_preview_capability.py",
@@ -18235,6 +18240,7 @@
       "packages/core/tests/test_f4_bootstrap.py::test_detect_pyproject_toml_surfaces_project_scripts",
       "packages/core/tests/test_f4_bootstrap.py::test_planning_mode_skips_bootstrap",
       "packages/core/tests/test_f51_constraint4_multifire.py::test_a_DIFFERENT_failure_restarts_the_count",
+      "packages/core/tests/test_f51_constraint4_multifire.py::test_host_repeat_halt_reaches_real_landing_and_escalates",
       "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_count_is_keyed_on_the_COMMAND_not_the_observation",
       "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_count_reads_the_durable_log",
       "packages/core/tests/test_f51_constraint4_multifire.py::test_receipt_reuse_notice_does_not_repeat_itself",
@@ -18338,6 +18344,7 @@
       "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
       "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
       "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam",
+      "packages/core/tests/test_f59_generic_notice.py::test_verify_web_app_notice_via_real_observation_execution_integration_seam",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_attempt2_does_NOT_disable_thinking",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_off_overlong_assistant_think_is_stripped_all_tiers",
       "packages/core/tests/test_f5_thinking_budget.py::test_assist_on_attempt1_keeps_thinking_per_provider_default",
@@ -19017,6 +19024,8 @@
       "packages/core/tests/test_planner_gate.py::test_execution_mode_exposes_mutating_tools_plus_virtuals",
       "packages/core/tests/test_planner_gate.py::test_legacy_executor_without_readonly_falls_back_to_allowlist_only",
       "packages/core/tests/test_planner_gate.py::test_planning_with_no_allowlist_shows_only_readonly_tools",
+      "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_consecutive_second_planning_refusal_via_real_gate_changes_bytes_and_count",
+      "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_first_planning_refusal_via_real_gate_has_count_consequence_next_move",
       "packages/core/tests/test_planning_write_rejection.py::test_allowlist_read_tools_still_execute_in_planning",
       "packages/core/tests/test_planning_write_rejection.py::test_ask_user_allowed_in_planning_halts_for_input",
       "packages/core/tests/test_planning_write_rejection.py::test_empty_initial_plan_is_corrected_before_approval_and_seeds_design",
@@ -31472,6 +31481,38 @@
           "packages/core/tests/test_event_contract_corpus.py::test_migration_is_pure_idempotent_and_defensively_copies",
           "packages/core/tests/test_event_contract_corpus.py::test_store_rejects_untyped_values_before_any_persistence",
           "packages/core/tests/test_event_contract_corpus.py::test_unknown_kind_and_unexpected_known_kind_field_fail_closed"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CLEAN-SLATE-F59",
+      "root": "packages",
+      "source_identity_before": "c7a423d250672d82c6b26057377963d2b87a004f",
+      "source_identity_after": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10449,
+          "after_count": 10453,
+          "added_ids": [
+            "packages/core/tests/test_f51_constraint4_multifire.py::test_host_repeat_halt_reaches_real_landing_and_escalates",
+            "packages/core/tests/test_f59_generic_notice.py::test_verify_web_app_notice_via_real_observation_execution_integration_seam",
+            "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_consecutive_second_planning_refusal_via_real_gate_changes_bytes_and_count",
+            "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_first_planning_refusal_via_real_gate_has_count_consequence_next_move"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_planning_refusal_unit22.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_f51_constraint4_multifire.py::test_host_repeat_halt_reaches_real_landing_and_escalates",
+          "packages/core/tests/test_f59_generic_notice.py::test_verify_web_app_notice_via_real_observation_execution_integration_seam",
+          "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_consecutive_second_planning_refusal_via_real_gate_changes_bytes_and_count",
+          "packages/core/tests/test_planning_refusal_unit22.py::test_unit22_first_planning_refusal_via_real_gate_has_count_consequence_next_move"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
