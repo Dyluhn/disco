@@ -749,3 +749,37 @@ def test_ctk_gate_self_hosted_allowed():
         "https://blackbox.taile518f9.ts.net/v1",
     ):
         assert _host_speaks_chat_template_kwargs(url) is True, url
+
+
+def test_deepseek_public_api_explicitly_disables_thinking_on_both_paths():
+    """DeepSeek tool turns must not create reasoning history Disco cannot replay."""
+    provider = OpenAIProvider(
+        "https://api.deepseek.com/v1",
+        name="deepseek-direct",
+        enable_thinking=True,
+    )
+    req = _req()
+
+    for stream in (False, True):
+        body = provider._payload(req, "deepseek-v4-flash", stream=stream)
+        assert body["thinking"] == {"type": "disabled"}
+        assert "chat_template_kwargs" not in body
+
+
+def test_deepseek_nonthinking_policy_is_exactly_host_scoped():
+    """No similarly named or unrelated OpenAI-compatible host inherits the policy."""
+    req = _req()
+    public_hosts = (
+        "https://api.openai.com/v1",
+        "https://deepseek.example/v1",
+        "https://api.deepseek.com.example/v1",
+    )
+    for base_url in public_hosts:
+        body = OpenAIProvider(base_url, enable_thinking=True)._payload(req, "m1", stream=False)
+        assert "thinking" not in body
+        assert "chat_template_kwargs" not in body
+
+    self_hosted = OpenAIProvider("http://127.0.0.1:8080/v1", enable_thinking=True)
+    body = self_hosted._payload(req, "m1", stream=False)
+    assert "thinking" not in body
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}

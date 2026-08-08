@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+  "source_identity": "63bb4a09e046c60d2b38eaaab71cbeec76d269dd",
   "collected": {
     "counts": {
-      "packages": 10453,
-      "harness": 1324,
+      "packages": 10455,
+      "harness": 1325,
       "integrations": 9,
       "tests": 394
     },
-    "total": 12180,
+    "total": 12183,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -5353,6 +5353,8 @@
         "packages/core/tests/test_f5_thinking_budget.py::test_assistant_closed_think_stripped_exact",
         "packages/core/tests/test_f5_thinking_budget.py::test_ctk_gate_public_hosts_refused",
         "packages/core/tests/test_f5_thinking_budget.py::test_ctk_gate_self_hosted_allowed",
+        "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_nonthinking_policy_is_exactly_host_scoped",
+        "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_public_api_explicitly_disables_thinking_on_both_paths",
         "packages/core/tests/test_f5_thinking_budget.py::test_default_attempt_is_one_thinking_unchanged",
         "packages/core/tests/test_f5_thinking_budget.py::test_no_think_assistant_is_byte_identical",
         "packages/core/tests/test_f5_thinking_budget.py::test_streaming_assist_off_attempt2_strips_history_but_keeps_thinking",
@@ -10978,6 +10980,7 @@
         "harness/build_soak/tests/test_classifier.py::test_stuck_approve_no_execution_classifies_as_terminal_fail",
         "harness/build_soak/tests/test_classifier.py::test_thrash_finding_outranks_downstream_missing_terminal",
         "harness/build_soak/tests/test_classifier.py::test_write_in_planning_attempted_classifies",
+        "harness/build_soak/tests/test_classify_captured.py::test_deepseek_direct_capture_is_exactly_provider_bound",
         "harness/build_soak/tests/test_classify_captured.py::test_export_capture_classifies_pass",
         "harness/build_soak/tests/test_classify_captured.py::test_export_capture_without_download_is_nonzero",
         "harness/build_soak/tests/test_classify_captured.py::test_green_capture_classifies_pass",
@@ -12201,9 +12204,9 @@
     }
   },
   "mapping_static": {
-    "identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+    "identity": "63bb4a09e046c60d2b38eaaab71cbeec76d269dd",
     "python_test_file_count": 831,
-    "python_static_test_id_count": 10033,
+    "python_static_test_id_count": 10036,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -13400,6 +13403,7 @@
       "harness/build_soak/tests/test_classifier.py::test_stuck_approve_no_execution_classifies_as_terminal_fail",
       "harness/build_soak/tests/test_classifier.py::test_thrash_finding_outranks_downstream_missing_terminal",
       "harness/build_soak/tests/test_classifier.py::test_write_in_planning_attempted_classifies",
+      "harness/build_soak/tests/test_classify_captured.py::test_deepseek_direct_capture_is_exactly_provider_bound",
       "harness/build_soak/tests/test_classify_captured.py::test_export_capture_classifies_pass",
       "harness/build_soak/tests/test_classify_captured.py::test_export_capture_without_download_is_nonzero",
       "harness/build_soak/tests/test_classify_captured.py::test_green_capture_classifies_pass",
@@ -18358,6 +18362,8 @@
       "packages/core/tests/test_f5_thinking_budget.py::test_assistant_closed_think_stripped_exact",
       "packages/core/tests/test_f5_thinking_budget.py::test_ctk_gate_public_hosts_refused",
       "packages/core/tests/test_f5_thinking_budget.py::test_ctk_gate_self_hosted_allowed",
+      "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_nonthinking_policy_is_exactly_host_scoped",
+      "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_public_api_explicitly_disables_thinking_on_both_paths",
       "packages/core/tests/test_f5_thinking_budget.py::test_default_attempt_is_one_thinking_unchanged",
       "packages/core/tests/test_f5_thinking_budget.py::test_no_think_assistant_is_byte_identical",
       "packages/core/tests/test_f5_thinking_budget.py::test_streaming_assist_off_attempt2_strips_history_but_keeps_thinking",
@@ -27982,6 +27988,40 @@
           "packages/core/tests/test_f59_generic_notice.py::test_no_observation_streak_is_action_no_observation_not_thrash",
           "packages/core/tests/test_f59_generic_notice.py::test_representative_non_shell_classes_have_generic_notice_and_oracle_coverage",
           "packages/core/tests/test_f59_generic_notice.py::test_shell_and_plan_richer_notices_preserved_and_anti_spam"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-CERT-REQUAL5-DEEPSEEK",
+      "root": "multiple",
+      "source_identity_before": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+      "source_identity_after": "63bb4a09e046c60d2b38eaaab71cbeec76d269dd",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10453,
+          "after_count": 10455,
+          "added_ids": [
+            "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_nonthinking_policy_is_exactly_host_scoped",
+            "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_public_api_explicitly_disables_thinking_on_both_paths"
+          ]
+        },
+        "harness": {
+          "before_count": 1324,
+          "after_count": 1325,
+          "added_ids": [
+            "harness/build_soak/tests/test_classify_captured.py::test_deepseek_direct_capture_is_exactly_provider_bound"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/build_soak/tests/test_classify_captured.py::test_deepseek_direct_capture_is_exactly_provider_bound",
+          "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_nonthinking_policy_is_exactly_host_scoped",
+          "packages/core/tests/test_f5_thinking_budget.py::test_deepseek_public_api_explicitly_disables_thinking_on_both_paths"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
