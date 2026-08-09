@@ -317,14 +317,13 @@ class OrphanReconciler:
         live_cids = await service.list_live_instances()
         # Decision phase (cheap existence/status reads): collect the set of cids to
         # destroy. Kept serial + suppressed per-cid so one unreadable conversation
-        # doesn't abort the sweep. `status_value` is the log string for the
-        # terminal-status branch, or None for the no-row branch (which logs nothing,
-        # matching the original).
+        # doesn't abort the sweep. Only a conversation positively owned by this
+        # runtime can authorize destruction; absent and foreign-owned rows are
+        # retained even when their status is terminal.
         to_destroy: list[tuple[str, str | None]] = []
         for cid in live_cids:
             with contextlib.suppress(Exception):
-                if not await self._store.conversation_exists(cid):
-                    to_destroy.append((cid, None))
+                if not await self._store.conversation_owned_by(cid, owner_id):
                     continue
                 state = await self._store.get_state(cid)
                 if state.execution_status in terminal_statuses:
@@ -447,7 +446,36 @@ class LifecycleManager:
     async def _recover_finalization_journals(self) -> int:
         return await self._persistence.recover_finalization_journals()
 
+    def _detach_sandbox(self, conversation_id: str) -> tuple[Any, Any]:
+        """Synchronous detach/reset phase — no awaits.
+
+        Pops executor and pending session, forgets the loop, and clears session
+        markers before any await. Returns the detached old resources for the
+        async reclaim phase to kill/destroy. All resume-critical cache resets
+        happen here, so cancellation during reclaim never leaves the resume
+        path in an inconsistent state.
+        """
+        executor = self._run_state.pop_executor(conversation_id)
+        pending = self._run_state.pop_pending_session(conversation_id)
+        self._run_state.forget(conversation_id)  # force a fresh sandbox on the next run
+        self.clear_session_markers(conversation_id)
+        return executor, pending
+
+    async def _reclaim_detached_sandbox(self, executor: Any, pending: Any) -> None:
+        """Async best-effort reclaim of detached old resources only."""
+        if executor is not None:
+            with contextlib.suppress(Exception):
+                await executor.kill()  # destroys the sandbox instance (§6.4)
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.destroy()
+
     async def _teardown_sandbox(self, conversation_id: str) -> None:
+        """Explicit kill/delete overrides a pending inter-request preview intent."""
+        async with self._connections.preview_capture_lock(conversation_id):
+            await self._teardown_sandbox_with_preview_ownership(conversation_id)
+
+    async def _teardown_sandbox_with_preview_ownership(self, conversation_id: str) -> None:
         """Destroy a conversation's sandbox session (frees the container/port/memory +
         the idle preview server) while KEEPING the event log + the project snapshot. A
         later run re-creates the sandbox and rehydrates. Callers MUST ensure the
@@ -465,17 +493,8 @@ class LifecycleManager:
         #       kill/destroy (the container is reaped by the next teardown / idle TTL anyway) — the
         #       resume-critical invariants (fresh rebuild + rehydrate) always hold.
         # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
-        executor = self._run_state.pop_executor(conversation_id)
-        pending = self._run_state.pop_pending_session(conversation_id)
-        self._run_state.forget(conversation_id)  # force a fresh sandbox on the next run
-        self.clear_session_markers(conversation_id)
-        # Best-effort resource reclaim LAST (safe to cancel — resume state already consistent).
-        if executor is not None:
-            with contextlib.suppress(Exception):
-                await executor.kill()  # destroys the sandbox instance (§6.4)
-        if pending is not None:
-            with contextlib.suppress(Exception):
-                await pending.destroy()
+        executor, pending = self._detach_sandbox(conversation_id)
+        await self._reclaim_detached_sandbox(executor, pending)
 
     def clear_session_markers(self, conversation_id: str) -> None:
         """Reset every cache that must not survive sandbox replacement."""
@@ -511,6 +530,15 @@ class LifecycleManager:
         return self._run_state.active_task(conversation_id) is not None
 
     async def _suspend(self, conversation_id: str) -> None:
+        """Suspend only after any in-flight preview capture releases ownership."""
+        if self._connections.preview_capture_active(conversation_id):
+            return
+        async with self._connections.preview_capture_lock(conversation_id):
+            if self._connections.preview_capture_active(conversation_id):
+                return
+            await self._suspend_with_preview_ownership(conversation_id)
+
+    async def _suspend_with_preview_ownership(self, conversation_id: str) -> None:
         """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
         tear down the container/port/memory/preview-server. Skips when there's no
         live sandbox, when storage isn't ready (no durable snapshot → keep the
@@ -519,15 +547,17 @@ class LifecycleManager:
         message) re-creates the sandbox and rehydrates from the snapshot."""
         if not self._run_state.has_executor(conversation_id):
             return
-        if self._sandbox.current_project_store().status() != StorageStatus.OK:
-            return
-        state = await self._store.get_state(conversation_id)
-        if state.execution_status is ConversationStatus.RUNNING:
-            return
-        if self._has_active_work(conversation_id):
-            return
         with contextlib.suppress(Exception):
             async with self._workspace.lock(conversation_id):
+                if not self._run_state.has_executor(conversation_id):
+                    return
+                if self._sandbox.current_project_store().status() != StorageStatus.OK:
+                    return
+                state = await self._store.get_state(conversation_id)
+                if state.execution_status is ConversationStatus.RUNNING:
+                    return
+                if self._has_active_work(conversation_id):
+                    return
                 events = await self._store.get_events(conversation_id)
                 committed = False
                 if state.execution_status is ConversationStatus.FINISHED:
@@ -546,12 +576,15 @@ class LifecycleManager:
                 # POST /resume (or a new message) can re-kick the cached loop.
                 if not self._run_state.has_executor(conversation_id):
                     return
+                if self._sandbox.current_project_store().status() != StorageStatus.OK:
+                    return
                 state = await self._store.get_state(conversation_id)
                 if state.execution_status is ConversationStatus.RUNNING or self._has_active_work(
                     conversation_id
                 ):
                     return
-                await self._teardown_sandbox(conversation_id)
+                executor, pending = self._detach_sandbox(conversation_id)
+            await self._reclaim_detached_sandbox(executor, pending)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     def sandbox_state(self, conversation_id: str) -> str | None:

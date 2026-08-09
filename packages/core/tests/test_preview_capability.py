@@ -527,6 +527,7 @@ def test_preview_capability_preserves_signed_immutable_version_across_assets(
         target_path="/?version=7",
         authority_id=authority,
         immutable_version=7,
+        capture_generation=41,
     )
     redeemed = signer.redeem_intent(
         intent,
@@ -548,6 +549,7 @@ def test_preview_capability_preserves_signed_immutable_version_across_assets(
     assert capability is not None
     assert capability.authority_id == authority
     assert capability.immutable_version == 7
+    assert capability.capture_generation == 41
 
     for invalid in (0, -1, True):
         with pytest.raises(ValueError, match="immutable preview version"):

@@ -226,6 +226,14 @@ def _extract_sandbox_instance_ids(*payloads: Any) -> list[str]:
         scan(value.get("state"))
         scan(value.get("extras"))
         scan(value.get("sandbox"), sandbox_context=True)
+        # Frozen event payloads have changed their envelope across API
+        # generations (tool_result, verifier selection, diagnostics, ...).
+        # Walk the remaining mapping values so ownership extraction follows
+        # the durable evidence rather than one event schema.
+        for key, child in value.items():
+            if key in {"state", "extras", "sandbox"}:
+                continue
+            scan(child, sandbox_context=key in {"sandbox", "sandbox_state"})
 
     for payload in payloads:
         scan(payload)
@@ -428,10 +436,17 @@ def _add_cleanup_evidence(
     container_names = probes.live_disco_container_names()
     volume_names = probes.disco_volume_names()
     after_dangling = probes.dangling_volume_names()
+    # The terminal state is not a complete ownership record after a restart:
+    # the durable event stream is the frozen source of truth and may contain
+    # both pre- and post-restart sandbox generations.  Feed each event as its
+    # own payload so nested tool results / verifier selections are harvested
+    # without teaching the extractor about an unstable event-list envelope.
+    frozen_events = getattr(run, "events", None) or []
     sandbox_ids = _extract_sandbox_instance_ids(
         getattr(run, "state_final", {}) or {},
         release_response,
         evidence.get("diagnostic_stop"),
+        *frozen_events,
     )
     if sandbox_ids and container_names is not None:
         cleanup = _scoped_cleanup_slice(
