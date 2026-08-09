@@ -126,6 +126,9 @@ class _SealedProjectionRuntime(_StaticRuntime):
         super().__init__(project_store, target_port=cast(int, projection["port"]))
         self._projection = projection
 
+    async def ensure_preview(self, _conversation_id: str) -> bool:
+        return True
+
     async def _resolve_finished_preview_runtime(
         self,
         _conversation_id: str,
