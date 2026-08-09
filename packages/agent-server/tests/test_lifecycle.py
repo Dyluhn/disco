@@ -407,7 +407,7 @@ async def test_build_session_wires_recreate_hook():
 # ---- orphan container sweep: terminal-status coverage -------------------------
 
 
-async def test_orphan_sweep_destroys_owned_idle_but_retains_unowned(tmp_path):
+async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
     """IDLE is the PRIMARY live stop state (bp-12) — its containers are just as
     orphaned after a restart as FINISHED ones (handles are in-memory; resume
     builds a fresh instance). Unknown and foreign-owned conversation_ids are
