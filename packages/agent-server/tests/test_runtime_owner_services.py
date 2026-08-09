@@ -394,6 +394,60 @@ def test_preview_capture_owner_spans_metadata_to_redemption() -> None:
     assert not tracker.preview_capture_ownership.active("conv_finished")
 
 
+def test_preview_capture_owner_rolls_over_after_resolution_passes_ttl(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(preview_capture_ownership_module.time, "monotonic", lambda: now[0])
+    tracker = ConnectionTracker(_StubSuspend())
+
+    generation = tracker.preview_capture_ownership.begin("conv_finished")
+    now[0] += intent_ttl_s() + 1.0
+
+    tracker.preview_capture_ownership.complete("conv_finished", generation)
+    renewed = tracker.preview_capture_ownership.begin("conv_finished")
+    assert tracker.preview_capture_ownership.active("conv_finished")
+    tracker.preview_capture_ownership.complete("conv_finished", renewed)
+
+
+async def test_response_ready_rollover_wins_waiting_suspend_after_expiry(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(preview_capture_ownership_module.time, "monotonic", lambda: now[0])
+    precheck_done = asyncio.Event()
+    capture_checked = asyncio.Event()
+    teardown_calls: list[str] = []
+    tracker: ConnectionTracker
+
+    class _OwnerAwareSuspend(_StubSuspend):
+        async def suspend(self, conversation_id: str) -> None:
+            tracker.preview_capture_ownership.active(conversation_id)
+            precheck_done.set()
+            async with tracker.preview_capture_ownership.lock_for(conversation_id):
+                if tracker.preview_capture_ownership.active(conversation_id):
+                    capture_checked.set()
+                else:
+                    teardown_calls.append(conversation_id)
+
+    tracker = ConnectionTracker(_OwnerAwareSuspend())
+    conversation_id = "conv_finished"
+    original = tracker.preview_capture_ownership.begin(conversation_id)
+    lock = tracker.preview_capture_ownership.lock_for(conversation_id)
+
+    async with lock:
+        now[0] += intent_ttl_s() + 1.0
+        tracker.on_disconnect(conversation_id, grace_s=0.0)
+        await asyncio.sleep(0)
+        await asyncio.wait_for(precheck_done.wait(), timeout=1.0)
+        tracker.preview_capture_ownership.complete(conversation_id, original)
+        response_ready = tracker.preview_capture_ownership.begin(conversation_id)
+        suspend_task = tracker._suspend_tasks[conversation_id]
+
+    await asyncio.wait_for(capture_checked.wait(), timeout=1.0)
+    tracker.cancel_suspension(conversation_id)
+    await asyncio.wait_for(suspend_task, timeout=1.0)
+    tracker.preview_capture_ownership.complete(conversation_id, response_ready)
+
+    assert teardown_calls == []
+
+
 def test_overlapping_preview_capture_completion_preserves_newer_owner(monkeypatch) -> None:
     now = [100.0]
     monkeypatch.setattr(preview_capture_ownership_module.time, "monotonic", lambda: now[0])

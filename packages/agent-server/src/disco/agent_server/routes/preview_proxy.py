@@ -353,6 +353,22 @@ async def _preview_app_response(
             media_type="text/plain",
         )
     try:
+        if preview_cap is not None:
+            # The capability's generation is minted in the preceding request,
+            # while this request performs the potentially slow finished-preview
+            # restore and body read.  Hold the same conversation lock across the
+            # whole redemption transaction so lifecycle teardown cannot detach
+            # the backing sandbox between target resolution and upstream read.
+            async with runtime.preview.capture_lease(conversation_id):
+                return await _resolved_preview_response(
+                    store,
+                    runtime,
+                    request,
+                    conversation_id,
+                    safe_path,
+                    preview_cap,
+                    owner_id,
+                )
         return await _resolved_preview_response(
             store,
             runtime,

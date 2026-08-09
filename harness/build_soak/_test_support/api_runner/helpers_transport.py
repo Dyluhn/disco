@@ -210,10 +210,18 @@ def _strict_workspace_case(tmp_path, *, content: str = "<h1>sealed</h1>"):
 
 
 class _CanonicalPreviewTransport(FakeTransport):
-    def __init__(self, *args, preview_status=200, preview_body="", **kwargs):
+    def __init__(
+        self,
+        *args,
+        preview_status=200,
+        preview_body="",
+        preview_failure_stage=None,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.preview_status = preview_status
         self.preview_body = preview_body
+        self.preview_failure_stage = preview_failure_stage
         self.preview_fetches = 0
 
     async def fetch_isolated_preview(self, conversation_id):

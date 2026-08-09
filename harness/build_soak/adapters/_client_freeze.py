@@ -416,6 +416,7 @@ class _FreezeMixin(_ClientBase):
         """
         avail_status, avail = await self._t.get_json(f"/conversations/{conversation_id}/preview")
         status, text, _hdrs = await self._t.fetch_isolated_preview(conversation_id)
+        failure_stage = getattr(self._t, "preview_failure_stage", None)
         if status == 409 and text.strip() == "preview generation changed":
             # The canonical authority rotates BY DESIGN when the first post-finish
             # request replays the sealed runtime from immutable bytes; the real
@@ -425,7 +426,8 @@ class _FreezeMixin(_ClientBase):
             # rotation in a row is retained as the truthful failure and any other
             # 409 is never retried.
             status, text, _hdrs = await self._t.fetch_isolated_preview(conversation_id)
-        return {
+            failure_stage = getattr(self._t, "preview_failure_stage", None)
+        preview = {
             "health": {"status": status},
             "content": text,
             "available": status < 400,
@@ -433,6 +435,9 @@ class _FreezeMixin(_ClientBase):
             "runtime_availability_status": avail_status,
             "source": "isolated_path_capability",
         }
+        if failure_stage in {"mint", "validation", "redemption", "fetch"}:
+            preview["failure_stage"] = failure_stage
+        return preview
 
     def _read_events(self, conversation_id: str) -> list[dict[str, Any]]:
         uri = f"file:{self._db_path}?mode=ro"

@@ -670,15 +670,19 @@ def _register_preview_meta_routes(
             None,
         )
         begin_capture, capture_lease = _capture_hooks(runtime)
+        complete_capture = runtime.preview.complete_capture
         if (
             latest_status is not None
             and latest_status.status is ConversationStatus.FINISHED
             and begin_capture is not None
             and capture_lease is not None
         ):
-            begin_capture(conversation_id)
+            capture_generation = begin_capture(conversation_id)
             async with capture_lease(conversation_id):
-                return await runtime.preview.preview(conversation_id)
+                metadata = await runtime.preview.preview(conversation_id)
+                complete_capture(conversation_id, capture_generation)
+                begin_capture(conversation_id)
+                return metadata
         return await runtime.preview.preview(conversation_id)
 
     @router.post("/conversations/{conversation_id}/preview/restart")

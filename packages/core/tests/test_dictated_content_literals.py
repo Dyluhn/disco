@@ -77,6 +77,52 @@ def test_explicit_application_title_change_replaces_only_same_exact_slot():
     assert dictated_content_conditions_from_events(list(events)) == conditions
 
 
+def test_revised_release_panel_replaces_superseded_panel_literal():
+    events = [
+        _user("Add a visible release panel containing 'First revision 98016'.", 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user(
+            "Recover after the version restore: preserve the imported heading and "
+            "add a release panel containing exactly 'Rollback recovered 98016', then verify it.",
+            4,
+        ),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.revision, condition.literal) for condition in conditions] == [
+        (2, "Rollback recovered 98016"),
+    ]
+    assert conditions[0].requirement_slot == "component:release:panel"
+    assert conditions[0].supersedes_source_event_id == events[0].id
+
+
+def test_distinct_named_content_slots_coexist_and_each_replaces_its_own_copy():
+    events = [
+        _user("Add a status banner containing 'Ready'.", 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user(
+            "Update the status banner to say 'Recovered' and add a release panel "
+            "containing 'Restored'.",
+            4,
+        ),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(condition.requirement_slot, condition.literal) for condition in conditions] == [
+        ("component:status:banner", "Recovered"),
+        ("component:release:panel", "Restored"),
+    ]
+    assert conditions[0].supersedes_source_event_id == events[0].id
+
+
 def test_direct_target_title_and_bare_title_change_share_identity_slot():
     initial = _user(
         'Build a strict AppKit tracker titled exactly "AppKit Rollback".',

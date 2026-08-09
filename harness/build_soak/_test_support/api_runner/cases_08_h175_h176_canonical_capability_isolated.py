@@ -7,6 +7,7 @@ from ._shared import (
     DiscoApiClient,
     HttpTransport,
     assemble_dossier,
+    asyncio,
     classify_dossier,
     clean_smoke_log,
     drive_scenario,
@@ -127,6 +128,26 @@ async def _impl_test_collect_preview_never_masks_canonical_failure_with_snapshot
 
 
 @pytest.mark.asyncio
+async def _impl_test_collect_preview_retains_safe_failure_stage(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(db, _CID, [])
+    transport = _CanonicalPreviewTransport(
+        db,
+        states=["FINISHED"],
+        preview_status=599,
+        preview_body="isolated preview request failed",
+        preview_failure_stage="fetch",
+    )
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+
+    preview = await client.collect_preview(_CID)
+
+    assert preview["health"]["status"] == 599
+    assert preview["failure_stage"] == "fetch"
+    assert "capability" not in preview["content"]
+
+
+@pytest.mark.asyncio
 async def _impl_test_collect_preview_carries_canonical_wrong_body_without_forgery(tmp_path):
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, [])
@@ -174,6 +195,118 @@ async def _impl_test_http_transport_redeems_preview_capability_without_app_sessi
     assert status == 200
     assert body == "<h1>Build Smoke OK</h1>"
     assert seen == [f"/conversations/{cid}/preview/capability", bootstrap_path, "/"]
+
+
+@pytest.mark.asyncio
+async def _impl_test_http_transport_retains_safe_mint_stage_for_transport_failure():
+    cid = "conv_a1b2c3d4proof"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "connection failed for bearer=must-not-be-retained", request=request
+        )
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
+    )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, headers = await transport.fetch_isolated_preview(cid)
+
+    assert (status, body, headers) == (599, "isolated preview request failed", {})
+    assert transport.preview_failure_stage == "mint"
+    assert "must-not-be-retained" not in body
+
+
+@pytest.mark.asyncio
+async def _impl_test_http_transport_classifies_generated_fetch_status_separately():
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/preview/capability"):
+            return _capability_response(request, cid, bootstrap_path)
+        if request.url.path == bootstrap_path:
+            return _bootstrap_response(request)
+        if request.url.path == "/":
+            return httpx.Response(503, text="preview temporarily unavailable")
+        raise AssertionError(f"unexpected path {request.url.path}")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
+    )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    status, body, _headers = await transport.fetch_isolated_preview(cid)
+
+    assert status == 503
+    assert body == "preview temporarily unavailable"
+    assert transport.preview_failure_stage == "fetch"
+
+
+@pytest.mark.asyncio
+async def _impl_test_http_transport_preview_stage_is_task_local_under_interleaving():
+    first_cid = "conv_a1b2c3d4proof"
+    second_cid = "conv_b1c2d3e4proof"
+    first_capability_seen = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/preview/capability"):
+            if first_cid in path:
+                first_capability_seen.set()
+                await release_first.wait()
+                return httpx.Response(
+                    200,
+                    json={
+                        "bootstrap_url": "http://127.0.0.2:19120/__disco/preview-auth",
+                        "bootstrap_intent": "first-intent",
+                        "target_path": "/",
+                        "port": 5173,
+                        "transport": "canonical",
+                        "preview_authority": "live:first",
+                    },
+                )
+            return httpx.Response(200, json={"target_path": "/"})
+        if path == "/__disco/preview-auth":
+            return httpx.Response(
+                200,
+                headers={
+                    "set-cookie": (
+                        "disco_local_preview_19120=first-proof; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                },
+            )
+        if path == "/":
+            raise httpx.ConnectError("fetch failed", request=request)
+        raise AssertionError(f"unexpected path {path}")
+
+    transport = HttpTransport(
+        "http://127.0.0.1:8000",
+        _transport=httpx.MockTransport(handler),
+    )
+    transport._cookie = "disco_session=app-session-proof"
+    transport._csrf = "csrf-proof"
+
+    async def fetch_with_stage(cid):
+        result = await transport.fetch_isolated_preview(cid)
+        return result, transport.preview_failure_stage
+
+    first_task = asyncio.create_task(fetch_with_stage(first_cid))
+    await asyncio.wait_for(first_capability_seen.wait(), timeout=1.0)
+    second_result, second_stage = await asyncio.wait_for(fetch_with_stage(second_cid), timeout=1.0)
+    release_first.set()
+    first_result, first_stage = await asyncio.wait_for(first_task, timeout=1.0)
+
+    assert second_result[0:2] == (502, "invalid preview capability response")
+    assert first_result[0:2] == (599, "isolated preview request failed"), first_result
+    assert second_stage == "validation"
+    assert first_stage == "fetch"
 
 
 @pytest.mark.asyncio
@@ -382,6 +515,7 @@ async def _impl_test_http_transport_rejects_malformed_preview_bootstrap_before_r
 
     assert status == 502
     assert body == "invalid preview capability response"
+    assert transport.preview_failure_stage == "validation"
     assert seen == [f"/conversations/{cid}/preview/capability"]
 
 
@@ -463,6 +597,7 @@ async def _impl_test_http_transport_never_retains_intent_reflected_by_failed_red
 
     assert status == 403
     assert body == "preview capability redemption failed"
+    assert transport.preview_failure_stage == "redemption"
     assert intent not in body
     assert headers == {}
 
