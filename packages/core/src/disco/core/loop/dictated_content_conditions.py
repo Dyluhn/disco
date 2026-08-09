@@ -92,6 +92,16 @@ _APPLICATION_TITLE_REPLACEMENT_RE = re.compile(
     r")\s+(?:exactly\s+)?$",
     re.IGNORECASE,
 )
+_NAMED_CONTENT_COMPONENT_RE = re.compile(
+    r"\b(?P<name>[a-z][\w-]{1,48})\s+"
+    r"(?P<kind>panel|banner|heading|button|card|section|badge|label)\b",
+    re.IGNORECASE,
+)
+_CONTENT_ASSIGNMENT_RE = re.compile(
+    r"\b(?:containing|with|showing|saying|say|text|labelled|labeled)\s+"
+    r"(?:exactly\s+)?$",
+    re.IGNORECASE,
+)
 _DOCUMENT_ARTIFACT_RE = re.compile(
     r"\b([\w./-]+\.(?:md|markdown|txt|rst|csv|tsv|json|ya?ml|log|ini|toml))\b",
     re.IGNORECASE,
@@ -206,6 +216,19 @@ def _is_diagnostic_protocol_metadata_literal(
 def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | None, bool]:
     prefix = text[max(0, quote_start - 320) : quote_start]
     sentence = re.split(r"[.!?]", prefix)[-1]
+    assignment = _CONTENT_ASSIGNMENT_RE.search(sentence)
+    components = (
+        list(_NAMED_CONTENT_COMPONENT_RE.finditer(sentence, 0, assignment.start()))
+        if assignment is not None
+        else []
+    )
+    named_slot = components[-1] if components else None
+    if named_slot is not None:
+        # Explicitly named UI/content slots are singletons. A later revision
+        # that dictates the same slot replaces its prior copy; distinct named
+        # slots continue to accumulate as independent requirements.
+        slot = f"component:{named_slot['name'].lower()}:{named_slot['kind'].lower()}"
+        return slot, True
     if _APPLICATION_TITLE_REPLACEMENT_RE.search(sentence):
         return "application.title", True
     if _APPLICATION_TITLE_DECLARATION_RE.search(

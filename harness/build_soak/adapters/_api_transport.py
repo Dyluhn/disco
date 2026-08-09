@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import urllib.parse
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +104,7 @@ async def _redeem_isolated_preview(
     capability: _PreviewCapability,
     *,
     origin: str,
+    failure_stage: list[str] | None = None,
 ) -> tuple[int, str, dict[str, str]]:
     redeemed = await client.post(
         capability.bootstrap_url,
@@ -110,6 +112,8 @@ async def _redeem_isolated_preview(
         headers={"Origin": origin},
     )
     if redeemed.status_code != 200:
+        if failure_stage is not None:
+            failure_stage[:] = ["redemption"]
         return redeemed.status_code, "preview capability redemption failed", {}
     if "cookies" in redeemed.headers.get("clear-site-data", "").lower():
         failure = await _complete_preview_storage_reset(
@@ -119,10 +123,18 @@ async def _redeem_isolated_preview(
             document=redeemed.text,
         )
         if failure is not None:
+            if failure_stage is not None:
+                failure_stage[:] = ["redemption"]
             return failure
     if any(cookie.name == SESSION_COOKIE for cookie in client.cookies.jar):
+        if failure_stage is not None:
+            failure_stage[:] = ["redemption"]
         return 502, "preview bootstrap crossed application session", {}
+    if failure_stage is not None:
+        failure_stage[:] = ["fetch"]
     preview = await client.get(capability.isolated_url)
+    if preview.status_code >= 400 and failure_stage is not None:
+        failure_stage[:] = ["fetch"]
     return preview.status_code, preview.text, dict(preview.headers)
 
 
@@ -152,6 +164,20 @@ class HttpTransport:
         self._transport = _transport
         self._cookie: str | None = None  # "disco_session=<value>"
         self._csrf: str | None = None
+        # Safe, stage-only diagnostic retained for the dossier metadata.  Never
+        # retain exception text, URLs, response bodies, or capability material.
+        self._preview_failure_stage_var: ContextVar[str | None] = ContextVar(
+            "preview_failure_stage", default=None
+        )
+
+    @property
+    def preview_failure_stage(self) -> str | None:
+        """Return the stage captured by this task's most recent preview request."""
+
+        return self._preview_failure_stage_var.get()
+
+    def _set_preview_failure_stage(self, stage: str | None) -> None:
+        self._preview_failure_stage_var.set(stage)
 
     async def _ensure_session(self) -> None:
         if self._cookie is not None:
@@ -268,7 +294,9 @@ class HttpTransport:
         and an application session cookie in that jar fails closed.
         """
 
+        self._set_preview_failure_stage(None)
         await self._ensure_session()
+        failure_stage = ["mint"]
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout,
@@ -285,29 +313,39 @@ class HttpTransport:
                     headers=self._headers(unsafe=True),
                 )
             if minted.status_code != 200:
+                self._set_preview_failure_stage("mint")
                 return minted.status_code, minted.text, dict(minted.headers)
+            failure_stage[:] = ["validation"]
             capability = _validated_preview_capability(
                 _safe_json(minted),
                 base_url=self.base_url,
                 conversation_id=conversation_id,
             )
             if capability is None:
+                self._set_preview_failure_stage("validation")
                 return 502, "invalid preview capability response", {}
 
+            failure_stage[:] = ["redemption"]
             async with httpx.AsyncClient(
                 timeout=self._timeout,
                 follow_redirects=False,
                 trust_env=False,
                 transport=self._transport,
             ) as preview_client:
-                return await _redeem_isolated_preview(
+                status, text, headers = await _redeem_isolated_preview(
                     preview_client,
                     capability,
                     origin=self.base_url,
+                    failure_stage=failure_stage,
                 )
+            self._set_preview_failure_stage(
+                failure_stage[0] if status >= 400 and failure_stage else None
+            )
+            return status, text, headers
         except (httpx.HTTPError, OSError, ValueError):
             # Post-create boundary failure: retain a non-success status for the
             # output oracle, never a local snapshot PASS and never the bearer.
+            self._set_preview_failure_stage(failure_stage[0])
             return 599, "isolated preview request failed", {}
 
     async def ws_control(self, conversation_id: str, frame: dict[str, Any]) -> None:

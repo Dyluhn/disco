@@ -513,6 +513,10 @@ async def test_collect_preview_uses_canonical_capability_for_h175_unverifiable_c
 async def test_collect_preview_never_masks_canonical_failure_with_snapshot(*args, **kwargs):
     return await _c09._impl_test_collect_preview_never_masks_canonical_failure_with_snapshot(*args, **kwargs)
 
+@wraps(_c09._impl_test_collect_preview_retains_safe_failure_stage)
+async def test_collect_preview_retains_safe_failure_stage(*args, **kwargs):
+    return await _c09._impl_test_collect_preview_retains_safe_failure_stage(*args, **kwargs)
+
 @wraps(_c09._impl_test_collect_preview_carries_canonical_wrong_body_without_forgery)
 async def test_collect_preview_carries_canonical_wrong_body_without_forgery(*args, **kwargs):
     return await _c09._impl_test_collect_preview_carries_canonical_wrong_body_without_forgery(*args, **kwargs)
@@ -520,6 +524,18 @@ async def test_collect_preview_carries_canonical_wrong_body_without_forgery(*arg
 @wraps(_c09._impl_test_http_transport_redeems_preview_capability_without_app_session)
 async def test_http_transport_redeems_preview_capability_without_app_session(*args, **kwargs):
     return await _c09._impl_test_http_transport_redeems_preview_capability_without_app_session(*args, **kwargs)
+
+@wraps(_c09._impl_test_http_transport_retains_safe_mint_stage_for_transport_failure)
+async def test_http_transport_retains_safe_mint_stage_for_transport_failure(*args, **kwargs):
+    return await _c09._impl_test_http_transport_retains_safe_mint_stage_for_transport_failure(*args, **kwargs)
+
+@wraps(_c09._impl_test_http_transport_classifies_generated_fetch_status_separately)
+async def test_http_transport_classifies_generated_fetch_status_separately(*args, **kwargs):
+    return await _c09._impl_test_http_transport_classifies_generated_fetch_status_separately(*args, **kwargs)
+
+@wraps(_c09._impl_test_http_transport_preview_stage_is_task_local_under_interleaving)
+async def test_http_transport_preview_stage_is_task_local_under_interleaving(*args, **kwargs):
+    return await _c09._impl_test_http_transport_preview_stage_is_task_local_under_interleaving(*args, **kwargs)
 
 @wraps(_c09._impl_test_http_transport_completes_body_only_preview_storage_handoff)
 async def test_http_transport_completes_body_only_preview_storage_handoff(*args, **kwargs):

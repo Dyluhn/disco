@@ -8,16 +8,18 @@ All driven through sweep_idle_once() — no sleeping required.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlsplit
 
+import disco.agent_server.preview_capture_ownership as preview_capture_ownership_module
 import pytest
 from _static_preview_capability_support import _redeem
 from disco.agent_server import ConversationRuntime
 from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router
+from disco.agent_server.routes import preview_proxy
 from disco.agent_server.routes.preview import make_preview_router
 from disco.core import (
     ConversationStatus,
@@ -29,9 +31,10 @@ from disco.core import (
     StatusEvent,
     WorkspaceVersionEvent,
 )
+from disco.core.auth import PreviewCapability, intent_ttl_s
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import SnapshotResult, StorageStatus
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 # ---- helpers -----------------------------------------------------------------
@@ -413,7 +416,14 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
     )
     await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
     rt = _runtime(store)
-    rt.preview.preview = AsyncMock(return_value={"available": True})
+    now = [100.0]
+    monkeypatch.setattr(preview_capture_ownership_module.time, "monotonic", lambda: now[0])
+
+    async def slow_preview(_conversation_id: str) -> dict[str, bool]:
+        now[0] += intent_ttl_s() + 1.0
+        return {"available": True}
+
+    rt.preview.preview = slow_preview
     rt.preview.preview_target_port = lambda _cid: 8000
     fake_store = SimpleNamespace(status=lambda: StorageStatus.OK)
     rt.lifecycle._sandbox.current_project_store = lambda: fake_store  # type: ignore[method-assign]
@@ -433,6 +443,7 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
         metadata = owner.get(f"/conversations/{cid}/preview?owner_id=owner-a")
         assert metadata.status_code == 200, metadata.text
         assert rt.preview._connections.preview_capture_ownership.active(cid)
+        assert rt.preview._connections.preview_capture_ownership.remaining(cid) > 0
 
         # Capability mint is the middle request in the same bounded handoff.
         minted = owner.post(
@@ -442,8 +453,6 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
         assert minted.status_code == 200
         assert rt.preview._connections.preview_capture_ownership.active(cid)
 
-        # Re-arm the exact deadline only to keep this regression bounded.
-        rt.preview._connections.preview_capture_ownership._deadlines[cid] = time.monotonic() + 1.0
         bootstrap_url = minted.json()["bootstrap_url"]
         with TestClient(app, base_url=f"http://{urlsplit(bootstrap_url).netloc}") as preview_client:
             redeemed = _redeem(
@@ -465,6 +474,66 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
     rt.connections.on_disconnect(cid, grace_s=0.0)
     await rt.connections._suspend_tasks[cid]
     fake_executor.kill.assert_awaited_once()
+
+
+async def test_preview_redemption_holds_capture_lock_across_slow_restore_read() -> None:
+    """The redemption request owns the sandbox through resolution and body read."""
+    store = SqliteEventStore(":memory:")
+    cid = "conv_slow_preview_capture"
+    rt = _runtime(store)
+    generation = rt.preview.begin_capture(cid)
+    capability = PreviewCapability(
+        owner_id="owner-a",
+        conversation_id=cid,
+        port=5173,
+        http_methods=("GET",),
+        path_prefix="/",
+        expires_at=2_000_000_000,
+        capture_generation=generation,
+    )
+    request = SimpleNamespace(state=SimpleNamespace(preview_capability=capability))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_response(*_args, **_kwargs):
+        assert rt.preview._connections.preview_capture_ownership.lock_for(cid).locked()
+        started.set()
+        await release.wait()
+        return Response("preview", status_code=200)
+
+    task = None
+    blocked = None
+    lock = rt.preview._connections.preview_capture_ownership.lock_for(cid)
+    try:
+        with patch.object(preview_proxy, "_resolved_preview_response", slow_response):
+            task = asyncio.create_task(
+                preview_proxy._preview_app_response(
+                    store,
+                    rt,
+                    cast(Request, request),
+                    cid,
+                    "/",
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=1.0)
+            blocked = asyncio.create_task(lock.acquire())
+            await asyncio.sleep(0)
+            assert not blocked.done()
+            release.set()
+            response = await asyncio.wait_for(task, timeout=1.0)
+            await asyncio.wait_for(blocked, timeout=1.0)
+            lock.release()
+    finally:
+        release.set()
+        if task is not None and not task.done():
+            await asyncio.wait_for(task, timeout=1.0)
+        if blocked is not None and not blocked.done():
+            await asyncio.wait_for(blocked, timeout=1.0)
+        if blocked is not None and blocked.done() and lock.locked():
+            lock.release()
+
+    assert response.status_code == 200
+    assert not rt.preview._connections.preview_capture_ownership.active(cid)
 
 
 async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():

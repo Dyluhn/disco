@@ -139,6 +139,12 @@ class FilesystemEvidenceSink:
                     "runtime_available": bool(run.preview.get("runtime_available")),
                     "runtime_availability_status": run.preview.get("runtime_availability_status"),
                     "source": str(run.preview.get("source") or "unrecorded"),
+                    **(
+                        {"failure_stage": run.preview["failure_stage"]}
+                        if run.preview.get("failure_stage")
+                        in {"mint", "validation", "redemption", "fetch"}
+                        else {}
+                    ),
                 },
                 indent=2,
                 sort_keys=True,
