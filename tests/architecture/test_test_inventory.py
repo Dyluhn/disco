@@ -483,7 +483,7 @@ class TestMappingStatic:
             # The response-ready handoff correction adds eight focused ids in
             # existing files: four under `packages` and four under `harness`.
             "python_test_file_count": 834,
-            "python_static_test_id_count": 10070,
+            "python_static_test_id_count": 10071,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -824,7 +824,7 @@ class TestCollectedCounts:
             # to the existing Preview manager suite.
             # V9 cleanup/preview ownership adds nine collected package ids.
             # The response-ready handoff correction adds four package ids.
-            "packages": 10476,
+            "packages": 10477,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -928,7 +928,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12219 == sum(expected.values())
+        assert collected["total"] == 12220 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -944,7 +944,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12219}
+        assert result == {"collected_total": 12220}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -963,9 +963,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10070,
+            "python_static_ids": 10071,
             "typescript_static_ids": 1203,
-            "collected_total": 12219,
+            "collected_total": 12220,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
