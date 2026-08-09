@@ -103,18 +103,18 @@ class PreviewService:
         upstream/in-sandbox response read; a momentary workspace lock would
         still permit auto-suspend to stop the container between those phases.
         """
-        async with self._connections.preview_capture_lock_for(conversation_id):
+        async with self._connections.preview_capture_ownership.lock_for(conversation_id):
             yield
 
     def begin_capture(self, conversation_id: str) -> int:
-        return self._connections.begin_preview_capture(conversation_id)
+        return self._connections.preview_capture_ownership.begin(conversation_id)
 
     def complete_capture(
         self,
         conversation_id: str,
         generation: int | None = None,
     ) -> None:
-        self._connections.complete_preview_capture(conversation_id, generation)
+        self._connections.preview_capture_ownership.complete(conversation_id, generation)
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Return the already-live sandbox session without creating one."""

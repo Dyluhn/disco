@@ -73,6 +73,7 @@ from .lifecycle_ports import (
 from .live_session_directory import LiveSessionDirectory
 from .mcp_manager import McpManager
 from .persistence_notifier import PersistenceNotifier
+from .preview_capture_ownership import PreviewCaptureOwnership
 from .preview_service import PreviewService
 from .project_runtime_service import ProjectRuntimeService
 from .resume_ports import (
@@ -232,6 +233,7 @@ def _wire_foundation(
     rt.mcp = McpManager(rt._config_store, rt._secret_store, store)
     rt._kernel_pin_store = KernelPinStore()
     rt._connection_state = ConnectionState()
+    rt._preview_capture_ownership = PreviewCaptureOwnership()
     rt._lifecycle_idle = LifecycleIdleSweepDeps(rt._config_store)
     rt._workspace_fence = WorkspaceFenceService(
         rt._store,
@@ -282,7 +284,10 @@ def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
         rt._run_resources,
         rt._loop_registry,
     )
-    lifecycle_connections = LifecycleConnections(rt._connection_state)
+    lifecycle_connections = LifecycleConnections(
+        rt._connection_state,
+        rt._preview_capture_ownership,
+    )
     lifecycle_sandbox = LifecycleSandboxAccess(rt.sandbox, rt.projects)
     rt.lifecycle = LifecycleManager(
         persistence_owner,
@@ -315,6 +320,7 @@ def _wire_lifecycle(rt: _RuntimeWiringSchema) -> None:
     rt.connections = ConnectionTracker(
         LifecycleSuspender(rt.lifecycle),
         state=rt._connection_state,
+        preview_capture_ownership=rt._preview_capture_ownership,
     )
     rt._build_platform = BuildPlatformRuntime(
         store=rt._store,

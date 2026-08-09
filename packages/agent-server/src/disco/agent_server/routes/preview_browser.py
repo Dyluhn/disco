@@ -30,6 +30,7 @@ from ..auth import current_session
 from ..preview_inject import inject_element_mention_picker, inject_selection_agent
 from ..runtime import ConversationRuntime
 from ._common import require_owned_conversation
+from .preview_handoff import _capture_hooks
 
 _DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
@@ -668,13 +669,12 @@ def _register_preview_meta_routes(
             (event for event in reversed(events) if isinstance(event, StatusEvent)),
             None,
         )
-        begin_capture = getattr(runtime.preview, "begin_capture", None)
-        capture_lease = getattr(runtime.preview, "capture_lease", None)
+        begin_capture, capture_lease = _capture_hooks(runtime)
         if (
             latest_status is not None
             and latest_status.status is ConversationStatus.FINISHED
-            and callable(begin_capture)
-            and callable(capture_lease)
+            and begin_capture is not None
+            and capture_lease is not None
         ):
             begin_capture(conversation_id)
             async with capture_lease(conversation_id):

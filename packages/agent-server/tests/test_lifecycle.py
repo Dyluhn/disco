@@ -393,7 +393,7 @@ async def test_explicit_teardown_overrides_pending_preview_intent():
     await rt._teardown_sandbox(cid)
 
     fake_executor.kill.assert_awaited_once()
-    assert not rt.preview._connections.preview_capture_active(cid)
+    assert not rt.preview._connections.preview_capture_ownership.active(cid)
 
 
 async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
@@ -432,7 +432,7 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
     with TestClient(app, base_url="http://testserver") as owner:
         metadata = owner.get(f"/conversations/{cid}/preview?owner_id=owner-a")
         assert metadata.status_code == 200, metadata.text
-        assert rt.preview._connections.preview_capture_active(cid)
+        assert rt.preview._connections.preview_capture_ownership.active(cid)
 
         # Capability mint is the middle request in the same bounded handoff.
         minted = owner.post(
@@ -440,10 +440,10 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
             json={"target_path": "/", "transport": "path"},
         )
         assert minted.status_code == 200
-        assert rt.preview._connections.preview_capture_active(cid)
+        assert rt.preview._connections.preview_capture_ownership.active(cid)
 
         # Re-arm the exact deadline only to keep this regression bounded.
-        rt.preview._connections._state._preview_capture_deadlines[cid] = time.monotonic() + 1.0
+        rt.preview._connections.preview_capture_ownership._deadlines[cid] = time.monotonic() + 1.0
         bootstrap_url = minted.json()["bootstrap_url"]
         with TestClient(app, base_url=f"http://{urlsplit(bootstrap_url).netloc}") as preview_client:
             redeemed = _redeem(
@@ -456,11 +456,11 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
         assert redeemed.status_code == 200
         # Redemption releases its own capability generation; the metadata
         # handoff remains bounded until its owner completes or expires.
-        assert rt.preview._connections.preview_capture_active(cid)
-        remaining = rt.preview._connections._state._preview_capture_owners[cid]
+        assert rt.preview._connections.preview_capture_ownership.active(cid)
+        remaining = rt.preview._connections.preview_capture_ownership._owners[cid]
         assert len(remaining) == 1
         rt.preview.complete_capture(cid, next(iter(remaining)))
-        assert not rt.preview._connections.preview_capture_active(cid)
+        assert not rt.preview._connections.preview_capture_ownership.active(cid)
 
     rt.connections.on_disconnect(cid, grace_s=0.0)
     await rt.connections._suspend_tasks[cid]

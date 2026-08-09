@@ -19,6 +19,7 @@ from disco.tools.projects import ProjectStore
 
 from .connection_tracker import ConnectionState
 from .persistence_notifier import PersistenceNotifier
+from .preview_capture_ownership import PreviewCaptureOwnership
 from .project_runtime_service import ProjectRuntimeService
 from .run_registry import KernelPinStore, LoopRegistry, RunRegistry, RunResourceRegistry
 from .sandbox_runtime_service import SandboxRuntimeService
@@ -165,20 +166,26 @@ class LifecycleSandboxAccess:
 class LifecycleConnections:
     """Narrow connection tracker for lifecycle connect/disconnect/suspend."""
 
-    def __init__(self, connections: ConnectionState) -> None:
+    def __init__(
+        self,
+        connections: ConnectionState,
+        preview_capture_ownership: PreviewCaptureOwnership | None = None,
+    ) -> None:
         self._connections = connections
+        self._preview_capture_ownership = preview_capture_ownership or PreviewCaptureOwnership()
 
     def has_connections(self, conversation_id: str) -> bool:
         return self._connections.has_connections(conversation_id)
 
     def clear_session_state(self, conversation_id: str) -> None:
         self._connections.clear_session_state(conversation_id)
+        self._preview_capture_ownership.clear_session_state(conversation_id)
 
     def preview_capture_lock(self, conversation_id: str) -> asyncio.Lock:
-        return self._connections.preview_capture_lock_for(conversation_id)
+        return self._preview_capture_ownership.lock_for(conversation_id)
 
     def preview_capture_active(self, conversation_id: str) -> bool:
-        return self._connections.preview_capture_active(conversation_id)
+        return self._preview_capture_ownership.active(conversation_id)
 
 class LifecycleIdleSweepDeps:
     """Idle TTL configuration for lifecycle suspension decisions."""

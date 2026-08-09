@@ -42,13 +42,10 @@ from .preview_browser import (
     _wake_for_preview,
 )
 from .preview_capability import (
-    PreviewCapabilityBody,
-    _path_preview_bootstrap_response,
-    _preview_capability_response,
-)
-from .preview_capability import (
     _canonical_preview_authority as _canonical_preview_authority,
 )
+from .preview_capability import _path_preview_bootstrap_response
+from .preview_handoff import PreviewCapabilityBody, preview_capability_response
 from .preview_proxy import (
     _close_ws,
     _port_app_response,
@@ -231,7 +228,7 @@ def _register_preview_capability_route(
         body: PreviewCapabilityBody,
         request: Request,
     ) -> Response:
-        return await _preview_capability_response(
+        return await preview_capability_response(
             store,
             runtime,
             signer,

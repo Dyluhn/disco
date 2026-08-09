@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .live_session_directory import LiveSessionDirectory
     from .mcp_manager import McpManager
     from .persistence_notifier import PersistenceNotifier
+    from .preview_capture_ownership import PreviewCaptureOwnership
     from .preview_service import PreviewService
     from .project_runtime_service import ProjectRuntimeService
     from .resume_service import ResumeService
@@ -99,6 +100,7 @@ class _RuntimeWiringSchema:
     mcp: McpManager
     _kernel_pin_store: KernelPinStore
     _connection_state: ConnectionState
+    _preview_capture_ownership: PreviewCaptureOwnership
     _lifecycle_idle: LifecycleIdleSweepDeps
     _idle_sweeper: LifecycleIdleSweeper
     _workspace_fence: WorkspaceFenceService

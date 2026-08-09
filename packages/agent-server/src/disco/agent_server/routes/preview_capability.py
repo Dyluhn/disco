@@ -7,7 +7,6 @@ import json as _json
 import time
 import urllib.parse
 from dataclasses import dataclass
-from typing import Literal
 
 from disco.core import ConversationStatus, Event, StatusEvent, WorkspaceVersionEvent
 from disco.core.auth import (
@@ -31,7 +30,6 @@ from disco.tools.projects import StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
 from ..auth import current_session
 from ..preview_bootstrap import (
@@ -60,18 +58,12 @@ from .preview_browser import (
     _preview_bootstrap_url,
 )
 from .preview_finished import refresh_canonical_preview_port
+from .preview_handoff import PreviewCapabilityBody
 from .preview_static import (
     _committed_static_capability_available,
     _sealed_runtime_contract,
     _selected_app_entry,
 )
-
-
-class PreviewCapabilityBody(BaseModel):
-    port: int | None = None
-    target_path: str = Field("/", max_length=MAX_PREVIEW_TARGET_PATH_CHARS)
-    transport: Literal["host", "path", "path_live", "canonical"] = "host"
-    workspace_version: int | None = Field(default=None, ge=1)
 
 
 def _preview_authority_label(kind: str, *parts: object) -> str:
@@ -581,52 +573,6 @@ async def _preview_capability_response_unleased(
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
-
-
-async def _preview_capability_response(
-    store: SqliteEventStore,
-    runtime: ConversationRuntime | None,
-    signer: PreviewCapabilitySigner,
-    conversation_id: str,
-    body: PreviewCapabilityBody,
-    request: Request,
-) -> Response:
-    """Mint capability while retaining the finished preview's sandbox owner."""
-    if runtime is None:
-        return await _preview_capability_response_unleased(
-            store,
-            runtime,
-            signer,
-            conversation_id,
-            body,
-            request,
-        )
-    capture_lease = getattr(runtime.preview, "capture_lease", None)
-    if not callable(capture_lease):
-        # Narrow compatibility for route doubles that intentionally model only
-        # capability selection; the composed runtime always supplies the lease.
-        return await _preview_capability_response_unleased(
-            store,
-            runtime,
-            signer,
-            conversation_id,
-            body,
-            request,
-        )
-    begin_capture = getattr(runtime.preview, "begin_capture", None)
-    capture_generation = None
-    if callable(begin_capture):
-        capture_generation = begin_capture(conversation_id)
-    async with capture_lease(conversation_id):
-        return await _preview_capability_response_unleased(
-            store,
-            runtime,
-            signer,
-            conversation_id,
-            body,
-            request,
-            capture_generation,
-        )
 
 
 async def _redemption_body(request: Request) -> bytes | Response:
