@@ -55,8 +55,8 @@ class LifecycleStoreAccess:
             return await self._store.get_events(conversation_id, event_filter)
         return await self._store.get_events(conversation_id)
 
-    async def conversation_exists(self, conversation_id: str) -> bool:
-        return await self._store.conversation_exists(conversation_id)
+    async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool:
+        return await self._store.conversation_owned_by(conversation_id, owner_id)
 
 
 class LifecycleRunState:
