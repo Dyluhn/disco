@@ -19,6 +19,7 @@ by name as ``runtime.preview.<method>``.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from disco.core import DEFAULT_OWNER_ID, ConversationStatus
@@ -73,6 +74,7 @@ class PreviewService:
         self._live_sessions = live_sessions
         self._store = store
         self._settings = settings
+        self._connections = connections
         self._projects = projects
         self._lifecycle = lifecycle
         self._loop_factory = loop_factory
@@ -91,6 +93,24 @@ class PreviewService:
             loop_factory,
             workspace,
         )
+
+    @asynccontextmanager
+    async def capture_lease(self, conversation_id: str):
+        """Keep the finished preview's sandbox owned through one HTTP capture.
+
+        Lifecycle teardown takes the same per-conversation lock before detaching
+        the executor.  The lease deliberately spans runtime resolution and the
+        upstream/in-sandbox response read; a momentary workspace lock would
+        still permit auto-suspend to stop the container between those phases.
+        """
+        async with self._connections.preview_capture_lock_for(conversation_id):
+            yield
+
+    def begin_capture(self, conversation_id: str) -> None:
+        self._connections.begin_preview_capture(conversation_id)
+
+    def complete_capture(self, conversation_id: str) -> None:
+        self._connections.complete_preview_capture(conversation_id)
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Return the already-live sandbox session without creating one."""

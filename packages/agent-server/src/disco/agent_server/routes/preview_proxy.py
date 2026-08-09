@@ -352,15 +352,21 @@ async def _preview_app_response(
             status_code=404,
             media_type="text/plain",
         )
-    return await _resolved_preview_response(
-        store,
-        runtime,
-        request,
-        conversation_id,
-        safe_path,
-        preview_cap,
-        owner_id,
-    )
+    try:
+        return await _resolved_preview_response(
+            store,
+            runtime,
+            request,
+            conversation_id,
+            safe_path,
+            preview_cap,
+            owner_id,
+        )
+    finally:
+        if preview_cap is not None:
+            complete_capture = getattr(runtime.preview, "complete_capture", None)
+            if callable(complete_capture):
+                complete_capture(conversation_id)
 
 
 async def _resolved_preview_response(

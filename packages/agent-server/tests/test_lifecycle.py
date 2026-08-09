@@ -8,12 +8,17 @@ All driven through sweep_idle_once() — no sleeping required.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import pytest
+from _static_preview_capability_support import _redeem
 from disco.agent_server import ConversationRuntime
+from disco.agent_server.auth import AgentAuthMiddleware, make_auth_router
+from disco.agent_server.routes.preview import make_preview_router
 from disco.core import (
     ConversationStatus,
     DeliverableEvent,
@@ -26,6 +31,8 @@ from disco.core import (
 )
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import SnapshotResult, StorageStatus
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 # ---- helpers -----------------------------------------------------------------
 
@@ -371,6 +378,87 @@ async def test_rehydrated_flag_cleared_after_teardown():
 
     # The flag MUST be cleared so _maybe_rehydrate runs again after a recreate.
     assert cid not in rt.lifecycle._rehydration._rehydrated
+
+
+async def test_explicit_teardown_overrides_pending_preview_intent():
+    """Delete/kill is authoritative even while a preview handoff is pending."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = "conv-preview-explicit-teardown"
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock()
+    rt._run_resources.set_executor(cid, fake_executor)
+    rt.preview.begin_capture(cid)
+
+    await rt._teardown_sandbox(cid)
+
+    fake_executor.kill.assert_awaited_once()
+    assert not rt.preview._connections.preview_capture_active(cid)
+
+
+async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
+    monkeypatch, tmp_path
+):
+    """The real meta/capability/redemption seam owns the sandbox through handoff."""
+    monkeypatch.setenv("DISCO_AUTH_SECRET", "preview-handoff-seam-secret")
+    store = SqliteEventStore(tmp_path / "preview-handoff.sqlite3")
+    cid = "conv_a1b2c3d4handoff"
+    store.create_conversation(cid, owner_id="owner-a", surface="build")
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="preview"),
+        ),
+    )
+    await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+    rt = _runtime(store)
+    rt.preview.preview = AsyncMock(return_value={"available": True})
+    rt.preview.preview_target_port = lambda _cid: 8000
+    fake_store = SimpleNamespace(status=lambda: StorageStatus.OK)
+    rt.lifecycle._sandbox.current_project_store = lambda: fake_store  # type: ignore[method-assign]
+    rt.lifecycle._store.get_state = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(execution_status=ConversationStatus.PAUSED)
+    )
+    rt.lifecycle._maybe_snapshot = AsyncMock()  # type: ignore[method-assign]
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock()
+    rt._run_resources.set_executor(cid, fake_executor)
+
+    app = FastAPI()
+    app.add_middleware(AgentAuthMiddleware, store=store)
+    app.include_router(make_auth_router())
+    app.include_router(make_preview_router(store, rt))
+    with TestClient(app, base_url="http://testserver") as owner:
+        metadata = owner.get(f"/conversations/{cid}/preview?owner_id=owner-a")
+        assert metadata.status_code == 200, metadata.text
+        assert rt.preview._connections.preview_capture_active(cid)
+
+        # Capability mint is the middle request in the same bounded handoff.
+        minted = owner.post(
+            f"/conversations/{cid}/preview/capability?owner_id=owner-a",
+            json={"target_path": "/", "transport": "path"},
+        )
+        assert minted.status_code == 200
+        assert rt.preview._connections.preview_capture_active(cid)
+
+        # Re-arm the exact deadline only to keep this regression bounded.
+        rt.preview._connections._state._preview_capture_deadlines[cid] = time.monotonic() + 1.0
+        bootstrap_url = minted.json()["bootstrap_url"]
+        with TestClient(app, base_url=f"http://{urlsplit(bootstrap_url).netloc}") as preview_client:
+            redeemed = _redeem(
+                preview_client,
+                bootstrap_url,
+                minted.json()["bootstrap_intent"],
+            )
+            preview_response = preview_client.get(f"/__disco/isolated-preview/{cid}/")
+            assert preview_response.status_code in {200, 404, 503}
+        assert redeemed.status_code == 200
+        assert not rt.preview._connections.preview_capture_active(cid)
+
+    rt.connections.on_disconnect(cid, grace_s=0.0)
+    await rt.connections._suspend_tasks[cid]
+    fake_executor.kill.assert_awaited_once()
 
 
 async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():

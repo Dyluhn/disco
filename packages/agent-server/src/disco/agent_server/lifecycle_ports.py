@@ -8,6 +8,7 @@ subowners and passes them to the lifecycle collaborators.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -172,6 +173,12 @@ class LifecycleConnections:
 
     def clear_session_state(self, conversation_id: str) -> None:
         self._connections.clear_session_state(conversation_id)
+
+    def preview_capture_lock(self, conversation_id: str) -> asyncio.Lock:
+        return self._connections.preview_capture_lock_for(conversation_id)
+
+    def preview_capture_active(self, conversation_id: str) -> bool:
+        return self._connections.preview_capture_active(conversation_id)
 
 class LifecycleIdleSweepDeps:
     """Idle TTL configuration for lifecycle suspension decisions."""

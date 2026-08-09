@@ -515,7 +515,7 @@ async def _capability_intent(
     return bootstrap, intent, None, None
 
 
-async def _preview_capability_response(
+async def _preview_capability_response_unleased(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
     signer: PreviewCapabilitySigner,
@@ -569,6 +569,50 @@ async def _preview_capability_response(
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
+
+
+async def _preview_capability_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    signer: PreviewCapabilitySigner,
+    conversation_id: str,
+    body: PreviewCapabilityBody,
+    request: Request,
+) -> Response:
+    """Mint capability while retaining the finished preview's sandbox owner."""
+    if runtime is None:
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+        )
+    capture_lease = getattr(runtime.preview, "capture_lease", None)
+    if not callable(capture_lease):
+        # Narrow compatibility for route doubles that intentionally model only
+        # capability selection; the composed runtime always supplies the lease.
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+        )
+    begin_capture = getattr(runtime.preview, "begin_capture", None)
+    if callable(begin_capture):
+        begin_capture(conversation_id)
+    async with capture_lease(conversation_id):
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+        )
 
 
 async def _redemption_body(request: Request) -> bytes | Response:

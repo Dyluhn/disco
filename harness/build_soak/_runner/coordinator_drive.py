@@ -18,6 +18,7 @@ from ..adapters.disco_api import (
 from ..evidence_sink import _timeline_md
 from ..ports import ProductClient
 from .bindings import CoordinatorBindings
+from .coordinator_cleanup import _allow_global_cleanup_fallback
 from .records import (
     _finish_unsealable_fail_record,
     _invalid_run_record,
@@ -123,7 +124,7 @@ async def _hardcap_record(
                 relay_log=str(runtime.relay_log_path() or "") or None,
                 timeline=frozen.timeline,
                 baseline_dangling_volumes=baseline_dangling_volumes,
-                allow_global_cleanup_fallback=parallel_workers <= 1,
+                allow_global_cleanup_fallback=_allow_global_cleanup_fallback(parallel_workers),
             )
         except Exception as cleanup_exc:  # noqa: BLE001 — retain partial dossier
             frozen.timeline.append(

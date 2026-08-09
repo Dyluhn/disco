@@ -471,6 +471,11 @@ class LifecycleManager:
                 await pending.destroy()
 
     async def _teardown_sandbox(self, conversation_id: str) -> None:
+        """Explicit kill/delete overrides a pending inter-request preview intent."""
+        async with self._connections.preview_capture_lock(conversation_id):
+            await self._teardown_sandbox_with_preview_ownership(conversation_id)
+
+    async def _teardown_sandbox_with_preview_ownership(self, conversation_id: str) -> None:
         """Destroy a conversation's sandbox session (frees the container/port/memory +
         the idle preview server) while KEEPING the event log + the project snapshot. A
         later run re-creates the sandbox and rehydrates. Callers MUST ensure the
@@ -525,6 +530,15 @@ class LifecycleManager:
         return self._run_state.active_task(conversation_id) is not None
 
     async def _suspend(self, conversation_id: str) -> None:
+        """Suspend only after any in-flight preview capture releases ownership."""
+        if self._connections.preview_capture_active(conversation_id):
+            return
+        async with self._connections.preview_capture_lock(conversation_id):
+            if self._connections.preview_capture_active(conversation_id):
+                return
+            await self._suspend_with_preview_ownership(conversation_id)
+
+    async def _suspend_with_preview_ownership(self, conversation_id: str) -> None:
         """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
         tear down the container/port/memory/preview-server. Skips when there's no
         live sandbox, when storage isn't ready (no durable snapshot → keep the

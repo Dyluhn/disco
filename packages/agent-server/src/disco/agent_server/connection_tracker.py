@@ -19,7 +19,8 @@ collaborator constructed once in ``ConversationRuntime``:
     a conversation (teardown, backend-eviction, forget).
 
 The state (``_connections``, ``_suspend_tasks``, ``_session_view_cache``,
-``_session_view_locks``, ``_wake_locks``, ``_last_sessions``) is owned here.
+``_session_view_locks``, ``_wake_locks``, ``_preview_capture_locks``,
+``_last_sessions``) is owned here.
 The suspend action is reached through a **narrow named typed collaborator** —
 never through ``ConversationRuntime``, ``Any``, a generic context object, or
 an exposed cross-domain dictionary.
@@ -34,8 +35,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from disco.core.auth import intent_ttl_s
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
 if TYPE_CHECKING:
@@ -69,10 +72,19 @@ class ConnectionState:
         self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
         self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
+        self._preview_capture_locks: dict[str, asyncio.Lock] = {}
+        self._preview_capture_deadlines: dict[str, float] = {}
         self._last_sessions: dict[str, list[SessionInfo]] = {}
 
     def has_connections(self, conversation_id: str) -> bool:
         return self._connections.get(conversation_id, 0) > 0
+
+    def preview_capture_lock_for(self, conversation_id: str) -> asyncio.Lock:
+        """Get the stable lifecycle/preview ownership lock for a conversation."""
+        return self._preview_capture_locks.setdefault(
+            conversation_id,
+            asyncio.Lock(),
+        )
 
     def clear_session_state(self, conversation_id: str) -> None:
         for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
@@ -80,7 +92,34 @@ class ConnectionState:
         for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
             del self._session_view_locks[key]
         self._wake_locks.pop(conversation_id, None)
+        self._preview_capture_deadlines.pop(conversation_id, None)
         self._last_sessions.pop(conversation_id, None)
+
+    def begin_preview_capture(self, conversation_id: str) -> None:
+        """Retain ownership across metadata → capability → redemption."""
+        self._preview_capture_deadlines[conversation_id] = time.monotonic() + intent_ttl_s()
+
+    def complete_preview_capture(self, conversation_id: str) -> None:
+        self._preview_capture_deadlines.pop(conversation_id, None)
+
+    def preview_capture_active(self, conversation_id: str) -> bool:
+        deadline = self._preview_capture_deadlines.get(conversation_id)
+        if deadline is None:
+            return False
+        if deadline <= time.monotonic():
+            self._preview_capture_deadlines.pop(conversation_id, None)
+            return False
+        return True
+
+    def preview_capture_remaining(self, conversation_id: str) -> float:
+        deadline = self._preview_capture_deadlines.get(conversation_id)
+        if deadline is None:
+            return 0.0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            self._preview_capture_deadlines.pop(conversation_id, None)
+            return 0.0
+        return remaining
 
 
 class ConnectionTracker:
@@ -137,11 +176,24 @@ class ConnectionTracker:
     async def _suspend_after_grace(self, conversation_id: str, grace_s: float) -> None:
         try:
             await asyncio.sleep(grace_s)
+            if self._state.has_connections(conversation_id):
+                return
+            await self._suspend.suspend(conversation_id)
+            # A FINISHED metadata request can retain ownership across the
+            # capability/redemption gap.  Re-admit suspension exactly at that
+            # bounded deadline; reconnect cancellation still wins.
+            remaining = self._state.preview_capture_remaining(conversation_id)
+            while remaining > 0:
+                await asyncio.sleep(remaining)
+                if self._state.has_connections(conversation_id):
+                    return
+                await self._suspend.suspend(conversation_id)
+                remaining = self._state.preview_capture_remaining(conversation_id)
         except asyncio.CancelledError:
             return
-        if not self._state.has_connections(conversation_id):
-            await self._suspend.suspend(conversation_id)
-        self._suspend_tasks.pop(conversation_id, None)
+        finally:
+            if self._suspend_tasks.get(conversation_id) is asyncio.current_task():
+                self._suspend_tasks.pop(conversation_id, None)
 
     def has_connections(self, conversation_id: str) -> bool:
         """True when at least one WS connection is open for this conversation."""
@@ -188,6 +240,22 @@ class ConnectionTracker:
         """Get or create the wake lock for a conversation."""
         return self._state._wake_locks.setdefault(conversation_id, asyncio.Lock())
 
+    def preview_capture_lock_for(self, conversation_id: str) -> asyncio.Lock:
+        """Serialize finished-preview capture with auto-suspend teardown."""
+        return self._state.preview_capture_lock_for(conversation_id)
+
+    def begin_preview_capture(self, conversation_id: str) -> None:
+        self._state.begin_preview_capture(conversation_id)
+
+    def complete_preview_capture(self, conversation_id: str) -> None:
+        self._state.complete_preview_capture(conversation_id)
+
+    def preview_capture_active(self, conversation_id: str) -> bool:
+        return self._state.preview_capture_active(conversation_id)
+
+    def preview_capture_remaining(self, conversation_id: str) -> float:
+        return self._state.preview_capture_remaining(conversation_id)
+
     # ---- last-sessions degrade (DC-04b) ------------------------------------
 
     def last_sessions_get(self, conversation_id: str) -> list[SessionInfo]:
@@ -207,6 +275,7 @@ class ConnectionTracker:
     def clear_conversation(self, conversation_id: str) -> None:
         """Forget all session and connection state for a deleted conversation."""
         self.clear_session_state(conversation_id)
+        self._state._preview_capture_locks.pop(conversation_id, None)
         self._state._connections.pop(conversation_id, None)
         task = self._suspend_tasks.pop(conversation_id, None)
         if task is not None:

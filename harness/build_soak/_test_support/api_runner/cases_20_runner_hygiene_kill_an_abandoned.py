@@ -24,6 +24,7 @@ from .cases_20_runner_hygiene_part_2 import (
     _impl_test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_ids,
     _impl_test_cleanup_progress_timeout_uses_preserved_kill_id_in_parallel,
     _impl_test_cleanup_parallel_without_id_refuses_global_attribution,
+    _impl_test_cleanup_extracts_all_frozen_event_stream_sandbox_ids,
     _impl_test_cleanup_scoped_volume_probe_failure_omits_adjudication,
     _impl_test_kill_is_idempotent_on_already_terminal_conv,
     _impl_test_release_conversation_swallows_unreachable_server,
