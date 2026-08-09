@@ -152,6 +152,8 @@ async def prepare_sealed_node_dependencies(
         return None
     cwd = sealed_workspace_cwd(contract.cwd)
     package_path = sealed_path(cwd, "package.json")
+    if not await session.file_exists(package_path):
+        return None
     try:
         package = json.loads((await session.read_file(package_path)).decode("utf-8"))
     except Exception as exc:
@@ -173,7 +175,14 @@ async def prepare_sealed_node_dependencies(
             f"sealed Node Preview dependency restore from {lock_path} failed: {detail}"
         )
     dependency_dir = sealed_path(cwd, "node_modules")
-    if not await session.file_exists(dependency_dir):
+    dependency_arg = shlex.quote(dependency_dir)
+    probed = await session.exec_shell(
+        f"test -d {dependency_arg} && test ! -L {dependency_arg}",
+        timeout_s=30,
+    )
+    if getattr(probed, "exit_code", 1) != 0 or bool(
+        getattr(probed, "timed_out", False)
+    ):
         raise RuntimeError(
             "sealed Node Preview dependency restore did not produce node_modules; "
             "this package-manager layout is not yet supported for sealed replay"
