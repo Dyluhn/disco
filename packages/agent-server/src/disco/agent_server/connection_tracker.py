@@ -74,6 +74,8 @@ class ConnectionState:
         self._wake_locks: dict[str, asyncio.Lock] = {}
         self._preview_capture_locks: dict[str, asyncio.Lock] = {}
         self._preview_capture_deadlines: dict[str, float] = {}
+        self._preview_capture_owners: dict[str, dict[int, float]] = {}
+        self._next_preview_capture_generation = 0
         self._last_sessions: dict[str, list[SessionInfo]] = {}
 
     def has_connections(self, conversation_id: str) -> bool:
@@ -93,29 +95,62 @@ class ConnectionState:
             del self._session_view_locks[key]
         self._wake_locks.pop(conversation_id, None)
         self._preview_capture_deadlines.pop(conversation_id, None)
+        self._preview_capture_owners.pop(conversation_id, None)
         self._last_sessions.pop(conversation_id, None)
 
-    def begin_preview_capture(self, conversation_id: str) -> None:
+    def begin_preview_capture(self, conversation_id: str) -> int:
         """Retain ownership across metadata → capability → redemption."""
-        self._preview_capture_deadlines[conversation_id] = time.monotonic() + intent_ttl_s()
+        self._next_preview_capture_generation += 1
+        generation = self._next_preview_capture_generation
+        deadline = time.monotonic() + intent_ttl_s()
+        self._preview_capture_owners.setdefault(conversation_id, {})[generation] = deadline
+        self._preview_capture_deadlines[conversation_id] = max(
+            deadline,
+            self._preview_capture_deadlines.get(conversation_id, 0.0),
+        )
+        return generation
 
-    def complete_preview_capture(self, conversation_id: str) -> None:
+    def complete_preview_capture(
+        self,
+        conversation_id: str,
+        generation: int | None = None,
+    ) -> None:
+        owners = self._preview_capture_owners.get(conversation_id)
+        if owners:
+            if generation is None:
+                generation = max(owners)
+            owners.pop(generation, None)
+            if owners:
+                self._preview_capture_deadlines[conversation_id] = max(owners.values())
+            else:
+                self._preview_capture_owners.pop(conversation_id, None)
+                self._preview_capture_deadlines.pop(conversation_id, None)
+            return
         self._preview_capture_deadlines.pop(conversation_id, None)
 
     def preview_capture_active(self, conversation_id: str) -> bool:
-        deadline = self._preview_capture_deadlines.get(conversation_id)
-        if deadline is None:
-            return False
-        if deadline <= time.monotonic():
-            self._preview_capture_deadlines.pop(conversation_id, None)
+        remaining = self.preview_capture_remaining(conversation_id)
+        if remaining <= 0:
             return False
         return True
 
     def preview_capture_remaining(self, conversation_id: str) -> float:
+        now = time.monotonic()
+        owners = self._preview_capture_owners.get(conversation_id)
+        if owners:
+            for generation, deadline in list(owners.items()):
+                if deadline <= now:
+                    owners.pop(generation, None)
+            if owners:
+                remaining = max(owners.values()) - now
+                self._preview_capture_deadlines[conversation_id] = max(owners.values())
+                return max(remaining, 0.0)
+            self._preview_capture_owners.pop(conversation_id, None)
+
         deadline = self._preview_capture_deadlines.get(conversation_id)
         if deadline is None:
             return 0.0
-        remaining = deadline - time.monotonic()
+        remaining = deadline - now
         if remaining <= 0:
             self._preview_capture_deadlines.pop(conversation_id, None)
             return 0.0
@@ -244,11 +279,15 @@ class ConnectionTracker:
         """Serialize finished-preview capture with auto-suspend teardown."""
         return self._state.preview_capture_lock_for(conversation_id)
 
-    def begin_preview_capture(self, conversation_id: str) -> None:
-        self._state.begin_preview_capture(conversation_id)
+    def begin_preview_capture(self, conversation_id: str) -> int:
+        return self._state.begin_preview_capture(conversation_id)
 
-    def complete_preview_capture(self, conversation_id: str) -> None:
-        self._state.complete_preview_capture(conversation_id)
+    def complete_preview_capture(
+        self,
+        conversation_id: str,
+        generation: int | None = None,
+    ) -> None:
+        self._state.complete_preview_capture(conversation_id, generation)
 
     def preview_capture_active(self, conversation_id: str) -> bool:
         return self._state.preview_capture_active(conversation_id)

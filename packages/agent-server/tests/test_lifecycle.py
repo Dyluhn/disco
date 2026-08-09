@@ -454,6 +454,10 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
             preview_response = preview_client.get(f"/__disco/isolated-preview/{cid}/")
             assert preview_response.status_code in {200, 404, 503}
         assert redeemed.status_code == 200
+        # Redemption releases its own capability generation; the metadata
+        # handoff remains bounded until its owner completes or expires.
+        assert rt.preview._connections.preview_capture_active(cid)
+        rt.preview.complete_capture(cid)
         assert not rt.preview._connections.preview_capture_active(cid)
 
     rt.connections.on_disconnect(cid, grace_s=0.0)

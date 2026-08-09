@@ -28,6 +28,7 @@ import disco.agent_server.connection_tracker as connection_tracker_module
 from disco.agent_server.connection_tracker import ConnectionTracker
 from disco.agent_server.preview_service import PreviewService
 from disco.agent_server.space_service import SpaceService
+from disco.core.auth import intent_ttl_s
 from disco.retrieval import DiskVectorStore
 from disco.retrieval.ranking import Embedder
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
@@ -384,10 +385,30 @@ async def test_preview_service_capture_lease_holds_stable_owner() -> None:
 
 def test_preview_capture_owner_spans_metadata_to_redemption() -> None:
     tracker = ConnectionTracker(_StubSuspend())
-    tracker.begin_preview_capture("conv_finished")
+    generation = tracker.begin_preview_capture("conv_finished")
     assert tracker.preview_capture_active("conv_finished")
-    tracker.complete_preview_capture("conv_finished")
+    tracker.complete_preview_capture("conv_finished", generation)
     assert not tracker.preview_capture_active("conv_finished")
+
+
+def test_overlapping_preview_capture_completion_preserves_newer_owner(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection_tracker_module.time, "monotonic", lambda: now[0])
+    tracker = ConnectionTracker(_StubSuspend())
+
+    first = tracker.begin_preview_capture("conv_finished")
+    second = tracker.begin_preview_capture("conv_finished")
+    tracker.complete_preview_capture("conv_finished", first)
+
+    assert tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", second)
+    assert not tracker.preview_capture_active("conv_finished")
+
+    expired = tracker.begin_preview_capture("conv_finished")
+    assert tracker.preview_capture_active("conv_finished")
+    now[0] += intent_ttl_s() + 1
+    assert not tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", expired)
 
 
 def test_clear_session_state_preserves_connection_ownership() -> None:

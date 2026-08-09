@@ -268,6 +268,7 @@ async def _mint_canonical_preview(
     port: int,
     target: str,
     workspace_version: int | None,
+    capture_generation: int | None,
 ) -> tuple[str, str, str, int | None]:
     authority_id = await _canonical_preview_authority(
         store,
@@ -312,6 +313,7 @@ async def _mint_canonical_preview(
         http_methods=PREVIEW_APP_HTTP_METHODS,
         authority_id=authority_id,
         immutable_version=workspace_version,
+        capture_generation=capture_generation,
     )
     return bootstrap, intent, authority_id, workspace_version
 
@@ -404,6 +406,7 @@ def _host_preview_intent(
     port: int,
     target: str,
     target_parts: urllib.parse.SplitResult,
+    capture_generation: int | None,
 ) -> tuple[str, str]:
     reserved_host_target = (
         target_parts.path == PREVIEW_BOOTSTRAP_PATH
@@ -426,6 +429,7 @@ def _host_preview_intent(
             target_path=target,
             allow_websocket=True,
             http_methods=PREVIEW_APP_HTTP_METHODS,
+            capture_generation=capture_generation,
         ),
     )
 
@@ -440,6 +444,7 @@ def _path_preview_intent(
     target_parts: urllib.parse.SplitResult,
     *,
     allow_websocket: bool,
+    capture_generation: int | None,
 ) -> tuple[str, str]:
     path_prefix = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/"
     path_target = f"{path_prefix}{safe_target}"
@@ -459,6 +464,7 @@ def _path_preview_intent(
             target_path=path_target,
             path_prefix=path_prefix,
             allow_websocket=allow_websocket,
+            capture_generation=capture_generation,
         ),
     )
 
@@ -476,6 +482,7 @@ async def _capability_intent(
     target_parts: urllib.parse.SplitResult,
     safe_target: str,
     body: PreviewCapabilityBody,
+    capture_generation: int | None,
 ) -> tuple[str, str, str | None, int | None]:
     if body.transport == "canonical":
         return await _mint_canonical_preview(
@@ -489,6 +496,7 @@ async def _capability_intent(
             port=port,
             target=target,
             workspace_version=body.workspace_version,
+            capture_generation=capture_generation,
         )
     if body.transport == "host":
         bootstrap, intent = _host_preview_intent(
@@ -500,6 +508,7 @@ async def _capability_intent(
             port,
             target,
             target_parts,
+            capture_generation,
         )
     else:
         bootstrap, intent = _path_preview_intent(
@@ -511,6 +520,7 @@ async def _capability_intent(
             safe_target,
             target_parts,
             allow_websocket=body.transport == "path_live",
+            capture_generation=capture_generation,
         )
     return bootstrap, intent, None, None
 
@@ -522,6 +532,7 @@ async def _preview_capability_response_unleased(
     conversation_id: str,
     body: PreviewCapabilityBody,
     request: Request,
+    capture_generation: int | None = None,
 ) -> Response:
     _validate_capability_body(body)
     session = current_session(request)
@@ -556,6 +567,7 @@ async def _preview_capability_response_unleased(
         target_parts,
         safe_target,
         body,
+        capture_generation,
     )
     return JSONResponse(
         {
@@ -602,8 +614,9 @@ async def _preview_capability_response(
             request,
         )
     begin_capture = getattr(runtime.preview, "begin_capture", None)
+    capture_generation = None
     if callable(begin_capture):
-        begin_capture(conversation_id)
+        capture_generation = begin_capture(conversation_id)
     async with capture_lease(conversation_id):
         return await _preview_capability_response_unleased(
             store,
@@ -612,6 +625,7 @@ async def _preview_capability_response(
             conversation_id,
             body,
             request,
+            capture_generation,
         )
 
 
