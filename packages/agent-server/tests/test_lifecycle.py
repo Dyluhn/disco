@@ -457,7 +457,9 @@ async def test_finished_preview_handoff_holds_then_releases_suspend_ownership(
         # Redemption releases its own capability generation; the metadata
         # handoff remains bounded until its owner completes or expires.
         assert rt.preview._connections.preview_capture_active(cid)
-        rt.preview.complete_capture(cid)
+        remaining = rt.preview._connections._state._preview_capture_owners[cid]
+        assert len(remaining) == 1
+        rt.preview.complete_capture(cid, next(iter(remaining)))
         assert not rt.preview._connections.preview_capture_active(cid)
 
     rt.connections.on_disconnect(cid, grace_s=0.0)

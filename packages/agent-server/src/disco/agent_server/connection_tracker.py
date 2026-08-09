@@ -117,8 +117,10 @@ class ConnectionState:
     ) -> None:
         owners = self._preview_capture_owners.get(conversation_id)
         if owners:
+            # A legacy capability has no generation. It must never release a
+            # tokenized owner that may belong to a newer overlapping handoff.
             if generation is None:
-                generation = max(owners)
+                return
             owners.pop(generation, None)
             if owners:
                 self._preview_capture_deadlines[conversation_id] = max(owners.values())

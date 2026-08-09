@@ -411,6 +411,17 @@ def test_overlapping_preview_capture_completion_preserves_newer_owner(monkeypatc
     tracker.complete_preview_capture("conv_finished", expired)
 
 
+def test_legacy_capture_completion_cannot_release_newer_generation() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    generation = tracker.begin_preview_capture("conv_finished")
+
+    tracker.complete_preview_capture("conv_finished")
+
+    assert tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", generation)
+    assert not tracker.preview_capture_active("conv_finished")
+
+
 def test_clear_session_state_preserves_connection_ownership() -> None:
     tracker = ConnectionTracker(_StubSuspend())
     tracker.on_connect("conv_a")
