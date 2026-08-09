@@ -865,6 +865,10 @@ async def test_cleanup_progress_timeout_uses_preserved_kill_id_in_parallel(*args
 async def test_cleanup_parallel_without_id_refuses_global_attribution(*args, **kwargs):
     return await _c21._impl_test_cleanup_parallel_without_id_refuses_global_attribution(*args, **kwargs)
 
+@wraps(_c21._impl_test_cleanup_extracts_all_frozen_event_stream_sandbox_ids)
+async def test_cleanup_extracts_all_frozen_event_stream_sandbox_ids(*args, **kwargs):
+    return await _c21._impl_test_cleanup_extracts_all_frozen_event_stream_sandbox_ids(*args, **kwargs)
+
 @wraps(_c21._impl_test_cleanup_scoped_volume_probe_failure_omits_adjudication)
 async def test_cleanup_scoped_volume_probe_failure_omits_adjudication(*args, **kwargs):
     return await _c21._impl_test_cleanup_scoped_volume_probe_failure_omits_adjudication(*args, **kwargs)

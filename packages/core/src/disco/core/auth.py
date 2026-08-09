@@ -107,6 +107,7 @@ class PreviewCapability:
     allow_websocket: bool = False
     authority_id: str | None = None
     immutable_version: int | None = None
+    capture_generation: int | None = None
 
 
 class PreviewIntentRedemptionStore(Protocol):
@@ -499,6 +500,7 @@ class PreviewCapabilitySigner:
         http_methods: tuple[str, ...] = ("GET",),
         authority_id: str | None = None,
         immutable_version: int | None = None,
+        capture_generation: int | None = None,
     ) -> str:
         target, prefix = _normalized_preview_target(target_path, path_prefix)
         methods = _normalized_preview_methods(http_methods)
@@ -523,6 +525,7 @@ class PreviewCapabilitySigner:
                 "ws": bool(allow_websocket),
                 "authority": authority_id,
                 "version": immutable_version,
+                "capture_generation": capture_generation,
                 "jti": jti,
                 "exp": expires_at,
             }
@@ -606,6 +609,7 @@ class PreviewCapabilitySigner:
                 "ws": cap.allow_websocket,
                 "authority": cap.authority_id,
                 "version": cap.immutable_version,
+                "capture_generation": cap.capture_generation,
                 "exp": int(time.time()) + preview_ttl_s(),
             }
         )
@@ -642,6 +646,7 @@ class PreviewCapabilitySigner:
                 "ws": cap.allow_websocket,
                 "authority": cap.authority_id,
                 "version": cap.immutable_version,
+                "capture_generation": cap.capture_generation,
                 "partitioned": partitioned,
                 "jti": jti,
                 "exp": expires_at,
@@ -742,6 +747,7 @@ class PreviewCapabilitySigner:
         allow_websocket = payload.get("ws", False)
         authority_id = payload.get("authority")
         immutable_version = payload.get("version")
+        capture_generation = payload.get("capture_generation")
         scalars = _cap_scalar_fields(owner, cid, prefix, port, exp, allow_websocket)
         if scalars is None:
             return None
@@ -749,6 +755,10 @@ class PreviewCapabilitySigner:
         if _cap_authority_invalid(authority_id):
             return None
         if _immutable_preview_version_invalid(immutable_version):
+            return None
+        if capture_generation is not None and (
+            type(capture_generation) is not int or capture_generation <= 0
+        ):
             return None
         normalized_methods = _normalize_cap_methods(payload, methods)
         if normalized_methods is None:
@@ -763,6 +773,7 @@ class PreviewCapabilitySigner:
             allow_websocket=allow_websocket,
             authority_id=authority_id,
             immutable_version=immutable_version,
+            capture_generation=capture_generation,
         )
 
 

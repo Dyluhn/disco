@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,19 @@ from .thrash import (
     _confirmed_live_thrash_stop,
     _current_thrash_failure_matches_retained,
 )
+
+
+def _allow_global_cleanup_fallback(parallel_workers: int) -> bool:
+    """Allow a global delta only when this process is the sole soak lane.
+
+    ``parallel_workers`` is the inner worker count and cannot describe the
+    separate lane processes used by the live campaign.  The lane launcher sets
+    this explicit boundary marker; ordinary one-process runs retain the
+    historical serial fallback.
+    """
+    if os.environ.get("DISCO_BUILD_SOAK_OUTER_LANE") == "1":
+        return False
+    return parallel_workers <= 1
 
 
 def _trusted_inactive_nonterminal(evidence: Any) -> bool:
@@ -68,7 +82,7 @@ async def _collect_cleanup_evidence(
             relay_log=str(runtime.relay_log_path() or "") or None,
             timeline=getattr(run, "timeline", []),
             baseline_dangling_volumes=baseline_dangling_volumes,
-            allow_global_cleanup_fallback=parallel_workers <= 1,
+            allow_global_cleanup_fallback=_allow_global_cleanup_fallback(parallel_workers),
         )
     except Exception as exc:  # noqa: BLE001
         with contextlib.suppress(Exception):

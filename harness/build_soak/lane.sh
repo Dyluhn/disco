@@ -10,6 +10,10 @@
 # is appended to <out_root>/ledger.tsv (lane, scenario, exit code, run dir,
 # seconds). Lanes CONTINUE past failures — triage happens between waves.
 set -u
+# This process is one of several host-concurrent lanes.  The runner must not
+# attribute a host-global container delta to one conversation when its frozen
+# event stream lacks an owner id.
+export DISCO_BUILD_SOAK_OUTER_LANE=1
 LANE="$1"; OUT="$2"; SEED="$3"; shift 3
 REPO=/var/home/dylan/projects/disclaude
 PY="$REPO/.venv/bin/python"

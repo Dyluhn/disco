@@ -24,8 +24,11 @@ import asyncio
 import time
 from pathlib import Path
 
+import disco.agent_server.connection_tracker as connection_tracker_module
 from disco.agent_server.connection_tracker import ConnectionTracker
+from disco.agent_server.preview_service import PreviewService
 from disco.agent_server.space_service import SpaceService
+from disco.core.auth import intent_ttl_s
 from disco.retrieval import DiskVectorStore
 from disco.retrieval.ranking import Embedder
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
@@ -213,6 +216,54 @@ async def test_suspend_after_grace_skipped_when_reconnected() -> None:
     assert "conv_a" not in tracker._suspend_tasks
 
 
+async def test_suspension_retries_at_preview_intent_expiry(monkeypatch) -> None:
+    suspend = _StubSuspend()
+    tracker = ConnectionTracker(suspend)
+    now = [100.0]
+    monkeypatch.setattr(connection_tracker_module.time, "monotonic", lambda: now[0])
+
+    async def advance(delay: float) -> None:
+        now[0] += delay
+
+    monkeypatch.setattr(connection_tracker_module.asyncio, "sleep", advance)
+    tracker.on_connect("conv_a")
+    tracker.on_disconnect("conv_a", grace_s=0.0)
+    tracker._state._preview_capture_deadlines["conv_a"] = now[0] + 0.02
+    await tracker._suspend_tasks["conv_a"]
+    assert suspend.calls == ["conv_a", "conv_a"]
+
+
+async def test_suspension_follows_extended_preview_deadline(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection_tracker_module.time, "monotonic", lambda: now[0])
+
+    async def advance(delay: float) -> None:
+        now[0] += delay
+
+    monkeypatch.setattr(connection_tracker_module.asyncio, "sleep", advance)
+
+    class _ExtendingSuspend(_StubSuspend):
+        def __init__(self, tracker_ref: ConnectionTracker | None = None) -> None:
+            super().__init__()
+            self.tracker_ref = tracker_ref
+
+        async def suspend(self, conversation_id: str) -> None:
+            await super().suspend(conversation_id)
+            if len(self.calls) == 1:
+                assert self.tracker_ref is not None
+                self.tracker_ref._state._preview_capture_deadlines[conversation_id] = now[0] + 0.02
+
+    suspend = _ExtendingSuspend()
+    tracker = ConnectionTracker(suspend)
+    suspend.tracker_ref = tracker
+    tracker.on_connect("conv_a")
+    tracker.on_disconnect("conv_a", grace_s=0.0)
+    tracker._state._preview_capture_deadlines["conv_a"] = now[0] + 0.02
+
+    await tracker._suspend_tasks["conv_a"]
+    assert suspend.calls == ["conv_a", "conv_a"]
+
+
 # ---------------------------------------------------------------------------
 # ConnectionTracker: has_connections / cancel_suspension
 # ---------------------------------------------------------------------------
@@ -301,6 +352,7 @@ def test_clear_conversation_drops_all_caches_and_locks() -> None:
     tracker.session_view_cache_set("conv_a", "dev", 0.0, SessionView(running=False, output=""))
     tracker.session_view_lock("conv_a", "dev")
     tracker.wake_lock_for("conv_a")
+    tracker.preview_capture_lock_for("conv_a")
     tracker.set_last_sessions("conv_a", [SessionInfo(name="dev", busy=False, last_lines="")])
 
     tracker.clear_conversation("conv_a")
@@ -308,9 +360,66 @@ def test_clear_conversation_drops_all_caches_and_locks() -> None:
     assert tracker.session_view_cache_get("conv_a", "dev") is None
     assert ("conv_a", "dev") not in tracker._state._session_view_locks
     assert "conv_a" not in tracker._state._wake_locks
+    assert "conv_a" not in tracker._state._preview_capture_locks
     assert tracker.last_sessions_get("conv_a") == []
     assert tracker.has_connections("conv_a") is False
     assert "conv_a" not in tracker._suspend_tasks
+
+
+def test_preview_capture_lock_is_stable_per_conversation() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    first = tracker.preview_capture_lock_for("conv_a")
+    assert tracker.preview_capture_lock_for("conv_a") is first
+    assert tracker.preview_capture_lock_for("conv_b") is not first
+
+
+async def test_preview_service_capture_lease_holds_stable_owner() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    service = object.__new__(PreviewService)
+    service._connections = tracker
+    lock = tracker.preview_capture_lock_for("conv_finished")
+    async with service.capture_lease("conv_finished"):
+        assert lock.locked()
+    assert not lock.locked()
+
+
+def test_preview_capture_owner_spans_metadata_to_redemption() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    generation = tracker.begin_preview_capture("conv_finished")
+    assert tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", generation)
+    assert not tracker.preview_capture_active("conv_finished")
+
+
+def test_overlapping_preview_capture_completion_preserves_newer_owner(monkeypatch) -> None:
+    now = [100.0]
+    monkeypatch.setattr(connection_tracker_module.time, "monotonic", lambda: now[0])
+    tracker = ConnectionTracker(_StubSuspend())
+
+    first = tracker.begin_preview_capture("conv_finished")
+    second = tracker.begin_preview_capture("conv_finished")
+    tracker.complete_preview_capture("conv_finished", first)
+
+    assert tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", second)
+    assert not tracker.preview_capture_active("conv_finished")
+
+    expired = tracker.begin_preview_capture("conv_finished")
+    assert tracker.preview_capture_active("conv_finished")
+    now[0] += intent_ttl_s() + 1
+    assert not tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", expired)
+
+
+def test_legacy_capture_completion_cannot_release_newer_generation() -> None:
+    tracker = ConnectionTracker(_StubSuspend())
+    generation = tracker.begin_preview_capture("conv_finished")
+
+    tracker.complete_preview_capture("conv_finished")
+
+    assert tracker.preview_capture_active("conv_finished")
+    tracker.complete_preview_capture("conv_finished", generation)
+    assert not tracker.preview_capture_active("conv_finished")
 
 
 def test_clear_session_state_preserves_connection_ownership() -> None:
@@ -323,12 +432,14 @@ def test_clear_session_state_preserves_connection_ownership() -> None:
         SessionView(running=True, output="out"),
     )
     tracker.set_last_sessions("conv_a", [])
+    capture_lock = tracker.preview_capture_lock_for("conv_a")
 
     tracker.clear_session_state("conv_a")
 
     assert tracker.has_connections("conv_a")
     assert tracker.session_view_cache_get("conv_a", "dev") is None
     assert tracker.last_sessions_get("conv_a") == []
+    assert tracker.preview_capture_lock_for("conv_a") is capture_lock
 
 
 async def test_clear_conversation_cancels_pending_suspend() -> None:

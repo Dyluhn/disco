@@ -621,6 +621,53 @@ async def _impl_test_cleanup_parallel_without_id_refuses_global_attribution(monk
 
 
 @pytest.mark.asyncio
+async def _impl_test_cleanup_extracts_all_frozen_event_stream_sandbox_ids(monkeypatch):
+    """Restart evidence owns every generation, not only the terminal snapshot."""
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman(
+        monkeypatch,
+        ps_stdout="\n".join(
+            [
+                "disco-sbx-sbx_before_restart",
+                "disco-egr-sbx_before_restart",
+                "disco-sbx-sbx_after_restart",
+                "disco-egr-sbx_after_restart",
+                "disco-sbx-sbx_other_lane",
+            ]
+        ),
+        volume_stdout="",
+        dangling_stdout="",
+    )
+    run = _cleanup_run({"status": "FINISHED", "extras": {}})
+    run.events = [
+        {
+            "tool_result": {
+                "structured": {"sandbox_instance_id": "sbx_before_restart"}
+            }
+        },
+        {"preview_selection": {"sandbox_instance_id": "sbx_after_restart"}},
+    ]
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        cast(DiscoApiClient, _CleanupKillClient()),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=[],
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+        allow_global_cleanup_fallback=False,
+    )
+
+    assert ev["cleanup"]["scope"] == "conversation"
+    assert ev["cleanup"]["container_orphans"] == 4
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("parallel", [False, True])
 async def _impl_test_cleanup_scoped_volume_probe_failure_omits_adjudication(monkeypatch, parallel):
     async def _no_sleep(_seconds: float) -> None:

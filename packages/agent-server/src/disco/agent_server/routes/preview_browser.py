@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx
 import idna
+from disco.core import ConversationStatus, StatusEvent
 from disco.core.auth import (
     PATH_PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_BOOTSTRAP_PATH,
@@ -659,6 +660,25 @@ def _register_preview_meta_routes(
         )
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
+        try:
+            events = await store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — metadata remains passive on read failure
+            events = []
+        latest_status = next(
+            (event for event in reversed(events) if isinstance(event, StatusEvent)),
+            None,
+        )
+        begin_capture = getattr(runtime.preview, "begin_capture", None)
+        capture_lease = getattr(runtime.preview, "capture_lease", None)
+        if (
+            latest_status is not None
+            and latest_status.status is ConversationStatus.FINISHED
+            and callable(begin_capture)
+            and callable(capture_lease)
+        ):
+            begin_capture(conversation_id)
+            async with capture_lease(conversation_id):
+                return await runtime.preview.preview(conversation_id)
         return await runtime.preview.preview(conversation_id)
 
     @router.post("/conversations/{conversation_id}/preview/restart")

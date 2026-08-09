@@ -59,6 +59,7 @@ from .preview_browser import (
     _path_preview_bootstrap_url,
     _preview_bootstrap_url,
 )
+from .preview_finished import refresh_canonical_preview_port
 from .preview_static import (
     _committed_static_capability_available,
     _sealed_runtime_contract,
@@ -267,6 +268,7 @@ async def _mint_canonical_preview(
     port: int,
     target: str,
     workspace_version: int | None,
+    capture_generation: int | None,
 ) -> tuple[str, str, str, int | None]:
     authority_id = await _canonical_preview_authority(
         store,
@@ -311,6 +313,7 @@ async def _mint_canonical_preview(
         http_methods=PREVIEW_APP_HTTP_METHODS,
         authority_id=authority_id,
         immutable_version=workspace_version,
+        capture_generation=capture_generation,
     )
     return bootstrap, intent, authority_id, workspace_version
 
@@ -362,9 +365,14 @@ async def _selected_capability_port(
     selected_port = (
         _canonical_preview_port(runtime, conversation_id) if runtime is not None else PREVIEW_PORT
     )
-    if selected_port is None and body.transport == "canonical" and runtime is not None:
-        await runtime.preview.ensure_preview(conversation_id)
-        selected_port = _canonical_preview_port(runtime, conversation_id)
+    selected_port = await refresh_canonical_preview_port(
+        store,
+        runtime,
+        conversation_id,
+        selected_port,
+        canonical=body.transport == "canonical",
+        current=body.workspace_version is None,
+    )
     if (
         selected_port is None
         and body.transport in {"path", "canonical"}
@@ -398,6 +406,7 @@ def _host_preview_intent(
     port: int,
     target: str,
     target_parts: urllib.parse.SplitResult,
+    capture_generation: int | None,
 ) -> tuple[str, str]:
     reserved_host_target = (
         target_parts.path == PREVIEW_BOOTSTRAP_PATH
@@ -420,6 +429,7 @@ def _host_preview_intent(
             target_path=target,
             allow_websocket=True,
             http_methods=PREVIEW_APP_HTTP_METHODS,
+            capture_generation=capture_generation,
         ),
     )
 
@@ -434,6 +444,7 @@ def _path_preview_intent(
     target_parts: urllib.parse.SplitResult,
     *,
     allow_websocket: bool,
+    capture_generation: int | None,
 ) -> tuple[str, str]:
     path_prefix = f"{ISOLATED_PATH_PREVIEW_PREFIX}/{conversation_id}/"
     path_target = f"{path_prefix}{safe_target}"
@@ -453,6 +464,7 @@ def _path_preview_intent(
             target_path=path_target,
             path_prefix=path_prefix,
             allow_websocket=allow_websocket,
+            capture_generation=capture_generation,
         ),
     )
 
@@ -470,6 +482,7 @@ async def _capability_intent(
     target_parts: urllib.parse.SplitResult,
     safe_target: str,
     body: PreviewCapabilityBody,
+    capture_generation: int | None,
 ) -> tuple[str, str, str | None, int | None]:
     if body.transport == "canonical":
         return await _mint_canonical_preview(
@@ -483,6 +496,7 @@ async def _capability_intent(
             port=port,
             target=target,
             workspace_version=body.workspace_version,
+            capture_generation=capture_generation,
         )
     if body.transport == "host":
         bootstrap, intent = _host_preview_intent(
@@ -494,6 +508,7 @@ async def _capability_intent(
             port,
             target,
             target_parts,
+            capture_generation,
         )
     else:
         bootstrap, intent = _path_preview_intent(
@@ -505,17 +520,19 @@ async def _capability_intent(
             safe_target,
             target_parts,
             allow_websocket=body.transport == "path_live",
+            capture_generation=capture_generation,
         )
     return bootstrap, intent, None, None
 
 
-async def _preview_capability_response(
+async def _preview_capability_response_unleased(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
     signer: PreviewCapabilitySigner,
     conversation_id: str,
     body: PreviewCapabilityBody,
     request: Request,
+    capture_generation: int | None = None,
 ) -> Response:
     _validate_capability_body(body)
     session = current_session(request)
@@ -550,6 +567,7 @@ async def _preview_capability_response(
         target_parts,
         safe_target,
         body,
+        capture_generation,
     )
     return JSONResponse(
         {
@@ -563,6 +581,52 @@ async def _preview_capability_response(
         },
         headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
     )
+
+
+async def _preview_capability_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    signer: PreviewCapabilitySigner,
+    conversation_id: str,
+    body: PreviewCapabilityBody,
+    request: Request,
+) -> Response:
+    """Mint capability while retaining the finished preview's sandbox owner."""
+    if runtime is None:
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+        )
+    capture_lease = getattr(runtime.preview, "capture_lease", None)
+    if not callable(capture_lease):
+        # Narrow compatibility for route doubles that intentionally model only
+        # capability selection; the composed runtime always supplies the lease.
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+        )
+    begin_capture = getattr(runtime.preview, "begin_capture", None)
+    capture_generation = None
+    if callable(begin_capture):
+        capture_generation = begin_capture(conversation_id)
+    async with capture_lease(conversation_id):
+        return await _preview_capability_response_unleased(
+            store,
+            runtime,
+            signer,
+            conversation_id,
+            body,
+            request,
+            capture_generation,
+        )
 
 
 async def _redemption_body(request: Request) -> bytes | Response:
