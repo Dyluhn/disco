@@ -35,11 +35,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from disco.core.auth import intent_ttl_s
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
+
+from .preview_capture_ownership import PreviewCaptureOwnership
 
 if TYPE_CHECKING:
     from .lifecycle import LifecycleManager
@@ -72,21 +72,10 @@ class ConnectionState:
         self._session_view_cache: dict[tuple[str, str], tuple[float, SessionView]] = {}
         self._session_view_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._wake_locks: dict[str, asyncio.Lock] = {}
-        self._preview_capture_locks: dict[str, asyncio.Lock] = {}
-        self._preview_capture_deadlines: dict[str, float] = {}
-        self._preview_capture_owners: dict[str, dict[int, float]] = {}
-        self._next_preview_capture_generation = 0
         self._last_sessions: dict[str, list[SessionInfo]] = {}
 
     def has_connections(self, conversation_id: str) -> bool:
         return self._connections.get(conversation_id, 0) > 0
-
-    def preview_capture_lock_for(self, conversation_id: str) -> asyncio.Lock:
-        """Get the stable lifecycle/preview ownership lock for a conversation."""
-        return self._preview_capture_locks.setdefault(
-            conversation_id,
-            asyncio.Lock(),
-        )
 
     def clear_session_state(self, conversation_id: str) -> None:
         for key in [k for k in self._session_view_cache if k[0] == conversation_id]:
@@ -94,69 +83,7 @@ class ConnectionState:
         for key in [k for k in self._session_view_locks if k[0] == conversation_id]:
             del self._session_view_locks[key]
         self._wake_locks.pop(conversation_id, None)
-        self._preview_capture_deadlines.pop(conversation_id, None)
-        self._preview_capture_owners.pop(conversation_id, None)
         self._last_sessions.pop(conversation_id, None)
-
-    def begin_preview_capture(self, conversation_id: str) -> int:
-        """Retain ownership across metadata → capability → redemption."""
-        self._next_preview_capture_generation += 1
-        generation = self._next_preview_capture_generation
-        deadline = time.monotonic() + intent_ttl_s()
-        self._preview_capture_owners.setdefault(conversation_id, {})[generation] = deadline
-        self._preview_capture_deadlines[conversation_id] = max(
-            deadline,
-            self._preview_capture_deadlines.get(conversation_id, 0.0),
-        )
-        return generation
-
-    def complete_preview_capture(
-        self,
-        conversation_id: str,
-        generation: int | None = None,
-    ) -> None:
-        owners = self._preview_capture_owners.get(conversation_id)
-        if owners:
-            # A legacy capability has no generation. It must never release a
-            # tokenized owner that may belong to a newer overlapping handoff.
-            if generation is None:
-                return
-            owners.pop(generation, None)
-            if owners:
-                self._preview_capture_deadlines[conversation_id] = max(owners.values())
-            else:
-                self._preview_capture_owners.pop(conversation_id, None)
-                self._preview_capture_deadlines.pop(conversation_id, None)
-            return
-        self._preview_capture_deadlines.pop(conversation_id, None)
-
-    def preview_capture_active(self, conversation_id: str) -> bool:
-        remaining = self.preview_capture_remaining(conversation_id)
-        if remaining <= 0:
-            return False
-        return True
-
-    def preview_capture_remaining(self, conversation_id: str) -> float:
-        now = time.monotonic()
-        owners = self._preview_capture_owners.get(conversation_id)
-        if owners:
-            for generation, deadline in list(owners.items()):
-                if deadline <= now:
-                    owners.pop(generation, None)
-            if owners:
-                remaining = max(owners.values()) - now
-                self._preview_capture_deadlines[conversation_id] = max(owners.values())
-                return max(remaining, 0.0)
-            self._preview_capture_owners.pop(conversation_id, None)
-
-        deadline = self._preview_capture_deadlines.get(conversation_id)
-        if deadline is None:
-            return 0.0
-        remaining = deadline - now
-        if remaining <= 0:
-            self._preview_capture_deadlines.pop(conversation_id, None)
-            return 0.0
-        return remaining
 
 
 class ConnectionTracker:
@@ -174,9 +101,11 @@ class ConnectionTracker:
         suspend: SuspendCallback,
         *,
         state: ConnectionState | None = None,
+        preview_capture_ownership: PreviewCaptureOwnership | None = None,
     ) -> None:
         self._suspend = suspend
         self._state = state or ConnectionState()
+        self.preview_capture_ownership = preview_capture_ownership or PreviewCaptureOwnership()
         # Auto-suspend (lifecycle G): a build session is live only while a UI is
         # watching it. Track open WS connections per conversation; when the last
         # one closes, free the idle sandbox after a grace period.
@@ -219,13 +148,13 @@ class ConnectionTracker:
             # A FINISHED metadata request can retain ownership across the
             # capability/redemption gap.  Re-admit suspension exactly at that
             # bounded deadline; reconnect cancellation still wins.
-            remaining = self._state.preview_capture_remaining(conversation_id)
+            remaining = self.preview_capture_ownership.remaining(conversation_id)
             while remaining > 0:
                 await asyncio.sleep(remaining)
                 if self._state.has_connections(conversation_id):
                     return
                 await self._suspend.suspend(conversation_id)
-                remaining = self._state.preview_capture_remaining(conversation_id)
+                remaining = self.preview_capture_ownership.remaining(conversation_id)
         except asyncio.CancelledError:
             return
         finally:
@@ -277,26 +206,6 @@ class ConnectionTracker:
         """Get or create the wake lock for a conversation."""
         return self._state._wake_locks.setdefault(conversation_id, asyncio.Lock())
 
-    def preview_capture_lock_for(self, conversation_id: str) -> asyncio.Lock:
-        """Serialize finished-preview capture with auto-suspend teardown."""
-        return self._state.preview_capture_lock_for(conversation_id)
-
-    def begin_preview_capture(self, conversation_id: str) -> int:
-        return self._state.begin_preview_capture(conversation_id)
-
-    def complete_preview_capture(
-        self,
-        conversation_id: str,
-        generation: int | None = None,
-    ) -> None:
-        self._state.complete_preview_capture(conversation_id, generation)
-
-    def preview_capture_active(self, conversation_id: str) -> bool:
-        return self._state.preview_capture_active(conversation_id)
-
-    def preview_capture_remaining(self, conversation_id: str) -> float:
-        return self._state.preview_capture_remaining(conversation_id)
-
     # ---- last-sessions degrade (DC-04b) ------------------------------------
 
     def last_sessions_get(self, conversation_id: str) -> list[SessionInfo]:
@@ -312,11 +221,12 @@ class ConnectionTracker:
     def clear_session_state(self, conversation_id: str) -> None:
         """Drop session caches without changing live connection ownership."""
         self._state.clear_session_state(conversation_id)
+        self.preview_capture_ownership.clear_session_state(conversation_id)
 
     def clear_conversation(self, conversation_id: str) -> None:
         """Forget all session and connection state for a deleted conversation."""
         self.clear_session_state(conversation_id)
-        self._state._preview_capture_locks.pop(conversation_id, None)
+        self.preview_capture_ownership.clear_conversation(conversation_id)
         self._state._connections.pop(conversation_id, None)
         task = self._suspend_tasks.pop(conversation_id, None)
         if task is not None:
