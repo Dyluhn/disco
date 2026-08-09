@@ -407,17 +407,25 @@ async def test_build_session_wires_recreate_hook():
 # ---- orphan container sweep: terminal-status coverage -------------------------
 
 
-async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
+async def test_orphan_sweep_destroys_owned_idle_but_retains_unowned(tmp_path):
     """IDLE is the PRIMARY live stop state (bp-12) — its containers are just as
     orphaned after a restart as FINISHED ones (handles are in-memory; resume
-    builds a fresh instance). Unknown conversation_ids (store has no row) are
-    garbage too. Both must be destroyed by the startup sweep."""
+    builds a fresh instance). Unknown and foreign-owned conversation_ids are
+    NOT owned by this runtime (shared or isolated stores) and must be retained;
+    only a locally-owned terminal status authorizes destroy."""
     store = SqliteEventStore(":memory:")
     rt = _runtime(store)
     idle_cid = await _make_conversation(store, ConversationStatus.IDLE)
+    foreign_cid = "conv-foreign-terminal"
+    store.create_conversation(foreign_cid, owner_id="foreign")
+    await store.append(
+        foreign_cid,
+        MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="hello")),
+    )
+    await store.append(foreign_cid, StatusEvent(status=ConversationStatus.FINISHED))
 
     svc = MagicMock()
-    svc.list_live_instances = AsyncMock(return_value=[idle_cid, "conv-ghost-no-row"])
+    svc.list_live_instances = AsyncMock(return_value=[idle_cid, "conv-ghost-no-row", foreign_cid])
     svc.destroy_by_conversation = AsyncMock()
     rt.sandbox._sandbox_service_now = MagicMock(return_value=svc)  # type: ignore[method-assign]
 
@@ -425,7 +433,10 @@ async def test_orphan_sweep_destroys_idle_and_unknown(tmp_path):
 
     destroyed = {c.args[0] for c in svc.destroy_by_conversation.await_args_list}
     assert idle_cid in destroyed, "IDLE conversation's container must be swept"
-    assert "conv-ghost-no-row" in destroyed, "unknown conversation's container must be swept"
+    assert "conv-ghost-no-row" not in destroyed, (
+        "unknown conversation's container is unowned and must be retained"
+    )
+    assert foreign_cid not in destroyed, "foreign-owned terminal container must be retained"
 
 
 async def test_orphan_sweep_keeps_running(tmp_path):
@@ -596,3 +607,51 @@ async def test_done_run_task_does_not_block_suspend(tmp_path):
         count = await rt.lifecycle.sweep_idle_once()
     assert count == 1
     assert not rt._run_resources.has_executor(cid)  # a done task does not block suspend
+
+
+async def test_suspend_releases_workspace_lock_before_kill(tmp_path):
+    """Regression for preview-harness timeout: concurrent auto-suspend held the
+    workspace lock while awaiting slow Podman `executor.kill()` (~2.5 min),
+    blocking sealed-preview restoration which also needs that lock. `_suspend`
+    must detach synchronously inside the lock and reclaim outside, so the lock
+    is already free while kill is blocked and the old executor is already
+    detached."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime_with_storage(store, str(tmp_path))
+    cid = await _make_conversation(store, ConversationStatus.PAUSED)
+
+    kill_entered = asyncio.Event()
+    kill_release = asyncio.Event()
+
+    async def _blocked_kill() -> None:
+        kill_entered.set()
+        await kill_release.wait()
+
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock(side_effect=_blocked_kill)
+    rt._run_resources.set_executor(cid, fake_executor)
+    # Minimal suspend path for a PAUSED conversation: patch the durable snapshot
+    # so the test only exercises the detach-vs-reclaim lock ordering.
+    rt.lifecycle._maybe_snapshot = AsyncMock()  # type: ignore[method-assign]
+
+    suspend_task = asyncio.create_task(rt.lifecycle._suspend(cid))
+
+    # Wait until kill is entered — proves _suspend reached the reclaim phase.
+    await asyncio.wait_for(kill_entered.wait(), timeout=2)
+
+    # Acquire the same fence from a separate task while old kill remains blocked.
+    lock = rt._workspace_fence.lock(cid)
+    lock_acquired = asyncio.Event()
+
+    async def _probe_fence() -> None:
+        async with lock:
+            lock_acquired.set()
+
+    probe_task = asyncio.create_task(_probe_fence())
+    await asyncio.wait_for(lock_acquired.wait(), timeout=2)
+    assert not rt._run_resources.has_executor(cid), "old executor must be detached before kill"
+
+    # Release the blocked kill and let suspend finish.
+    kill_release.set()
+    await asyncio.wait_for(suspend_task, timeout=2)
+    await probe_task
