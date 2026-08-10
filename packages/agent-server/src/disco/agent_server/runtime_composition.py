@@ -229,6 +229,7 @@ def _wire_foundation(
         enable_thinking=enable_thinking,
     )
     rt._driver_preflight = DriverPreflight(rt.drivers)
+    rt.drivers.bind_readiness_observer(rt._driver_preflight.observe_success)
     rt._cancellations = CancellationRegistry()
     rt.mcp = McpManager(rt._config_store, rt._secret_store, store)
     rt._kernel_pin_store = KernelPinStore()

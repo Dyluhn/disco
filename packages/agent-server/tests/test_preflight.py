@@ -26,6 +26,9 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.llm import (
+    CallContext,
+    CapabilityProfile,
+    CompletionRequest,
     CompletionResponse,
     DefaultLLMRouter,
     LLMAuthError,
@@ -142,6 +145,92 @@ async def test_preflight_driver_passes_and_caches_success(monkeypatch):
     assert [decision["reason"] for decision in trace["routing_decisions"]] == [
         "cached driver preflight success"
     ]
+
+
+async def test_real_completion_refreshes_shared_driver_readiness(monkeypatch):
+    import disco.agent_server.driver_runtime as driver_runtime_module
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _ConfigStore:
+        def load(self):
+            return _cfg()
+
+    provider = _FakeProvider()
+    monkeypatch.setattr(
+        driver_runtime_module,
+        "build_providers",
+        lambda *_args, **_kwargs: {"fake": provider},
+    )
+    rt.drivers._config_store = _ConfigStore()  # type: ignore[assignment]
+    router = rt.drivers.router(conversation_id="working")
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="real work")],
+    )
+
+    await router.complete(request, context=CallContext(conversation_id="working"))
+
+    assert "m" in rt._driver_preflight._ok
+    assert ("working", ModelRole.AGENT_DRIVER, "m") in rt._driver_preflight._proven
+
+    class _DeadRouter:
+        calls = 0
+
+        async def complete(self, req, *, context=None):
+            self.calls += 1
+            raise TimeoutError
+
+    dead = _DeadRouter()
+    rt.drivers.router = lambda **_kwargs: dead  # type: ignore[method-assign]
+    assert await rt._preflight_driver("next") is None
+    assert dead.calls == 0
+
+
+async def test_real_completion_supersedes_concurrent_transient_probe(monkeypatch):
+    import disco.agent_server.driver_runtime as driver_runtime_module
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store)
+
+    class _ConfigStore:
+        def load(self):
+            return _cfg()
+
+    monkeypatch.setattr(
+        driver_runtime_module,
+        "build_providers",
+        lambda *_args, **_kwargs: {"fake": _FakeProvider()},
+    )
+    rt.drivers._config_store = _ConfigStore()  # type: ignore[assignment]
+    live_router = rt.drivers.router(conversation_id="working")
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="real work")],
+    )
+
+    class _BlockedTransientRouter:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def complete(self, req, *, context=None):
+            self.started.set()
+            await self.release.wait()
+            raise TimeoutError
+
+    blocked = _BlockedTransientRouter()
+    rt.drivers.router = lambda **_kwargs: blocked  # type: ignore[method-assign]
+    rt._driver_preflight._ATTEMPTS = 1
+    pending = asyncio.create_task(rt._preflight_driver("waiting"))
+    await blocked.started.wait()
+
+    await live_router.complete(request, context=CallContext(conversation_id="working"))
+    blocked.release.set()
+
+    assert await pending is None
+    assert ("waiting", ModelRole.AGENT_DRIVER, "m") in rt._driver_preflight._proven
 
 
 async def test_concurrent_cold_preflights_singleflight_per_model(monkeypatch):

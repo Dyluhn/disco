@@ -10,11 +10,13 @@ from __future__ import annotations
 
 from disco.core import LLMMessage, NoOpCondenser, View
 from disco.core.llm import (
+    CallContext,
     CapabilityProfile,
     CompletionRequest,
     DefaultLLMRouter,
     ModelRole,
     RouterSummarizer,
+    RoutingDecision,
 )
 from llm_fakes import FakeModelProvider, build_router, simple_config
 
@@ -76,3 +78,34 @@ async def test_stream_deltas_reassemble_and_final_matches_complete():
     assert final.text == nonstream.text
     assert final.usage == nonstream.usage
     assert final.model_used == nonstream.model_used
+
+
+async def test_stream_success_observer_waits_for_the_terminal_final():
+    observed: list[tuple[str, RoutingDecision, CallContext]] = []
+    context = CallContext(conversation_id="conv-stream")
+    providers = {
+        "ollama": FakeModelProvider("ollama", text="done"),
+        "openrouter": FakeModelProvider("openrouter"),
+    }
+    router = DefaultLLMRouter(
+        simple_config(),
+        providers,
+    )
+    router._bind_success_observer(
+        lambda key, decision, ctx: observed.append((key, decision, ctx))
+    )
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="go")],
+        stream=True,
+    )
+
+    chunks = []
+    async for chunk in router.stream_complete(request, context=context):
+        chunks.append(chunk)
+        if not chunk.done:
+            assert observed == []
+
+    final = chunks[-1].final
+    assert final is not None and final.routing is not None
+    assert observed == [("local", final.routing, context)]

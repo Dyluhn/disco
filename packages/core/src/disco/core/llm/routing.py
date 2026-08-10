@@ -35,7 +35,7 @@ from __future__ import annotations
 # ruff: noqa: F401
 import logging
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Literal, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
@@ -217,14 +217,21 @@ class DefaultLLMRouter:
         self._prompts = prompt_provider or StaticPromptProvider()
         self._sink = sink or NullRoutingSink()
         self._cost = cost_tracker or CostTracker()
+        self._on_success: Callable[[str, RoutingDecision, CallContext], None] | None = None
+
+    def _bind_success_observer(
+        self,
+        observer: Callable[[str, RoutingDecision, CallContext], None],
+    ) -> None:
+        self._on_success = observer
 
     # -- resolution (v1.2: direct config lookup, no policy) -------------------
 
     def _resolve(
         self, req: CompletionRequest, ctx: CallContext
-    ) -> tuple[ModelEntry, Path, str, list[str]]:
-        """Deterministic role→model resolution. Returns (entry, path, reason,
-        overflow_triggers).
+    ) -> tuple[str, ModelEntry, Path, str, list[str]]:
+        """Deterministic role→model resolution. Returns (model key, entry, path,
+        reason, overflow_triggers).
 
         Precedence is owned by `RouterConfig.model_for`: per-conversation override
         (driver only) > settings assignment > default_model.
@@ -287,17 +294,17 @@ class DefaultLLMRouter:
                     f"Check DISCO_DRIVER_VISION env and driver-local config."
                 )
 
-        return entry, path, "config", []
+        return key, entry, path, "config", []
 
     # -- vision escalation (DF-08) ---------------------------------------------
 
     def _try_vision_escalation(
         self, profile, key: str, entry: ModelEntry, original_path: Path
-    ) -> tuple[ModelEntry, Path, str, list[str]] | None:
+    ) -> tuple[str, ModelEntry, Path, str, list[str]] | None:
         """DF-08: escalate an image-bearing request to the configured vision
-        model when the primary lacks VISION. Returns (entry, path, reason,
-        overflow_triggers) or None if escalation is not possible (guard stays
-        hard). Does NOT emit to the sink — the caller (complete) owns the one
+        model when the primary lacks VISION. Returns (model key, entry, path,
+        reason, overflow_triggers) or None if escalation is not possible (guard
+        stays hard). Does NOT emit to the sink — the caller (complete) owns the one
         and only RoutingDecision per call (RT4)."""
         target_key = self._config.vision_escalation_model
         if target_key is None:
@@ -308,6 +315,7 @@ class DefaultLLMRouter:
         if Requirement.VISION not in (target.capabilities or []):
             return None
         return (
+            target_key,
             target,
             "overflow",
             f"vision escalation: {key} lacks VISION → {target_key}",
@@ -425,12 +433,13 @@ class DefaultLLMRouter:
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse:
         ctx = context or CallContext()
-        entry, path, reason, overflow_triggers = self._resolve(req, ctx)
+        model_key, entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
         provider = self._provider_for(entry)
         return await _execute_complete(
             self,
+            model_key=model_key,
             provider=provider,
             exec_req=exec_req,
             model_id=entry.model_id,
@@ -453,12 +462,13 @@ class DefaultLLMRouter:
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> AsyncIterator[StreamChunk]:
         ctx = context or CallContext()
-        entry, path, reason, overflow_triggers = self._resolve(req, ctx)
+        model_key, entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._provider_for(entry)
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
         async for chunk in _execute_stream_complete(
             self,
+            model_key=model_key,
             provider=provider,
             exec_req=exec_req,
             model_id=entry.model_id,
