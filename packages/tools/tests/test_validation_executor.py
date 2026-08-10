@@ -102,6 +102,45 @@ async def test_invalid_arguments_message_deterministic_for_stuck_detector():
     assert a.content == b.content
 
 
+async def test_truncated_file_write_arguments_fail_closed_with_bounded_recovery():
+    """A provider-capped JSON string is not misreported as an invented `_raw` key."""
+    sandbox = FakeSandboxInstance()
+    ex = _executor(sandbox=sandbox)
+    raw = '{"path":"index.html","content":"<main class=\\"hero\\">unfinished'
+
+    first = await ex.execute(call("file_write", _raw=raw))
+    second = await ex.execute(call("file_write", _raw=raw))
+
+    assert first.success is False
+    assert first.structured["kind"] == "invalid_arguments"
+    assert sandbox._fs == {}
+    seen = first.error or ""
+    assert first.content == seen == second.content
+    assert "incomplete JSON object" in seen
+    assert "likely truncated" in seen
+    assert "No tool ran" in seen
+    assert "bounded file_write" in seen and "bounded file_append" in seen
+    assert "Expected arguments" in seen and "path" in seen and "content" in seen
+    assert "unexpected argument" not in seen
+    assert "'_raw'" not in seen
+
+
+async def test_closed_or_non_object_raw_arguments_keep_schema_error_path():
+    """The diagnosis is narrow; other malformed shapes remain ordinary failures."""
+    ex = _executor(sandbox=FakeSandboxInstance())
+
+    closed = await ex.execute(call("file_write", _raw='{"path":"index.html",]'))
+    array = await ex.execute(call("file_write", _raw='[{"path":"index.html"}]'))
+
+    for result in (closed, array):
+        assert result.success is False
+        assert result.structured["kind"] == "invalid_arguments"
+        seen = result.error or ""
+        assert "unexpected argument" in seen
+        assert "_raw" in seen
+        assert "likely truncated" not in seen
+
+
 async def test_missing_required_message_names_field():
     """No-key-at-all case still names the missing required field generically."""
     ex = _executor(sandbox=FakeSandboxInstance())
