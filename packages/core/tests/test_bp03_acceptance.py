@@ -103,6 +103,13 @@ def test_scanfix_prompt_surgery_contract():
     assert "browser tool once" not in _EXECUTION_DRIVER_PROMPT
 
 
+def test_execution_prompts_bound_large_file_tool_calls():
+    for prompt in (_EXECUTION_DRIVER_PROMPT, _EXECUTION_DRIVER_PROMPT_SMALL):
+        assert "under 12,000 characters" in prompt
+        assert "bounded `file_write`" in prompt
+        assert "bounded `file_append`" in prompt
+
+
 def test_verify_mandates_lead_with_structured_verifier():
     mandates = [
         _SELF_VERIFY_MANDATE_CAPABLE,

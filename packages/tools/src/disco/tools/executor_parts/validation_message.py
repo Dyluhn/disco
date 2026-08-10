@@ -197,6 +197,71 @@ def _nested_hints(args_model: type[BaseModel], errors: list[dict[str, Any]]) -> 
     return hints
 
 
+def _json_structure_is_open(raw: str) -> bool:
+    """Whether a JSON-like object's strings or containers remain open at EOF."""
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    pairs = {"}": "{", "]": "["}
+    for char in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if not stack or stack.pop() != pairs[char]:
+                return False
+
+    return in_string or bool(stack)
+
+
+def _incomplete_raw_json(arguments: dict[str, Any]) -> str | None:
+    """Return the decoder-preserved payload when a JSON object ended early.
+
+    The OpenAI-compatible decoder deliberately preserves unparseable tool
+    arguments as ``{"_raw": ...}`` so validation fails closed. A response
+    capped in the middle of a large string is not an invented ``_raw`` tool
+    argument, though: reporting it as one sends the model down the wrong repair
+    path. Recognise only that exact internal envelope and only an object whose
+    lexical structure is still open at EOF. Closed-but-invalid JSON and bare
+    arrays retain the ordinary schema-error path.
+    """
+    if set(arguments) != {"_raw"} or not isinstance(arguments["_raw"], str):
+        return None
+    raw = arguments["_raw"].strip()
+    if not raw.startswith("{") or not _json_structure_is_open(raw):
+        return None
+
+    return arguments["_raw"]
+
+
+def _incomplete_json_message(
+    tool_name: str,
+    args_model: type[BaseModel],
+    raw: str,
+) -> str:
+    """Truthful recovery for provider-truncated structured arguments."""
+    msg = (
+        f"arguments for {tool_name!r} were not executed: the provider response ended "
+        f"with an incomplete JSON object (likely truncated; received {len(raw)} characters). "
+        f"No tool ran. Re-call {tool_name!r} with a complete, smaller JSON object."
+    )
+    if tool_name == "file_write":
+        msg += (
+            " For large file content, use one bounded file_write call followed by "
+            "bounded file_append calls."
+        )
+    return msg + f" Expected arguments: {_arg_surface(args_model)}."
+
+
 def describe_validation_failure(
     tool_name: str,
     args_model: type[BaseModel],
@@ -215,6 +280,9 @@ def describe_validation_failure(
     Deterministic for identical arguments (so byte-identical repeated bad calls
     still trip the loop's stuck detector as before).
     """
+    if (raw := _incomplete_raw_json(arguments)) is not None:
+        return _incomplete_json_message(tool_name, args_model, raw)
+
     valid_keys = _valid_arg_keys(args_model)
     unknown = sorted(k for k in arguments if k not in valid_keys)
 
