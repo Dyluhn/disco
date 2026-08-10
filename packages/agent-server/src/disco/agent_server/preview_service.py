@@ -343,11 +343,21 @@ class PreviewService:
         conversation_id: str,
         events: list[Any],
         committed: Any,
+        *,
+        preserve_exact: bool,
     ) -> bool:
         contract = self._sealed_runtime_contract(conversation_id, events, committed)
         if contract is None:
             return False
         try:
+            if preserve_exact and (
+                await self._runtime_projection.resolve_finished_preview_runtime(
+                    conversation_id,
+                    contract,
+                )
+                is not None
+            ):
+                return True
             return await self._sealed_restorer.restore(
                 conversation_id,
                 events,
@@ -362,7 +372,12 @@ class PreviewService:
             )
             return False
 
-    async def ensure_preview(self, conversation_id: str) -> bool:
+    async def ensure_preview(
+        self,
+        conversation_id: str,
+        *,
+        preserve_exact_finished: bool = False,
+    ) -> bool:
         """Backend half of the UI 'Restart preview' button (§E7). Bounded + safe: the
         same idempotent restart as SandboxSession.ensure_preview.
 
@@ -370,7 +385,12 @@ class PreviewService:
         which would make this button a dead affordance. Instead, re-materialize through
         the documented resume path: re-compose the loop/executor (lazy sandbox),
         rehydrate the snapshot, then start the preview — the user explicitly asked to
-        see the artifact again, and that's exactly what the snapshot is for."""
+        see the artifact again, and that's exactly what the snapshot is for.
+
+        Canonical capability capture sets ``preserve_exact_finished`` so an exact,
+        healthy, host-verified FINISHED projection remains in place.  The explicit
+        Restart Preview action keeps the default replacement behavior.
+        """
         session = self._live_sessions.live_session(conversation_id)
         manager = getattr(session, "_preview_manager", None) if session is not None else None
         store = self._projects.current_project_store()
@@ -406,4 +426,9 @@ class PreviewService:
 
         if not finished:
             return await self._restart_manager(manager)
-        return await self._restore_finished(conversation_id, events, committed)
+        return await self._restore_finished(
+            conversation_id,
+            events,
+            committed,
+            preserve_exact=preserve_exact_finished,
+        )

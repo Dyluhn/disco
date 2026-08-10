@@ -29,13 +29,20 @@ class _Preview:
     def __init__(self) -> None:
         self.port = 8000
         self.ensure_calls = 0
+        self.preserve_exact_calls: list[bool] = []
         self.restore = True
 
     def preview_target_port(self, _conversation_id: str) -> int:
         return self.port
 
-    async def ensure_preview(self, _conversation_id: str) -> bool:
+    async def ensure_preview(
+        self,
+        _conversation_id: str,
+        *,
+        preserve_exact_finished: bool = False,
+    ) -> bool:
         self.ensure_calls += 1
+        self.preserve_exact_calls.append(preserve_exact_finished)
         if self.restore:
             self.port = 8080
         return self.restore
@@ -73,6 +80,7 @@ async def test_finished_current_canonical_replaces_a_stale_live_port_before_mint
 
     assert selected == expected_port
     assert runtime.preview.ensure_calls == ensure_calls
+    assert runtime.preview.preserve_exact_calls == ([True] if ensure_calls else [])
 
 
 async def test_finished_current_canonical_refuses_a_stale_port_when_restore_fails() -> None:
@@ -90,6 +98,7 @@ async def test_finished_current_canonical_refuses_a_stale_port_when_restore_fail
 
     assert selected is None
     assert runtime.preview.ensure_calls == 1
+    assert runtime.preview.preserve_exact_calls == [True]
 
 
 async def test_sealed_node_dependency_restore_requires_a_real_directory() -> None:
