@@ -117,7 +117,7 @@ def test_every_sealed_runtime_normalizes_cwd_before_non_node_launch() -> None:
     assert normalized.cwd == "./web"
     assert normalized.command == "python3 server.py"
 
-    with pytest.raises(RuntimeError, match="inside /workspace"):
+    with pytest.raises(RuntimeError, match="source workspace"):
         PreviewService._normalized_sealed_runtime_contract(_sealed_contract_with_cwd("/etc"))
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -155,6 +155,19 @@ def _sealed_contract(version_seq: int, marker: str) -> SealedPreviewRuntimeContr
         framework=None,
         cwd=None,
     )
+
+
+def test_sealed_runtime_rebinds_source_sandbox_cwd_to_restored_workspace() -> None:
+    contract = _sealed_contract(1, "a")
+    contract = replace(
+        contract,
+        cwd="/dev/shm/disco-lane/sbx_test-instance/api",
+        projection=replace(contract.projection, sandbox_instance_id="sbx_test-instance"),
+    )
+
+    normalized = preview_sealed_restore.normalized_sealed_runtime_contract(contract)
+
+    assert normalized.cwd == "./api"
 
 
 @pytest.mark.asyncio

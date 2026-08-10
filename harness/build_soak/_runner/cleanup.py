@@ -12,6 +12,7 @@ from ..adapters.disco_api import (
     TERMINAL_STATES,
     DiscoApiClient,
 )
+from ..events import NormalizationError, normalize_events
 from ..ports import ProductClient
 from ..provider_ledger import parse_relay_log, record_applies_to_conversation
 from .bindings import CleanupBindings
@@ -441,7 +442,11 @@ def _add_cleanup_evidence(
     # both pre- and post-restart sandbox generations.  Feed each event as its
     # own payload so nested tool results / verifier selections are harvested
     # without teaching the extractor about an unstable event-list envelope.
-    frozen_events = getattr(run, "events", None) or []
+    raw_frozen_events = getattr(run, "events", None) or []
+    try:
+        frozen_events = normalize_events(raw_frozen_events)
+    except NormalizationError:
+        frozen_events = raw_frozen_events
     sandbox_ids = _extract_sandbox_instance_ids(
         getattr(run, "state_final", {}) or {},
         release_response,

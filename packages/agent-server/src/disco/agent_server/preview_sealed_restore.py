@@ -62,7 +62,17 @@ def sealed_runtime_contract(
     )
 
 
-def sealed_workspace_cwd(cwd: str | None) -> str:
+def _source_workspace_relative_cwd(cwd: str, sandbox_instance_id: str | None) -> str | None:
+    if not sandbox_instance_id:
+        return None
+    parts = tuple(part for part in cwd.split("/") if part)
+    if sandbox_instance_id not in parts:
+        return None
+    sandbox_root = parts.index(sandbox_instance_id)
+    return "/".join(parts[sandbox_root + 1 :])
+
+
+def sealed_workspace_cwd(cwd: str | None, *, sandbox_instance_id: str | None = None) -> str:
     """Return a jailed workspace-relative cwd for dependency restoration."""
 
     if cwd is None or cwd in {"", ".", "/workspace", "/workspace/"}:
@@ -72,7 +82,10 @@ def sealed_workspace_cwd(cwd: str | None) -> str:
     if cwd.startswith("/workspace/"):
         relative = cwd.removeprefix("/workspace/")
     elif cwd.startswith("/"):
-        raise RuntimeError("sealed Preview cwd must remain inside /workspace")
+        source_relative = _source_workspace_relative_cwd(cwd, sandbox_instance_id)
+        if source_relative is None:
+            raise RuntimeError("sealed Preview cwd must remain inside its source workspace")
+        relative = source_relative
     else:
         relative = cwd
     parts = tuple(part for part in relative.split("/") if part not in {"", "."})
@@ -87,12 +100,20 @@ def sealed_path(cwd: str, name: str) -> str:
     return posixpath.join(cwd, name) if cwd else name
 
 
+def _source_sandbox_instance_id(contract: Any) -> str | None:
+    value = getattr(getattr(contract, "projection", None), "sandbox_instance_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 def normalized_sealed_runtime_contract(
     contract: SealedPreviewRuntimeContract,
 ) -> SealedPreviewRuntimeContract:
     """Canonicalize every sealed launch cwd before any runtime dispatch."""
 
-    relative_cwd = sealed_workspace_cwd(contract.cwd)
+    relative_cwd = sealed_workspace_cwd(
+        contract.cwd,
+        sandbox_instance_id=_source_sandbox_instance_id(contract),
+    )
     return replace(contract, cwd=f"./{relative_cwd}" if relative_cwd else None)
 
 
@@ -150,7 +171,10 @@ async def prepare_sealed_node_dependencies(
         framework=contract.framework,
     ):
         return None
-    cwd = sealed_workspace_cwd(contract.cwd)
+    cwd = sealed_workspace_cwd(
+        contract.cwd,
+        sandbox_instance_id=_source_sandbox_instance_id(contract),
+    )
     package_path = sealed_path(cwd, "package.json")
     if not await session.file_exists(package_path):
         return None
