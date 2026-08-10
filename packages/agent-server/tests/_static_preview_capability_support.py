@@ -108,7 +108,13 @@ class _StaticRuntime:
         del owner_id
         return None
 
-    async def ensure_preview(self, _conversation_id: str) -> bool:
+    async def ensure_preview(
+        self,
+        _conversation_id: str,
+        *,
+        preserve_exact_finished: bool = False,
+    ) -> bool:
+        del preserve_exact_finished
         return False
 
     async def _resolve_finished_preview_runtime(
@@ -136,7 +142,13 @@ class _SealedProjectionRuntime(_StaticRuntime):
         super().__init__(project_store, target_port=cast(int, projection["port"]))
         self._projection = projection
 
-    async def ensure_preview(self, _conversation_id: str) -> bool:
+    async def ensure_preview(
+        self,
+        _conversation_id: str,
+        *,
+        preserve_exact_finished: bool = False,
+    ) -> bool:
+        del preserve_exact_finished
         return True
 
     async def _resolve_finished_preview_runtime(

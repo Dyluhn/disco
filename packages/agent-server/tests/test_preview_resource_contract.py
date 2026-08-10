@@ -6,6 +6,7 @@ import re
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from disco.agent_server import preview_sealed_restore
@@ -20,6 +21,7 @@ from disco.agent_server.preview_projection import (
 )
 from disco.agent_server.preview_runtime_projection import PreviewRuntimeProjection
 from disco.agent_server.preview_sealed_restore import SealedPreviewRestorer
+from disco.agent_server.preview_service import PreviewService
 from disco.agent_server.preview_status import empty_preview_metadata, managed_preview_metadata
 
 _PORT_RE = re.compile(r"(?:http\.server\s+|--port[= ]|-p[= ]|PORT=)(\d+)")
@@ -230,6 +232,77 @@ async def test_finished_runtime_accepts_the_exact_still_live_generation() -> Non
                 contract.conversation_id, contract
             )
             == current
+        )
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
+async def test_finished_restore_reuses_exact_live_generation_before_destructive_rebind() -> None:
+    """Capability refresh must not replace the exact host-verified FINISHED runtime."""
+
+    sandbox = _FakeSandbox()
+    manager = _manager(sandbox, port_pool=[3000])
+    session = await manager.start(command="python3 server.py", name="web", supervise=False)
+    current = session.to_dict()
+    contract = replace(
+        _sealed_contract(1, "a"),
+        projection=ActiveLivePreviewProjection(
+            projection_id=current["projection_id"],
+            session_name=current["name"],
+            port=current["port"],
+            launch_kind=current["launch_kind"],
+            intent_digest=current["intent_digest"],
+            sandbox_instance_id=current["sandbox_instance_id"],
+            sandbox_generation=current["sandbox_generation"],
+            source_action_id="action-live",
+            source_action_seq=1,
+            source_observation_id="observation-live",
+            source_observation_seq=2,
+        ),
+    )
+    service = object.__new__(PreviewService)
+    service._runtime_projection = PreviewRuntimeProjection(
+        SimpleNamespace(live_session=lambda _cid: SimpleNamespace(_preview_manager=manager)),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        SimpleNamespace(),
+        SimpleNamespace(),
+    )
+    restore = AsyncMock(return_value=True)
+    service._sealed_restorer = SimpleNamespace(restore=restore)
+    service._sealed_runtime_contract = lambda *_args: contract  # type: ignore[method-assign]
+    committed = object()
+
+    try:
+        assert (
+            await service._restore_finished(
+                contract.conversation_id,
+                [],
+                committed,
+                preserve_exact=True,
+            )
+            is True
+        )
+        restore.assert_not_awaited()
+        assert manager.canonical_session() is session
+        assert session.to_dict() == current
+
+        # The explicit Restart Preview action retains its replacement semantics.
+        assert (
+            await service._restore_finished(
+                contract.conversation_id,
+                [],
+                committed,
+                preserve_exact=False,
+            )
+            is True
+        )
+        restore.assert_awaited_once_with(
+            contract.conversation_id,
+            [],
+            committed,
+            contract,
         )
     finally:
         await manager.aclose()

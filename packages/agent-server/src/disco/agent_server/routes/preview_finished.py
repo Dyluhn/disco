@@ -39,7 +39,13 @@ async def refresh_canonical_preview_port(
     finished = current and await is_finished_conversation(store, conversation_id)
     if selected_port is not None and not finished:
         return selected_port
-    restored = await runtime.preview.ensure_preview(conversation_id)
+    if finished:
+        restored = await runtime.preview.ensure_preview(
+            conversation_id,
+            preserve_exact_finished=True,
+        )
+    else:
+        restored = await runtime.preview.ensure_preview(conversation_id)
     if finished and not restored:
         return None
     return _canonical_preview_port(runtime, conversation_id)
