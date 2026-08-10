@@ -17,6 +17,7 @@ from disco.core.verification import (
     HostVerificationClaim,
     HostVerificationResult,
     PreviewSelectionIdentity,
+    VerificationCheckContract,
     VerificationClaimKind,
     VerificationClaimStatus,
     default_structured_web_claims,
@@ -284,6 +285,48 @@ async def test_missing_required_preview_produces_current_typed_binding_failure(
         for claim in receipt.claim_results
         if claim.kind is not VerificationClaimKind.ARTIFACT_IDENTITY
     )
+
+
+@pytest.mark.asyncio
+async def test_preview_binding_failure_retains_admitted_verifier_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claims = default_structured_web_claims()
+    check = VerificationCheckContract(
+        check_id="web-functional",
+        receipt_kind="disco.web_functional@1",
+        issuer_id="disco.host_web_verifier@1",
+        operation="host.verify_deliverable",
+        accepted_claim_kinds=frozenset(claim.kind for claim in claims),
+        claims=claims,
+    )
+    deliverable = _deliverable().model_copy(
+        update={
+            "preview_binding_required": True,
+            "required_claims": claims,
+            "verification_check": check,
+        }
+    )
+
+    async def verify_run(self, args, ctx):  # noqa: ANN001
+        del self, args, ctx
+        raise AssertionError("missing Preview authority must fail before browser probe")
+
+    async def close_lane(self, ctx):  # noqa: ANN001
+        del self, ctx
+        return True
+
+    monkeypatch.setattr(VerifyWebAppTool, "run", verify_run)
+    monkeypatch.setattr(BrowserTool, "close_host_verifier_lane", close_lane)
+
+    verdict = await HostWebAppVerifier(_Executor()).verify(deliverable)
+    receipt = HostVerificationResult.model_validate(verdict["verification_result"])
+
+    assert verdict["failure_fingerprint"] == "preview_selection_mismatch"
+    assert receipt.verifier_id == check.issuer_id
+    assert receipt.tool_id == check.operation
+    assert receipt.status is VerificationClaimStatus.FAIL
+    assert receipt.is_current_for(deliverable, observed_url=str(verdict["url"]))
 
 
 @pytest.mark.asyncio
