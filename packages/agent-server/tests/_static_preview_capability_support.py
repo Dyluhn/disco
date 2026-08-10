@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -75,13 +77,21 @@ class _StaticRuntime:
     def __init__(self, project_store: ProjectStore, *, target_port: int | None = 8000) -> None:
         self._project_store = project_store
         self._target_port = target_port
+        self._capture_locks: dict[str, asyncio.Lock] = {}
         self.preview = SimpleNamespace(
+            capture_lease=self.capture_lease,
             preview_target_port=self.preview_target_port,
             wake_for_preview=self.wake_for_preview,
             ensure_preview=self.ensure_preview,
             preview=self.preview_metadata,
             resolve_finished_preview_runtime=self._resolve_finished_preview_runtime,
         )
+
+    @asynccontextmanager
+    async def capture_lease(self, conversation_id: str):
+        lock = self._capture_locks.setdefault(conversation_id, asyncio.Lock())
+        async with lock:
+            yield
 
     def preview_target_port(self, _conversation_id: str) -> int | None:
         return self._target_port

@@ -536,6 +536,42 @@ async def test_preview_redemption_holds_capture_lock_across_slow_restore_read() 
     assert not rt.preview._connections.preview_capture_ownership.active(cid)
 
 
+async def test_owner_preview_uses_one_capture_transaction() -> None:
+    """A non-capability preview resolves under the same single outer lease."""
+    store = SqliteEventStore(":memory:")
+    cid = "conv_owner_preview_capture"
+    rt = _runtime(store)
+    request = SimpleNamespace(state=SimpleNamespace(preview_capability=None))
+
+    async def resolved(*_args, **_kwargs):
+        lock = rt.preview._connections.preview_capture_ownership.lock_for(cid)
+        assert lock.locked()
+        return Response("preview", status_code=200)
+
+    with (
+        patch.object(preview_proxy, "require_owned_conversation", return_value=cid),
+        patch.object(
+            preview_proxy,
+            "current_session",
+            return_value=SimpleNamespace(owner_id="owner-a"),
+        ),
+        patch.object(preview_proxy, "_resolved_preview_response", resolved),
+    ):
+        response = await asyncio.wait_for(
+            preview_proxy._preview_app_response(
+                store,
+                rt,
+                cast(Request, request),
+                cid,
+                "/",
+            ),
+            timeout=1.0,
+        )
+
+    assert response.status_code == 200
+    assert not rt.preview._connections.preview_capture_ownership.lock_for(cid).locked()
+
+
 async def test_rehydrate_after_recreate_clears_flag_and_rehydrates():
     """Mid-run recreate hook (bp-13 §2, orchestrator fix): _rehydrate_after_recreate
     must clear the idempotency flag THEN re-run _maybe_rehydrate — the mid-run drop

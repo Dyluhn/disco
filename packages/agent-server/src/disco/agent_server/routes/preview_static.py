@@ -567,15 +567,14 @@ async def _finished_runtime_response(
 ) -> Response:
     query = _forwarded_preview_query(request)
     active_path = f"{safe_path}?{query}" if query else safe_path
-    async with runtime.preview.capture_lease(conversation_id):
-        active = await _serve_active_finished_projection(
-            runtime,
-            conversation_id,
-            active_path,
-            contract,
-            capability_port=(preview_cap.port if preview_cap is not None else None),
-            inject_selection=preview_cap is not None,
-        )
+    active = await _serve_active_finished_projection(
+        runtime,
+        conversation_id,
+        active_path,
+        contract,
+        capability_port=(preview_cap.port if preview_cap is not None else None),
+        inject_selection=preview_cap is not None,
+    )
     if active is not None:
         return active
     return Response(
