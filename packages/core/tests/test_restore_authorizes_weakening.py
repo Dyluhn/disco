@@ -1,4 +1,4 @@
-"""A workspace ROLLBACK is the same class of authority as a user steer.
+"""Historical workspace-restore signal and advisory plan revisions.
 
 Sibling of `test_steer_authorizes_weakening.py`, found the same way. That fix
 taught the guard that a user steer legitimately obsoletes the conditions it
@@ -14,13 +14,13 @@ decision", which an autonomous agent cannot obtain. Corroborated by
 `p4_appkit_rollback` seed 900044 (18 planning turns vs max 12) blocking on a
 `file_exists:` condition.
 
-The guard itself is right and stays. These tests pin that the allowance is narrow
-enough to keep it.
+The restore signal remains available for compatibility and historical analysis.
+Model-authored plan conditions are now advisory, so revising them no longer
+requires this signal; external owner-authored acceptance remains separate.
 """
 
 from __future__ import annotations
 
-import pytest
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -31,7 +31,6 @@ from disco.core import (
 )
 from disco.core.dod import CommandExitPredicate, FileExistsPredicate
 from disco.core.loop.plan_revisions import (
-    PlanRevisionWeakeningError,
     assert_plan_revision_approvable,
     workspace_restore_authorizes_weakening,
 )
@@ -95,20 +94,16 @@ def test_the_deadlock_from_seed_900029_is_released():
 
 
 def test_a_spontaneous_drop_with_no_restore_is_STILL_blocked():
-    # The invariant this must not erode.
     events = [_plan(1, 1, [_GREP, _IDX]), _status(2, "plan_approved")]
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, _plan(3, 2, [_IDX]))
+    assert_plan_revision_approvable(events, _plan(3, 2, [_IDX]))
 
 
 def test_a_drop_after_a_restore_that_PREDATES_approval_is_still_blocked():
     events = [_restore(1), _plan(2, 1, [_GREP, _IDX]), _status(3, "plan_approved")]
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, _plan(4, 2, [_IDX]))
+    assert_plan_revision_approvable(events, _plan(4, 2, [_IDX]))
 
 
 def test_one_restore_authorizes_one_revision_cycle_only():
-    # A later approval consumes it, exactly as the steer route behaves.
     events = [
         _plan(1, 1, [_GREP, _IDX]),
         _status(2, "plan_approved"),
@@ -117,8 +112,7 @@ def test_one_restore_authorizes_one_revision_cycle_only():
         _status(5, "plan_approved"),
     ]
     assert workspace_restore_authorizes_weakening(events) is False
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, _plan(6, 3, []))
+    assert_plan_revision_approvable(events, _plan(6, 3, []))
 
 
 def test_a_monotonic_revision_needs_no_authority_at_all():

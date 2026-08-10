@@ -190,7 +190,26 @@ def host_verification_claims(
     conditions = dictated_content_conditions_from_events(events)
     claims.extend(_dictated_content_claims(conditions, accepted, contract_accepted))
     requested_claims, _ = user_verification_material(events)
-    claims.extend(claim for claim in requested_claims if claim.kind in accepted)
+    # Free-form user references and semantic wishes remain valuable evidence, but
+    # they are not automatically target-owned acceptance authority. The ordinary
+    # structured host has no generic way to prove visual similarity, arbitrary
+    # interactions, contract semantics, or target-specific behavior. A target that
+    # truly requires one must put the exact claim in ``check.claims``; that copy is
+    # already present above and stays required.
+    advisory_requested_kinds = {
+        VerificationClaimKind.VISUAL_SEMANTIC,
+        VerificationClaimKind.CONTRACT_SEMANTIC,
+        VerificationClaimKind.INTERACTION,
+        VerificationClaimKind.TARGET_SPECIFIC,
+    }
+    target_owned_ids = {claim.claim_id for claim in claims}
+    claims.extend(
+        claim.model_copy(update={"required": False})
+        if claim.kind in advisory_requested_kinds
+        else claim
+        for claim in requested_claims
+        if claim.kind in accepted and claim.claim_id not in target_owned_ids
+    )
     if (
         contract
         and VerificationClaimKind.CONTRACT_SEMANTIC in accepted

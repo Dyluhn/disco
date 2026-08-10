@@ -1362,46 +1362,36 @@ def test_failed_verifier_concrete_mutation_receipt_resets(*args, **kwargs):
 
 
 @functools.wraps(
-    _no_progress._impl_test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic
+    _no_progress._impl_test_debug_probe_budget_nudges_once_then_falls_through
 )
-async def test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic(
-    *args, **kwargs
-):
-    _impl = _no_progress._impl_test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic
+async def test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic(*args, **kwargs):
+    _impl = _no_progress._impl_test_debug_probe_budget_nudges_once_then_falls_through
     return await _impl(*args, **kwargs)
 
 
 @functools.wraps(
-    _no_progress._impl_test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak
+    _no_progress._impl_test_debug_probe_budget_is_shared_across_verifier_tools
 )
-async def test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak(
-    *args, **kwargs
-):
-    _impl = (
-        _no_progress._impl_test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak
-    )
+async def test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak(*args, **kwargs):
+    _impl = _no_progress._impl_test_debug_probe_budget_is_shared_across_verifier_tools
     return await _impl(*args, **kwargs)
 
 
 @functools.wraps(
-    _no_progress._impl_test_failed_verifier_old_marker_does_not_survive_new_mutation_streak
+    _no_progress._impl_test_debug_probe_budget_marker_resets_after_trusted_mutation
 )
-async def test_failed_verifier_old_marker_does_not_survive_new_mutation_streak(
-    *args, **kwargs
-):
-    _impl = _no_progress._impl_test_failed_verifier_old_marker_does_not_survive_new_mutation_streak
+async def test_failed_verifier_old_marker_does_not_survive_new_mutation_streak(*args, **kwargs):
+    _impl = _no_progress._impl_test_debug_probe_budget_marker_resets_after_trusted_mutation
     return await _impl(*args, **kwargs)
 
 
 @functools.wraps(
-    _no_progress._impl_test_failed_verifier_marker_metadata_cannot_substitute_for_semantic_detail
+    _no_progress._impl_test_legacy_verifier_marker_cannot_substitute_for_budget_marker
 )
 async def test_failed_verifier_marker_metadata_cannot_substitute_for_semantic_detail(
     *args, **kwargs
 ):
-    _impl = (
-        _no_progress._impl_test_failed_verifier_marker_metadata_cannot_substitute_for_semantic_detail
-    )
+    _impl = _no_progress._impl_test_legacy_verifier_marker_cannot_substitute_for_budget_marker
     return await _impl(*args, **kwargs)
 
 
@@ -1498,14 +1488,12 @@ async def test_t2_circuit_breaker_recovery_message_carries_search_and_environmen
 
 
 @functools.wraps(
-    _no_progress._impl_test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan
+    _no_progress._impl_test_debug_probe_budget_preempts_legacy_pass_churn_hint
 )
 async def test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan(
     *args, **kwargs
 ):
-    _impl = (
-        _no_progress._impl_test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan
-    )
+    _impl = _no_progress._impl_test_debug_probe_budget_preempts_legacy_pass_churn_hint
     return await _impl(*args, **kwargs)
 
 

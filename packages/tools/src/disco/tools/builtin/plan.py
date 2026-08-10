@@ -12,11 +12,12 @@ sandbox) and carry no side effects, so they are LOW risk and never gate a build.
 
 C18 — `PlanStepInput.done_condition` is an OPTIONAL machine-checkable predicate the
 agent attaches to a step. When the step is later marked done, C18 emits an advisory
-pass/fail note. Separately, every accepted condition is captured on approval as an
-immutable C1c finish gate and evaluated again from fresh sandbox evidence. Unsafe or
-internally contradictory conditions are rejected before approval. The predicate
-reuses `disco.core.dod.DoDPredicate` (file_exists / command / http_ok), so the local
-progress note and the external finish contract share one vocabulary.
+pass/fail note. It is deliberately not completion authority: only host-owned external
+DoD and admitted target contracts may refuse finish. Unsafe or internally
+contradictory conditions are still rejected before approval because the advisory
+check is executed by the host. The predicate reuses `disco.core.dod.DoDPredicate`
+(file_exists / command / http_ok), so progress diagnostics and external contracts can
+share one vocabulary without sharing authority.
 """
 
 from __future__ import annotations
@@ -43,17 +44,16 @@ class PlanStepInput(BaseModel):
     done_condition: DoDPredicate | None = Field(
         default=None,
         description=(
-            "STRONGLY RECOMMENDED — a machine-checkable proof this step is done. "
-            "For any step that CREATES a file, attach "
+            "OPTIONAL advisory evidence that this step is done. When a step creates "
+            "a stable file whose exact name is already required, you may attach "
             "`{'kind': 'file_exists', 'path': '<the file this step produces>'}` "
-            "naming that exact deliverable. These `file_exists` conditions are "
-            "checked at FINISH: the build is not complete until the files you "
-            "declared actually exist, so finish is refused until you have created "
-            "them (this is how the system confirms you built what was asked — "
-            "declaring a file you never create will block finish, not pass it). "
-            "Other shapes (`{'kind': 'command', 'cmd': ..., 'expect_exit': 0}` | "
-            "`{'kind': 'http_ok', 'url': ..., 'expect_status': 200}`) also gate "
-            "finish after approval. Command predicates use the same non-interactive "
+            "naming that exact deliverable. Do not invent filenames merely to make a "
+            "step checkable; omit the condition when implementation may choose the "
+            "layout. These conditions are checked when progress is marked done and "
+            "never veto finish. Other shapes (`{'kind': 'command', 'cmd': ..., "
+            "'expect_exit': 0}` | `{'kind': 'http_ok', 'url': ..., "
+            "'expect_status': 200}`) are also advisory. Command predicates use the "
+            "same non-interactive "
             "Bash semantics as the shell tool. Never use file_exists for a directory; name "
             "the exact nested file instead. Never use localhost, 127.0.0.0/8, ::1, "
             "or another loopback URL for http_ok: local preview ports/lifecycle are "
@@ -105,12 +105,12 @@ class SubmitPlanTool:
             "Propose a plan for approval. EXPLORE FIRST: use file_list/file_read to "
             "understand the workspace and search/extract for any web context, THEN call "
             "submit_plan with a short summary, ordered concrete steps, and a markdown "
-            "`context` block explaining what you found and why this plan. For every step "
-            "that creates a file, attach a `done_condition` of "
-            "`{'kind': 'file_exists', 'path': '<that file>'}` — this is how the system "
-            "verifies, at finish, that you actually built what was asked. Every accepted "
-            "done_condition becomes an immutable external finish gate. A directory is "
-            "not a file: name exact nested files, never parent directories. Never guess a "
+            "`context` block explaining what you found and why this plan. A "
+            "`done_condition` is optional advisory progress evidence, not completion "
+            "authority. Use `file_exists` only when the exact file is already required; "
+            "do not invent or freeze an implementation layout to make the plan checkable. "
+            "A directory is not a file: name exact nested files, never parent directories. "
+            "Never guess a "
             "localhost/loopback preview URL or port; preview verification is managed "
             "separately. Omit an unsafe condition. Do not take any state-changing action "
             "until the plan is approved."

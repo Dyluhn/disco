@@ -253,38 +253,35 @@ async def test_eight_to_zero_and_malformed_revisions_are_recoverably_blocked() -
         "summary": "Silently empty the verifier",
         "steps": [_step(f"step {index}", None) for index in range(1, 9)],
     }
-    for _ in range(2):
-        assert (
-            await loop._meta.handle_propose_plan_update(
-                action_step("propose_plan_update", weak_args), await loop._events()
-            )
-            is Disp.CONTINUE
+    assert (
+        await loop._meta.handle_propose_plan_update(
+            action_step("propose_plan_update", weak_args), await loop._events()
         )
+        is Disp.HALT
+    )
     events = await loop._events()
-    assert len([event for event in events if isinstance(event, PlanEvent)]) == 1
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 2
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
     assert not any(
-        isinstance(event, StatusEvent) and event.status == ConversationStatus.STUCK
+        isinstance(event, StatusEvent) and event.detail == "plan_predicate_weakening_blocked"
         for event in events
     )
-    guidance = [
-        event.message.content
-        for event in events
-        if isinstance(event, MessageEvent)
-        and event.meta.get("blocking") == "plan_predicate_weakening"
-    ]
-    assert guidance and paths[0] in guidance[-1] and paths[-1] in guidance[-1]
 
+    malformed_loop, _store = build_loop(
+        ScriptedAgent([]), conversation_id="plan-revision-malformed"
+    )
+    await _approve_initial(malformed_loop, paths=paths)
     malformed = {
         "summary": "Malformed typed condition",
         "steps": [{"title": "step 1", "done_condition": "file_exists required-0.txt"}],
     }
     assert (
-        await loop._meta.handle_propose_plan_update(
-            action_step("propose_plan_update", malformed), await loop._events()
+        await malformed_loop._meta.handle_propose_plan_update(
+            action_step("propose_plan_update", malformed), await malformed_loop._events()
         )
         is Disp.CONTINUE
     )
-    events = await loop._events()
+    events = await malformed_loop._events()
     assert len([event for event in events if isinstance(event, PlanEvent)]) == 1
     assert any(
         isinstance(event, StatusEvent) and event.detail == "invalid_plan_done_conditions"
@@ -458,11 +455,11 @@ async def test_first_failure_cannot_replace_an_unfailed_predicate_at_same_width(
         await loop._meta.handle_propose_plan_update(
             action_step("propose_plan_update", unrelated), await loop._events()
         )
-        is Disp.CONTINUE
+        is Disp.HALT
     )
     events = await loop._events()
-    assert len([event for event in events if isinstance(event, PlanEvent)]) == 1
-    assert any(
+    assert len([event for event in events if isinstance(event, PlanEvent)]) == 2
+    assert not any(
         isinstance(event, StatusEvent) and event.detail == "plan_predicate_weakening_blocked"
         for event in events
     )
@@ -749,11 +746,7 @@ def test_command_predicate_the_agent_proved_broken_may_be_replaced() -> None:
 
 
 def test_command_predicate_never_run_may_not_be_replaced() -> None:
-    """Negative control: without demonstrated failure this is still weakening."""
-    from disco.core.loop.plan_revisions import (
-        PlanRevisionWeakeningError,
-        assert_plan_revision_approvable,
-    )
+    from disco.core.loop.plan_revisions import assert_plan_revision_approvable
 
     broken = CommandExitPredicate(cmd='python3 -c "async def main(): async with x"')
     working = CommandExitPredicate(cmd="python3 /workspace/verify_app.py")
@@ -765,17 +758,11 @@ def test_command_predicate_never_run_may_not_be_replaced() -> None:
     )
     events = with_seqs([old, _approved(old, [broken]), *_productive_write()])
 
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, candidate)
+    assert_plan_revision_approvable(events, candidate)
 
 
 def test_demonstrated_failure_does_not_license_dropping_other_conditions() -> None:
-    """Negative control: the escape is one-for-one. Proving ONE command broken
-    must not let an unrelated acceptance condition disappear with it."""
-    from disco.core.loop.plan_revisions import (
-        PlanRevisionWeakeningError,
-        assert_plan_revision_approvable,
-    )
+    from disco.core.loop.plan_revisions import assert_plan_revision_approvable
 
     broken = CommandExitPredicate(cmd='python3 -c "async def main(): async with x"')
     unrelated = FileExistsPredicate(path="dist/index.html")
@@ -803,5 +790,4 @@ def test_demonstrated_failure_does_not_license_dropping_other_conditions() -> No
         ]
     )
 
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, candidate)
+    assert_plan_revision_approvable(events, candidate)

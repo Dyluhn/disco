@@ -316,13 +316,13 @@ async def _gate_host_verify_unavailable_disposition(
     check_deliverable: HostVerificationDeliverable,
     host_verdict: dict[str, Any],
     typed_result: HostVerificationResult | None,
-    browser_unavailable: bool,
 ) -> Disp:
     if typed_result is not None and _typed_result_has_unavailable_semantic_claim(typed_result):
         return await host_verify_failure_disposition(gate, check_deliverable, host_verdict)
-    if browser_unavailable:
-        return await emit_browser_unavailable_release(gate._loop, host_verdict)
-    return Disp.FALLTHROUGH
+    # Ordinary host certification is terminal, including infrastructure
+    # unavailability. Falling through to an inline verifier would silently turn
+    # the certifier back into another agent-facing debugging loop.
+    return await emit_browser_unavailable_release(gate._loop, host_verdict)
 
 
 async def _gate_host_verify_unverifiable_disposition(
@@ -332,6 +332,8 @@ async def _gate_host_verify_unverifiable_disposition(
 ) -> Disp:
     if host_verdict.get("model_verifier_applied") is True:
         return await host_verify_failure_disposition(gate, check_deliverable, host_verdict)
+    host_summary = str(host_verdict.get("summary") or "")
+    summary_suffix = f"; {host_summary}" if host_summary else ""
     await gate._loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -348,7 +350,7 @@ async def _gate_host_verify_unverifiable_disposition(
                     "the host verifier reported the app UNVERIFIABLE "
                     "because its browser infrastructure could not run "
                     f"(verdict {str(host_verdict.get('verdict') or 'unverifiable')!r}"
-                    f"{'; ' + str(host_verdict.get('summary')) if host_verdict.get('summary') else ''}). "
+                    f"{summary_suffix}). "
                     "The deliverable is UNVERIFIED and may be INCOMPLETE; "
                     "do not report it as a verified pass."
                 ),
@@ -368,7 +370,6 @@ async def _gate_host_verify_check_disposition(
     governed_target: bool,
     host_verdict: dict[str, Any],
     typed_result: HostVerificationResult | None,
-    browser_unavailable: bool,
     host_label: str | None,
     accepted_receipts: list[HostVerificationResult],
 ) -> Disp | None:
@@ -387,7 +388,7 @@ async def _gate_host_verify_check_disposition(
         )
     if host_label == "unavailable":
         return await _gate_host_verify_unavailable_disposition(
-            gate, check_deliverable, host_verdict, typed_result, browser_unavailable
+            gate, check_deliverable, host_verdict, typed_result
         )
     if host_label == "unverifiable":
         return await _gate_host_verify_unverifiable_disposition(
@@ -496,7 +497,10 @@ async def gate_host_verify(
     governed_target = governed_verification_required(events)
     authoritative = gate._host_verify_authoritative() or governed_target
     host_verifier = getattr(gate._loop, "_host_verifier", None)
-    if host_verifier is None and not authoritative:
+    # An absent optional host service is not a failed verification attempt.
+    # Ordinary builds fall through to the in-sandbox structured verifier; an
+    # admitted governed contract still comes through this path and fails closed.
+    if host_verifier is None and not governed_target:
         return Disp.FALLTHROUGH
     deliverable = await gate._host_verify_deliverable(
         step, events, include_unverifiable=authoritative
@@ -532,7 +536,7 @@ async def gate_host_verify(
         (
             host_verdict,
             typed_result,
-            browser_unavailable,
+            _browser_unavailable,
             host_label,
         ) = await gate._run_host_verifier_check(
             check_deliverable,
@@ -550,7 +554,6 @@ async def gate_host_verify(
             governed_target=governed_target,
             host_verdict=host_verdict,
             typed_result=typed_result,
-            browser_unavailable=browser_unavailable,
             host_label=host_label,
             accepted_receipts=accepted_receipts,
         )

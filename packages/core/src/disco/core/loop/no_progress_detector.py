@@ -47,6 +47,9 @@ _BARREN_READ_ONLY_TOOLS = frozenset({"think", "file_read", "file_list", "search"
 _FAILURE_PREFIX_CHARS = 160
 _STRUCTURED_VERIFIER_TOOLS = frozenset({"verify_web_app", "verify_appkit_app"})
 FAILED_VERIFIER_REPEAT_LIMIT = 2
+DEBUG_PROBE_LIMIT = 2
+DEBUG_PROBE_TOOLS = frozenset({"verify_web_app", "verify_appkit_app", "design_lint"})
+DEBUG_PROBE_BUDGET_DETAIL = "debug_probe_budget_exhausted"
 _VERIFIER_FILE_RECEIPT_TOOLS = F6_FILE_MUTATING_TOOLS
 _VERIFIER_APPKIT_RECEIPT_TOOLS = frozenset(
     {
@@ -101,6 +104,22 @@ class _VerifierStreak:
     next_action: str
 
 
+@dataclass(frozen=True)
+class DebugProbeBudget:
+    """Event-derived structured-debug allowance for the current artifact bytes."""
+
+    mutation_floor_seq: int
+    calls: int
+
+    @property
+    def exhausted(self) -> bool:
+        return self.calls >= DEBUG_PROBE_LIMIT
+
+    @property
+    def marker_detail(self) -> str:
+        return f"{DEBUG_PROBE_BUDGET_DETAIL}:{self.mutation_floor_seq}"
+
+
 def _after_last_user_message(events: list[Event]) -> list[Event]:
     """Slice after the latest user instruction or typed recovery boundary."""
     last = -1
@@ -150,6 +169,76 @@ def successful_mutation_with_receipt(
         and bool(path.strip())
         and isinstance(sha256, str)
         and _SHA256_HEX.fullmatch(sha256) is not None
+    )
+
+
+def _event_order(event: Event, fallback: int) -> int:
+    return event.seq if event.seq is not None else fallback
+
+
+def _latest_trusted_mutation_floor(
+    events: list[Event], action_by_id: dict[str, ActionEvent]
+) -> int:
+    mutation_floor = 0
+    for index, event in enumerate(events, start=1):
+        if not isinstance(event, ObservationEvent):
+            continue
+        action = action_by_id.get(event.action_id or "")
+        if successful_mutation_with_receipt(event, action):
+            mutation_floor = _event_order(event, index)
+    return mutation_floor
+
+
+def _is_agent_debug_probe(event: Event) -> bool:
+    if not isinstance(event, ActionEvent):
+        return False
+    if event.source is not EventSource.AGENT or event.tool_call is None:
+        return False
+    # Finish-time host probes use the same tool surface but are acceptance
+    # infrastructure, not model debugging. Charging them would let the
+    # advisory budget withdraw a mandatory governed verifier from itself.
+    if event.meta.get("verify_probe") is True:
+        return False
+    return event.tool_call.tool_name in DEBUG_PROBE_TOOLS
+
+
+def debug_probe_budget(events: list[Event]) -> DebugProbeBudget:
+    """Count agent debug probes after the latest trusted artifact mutation.
+
+    The event log is the lease: restart/resume and no-op writes cannot mint a new
+    allowance. Only the same trusted mutation receipts already used by verifier
+    no-progress detection move the floor.
+    """
+
+    action_by_id = {
+        event.id: event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call is not None
+    }
+    mutation_floor = _latest_trusted_mutation_floor(events, action_by_id)
+
+    calls = sum(
+        1
+        for index, event in enumerate(events, start=1)
+        if _event_order(event, index) > mutation_floor and _is_agent_debug_probe(event)
+    )
+    return DebugProbeBudget(mutation_floor_seq=mutation_floor, calls=calls)
+
+
+def debug_probe_blocked_tools(events: list[Event]) -> frozenset[str]:
+    """Withdraw high-level debug probes once the current-byte budget is spent."""
+
+    return DEBUG_PROBE_TOOLS if debug_probe_budget(events).exhausted else frozenset()
+
+
+def debug_probe_budget_notice_active(events: list[Event], budget: DebugProbeBudget) -> bool:
+    """Whether the current mutation floor already received its wrap-up notice."""
+
+    return any(
+        isinstance(event, StatusEvent)
+        and event.detail == budget.marker_detail
+        and (event.seq or 0) > budget.mutation_floor_seq
+        for event in events
     )
 
 

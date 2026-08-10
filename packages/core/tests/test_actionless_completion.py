@@ -215,9 +215,9 @@ async def test_unverified_web_completion_routes_through_browser_gate():
     force-finish DIRECTLY (StatusEvent(FINISHED)) the moment the actionless valve
     tripped — an UNVERIFIED "done" with mid-action narration next to the FINISHED
     chip. Now the branch routes through the SAME browser-verify gate a real
-    finish() clears: the gate injects its "verify your app" reminder and the run
-    CONTINUES (never a silent gate-bypass). Any completed_via_notify can only
-    appear AFTER that reminder, via the gate's own bounded 3-refusal release."""
+    finish() clears. The ordinary gate runs once and records an explicit
+    ``unverified_release`` before completion; it never silently bypasses the check
+    or reopens the builder."""
     from disco.core.llm import ToolSpec
     from loop_fakes import FakeExecutor
 
@@ -247,21 +247,17 @@ async def test_unverified_web_completion_routes_through_browser_gate():
     await loop.run()
     events = await store.get_events(CID)
 
-    # The browser-verify gate RAN and refused — its reminder is in the log.
-    nudges = [
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.message
-        and "verify your app the way a user would" in (e.message.content or "")
+    releases = [
+        event
+        for event in events
+        if isinstance(event, StatusEvent) and event.detail == "unverified_release"
     ]
-    assert nudges, "browser-verify gate was bypassed — no verify reminder injected"
-    # The completed_via_notify FINISH (if it ever lands, via the bounded
-    # 3-refusal release) NEVER precedes the verify reminder — i.e. it did not
-    # bypass the gate on the first trip (the W-32 force-finish is gone).
-    first_nudge_seq = min(e.seq for e in nudges if e.seq is not None)
+    assert len(releases) == 1, "browser verification was bypassed or retried"
     cvn = [e for e in events if isinstance(e, StatusEvent) and e.detail == "completed_via_notify"]
-    assert all(e.seq is not None and e.seq > first_nudge_seq for e in cvn)
+    assert cvn
+    release_seq = releases[0].seq
+    assert release_seq is not None
+    assert all(e.seq is not None and e.seq > release_seq for e in cvn)
 
 
 class _FakeHostVerifier:

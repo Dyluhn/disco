@@ -1,4 +1,4 @@
-"""A user steer IS the owner weakening decision the guard demands.
+"""Historical user-steer signal and advisory plan-revision behavior.
 
 Counted-promotion failure 2026-07-27 (`p4_ff_react_steer` seed 700022,
 FALSE_FINISH_NO_OUTPUT). A mid-run steer changed the build's direction, which
@@ -8,17 +8,13 @@ SIXTEEN times, driving 29 planning turns against an all-time observed maximum of
 14 — until the agent carried `package.json` into a plan whose new direction never
 produces it, guaranteeing failure at the output-truth gate.
 
-The refusal said "removing an acceptance condition requires a separate explicit
-owner weakening decision" while offering the agent no way to obtain one. The
-steer was that decision.
-
-The guard itself is right and stays: an agent must never silently lower its own
-bar. These tests pin that the allowance is narrow enough to keep it.
+The steer signal remains available for compatibility and historical analysis.
+Model-authored plan conditions are now advisory, so revising them no longer
+requires this signal; external owner-authored acceptance remains separate.
 """
 
 from __future__ import annotations
 
-import pytest
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -28,7 +24,6 @@ from disco.core import (
 )
 from disco.core.dod import FileExistsPredicate
 from disco.core.loop.plan_revisions import (
-    PlanRevisionWeakeningError,
     assert_plan_revision_approvable,
     user_steer_authorizes_weakening,
 )
@@ -118,16 +113,12 @@ def test_a_post_steer_revision_may_drop_an_obsoleted_predicate():
 
 
 def test_the_SAME_drop_without_a_steer_is_STILL_blocked():
-    # The invariant the guard exists for. A spontaneous drop stays refused.
     events = [_plan(1, 1, [_PKG, _APP]), _status(2, "plan_approved")]
     candidate = _plan(3, 2, [_APP])
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, candidate)
+    assert_plan_revision_approvable(events, candidate)
 
 
 def test_a_second_drop_after_the_steer_was_consumed_is_blocked_again():
-    # Steer -> revision -> approval. A LATER drop has no fresh owner decision
-    # behind it, so the guard closes again.
     events = [
         _plan(1, 1, [_PKG, _APP]),
         _status(2, "plan_approved"),
@@ -136,8 +127,7 @@ def test_a_second_drop_after_the_steer_was_consumed_is_blocked_again():
         _status(5, "plan_approved"),
     ]
     candidate = _plan(6, 3, [_APP])
-    with pytest.raises(PlanRevisionWeakeningError):
-        assert_plan_revision_approvable(events, candidate)
+    assert_plan_revision_approvable(events, candidate)
 
 
 def test_a_monotonic_revision_is_unaffected_either_way():

@@ -801,10 +801,12 @@ async def test_ask_user_before_any_work_refused():
 
 @pytest.mark.asyncio
 async def test_failed_verify_probe_does_not_unlock_meta_tools():
-    """Phase-B re-run #6 leak: first move = finish with a FAILING verify. The
-    gate's probe runs as a shell ActionEvent — which must NOT count as the
-    session's first real action, or the refused finish unlocks the withheld
-    meta tools and the model can remember-spam (exactly what happened live)."""
+    """A failed model-supplied finish check is evidence, not build authority.
+
+    The host records its probe without treating it as agent work and finishes
+    on the same turn.  In particular, it must not reopen the builder with the
+    meta tools unlocked by its own probe.
+    """
     from disco.core import ToolResult
     from loop_fakes import FakeExecutor
 
@@ -821,22 +823,30 @@ async def test_failed_verify_probe_does_not_unlock_meta_tools():
     )
     loop, store = build_loop(agent, executor=FakeExecutor(result=failing))
     await loop.send_message("go")
-    await loop.run()
+    state = await loop.run()
 
-    # Turn 2's offered tool set is STILL lean — the probe didn't flip it.
-    assert not (_META_VIRTUALS & set(agent.seen_tools[1]))
-    # And the hallucinated remember was intercepted, not executed: no
-    # KnowledgeEvent landed before the real shell action.
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(agent.seen_tools) == 1
     events = await store.get_events(CID)
-    shell_seq = next(
-        e.seq
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "finish_verify_advisory_failed"
         for e in events
-        if isinstance(e, ActionEvent)
+    )
+    assert any(
+        isinstance(e, ActionEvent)
+        and e.tool_call is not None
+        and e.tool_call.tool_name == "shell"
+        and e.meta.get("verify_probe")
+        for e in events
+    )
+    assert not any(isinstance(e, KnowledgeEvent) for e in events)
+    assert not any(
+        isinstance(e, ActionEvent)
         and e.tool_call is not None
         and e.tool_call.tool_name == "shell"
         and not e.meta.get("verify_probe")
+        for e in events
     )
-    assert not any(isinstance(e, KnowledgeEvent) and e.seq < shell_seq for e in events)
 
 
 # ---- Fix 3: in-loop exit invariant (no path carries RUNNING out of run()) ------

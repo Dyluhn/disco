@@ -36,6 +36,7 @@ from .no_progress_detector import (
     _NO_PROGRESS_PROBE_TOOLS,
     _after_last_user_message,
 )
+from .no_progress_detector import DEBUG_PROBE_BUDGET_DETAIL as DEBUG_PROBE_BUDGET_DETAIL
 from .no_progress_detector import (
     F6_FILE_MUTATING_TOOLS as F6_FILE_MUTATING_TOOLS,
 )
@@ -45,6 +46,10 @@ from .no_progress_detector import (
 )
 from .no_progress_detector import (
     barren_streak_no_progress as barren_streak_no_progress,
+)
+from .no_progress_detector import debug_probe_budget as debug_probe_budget
+from .no_progress_detector import (
+    debug_probe_budget_notice_active as debug_probe_budget_notice_active,
 )
 from .no_progress_detector import no_progress_detected as no_progress_detected
 from .no_progress_detector import (

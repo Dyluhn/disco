@@ -120,10 +120,8 @@ async def test_approves_file_exists_as_plan_owned_without_external_copy(tmp_path
 
 @pytest.mark.asyncio
 async def test_blocks_finish_when_declared_file_missing(tmp_path):
-    """The model declares it will create index.html, then finishes WITHOUT
-    creating it → the current plan verifier REFUSES finish and names the missing
-    deliverable. Repeated unchanged failure enters bounded replan/STUCK recovery;
-    it never turns the unmet predicate into a pass."""
+    """A speculative model filename remains visible on the plan but cannot veto
+    a finish whose host-owned acceptance boundaries are otherwise satisfied."""
     ws = tmp_path / "ws"
     ws.mkdir()  # index.html deliberately NOT planted
     sbx = _FakeSandbox(str(ws))
@@ -145,16 +143,13 @@ async def test_blocks_finish_when_declared_file_missing(tmp_path):
         ]
     )
     events, store = await _run(agent, sbx)
-    assert signals.latest_approved_plan(events) is not None
-    assert _dod_refused(events), "finish must be REFUSED while the declared deliverable is missing"
-    # the refusal must NAME the unmet predicate so the model knows what to fix
-    refusal = next(
-        e
-        for e in events
-        if isinstance(e, MessageEvent)
-        and "plan's verification conditions failed" in e.message.content
-    )
-    assert "index.html" in refusal.message.content
+    plan = signals.latest_approved_plan(events)
+    assert plan is not None and plan.steps[0].done_condition is not None
+    assert plan.steps[0].done_condition.path == "index.html"
+    assert not _dod_refused(events)
+    assert await store.get_external_dod_spec(CID) is None
+    fs = _final_status(events)
+    assert fs is not None and fs.status == ConversationStatus.FINISHED
 
 
 @pytest.mark.asyncio

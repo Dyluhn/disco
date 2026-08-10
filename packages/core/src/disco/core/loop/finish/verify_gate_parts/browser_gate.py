@@ -105,12 +105,8 @@ async def _gate_verify_web_app_unavailable_disposition(
     tool_name: str,
     appkit_prepared: tuple[VerifierStartedEvent, HostVerificationDeliverable] | None,
 ) -> Disp:
-    # P1-2: the verifier could not produce a usable verdict (execution
-    # error / empty / the driven verify failed). This must NOT fall through
-    # to a clean finish — on the build/web surface a FINISH requires a real
-    # PASS verdict (W-32: route completion THROUGH the gate). Refuse-and-
-    # continue (bounded), then an EXPLICIT unverified release at the cap;
-    # never a silent done, never a fall-back to the legacy browser gate.
+    # A missing ordinary verdict terminalizes as an explicit unverified release.
+    # Governed AppKit remains fail-closed through its typed contract path.
     if not governed_appkit:
         return await verifier_unavailable_disposition(gate, tool_name)
     current_events = await gate._loop._events()
@@ -187,6 +183,26 @@ async def _gate_verify_web_app_failure_disposition(
         message=(first_error or summary), rel_path=(screenshot or None)
     )
 
+    if not governed_appkit:
+        await gate._loop._emit(
+            StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_release")
+        )
+        warning = (
+            f"⚠ Finished WITHOUT a passing {tool_name} verdict — the deliverable "
+            f"is UNVERIFIED and may be INCOMPLETE. {summary}"
+            + (f" First failure: {first_error}" if first_error else "")
+            + (f" Outstanding: {next_action}" if next_action else "")
+            + " Note this clearly in your summary."
+        )
+        await gate._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=warning),
+            )
+        )
+        gate._loop._browser_verify_refusals = 0
+        return Disp.FALLTHROUGH
+
     prior_fp = _prior_verify_marker_fp(events, since_seq)
     if prior_fp is not None and prior_fp == fp:
         # LOOP BREAKER: the SAME failure verdict has recurred since the last
@@ -205,56 +221,28 @@ async def _gate_verify_web_app_failure_disposition(
         )
         return Disp.HALT
 
-    if governed_appkit or gate._loop._browser_verify_refusals < 3:
-        gate._loop._browser_verify_refusals += 1
-        payload = (
-            f"{tool_name} did not pass ({verdict.get('verdict')}). {summary}\n"
-            + (f"first error: {first_error}\n" if first_error else "")
-            + (f"screenshot: {screenshot}\n" if screenshot else "")
-            + (f"next step: {next_action}" if next_action else "Fix the issue, then finish.")
-        )
-        await gate._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=payload),
-            )
-        )
-        # Stamp the fingerprint so a repeat WITHOUT a productive edit trips the
-        # loop breaker above on the next finish attempt.
-        await gate._loop._emit(
-            StatusEvent(
-                status=ConversationStatus.RUNNING,
-                detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
-            )
-        )
-        return Disp.CONTINUE
-
-    # 3-refusal release — but NOT a silent 'done' (P1-3). The release emits a
-    # DISTINCT terminal signal (StatusEvent detail="unverified_release") AND a
-    # visible INCOMPLETE message BEFORE finalization, so a repeatedly-failing
-    # web build can never present as a clean verified FINISHED — the UI/harness
-    # keys on the marker, not on the agent's pre-gate summary text. Bounded:
-    # the run still releases after the cap so it cannot hang forever.
-    await gate._loop._emit(
-        StatusEvent(
-            status=ConversationStatus.RUNNING,
-            detail="unverified_release",
-        )
-    )
-    warn = (
-        f"⚠ Finished WITHOUT a passing {tool_name} verdict (3 attempts) — the "
-        f"deliverable is INCOMPLETE. {summary}"
-        + (f" Outstanding: {next_action}" if next_action else "")
-        + " Note this clearly in your summary."
+    gate._loop._browser_verify_refusals += 1
+    payload = (
+        f"{tool_name} did not pass ({verdict.get('verdict')}). {summary}\n"
+        + (f"first error: {first_error}\n" if first_error else "")
+        + (f"screenshot: {screenshot}\n" if screenshot else "")
+        + (f"next step: {next_action}" if next_action else "Fix the issue, then finish.")
     )
     await gate._loop._emit(
         MessageEvent(
             source=EventSource.ENVIRONMENT,
-            message=LLMMessage(role="user", content=warn),
+            message=LLMMessage(role="user", content=payload),
         )
     )
-    gate._loop._browser_verify_refusals = 0
-    return Disp.FALLTHROUGH
+    # Stamp the fingerprint so a repeat WITHOUT a productive edit trips the
+    # governed loop breaker above on the next finish attempt.
+    await gate._loop._emit(
+        StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
+        )
+    )
+    return Disp.CONTINUE
 
 
 async def gate_verify_web_app(
@@ -265,19 +253,12 @@ async def gate_verify_web_app(
     step: AgentStep | None = None,
     appkit_prepared: tuple[VerifierStartedEvent, HostVerificationDeliverable] | None = None,
 ) -> Disp:
-    """W-45 — verdict-consuming finish gate replacing `_browser_verified()` for web
-    builds with "the latest structured verifier verdict since the last productive
-    edit". At finish it drives once: pass → finish; fail → surface the verdict's
-    evidence and next action, then CONTINUE.
+    """Consume one current structured-verifier verdict at finish.
 
-    LOOP BREAKER: the verdict is cached by `_last_productive_seq` — a browser/
-    navigate/verify probe is NOT a productive edit, so re-verifying without an
-    edit reads the SAME cached verdict (no real re-run). When the SAME
-    `failure_fingerprint` recurs without a productive edit that changes the
-    served output, the gate marks the run STUCK instead of reloading 25-40×.
-    The 3-refusal release no longer
-    silently converts repeated failed verification into 'done' — it finishes
-    ONLY with an explicit blocked/incomplete summary.
+    Ordinary builds pass cleanly or terminalize with an explicit unverified
+    result; they never reopen the builder. Governed AppKit targets retain the
+    progress-sensitive refusal and repeated-failure halt required by their
+    admitted contract.
     """
     contract = governed_verification_contract(events)
     governed_appkit = bool(
@@ -394,14 +375,17 @@ async def browser_verify_delegated_to_host(gate: Any, step: AgentStep, events: l
     governed = governed_verification_required(events)
     if not (gate._host_verify_authoritative() or governed):
         return False
-    if getattr(gate._loop, "_host_verifier", None) is None:
-        return False
     deliverable = await gate._host_verify_deliverable(step, events)
     if deliverable is None:
         return False
-    if contract is not None:
-        return _delegated_to_host_governed_check(gate, contract, events)
-    return _delegated_to_host_legacy_check(deliverable, events)
+    # A contractless host-unavailable verdict is terminal evidence when paired
+    # with unverified_release, even if the verifier implementation itself was
+    # absent. Do not follow that result with an inline repair loop.
+    if contract is None:
+        return _delegated_to_host_legacy_check(deliverable, events)
+    if getattr(gate._loop, "_host_verifier", None) is None:
+        return False
+    return _delegated_to_host_governed_check(gate, contract, events)
 
 
 def _gate_browser_verify_is_appkit(
@@ -469,8 +453,8 @@ async def _gate_browser_verify_probe_result(
     # preview, not a dead :8000) and judge the probe on ground truth —
     # zero console errors AND a non-blank render (a page can serve 200
     # with a clean console yet mount nothing). Degrades to the prior
-    # passive nudge/release on browserless backends (the probe is a
-    # no-op there). Bounded by the existing 3-refusal cap below.
+    # explicit unverified release on browserless backends (the probe is a
+    # no-op there).
     if not await gate._drive_finish_browser_probe(target_url):
         return False, events
     events = await gate._loop._events()
@@ -492,24 +476,6 @@ async def _gate_browser_verify_ok_disposition(
         await gate._loop._emit(
             StatusEvent(status=ConversationStatus.RUNNING, detail=f"vision_artifact:{shot}")
         )
-
-
-def _gate_browser_verify_nudge_text(preview_url: str, first_error: str | None) -> str:
-    if first_error:
-        # Variant (2): quote the error
-        return (
-            "Before finishing: verify your app the way a user would. "
-            f"Use the browser tool to navigate to {preview_url}, "
-            "read the CONSOLE output, and fix any errors you see. "
-            f"The last load had errors: {first_error}"
-        )
-    # Variant (1): verbatim from order
-    return (
-        "Before finishing: verify your app the way a user would. "
-        f"Use the browser tool to navigate to {preview_url}, "
-        "read the CONSOLE output, and fix any errors you see. "
-        "Finish only after a clean load."
-    )
 
 
 async def _gate_browser_verify_active_check(
@@ -553,23 +519,23 @@ async def _gate_browser_verify_active_check(
     if ok:
         await _gate_browser_verify_ok_disposition(gate, events, target_key)
         return Disp.FALLTHROUGH
-    if gate._loop._browser_verify_refusals < 3:
-        gate._loop._browser_verify_refusals += 1
-        # Point the agent at the RESOLVED preview (random platform port), not
-        # a dead :8000; fall back to :8000 only when undetectable.
-        preview_url = target_url or "http://127.0.0.1:8000/"
-        nudge = _gate_browser_verify_nudge_text(preview_url, first_error)
-        await gate._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=nudge),
-            )
-        )
-        return Disp.CONTINUE
-    # 3-refusal release valve (3): allow but warn visibly
+    # This is the ordinary compatibility path. It gets one host-owned check,
+    # then terminalizes honestly instead of reopening the builder.
+    probe = _latest_browser_structured(events, target_key)
+    if first_error:
+        detail = f"Last console error: {first_error}."
+    elif probe is not None:
+        detail = "The browser check ran, but the page rendered no meaningful content."
+    elif target_url:
+        detail = f"Target {target_url} did not produce a clean, meaningful browser render."
+    else:
+        detail = "No clean, meaningful browser render was available."
+    await gate._loop._emit(
+        StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_release")
+    )
     warn_msg = (
-        "⚠ finished WITHOUT a clean browser verification — "
-        f"last console errors: {first_error or 'none seen'}"
+        "⚠ Finished WITHOUT a clean browser verification — the deliverable "
+        f"is UNVERIFIED and may be INCOMPLETE. {detail}"
     )
     await gate._loop._emit(
         MessageEvent(
@@ -577,6 +543,7 @@ async def _gate_browser_verify_active_check(
             message=LLMMessage(role="user", content=warn_msg),
         )
     )
+    gate._loop._browser_verify_refusals = 0
     return Disp.FALLTHROUGH
 
 

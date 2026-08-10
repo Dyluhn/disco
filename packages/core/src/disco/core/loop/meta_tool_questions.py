@@ -18,10 +18,12 @@ from ..events import (
 from ..llm import OperatingMode
 from .boundaries import AgentStep
 from .control import Disp
+from .turn_control_serve_refusals import (
+    questions_v2_attempts_since_last_plan as _questions_v2_attempts_since_last_plan,
+)
 from .turn_control_support import (
     _normalize_clarify_options,
     _normalize_questions_v2_options,
-    _questions_v2_attempts_since_last_plan,
     _questions_v2_used_since_last_plan,
 )
 

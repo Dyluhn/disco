@@ -180,13 +180,8 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("disco.loop")
 
-# finish-verify cap (issue B). The model-authored `verify` gate was the ONLY uncapped
-# gate in the loop — a broken/always-failing verify command could refuse `finish`
-# forever. Mirror the existing _browser_verify_refusals release valve: after N REAL
-# failures, finish anyway with a LOUD warning (the failure stays visible — important
-# for weak local models — rather than grinding to max_iterations). A MALFORMED verify
-# (SyntaxError / command-not-found) is a broken check, not a failed task, so it is
-# auto-stripped (bounded by _finish_verify_strips so it can't be gamed as a free finish).
+# Compatibility cap still used by workflow-output checks. Model-authored
+# ``finish(verify=...)`` is advisory and no longer consumes this budget.
 _FINISH_VERIFY_CAP = 3
 
 # C1c external DoD retry cap. External authority never auto-releases: once
@@ -239,9 +234,8 @@ def host_verify_authoritative_enabled() -> bool:
 
     Explicit off restores the REL-1c shadow posture. The authoritative default
     is live-proven as of 2026-07-03: no false-block on good builds, broken apps
-    are caught and driven to repair, and an ``unavailable`` host verdict
-    (browser infrastructure absent) degrades to the inline browser gate rather
-    than hard-refusing.
+    are caught. Ordinary non-pass/unavailable verdicts terminalize explicitly
+    unverified; admitted target contracts remain fail-closed.
     """
     return str(disco_env(_HOST_VERIFY_AUTHORITATIVE_FLAG) or "").strip().lower() not in _FALSY
 
@@ -249,8 +243,7 @@ def host_verify_authoritative_enabled() -> bool:
 # W5 — execution-nudge cap. The execution gate was the ONE uncapped gate in the
 # finish path (the comment "No cap" in the old code). After _EXECUTION_NUDGE_CAP
 # consecutive nudges the gate RELEASES with a LOUD warning so an agent that cannot
-# act (e.g. every tool is withheld) doesn't grind forever. Mirror the cap-3
-# pattern of _FINISH_VERIFY_CAP / _DOD_REFUSAL_CAP / _browser_verify_refusals.
+# act (e.g. every tool is withheld) doesn't grind forever.
 _EXECUTION_NUDGE_CAP = 3
 
 # Symmetric to _PLAN_NUDGE on the execution side: a hard gate that refuses FINISHED

@@ -430,31 +430,29 @@ async def test_receipt_reuse_count_is_keyed_on_the_COMMAND_not_the_observation()
 
 
 # ---------------------------------------------------------------------------
-# Surface 5 (legacy sibling) — `host_disposition.host_verify_failure_disposition`
-# NOT in F51's live list: it never fired twice in the 07d corpus. It is squarely
-# in the class the constraint names — capped at 3 fires, body a pure function of
-# the verdict — so the widened instrument flags it, and leaving it would mean
-# shipping a repair whose own instrument is red on the repaired tree.
+# Surface 5 (ordinary compatibility sibling) terminalizes on its first verdict.
+# Repeated direct calls are harmless/idempotent, but a real loop never reopens
+# the builder after this disposition.
 # ---------------------------------------------------------------------------
 
 
 async def test_the_legacy_shadow_verify_surface_escalates_across_its_three_fires():
+    from disco.core.loop.control import Disp
     from disco.core.loop.finish.verify_gate_parts.host_disposition import (
         host_verify_failure_disposition,
     )
 
     loop = _FakeLoop()
     gate = _FakeGate(loop)
-    for _ in range(3):
-        await host_verify_failure_disposition(gate, _Deliverable(), VERDICT)
+    dispositions = [
+        await host_verify_failure_disposition(gate, _Deliverable(), VERDICT) for _ in range(3)
+    ]
 
     bodies = loop.bodies()[:3]
-    assert len(set(bodies)) == 3, "three fires, three distinct bodies"
-    assert "REPEAT 2" in bodies[1] and "REPEAT 3" in bodies[2]
-    assert "RELEASED UNVERIFIED" in bodies[1], (
-        "the cost named must be this seam's ACTUAL cost — it releases unverified "
-        "rather than halting, unlike the governed seams"
-    )
+    assert dispositions == [Disp.FALLTHROUGH] * 3
+    assert len(set(bodies)) == 1
+    assert "UNVERIFIED" in bodies[0]
+    assert all("REPEAT" not in body for body in bodies)
 
 
 # ---------------------------------------------------------------------------
@@ -567,7 +565,11 @@ async def test_host_repeat_halt_reaches_real_landing_and_escalates() -> None:
     disp1 = await governed_non_pass_disposition(gate1, _Deliverable(), VERDICT, None, prior1)
     assert disp1 is Disp.HALT, "repeat fingerprint must take the HALT branch"
 
-    env1 = [e for e in loop1.emitted if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    env1 = [
+        e
+        for e in loop1.emitted
+        if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT
+    ]
     assert env1, "HALT must land an ENVIRONMENT prompt via the real valve"
     first_body = env1[0].message.content or ""
     # Derive expected prefix from production only for the final assertion —
@@ -576,7 +578,9 @@ async def test_host_repeat_halt_reaches_real_landing_and_escalates() -> None:
         _HOST_REPEAT_HALT_PREFIX,
     )
 
-    assert _HOST_REPEAT_HALT_PREFIX.strip() in first_body, "prefix must survive to the complete landing"
+    assert _HOST_REPEAT_HALT_PREFIX.strip() in first_body, (
+        "prefix must survive to the complete landing"
+    )
     assert "Context:" in first_body
 
     # Second HALT: same fingerprint, prior durable landing now on the log.
@@ -586,7 +590,11 @@ async def test_host_repeat_halt_reaches_real_landing_and_escalates() -> None:
     disp2 = await governed_non_pass_disposition(gate2, _Deliverable(), VERDICT, None, prior2)
     assert disp2 is Disp.HALT
 
-    env2 = [e for e in loop2.emitted if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    env2 = [
+        e
+        for e in loop2.emitted
+        if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT
+    ]
     assert env2
     second_body = env2[0].message.content or ""
 

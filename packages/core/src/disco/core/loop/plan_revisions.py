@@ -164,46 +164,22 @@ async def preflight_plan_revision(
     candidate: PlanEvent,
     events: list[Event],
 ) -> Disp | None:
-    """Shared pre-persistence idempotence and weakening boundary."""
+    """Shared pre-persistence idempotence boundary.
+
+    Model-authored done conditions are advisory, so replacing or dropping one is
+    never an acceptance-bar weakening. External DoD and admitted target contracts
+    live outside the plan and are unaffected by this boundary.
+    """
     if is_idempotent_plan_revision(events, candidate):
         return await redirect_idempotent_revision(loop, candidate, events)
-    diff = predicate_diff_for_revision(events, candidate)
-    if (
-        diff is not None
-        and not diff.is_monotonic
-        and not verifier_repair_replacement_allowed(events, candidate)
-    ):
-        return await reject_plan_weakening(loop, candidate, diff)
     return None
 
 
 def user_steer_authorizes_weakening(events: list[Event]) -> bool:
-    """A durable USER steer since the last approval IS the owner's weakening decision.
+    """Return the historical post-approval steer signal.
 
-    The weakening guard refuses a revision that drops an approved acceptance
-    condition and tells the agent that "removing an acceptance condition requires
-    a separate explicit owner weakening decision". That is the right invariant —
-    an agent must never silently lower its own bar — but until now there was no
-    way for the agent to OBTAIN such a decision, so the refusal named a rule
-    without naming an achievable action.
-
-    Counted-promotion failure 2026-07-27 (`p4_ff_react_steer` seed 700022,
-    FALSE_FINISH_NO_OUTPUT). A mid-run user steer changed the build's direction,
-    which legitimately obsoleted `file_exists:package.json`,
-    `file_exists:src/App.tsx` and `command:test -f dist/index.html`. Every
-    revision that dropped them was blocked — SIXTEEN times, driving 29 planning
-    turns against an all-time observed maximum of 14 — until the agent gave up
-    and carried `package.json` into a plan whose new direction never produces it.
-    The run was then guaranteed to fail the output-truth gate whatever it did.
-
-    The steer WAS the owner decision the refusal demanded. `revision_steer_pending`
-    is appended by the kernel ingress (`DiscoKernel.send_user_turn`), never by the
-    model, so it is host-authored authority the agent cannot forge.
-
-    Deliberately narrow: the marker must post-date the latest `plan_approved`, so
-    this authorizes exactly one revision cycle per steer. A spontaneous
-    agent-initiated drop with no steer behind it is still blocked, and a generic
-    plan approval still cannot remove a condition.
+    Kept for log analysis and compatibility. Model-authored plan conditions are
+    advisory now, so plan approval no longer depends on this signal.
     """
     for event in reversed(events):
         if not isinstance(event, StatusEvent):
@@ -216,39 +192,10 @@ def user_steer_authorizes_weakening(events: list[Event]) -> bool:
 
 
 def workspace_restore_authorizes_weakening(events: list[Event]) -> bool:
-    """A workspace RESTORE since the last approval is the same class of authority.
+    """Return the historical post-approval workspace-restore signal.
 
-    Sibling of `user_steer_authorizes_weakening`, and found the same way. That one
-    taught the guard that a user steer legitimately obsoletes the conditions it
-    supersedes. A rollback obsoletes them at least as hard: the platform itself
-    destroyed the state the condition describes, so the condition is not being
-    lowered, it is being made unsatisfiable by an authority above the agent.
-
-    Certified-lane evidence 2026-07-27 (`p4_ff_import_rollback` seed 900029, PASS
-    at 36 planning turns against an all-time maximum of 8). An approved condition
-    `command:grep -q 'First revision 900029' index.html` survived a
-    `workspace_restored` that deleted the string it greps for. Every revision
-    dropping it was refused — TWENTY-FIVE times, twenty-three of them
-    byte-identical — because "removing an acceptance condition requires a
-    separate explicit owner weakening decision", which an autonomous agent has no
-    way to obtain. Corroborated by `p4_appkit_rollback` seed 900044 (18 planning
-    turns vs max 12) blocking on a `file_exists:` condition, so it is not
-    specific to one predicate type.
-
-    Condition identities are keys — `command:{cmd}`, `file_exists:{path}` — and a
-    key outlives the state it describes. That is precisely why the deadlock is
-    total rather than merely awkward: no revision can satisfy the guard, so the
-    loop ends only if the agent stumbles onto a plan it tolerates.
-
-    `WorkspaceRestoredEvent` is emitted by the agent-server's workspace service
-    and is documented as "a user-requested workspace rollback"; there is no
-    agent-callable restore tool. So this is host-authored authority the model
-    cannot forge, exactly like `revision_steer_pending`.
-
-    Deliberately narrow, mirroring the steer route: the restore must post-date the
-    latest `plan_approved`, authorizing exactly one revision cycle. A spontaneous
-    drop with no restore behind it is still blocked, and a generic plan approval
-    still cannot remove a condition.
+    Kept for log analysis and compatibility. Model-authored plan conditions are
+    advisory now, so plan approval no longer depends on this signal.
     """
     for event in reversed(events):
         if isinstance(event, StatusEvent) and event.detail == "plan_approved":
@@ -259,22 +206,13 @@ def workspace_restore_authorizes_weakening(events: list[Event]) -> bool:
 
 
 def assert_plan_revision_approvable(events: list[Event], candidate: PlanEvent) -> None:
-    """Approval-funnel backstop for every persisted revision route."""
-    diff = predicate_diff_for_revision(events, candidate)
-    if (
-        diff is None
-        or diff.is_monotonic
-        or user_steer_authorizes_weakening(events)
-        or workspace_restore_authorizes_weakening(events)
-        or failed_verifier_replacement_allowed(events, candidate)
-        or demonstrated_command_replacement_allowed(events, candidate)
-        or (
-            _same_width_typed_replacement(events, candidate)
-            and signals.plan_is_verifier_repair(events, candidate)
-        )
-    ):
-        return
-    raise PlanRevisionWeakeningError(diff)
+    """Compatibility backstop; advisory plan checks cannot weaken acceptance.
+
+    The arguments remain part of the public compatibility surface. Approval-time
+    shape and safety validation happens before this function; hard acceptance is
+    owned by external DoD and admitted target contracts.
+    """
+    del events, candidate
 
 
 def predicate_label(predicate: DoDPredicate) -> str:
