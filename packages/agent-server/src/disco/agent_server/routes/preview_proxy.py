@@ -52,6 +52,20 @@ from .preview_static import (
 _LOG = logging.getLogger(__name__)
 
 
+@contextlib.asynccontextmanager
+async def _preview_capture_lease(runtime: object, conversation_id: str):
+    preview = getattr(runtime, "preview", None)
+    lease = getattr(preview, "capture_lease", None)
+    if not callable(lease):
+        # Narrow compatibility for route doubles that intentionally expose the
+        # pre-composition flat runtime surface.  ConversationRuntime always
+        # supplies PreviewService.capture_lease.
+        yield
+        return
+    async with lease(conversation_id):
+        yield
+
+
 async def _path_preview_websocket_capability_owner(
     websocket: WebSocket,
     store: SqliteEventStore,
@@ -358,7 +372,7 @@ async def _preview_app_response(
         # the lock at this route boundary also prevents a restored sandbox from
         # being detached between those phases, without reacquiring the same
         # non-reentrant conversation lock inside the FINISHED runtime path.
-        async with runtime.preview.capture_lease(conversation_id):
+        async with _preview_capture_lease(runtime, conversation_id):
             return await _resolved_preview_response(
                 store,
                 runtime,
