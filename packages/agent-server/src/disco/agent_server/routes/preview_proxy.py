@@ -6,8 +6,10 @@ import asyncio
 import contextlib
 import logging
 import urllib.parse
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import websockets
 from disco.core import ConversationStatus, StatusEvent
@@ -62,7 +64,11 @@ async def _preview_capture_lease(runtime: object, conversation_id: str):
         # supplies PreviewService.capture_lease.
         yield
         return
-    async with lease(conversation_id):
+    capture_lease = cast(
+        Callable[[str], AbstractAsyncContextManager[None]],
+        lease,
+    )
+    async with capture_lease(conversation_id):
         yield
 
 
