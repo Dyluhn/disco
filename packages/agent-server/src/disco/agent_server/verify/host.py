@@ -287,6 +287,7 @@ class HostWebAppVerifier:
         cls,
         deliverable: HostVerificationDeliverable,
     ) -> dict[str, Any]:
+        check = deliverable.verification_check
         verdict = dict(
             verify_app_compute_verdict(
                 url=deliverable.deployment_url or "",
@@ -317,10 +318,17 @@ class HostWebAppVerifier:
             deliverable=deliverable,
             observed_url=str(verdict.get("url") or ""),
             reason=str(verdict["summary"]),
+            verifier_id=(
+                check.issuer_id if check is not None else "host.preview_binding@1"
+            ),
             tool_id=(
-                "preview_status@1"
-                if deliverable.preview_selection is not None
-                else "host.preview_binding_preflight@1"
+                check.operation
+                if check is not None
+                else (
+                    "preview_status@1"
+                    if deliverable.preview_selection is not None
+                    else "host.preview_binding_preflight@1"
+                )
             ),
         ).model_dump(mode="json")
         return verdict
