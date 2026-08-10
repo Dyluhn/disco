@@ -197,11 +197,18 @@ def unavailable_verification_result(
     *,
     deliverable: Any,
     reason: str,
-    verifier_id: str = "host.verifier_dispatcher@1",
-    tool_id: str = "host.verifier_dispatcher@1",
+    verifier_id: str | None = None,
+    tool_id: str | None = None,
 ) -> HostVerificationResult:
     """Mint an exact non-authorizing receipt when no target verifier can run."""
 
+    check = getattr(deliverable, "verification_check", None)
+    resolved_verifier_id = verifier_id or (
+        check.issuer_id if check is not None else "host.verifier_dispatcher@1"
+    )
+    resolved_tool_id = tool_id or (
+        check.operation if check is not None else "host.verifier_dispatcher@1"
+    )
     claims = deliverable.required_claims
     if not claims:
         raise ValueError("unavailable verification receipt needs exact required claims")
@@ -210,7 +217,7 @@ def unavailable_verification_result(
             claim,
             VerificationClaimStatus.UNAVAILABLE,
             reason,
-            verifier_id=verifier_id,
+            verifier_id=resolved_verifier_id,
             basis="host verifier dispatcher capability registry",
         )
         for claim in claims
@@ -230,8 +237,8 @@ def unavailable_verification_result(
         workspace_generation=deliverable.workspace_generation,
         workspace_epoch=deliverable.workspace_epoch,
         observed_after_seq=deliverable.observed_after_seq,
-        verifier_id=verifier_id,
-        tool_id=tool_id,
+        verifier_id=resolved_verifier_id,
+        tool_id=resolved_tool_id,
         status=VerificationClaimStatus.UNAVAILABLE,
         reason=reason,
         claim_results=results,
