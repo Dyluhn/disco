@@ -642,13 +642,21 @@ async def _impl_test_cleanup_extracts_all_frozen_event_stream_sandbox_ids(monkey
         dangling_stdout="",
     )
     run = _cleanup_run({"status": "FINISHED", "extras": {}})
-    run.events = [
+    normalized_events = [
         {
             "tool_result": {
                 "structured": {"sandbox_instance_id": "sbx_before_restart"}
             }
         },
         {"preview_selection": {"sandbox_instance_id": "sbx_after_restart"}},
+    ]
+    run.events = [
+        {
+            "seq": seq,
+            "kind": "observation",
+            "payload": json.dumps({"kind": "observation", **event}),
+        }
+        for seq, event in enumerate(normalized_events, start=1)
     ]
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
