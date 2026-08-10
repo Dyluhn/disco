@@ -27,6 +27,7 @@ from disco.core.llm import (
     NoEligibleModel,
     Requirement,
     RouterConfig,
+    RoutingDecision,
 )
 from disco.core.llm import routing as routing_module
 from disco.core.llm.openai_provider import OpenAIProvider
@@ -273,6 +274,20 @@ async def test_routing_decision_emitted_exactly_once_on_success():
     assert sink.decisions[0] == resp.routing  # same decision attached + logged
     assert resp.routing.path == "pinned"
     assert resp.routing.overflow_triggers == []
+
+
+async def test_success_observer_receives_exact_model_key_decision_and_context():
+    observed: list[tuple[str, RoutingDecision, CallContext]] = []
+    context = CallContext(conversation_id="conv-success")
+    router, sink, _ = build_router()
+    router._bind_success_observer(
+        lambda key, decision, ctx: observed.append((key, decision, ctx))
+    )
+
+    response = await router.complete(_req(), context=context)
+
+    assert observed == [("local", response.routing, context)]
+    assert sink.decisions == [response.routing]
 
 
 async def test_response_always_has_routing_and_usage():

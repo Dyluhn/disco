@@ -94,6 +94,18 @@ class DriverPromptState(Protocol):
     def appkit_mode_active(self, conversation_id: str) -> bool: ...
 
 
+class DriverReadinessObserver(Protocol):
+    """Accept successful live routing as exact, bounded readiness evidence."""
+
+    def __call__(
+        self,
+        bound_conversation_id: str | None,
+        model_key: str,
+        decision: RoutingDecision,
+        context: CallContext,
+    ) -> None: ...
+
+
 class DriverRuntime:
     """Model metadata, routing composition, probes, policy, and context authority."""
 
@@ -119,6 +131,10 @@ class DriverRuntime:
         self._contexts = contexts
         self._injected_router = injected_router
         self._enable_thinking = enable_thinking
+        self._readiness_observer: DriverReadinessObserver | None = None
+
+    def bind_readiness_observer(self, observer: DriverReadinessObserver) -> None:
+        self._readiness_observer = observer
 
     @property
     def contexts(self) -> DriverContextState:
@@ -169,7 +185,17 @@ class DriverRuntime:
                 return self._prompt_state.appkit_mode_active(cid)
 
             appkit_active = _appkit_active
-        return DefaultLLMRouter(
+
+        def _observe_success(
+            model_key: str,
+            decision: RoutingDecision,
+            context: CallContext,
+        ) -> None:
+            observer = self._readiness_observer
+            if observer is not None:
+                observer(conversation_id, model_key, decision, context)
+
+        router = DefaultLLMRouter(
             cfg,
             providers,
             prompt_provider=DriverPrompts(
@@ -183,6 +209,8 @@ class DriverRuntime:
             ),
             sink=routing_sink_for(conversation_id),
         )
+        router._bind_success_observer(_observe_success)
+        return router
 
     def context_window(self, conversation_id: str | None = None) -> int | None:
         try:
@@ -464,6 +492,8 @@ class DriverPreflight:
                 self._record_success(cid, cfg, key, override, role, "shared")
             return None
         self._complete(key, task)
+        if self._accept_concurrent_live_success(transient, proof, cfg, override):
+            return None
         if transient and proof in self._proven:
             logger.warning(
                 "driver pre-flight for %r (role=%s) failed transiently (%s) but "
@@ -479,6 +509,47 @@ class DriverPreflight:
 
     def discard_conversation(self, conversation_id: str) -> None:
         self._proven = {proof for proof in self._proven if proof[0] != conversation_id}
+
+    def _accept_concurrent_live_success(
+        self,
+        transient: bool,
+        proof: tuple[str, ModelRole, str],
+        cfg: RouterConfig,
+        override: str | None,
+    ) -> bool:
+        conversation_id, role, key = proof
+        refreshed = self._ok.get(key)
+        if not transient or refreshed is None or time.monotonic() - refreshed >= self._TTL_S:
+            return False
+        self._proven.add(proof)
+        self._record_success(conversation_id, cfg, key, override, role, "live")
+        return True
+
+    def observe_success(
+        self,
+        bound_conversation_id: str | None,
+        model_key: str,
+        decision: RoutingDecision,
+        context: CallContext,
+    ) -> None:
+        if decision.path not in ("pinned", "manual"):
+            return
+        cfg = self._drivers.config_now()
+        role = decision.profile.role
+        override = context.model_override if role == ModelRole.AGENT_DRIVER else None
+        if self._model_key(cfg, override, role) != model_key:
+            return
+        entry = cfg.models.get(model_key)
+        if (
+            entry is None
+            or entry.model_id != decision.chosen_model
+            or entry.provider != decision.provider
+        ):
+            return
+        self._ok[model_key] = time.monotonic()
+        conversation_id = context.conversation_id or bound_conversation_id or ""
+        if conversation_id:
+            self._proven.add((conversation_id, role, model_key))
 
     async def aclose(self) -> None:
         tasks = {slot[0] for slot in self._inflight.values()}

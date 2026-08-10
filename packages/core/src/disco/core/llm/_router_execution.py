@@ -43,6 +43,16 @@ def _route(path: Path, reason: str, model_id: str, provider_name: str) -> _Failu
     return path, reason, model_id, provider_name
 
 
+def _notify_success(router: Any, model_key: str, decision: RoutingDecision, ctx: Any) -> None:
+    observer = router._on_success
+    if observer is None:
+        return
+    try:
+        observer(model_key, decision, ctx)
+    except Exception:  # noqa: BLE001 — passive observation cannot fail a completed call
+        _LOG.exception("LLM success observer failed")
+
+
 @dataclass
 class _StreamAttemptState:
     yielded_any: bool = False
@@ -52,6 +62,7 @@ class _StreamAttemptState:
 async def _yield_stream_attempt(
     router: Any,
     *,
+    model_key: str,
     provider: Any,
     exec_req: CompletionRequest,
     model_id: str,
@@ -65,6 +76,7 @@ async def _yield_stream_attempt(
             if not state.recorded:
                 router._sink.record(decision)
                 router._cost.add(final.usage.cost_usd, ctx.conversation_id)
+                _notify_success(router, model_key, decision, ctx)
                 state.recorded = True
             state.yielded_any = True
             yield chunk.model_copy(update={"final": final})
@@ -181,6 +193,7 @@ def _try_role_fallback(
 async def execute_complete(
     router: Any,
     *,
+    model_key: str,
     provider: Any,
     exec_req: CompletionRequest,
     model_id: str,
@@ -263,13 +276,12 @@ async def execute_complete(
             )
             router._sink.record(decision)
             router._cost.add(resp.usage.cost_usd, ctx.conversation_id)
+            _notify_success(router, model_key, decision, ctx)
             return resp.model_copy(update={"routing": decision})
 
 
 async def execute_stream_complete(
-    router: Any,
-    *,
-    provider: Any,
+    router: Any, *, model_key: str, provider: Any,
     exec_req: CompletionRequest,
     model_id: str,
     provider_name: str,
@@ -299,8 +311,7 @@ async def execute_stream_complete(
         state = _StreamAttemptState()
         try:
             async for chunk in _yield_stream_attempt(
-                router,
-                provider=provider,
+                router, model_key=model_key, provider=provider,
                 exec_req=exec_req,
                 model_id=model_id,
                 decision=decision,
