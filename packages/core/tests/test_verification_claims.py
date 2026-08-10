@@ -3,8 +3,13 @@ from __future__ import annotations
 import base64
 
 import pytest
+from disco.core import BuildPlatformAdmissionEvent
 from disco.core.events import EventSource, LLMMessage, MessageEvent
 from disco.core.loop import HostVerificationDeliverable
+from disco.core.loop.finish.verify_gate_parts.host_claims import host_verification_claims
+from disco.core.loop.finish.verify_gate_parts.host_deliverable import (
+    with_host_verification_profile,
+)
 from disco.core.loop.finish.verify_gates import _user_verification_material
 from disco.core.verification import (
     AdmittedVerificationContract,
@@ -23,6 +28,7 @@ from disco.core.verification import (
     requires_structured_browser_runtime,
     structured_web_verification_result,
 )
+from disco.core.verify_medium import VerifierMediumHint
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -469,6 +475,95 @@ def test_explicit_visual_requirement_compiles_exact_reference_pixels() -> None:
     assert references[0].instruction.startswith("Match this reference")
 
 
+def test_user_semantic_reference_is_advisory_without_target_owned_check() -> None:
+    event = MessageEvent(
+        id="evt-user-visual",
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="Match the supplied visual."),
+        verification_requirements=VerificationRequirementsDirective(
+            claims=(
+                VerificationRequestedClaim(
+                    claim_id="web.visual:reference",
+                    kind=VerificationClaimKind.VISUAL_SEMANTIC,
+                    expected="match the supplied visual",
+                ),
+            ),
+        ),
+    )
+
+    claim = next(
+        claim
+        for claim in host_verification_claims({}, [event])
+        if claim.claim_id == "web.visual:reference"
+    )
+
+    assert claim.required is False
+    assert claim.source_authority == "user_event:evt-user-visual"
+
+
+def test_exact_target_check_keeps_semantic_claim_required() -> None:
+    target_claim = HostVerificationClaim(
+        claim_id="web.visual:reference",
+        kind=VerificationClaimKind.VISUAL_SEMANTIC,
+        expected="match the supplied visual",
+        source_authority="target:visual_fixture@1",
+    )
+    admission = BuildPlatformAdmissionEvent(
+        seq=2,
+        route="platform",
+        profile_id="disco.freeform_web@1",
+        run_intent_id="intent-visual",
+        composition_authority="build_platform_core",
+        composition_digest="sha256:" + "a" * 64,
+        run_identity="run:sha256:" + "b" * 64,
+        verification_claims=(target_claim,),
+    )
+    request = MessageEvent(
+        id="evt-user-visual",
+        seq=1,
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="Match the supplied visual."),
+        verification_requirements=VerificationRequirementsDirective(
+            claims=(
+                VerificationRequestedClaim(
+                    claim_id=target_claim.claim_id,
+                    kind=target_claim.kind,
+                    expected=target_claim.expected,
+                ),
+            ),
+        ),
+    )
+
+    claims = host_verification_claims({}, [request, admission])
+    retained = [claim for claim in claims if claim.claim_id == target_claim.claim_id]
+
+    assert retained == [target_claim]
+
+
+@pytest.mark.asyncio
+async def test_game_medium_hint_does_not_invent_an_interaction_claim() -> None:
+    class _Gate:
+        async def _verifier_medium_hint(self, paths: list[str]) -> VerifierMediumHint:
+            assert paths == ["index.html"]
+            return VerifierMediumHint(kind="game", reason="canvas game markers")
+
+    deliverable = HostVerificationDeliverable(
+        conversation_id="conv",
+        artifact_path="index.html",
+        artifact_kind="app",
+        deployment_url="",
+        required_claims=default_structured_web_claims(),
+    )
+
+    profiled = await with_host_verification_profile(_Gate(), deliverable, [])
+
+    assert profiled.verification_medium == "game"
+    assert profiled.required_claims == deliverable.required_claims
+    assert all(
+        claim.kind is not VerificationClaimKind.INTERACTION for claim in profiled.required_claims
+    )
+
+
 def test_invalid_reference_pixels_are_rejected_before_they_can_become_evidence() -> None:
     with pytest.raises(ValueError, match="valid bounded image"):
         VerificationRequirementsDirective(
@@ -572,6 +667,34 @@ def test_one_aggregate_judgement_cannot_fan_out_across_semantic_claims() -> None
         for result in judged.claim_results
         if result.kind is VerificationClaimKind.CONTRACT_SEMANTIC
     )
+
+
+def test_failed_advisory_semantic_claim_does_not_veto_completion() -> None:
+    advisory = HostVerificationClaim(
+        claim_id="web.visual:advisory",
+        kind=VerificationClaimKind.VISUAL_SEMANTIC,
+        expected="match the user's visual preference",
+        source_authority="user_event:evt-visual",
+        required=False,
+    )
+    receipt = structured_web_verification_result(
+        deliverable=_deliverable(advisory),
+        verdict=_verdict(),
+    )
+
+    judged = apply_semantic_verifier_result(
+        receipt,
+        verified=False,
+        verdict="fail",
+        detail="the visual preference was not met",
+        claim_id=advisory.claim_id,
+    )
+
+    result = next(item for item in judged.claim_results if item.claim_id == advisory.claim_id)
+    assert result.required is False
+    assert result.status is VerificationClaimStatus.FAIL
+    assert judged.status is VerificationClaimStatus.PASS
+    assert judged.passed is True
 
 
 @pytest.mark.parametrize(

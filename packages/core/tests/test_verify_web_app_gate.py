@@ -7,13 +7,10 @@ matching the existing test_finish_browser_gate.py harness.
 
 Covered:
   (helpers) _latest_verify_verdict / _prior_verify_marker_fp pure readers
-  (c) PASS verdict  → run FINISHES first try, refusals reset, no nudge
-  (d/f) FAIL with CHANGING fingerprint across real edits → 3 next_action refusals
-        then a NARROWED release that finishes only with an explicit INCOMPLETE
-        summary (never a silent 'done')
-  (e) FAIL with CONSTANT fingerprint + a navigate in between → AWAITING_USER
-      with verify_no_progress legacy detail; the navigate does NOT reset it
-  (g) non-web deliverable → the verify gate is inert (never drives verify_web_app)
+  (c) PASS verdict → clean FINISHED
+  (d) ordinary FAIL/unavailable → one check, explicit unverified FINISHED
+  (e) preview lifecycle changes invalidate stale PASS receipts
+  (f) non-web deliverable → the verify gate is inert
 """
 
 import pytest
@@ -38,7 +35,6 @@ from loop_fakes import (
     FakeSummarizer,
     ScriptedAgent,
     action_step,
-    assert_blocked_question_landing,
     finish_step,
 )
 
@@ -323,10 +319,6 @@ async def test_pass_verdict_finishes_and_resets_refusals():
 
 @pytest.mark.asyncio
 async def test_fail_changing_fp_refuses_then_releases_with_incomplete_summary():
-    # Each finish is preceded by a NEW productive edit, so since_seq advances and
-    # the gate drives a FRESH verify whose fingerprint differs → the loop breaker
-    # never trips → the 3-refusal cap-release path is exercised. The release must
-    # finish only with an explicit INCOMPLETE summary (never a silent done).
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "v1"}),
@@ -352,21 +344,20 @@ async def test_fail_changing_fp_refuses_then_releases_with_incomplete_summary():
     env = _env(events)
     refusals = [m for m in env if "verify_web_app did not pass" in m]
     incompletes = [m for m in env if "INCOMPLETE" in m]
-    assert len(refusals) == 3, f"expected 3 next_action refusals, got {len(refusals)}: {env}"
-    assert any("next step:" in m for m in refusals), refusals
+    assert refusals == []
     assert len(incompletes) == 1, f"expected one explicit INCOMPLETE release: {env}"
-    # narrowed release: it finished, but LOUDLY incomplete — not a silent pass
+    assert execu.verify_calls == 1
+    assert any("First failure: Boom @ app.js:1" in message for message in env)
+    assert any("Outstanding: fix 1" in message for message in env)
+    assert any(detail == "unverified_release" for _status, detail in _statuses(events))
     assert ("FINISHED", None) in _statuses(events)
 
 
-# ---- (e) constant fingerprint → STUCK/no_progress (loop breaker) ------------
+# ---- ordinary failure is terminal; no fingerprint/navigation loop ----------
 
 
 @pytest.mark.asyncio
 async def test_fail_same_fp_with_navigate_between_halts_stuck():
-    # FAIL verdict with a CONSTANT fingerprint. After the first refusal the agent
-    # only NAVIGATES (non-productive) and re-finishes: the cached verdict's same
-    # fingerprint, with no productive edit, must HALT and ask — not reload.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "broken"}),
@@ -386,16 +377,10 @@ async def test_fail_same_fp_with_navigate_between_halts_stuck():
 
     events = await store.get_events("conv")
     sts = _statuses(events)
-    assert_blocked_question_landing(events)
-    terminal = [e for e in events if isinstance(e, StatusEvent)][-1]
-    assert str(terminal.meta.get("legacy_detail", "")).startswith("verify_no_progress:")
-    assert not any(s == "FINISHED" for s, _ in sts), sts
-    # the cached verdict was reused — verify was driven once, not re-run on the 2nd finish
-    assert execu.verify_calls == 1, (
-        f"expected ONE driven verify (cache hit), got {execu.verify_calls}"
-    )
-    env = _env(events)
-    assert any("same failure" in m.lower() for m in env), env
+    assert ("FINISHED", None) in sts
+    assert any(detail == "unverified_release" for _status, detail in sts)
+    assert execu.verify_calls == 1
+    assert all(call.tool_name != "browser" for call in execu.calls)
 
 
 @pytest.mark.asyncio
@@ -421,9 +406,9 @@ async def test_preview_control_does_not_invalidate_cached_failed_verifier_marker
     await loop.run()
 
     events = await store.get_events("conv")
-    assert execu.verify_calls == 1, "preview lifecycle must not invalidate cached verdict"
-    assert_blocked_question_landing(events)
-    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    assert execu.verify_calls == 1
+    assert ("FINISHED", None) in _statuses(events)
+    assert all(call.tool_name != preview_tool for call in execu.calls)
 
 
 @pytest.mark.asyncio
@@ -451,8 +436,9 @@ async def test_successful_preview_stop_invalidates_earlier_passing_verdict() -> 
 
     events = await store.get_events("conv")
     assert execu.verify_calls == 2
-    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
-    assert any("verify_web_app did not pass" in message for message in _env(events))
+    assert ("FINISHED", None) in _statuses(events)
+    assert any(detail == "unverified_release" for _status, detail in _statuses(events))
+    assert any("preview stopped" in message for message in _env(events))
 
 
 @pytest.mark.asyncio
@@ -502,7 +488,8 @@ async def test_unavailable_preview_selection_invalidates_earlier_passing_verdict
 
     events = await store.get_events("conv")
     assert execu.verify_calls == 2
-    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    assert ("FINISHED", None) in _statuses(events)
+    assert any(detail == "unverified_release" for _status, detail in _statuses(events))
 
 
 @pytest.mark.asyncio
@@ -529,7 +516,8 @@ async def test_successful_stop_without_visible_start_invalidates_passing_verdict
 
     events = await store.get_events("conv")
     assert execu.verify_calls == 2
-    assert not any(status == "FINISHED" for status, _detail in _statuses(events))
+    assert ("FINISHED", None) in _statuses(events)
+    assert any(detail == "unverified_release" for _status, detail in _statuses(events))
 
 
 # ---- (g) non-web deliverable: gate inert ------------------------------------
@@ -664,7 +652,7 @@ async def test_foreign_url_pass_is_not_accepted_drives_fresh_verify():
     assert ("FINISHED", None) in _statuses(events)
 
 
-# ---- P1-2: verifier failure must NOT cleanly finish ------------------------
+# ---- unavailable ordinary verifier releases once and explicitly ------------
 
 
 class FailingVerifyExecutor(VerifyExecutor):
@@ -688,14 +676,10 @@ class FailingVerifyExecutor(VerifyExecutor):
 
 @pytest.mark.asyncio
 async def test_verifier_failure_does_not_cleanly_finish():
-    # verify_web_app is advertised but cannot produce a usable verdict. The gate
-    # must NOT fall through to a clean FINISH (W-32): it refuses-and-continues with
-    # a "verification could not run" reminder, then releases EXPLICITLY as
-    # unverified at the cap — never a silent clean done.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
-            finish_step(),  # ScriptedAgent repeats finish on each CONTINUE
+            finish_step(),
         ]
     )
     execu = FailingVerifyExecutor([_verdict(passed=False, fp="X")])
@@ -706,24 +690,19 @@ async def test_verifier_failure_does_not_cleanly_finish():
     events = await store.get_events("conv")
     env = _env(events)
     sts = _statuses(events)
-    reminders = [m for m in env if "verification could not run" in m]
-    # the gate continued (did not clean-finish) at least once
-    assert reminders, f"expected a 'verification could not run' reminder: {env}"
-    # any terminal FINISHED must be accompanied by the explicit unverified marker —
-    # never a plain clean finish for a build that never verified.
+    assert execu.verify_calls == 1
     assert any(d == "unverified_release" for _, d in sts), sts
+    assert ("FINISHED", None) in sts
     assert any("UNVERIFIED" in m for m in env), env
 
 
-# ---- P1-3: the 3-refusal release is an EXPLICIT incomplete outcome ----------
+# ---- ordinary failed verdict carries a durable unverified marker ------------
 
 
 @pytest.mark.asyncio
 async def test_fail_release_emits_explicit_unverified_marker():
-    # A FAIL verdict with a CHANGING fingerprint across real edits exhausts the
-    # 3-refusal cap and releases. The release must carry a DISTINCT terminal signal
-    # (StatusEvent detail="unverified_release") so the run cannot present as a clean
-    # verified FINISHED — the agent's pre-gate summary text is not relied upon.
+    # The first ordinary FAIL carries a distinct terminal signal so the run cannot
+    # present as a clean verified FINISHED; later scripted repairs are never entered.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "v1"}),
@@ -747,9 +726,9 @@ async def test_fail_release_emits_explicit_unverified_marker():
 
     events = await store.get_events("conv")
     sts = _statuses(events)
-    # the distinct, queryable incomplete signal precedes the terminal FINISHED
     assert any(d == "unverified_release" for _, d in sts), sts
-    assert ("FINISHED", None) in sts  # still bounded — releases, doesn't hang
+    assert ("FINISHED", None) in sts
+    assert execu.verify_calls == 1
     env = _env(events)
     assert any("INCOMPLETE" in m for m in env), env
 

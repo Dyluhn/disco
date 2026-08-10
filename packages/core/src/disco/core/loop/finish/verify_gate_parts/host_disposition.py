@@ -106,53 +106,18 @@ def _repeat_preamble(repeats: int, cost: str) -> str:
 async def host_verify_failure_disposition(
     gate: Any, deliverable: HostVerificationDeliverable, verdict: dict
 ) -> Disp:
-    label = gate._verdict_label(verdict) or "fail"
+    """Release an ordinary/freeform failure honestly without reopening build.
+
+    Admitted target contracts use the separate governed disposition below and
+    remain fail-closed. This compatibility path is the terminal host judge for
+    an ordinary artifact, not another agent-facing debugging coach.
+    """
     summary = str(verdict.get("summary") or verdict.get("detail") or "host verifier did not pass")
     next_action = str(verdict.get("next_action") or "")
     first_failure = gate._verdict_first_failure(verdict)
     await gate._record_verifier_failure_to_context(
         message=(first_failure or summary), rel_path=None
     )
-    if gate._loop._browser_verify_refusals < 3:
-        gate._loop._browser_verify_refusals += 1
-        # Constraint 4 (F51): this seam is capped at 3 fires per streak and its
-        # payload is a pure function of the verdict, so three identical verdicts
-        # produced three identical bodies. The refusal ordinal is already in hand
-        # — it is the cap's own counter — so no new state is needed to say it.
-        refusals = gate._loop._browser_verify_refusals
-        payload = (
-            "<system-reminder>\n"
-            + (
-                _repeat_preamble(
-                    refusals,
-                    f"After {3 - refusals} more failed attempt"
-                    f"{'' if 3 - refusals == 1 else 's'} the run is RELEASED "
-                    "UNVERIFIED — finished with a deliverable that may be "
-                    "incomplete — rather than blocked. Change something the "
-                    "verifier measures, or finish and say plainly what is broken.",
-                )
-                if refusals > 1
-                else ""
-            )
-            + f"Host verification did not pass for {deliverable.artifact_kind} "
-            f"artifact {deliverable.artifact_path!r} ({label}). {summary}\n"
-            + (f"first failure: {first_failure}\n" if first_failure else "")
-            + (
-                f"next step: {next_action}\n"
-                if next_action
-                else "Fix the issue surfaced by the host verifier, then finish again.\n"
-            )
-            + "The task is NOT complete until the host verifier passes.\n"
-            "</system-reminder>"
-        )
-        await gate._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(role="user", content=payload),
-            )
-        )
-        return Disp.CONTINUE
-
     await gate._loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -160,8 +125,9 @@ async def host_verify_failure_disposition(
         )
     )
     warn = (
-        "⚠ Finished WITHOUT a passing host verifier verdict (3 attempts) — "
+        "⚠ Finished WITHOUT a passing host verifier verdict — "
         f"the deliverable is UNVERIFIED and may be INCOMPLETE. {summary}"
+        + (f" First failure: {first_failure}" if first_failure else "")
         + (f" Outstanding: {next_action}" if next_action else "")
         + " Note this clearly in your summary."
     )

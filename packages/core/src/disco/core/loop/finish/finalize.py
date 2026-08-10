@@ -140,12 +140,10 @@ class _FinalizeService(_FinishGateComponent):
     async def normalize_finish_step(
         self, step: AgentStep, events: list[Event]
     ) -> tuple[AgentStep, Disp]:
-        # VERIFY-ON-FINISH (post-condition gate). If the agent attached
-        # a `verify` check to finish, RUN it first and refuse the finish
-        # if it doesn't pass — the "run the tests before you claim done"
-        # forcing function. The check is visible in the trace; on
-        # failure the agent sees exactly what broke and adapts, instead
-        # of declaring a broken build complete.
+        # VERIFY-ON-FINISH is model-authored advisory evidence. Run a safe
+        # supplied check once and retain its result in the trace, but never let
+        # it veto completion or reopen build. External DoD and host-owned
+        # verification remain authoritative below.
         assert step.tool_call is not None  # caller (engine loop) enters only on the finish tool
         resolved = await self.resolve_verify_command(step.tool_call.arguments)
 
@@ -182,21 +180,17 @@ class _FinalizeService(_FinishGateComponent):
                 verify_cmd,
                 events,
                 finish_verify_passed=self._coordinator.verification.finish_verify_passed,
-                finish_dod_gate_passed=self._coordinator.verification.finish_dod_gate_passed,
             )
             if disp is not None:
                 return step, disp
         # C1c — external DoD evaluator gate. Runs AFTER the
-        # agent's own verify check (which grades the agent's
-        # own command) but BEFORE the step is committed to a
+        # agent's advisory check but BEFORE the step is committed to a
         # FINISHED status. The spec is captured at task start
         # and lives outside the agent's tool surface, so the
         # predicates are NOT the agent's own — they're a
         # structural, write-once acceptance bar (see
         # `core/dod.py`). When the spec exists and the verdict
-        # fails, the finish is REFUSED and the run CONTINUES —
-        # the same refuse-and-continue discipline verify-on-
-        # finish uses. When no spec is set for the
+        # fails, the finish is REFUSED and the run CONTINUES. When no spec is set for the
         # conversation, the gate is a no-op (legacy path is
         # byte-identical). See `_finish_dod_gate_passed` for
         # the full algorithm + the byte-identical-no-spec

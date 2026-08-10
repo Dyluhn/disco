@@ -139,8 +139,8 @@ def _initialize_core(
     # prior plan's; resets on a different
     # (incl. appended) plan. The cap lives
     # at module-level so tests can pin it.
-    loop._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
-    loop._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
+    loop._finish_verify_refusals = 0  # compatibility telemetry; finish checks are advisory
+    loop._finish_verify_strips = 0  # compatibility telemetry for malformed checks
     loop._finish_seal_refusals = 0  # REL-27 sealability refusals (cap-3 loud release)
     loop._workflow_output_contract_refusals = 0
     # C20 — `delegate_explore` count, per run segment. Reset in run() so a

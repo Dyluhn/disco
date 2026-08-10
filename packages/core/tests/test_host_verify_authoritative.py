@@ -413,10 +413,9 @@ async def test_host_fail_refuses_then_releases_loudly_without_inline_verify() ->
 
     assert state.execution_status == ConversationStatus.FINISHED
     assert execu.verify_calls == 0
-    assert len(host.calls) == 4
+    assert len(host.calls) == 1
     events = await store.get_events("conv")
     env = _env_messages(events)
-    assert any("<system-reminder>" in m and "Host verification did not pass" in m for m in env)
     assert any("Boom @ app.js:1" in m for m in env)
     assert any("WITHOUT a passing host verifier verdict" in m for m in env)
     assert ("RUNNING", "unverified_release") in _statuses(events)
@@ -488,8 +487,8 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
     assert verdicts[0].failures[0]["message"] == "Typed failure only."
 
     builder_context = "\n".join(msg.content for view in agent.seen_views for msg in view.messages)
-    assert "Typed verifier summary only." in builder_context
-    assert "Typed failure only." in builder_context
+    assert "Typed verifier summary only." not in builder_context
+    assert "Typed failure only." not in builder_context
     assert "RAW_CHECK_SECRET" not in builder_context
     assert judge.transcript not in builder_context
 
@@ -703,7 +702,7 @@ async def test_contract_judge_unverifiable_is_not_browser_unavailable() -> None:
     state = await loop.run()
 
     assert state.execution_status == ConversationStatus.FINISHED
-    assert len(judge.seeds) == 4
+    assert len(judge.seeds) == 1
     events = await store.get_events("conv")
     verdicts = [event for event in events if isinstance(event, VerifierVerdictEvent)]
     assert verdicts and all(event.verdict == "unavailable" for event in verdicts)
@@ -716,18 +715,14 @@ async def test_contract_judge_unverifiable_is_not_browser_unavailable() -> None:
         for event in verdicts
     )
     env = _env_messages(events)
-    assert any("Host verification did not pass" in message for message in env)
     assert any("WITHOUT a passing host verifier verdict" in message for message in env)
     assert not any("browser infrastructure could not run" in message for message in env)
 
 
 @pytest.mark.asyncio
 async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
-    """REL-1e flip safety: ``unavailable`` (verifier infra could not run) is not
-    evidence the app is broken — it must NOT burn host-refusal cycles, and it
-    must NOT delegate the browser gate to the host either (that would let the
-    app finish with no verification at all). The inline verify_web_app gate
-    stays the enforcement path."""
+    """Unavailable host infrastructure produces one terminal unverified result;
+    it never becomes a pass or another agent-facing verifier cycle."""
     host = _HostVerifier(
         _verdict(passed=False, fp="host_verifier_unavailable", verdict="unavailable")
     )
@@ -749,14 +744,13 @@ async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
     state = await loop.run()
 
     assert state.execution_status == ConversationStatus.FINISHED
-    # The inline gate enforced: the agent had to run a real verify_web_app.
-    assert execu.verify_calls >= 1
+    assert execu.verify_calls == 0
     events = await store.get_events("conv")
     env = _env_messages(events)
-    # No host-refusal cycle was burned and no loud unverified release happened.
+    # No host-refusal cycle was burned; the unavailable result is released loudly.
     assert not any("Host verification did not pass" in m for m in env)
-    assert not any("WITHOUT a passing host verifier verdict" in m for m in env)
-    assert ("RUNNING", "unverified_release") not in _statuses(events)
+    assert any("WITHOUT browser-render verification" in m for m in env)
+    assert ("RUNNING", "unverified_release") in _statuses(events)
     # The honest ``unavailable`` verdict is still on the audit trail.
     verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
     assert verdicts and all(v.verdict == "unavailable" for v in verdicts)

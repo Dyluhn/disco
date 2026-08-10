@@ -67,10 +67,10 @@ _REPLAN_FRAMING = (
     "  {instruction}\n\n"
     "Produce a REVISED plan that folds the new instruction into the steps above by "
     "CALLING the `submit_plan` tool with the FULL revised step list — e.g. "
-    'submit_plan(summary="…", steps=[{{"title":"…","done_condition":'
-    '{{"kind":"file_exists","path":"new/path","renamed_from":"old/path"}}}}]). '
-    "Retain every existing done_condition that still applies; use renamed_from only "
-    "when an existing file deliverable moves. Keep the steps you have already completed "
+    'submit_plan(summary="…", steps=[{{"title":"…"}}]). '
+    "Keep any advisory done_condition that is still useful, but freely replace or omit "
+    "one when the implementation layout changes; external acceptance requirements are "
+    "owned separately. Keep the steps you have already completed "
     "and add/adjust steps for the new instruction. Do NOT start editing files yet. A "
     "prose description of the plan does NOT register — ONLY a `submit_plan` tool call "
     "does; if you only describe it in text the build stays stuck in planning. The plan "

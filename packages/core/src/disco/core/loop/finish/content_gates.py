@@ -18,9 +18,9 @@ import asyncio
 import posixpath
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from ...dod import DoDSpec, FileExistsPredicate, predicate_fingerprints
+from ...dod import FileExistsPredicate
 from ...dod_evaluator import DoDEvaluator
-from ...events import ConversationStatus, DeliverableEvent, Event, PlanEvent, StatusEvent
+from ...events import DeliverableEvent, Event, PlanEvent, StatusEvent
 from ...llm import OperatingMode
 from ..boundaries import AgentStep
 from ..control import Disp
@@ -29,11 +29,11 @@ from .common import (
     _DICTATED_CONTENT_REFUSAL_CAP,
     _DOD_REFUSAL_CAP,
     _EXECUTION_NUDGE_CAP,
-    _execution_nudge,
     _LOG,
     _appkit_scope_active,
     _deliverable_event_paths,
     _DoDWorkspaceUnavailable,
+    _execution_nudge,
     _FinishGateComponent,
     _is_web_deliverable,
     _latest_plan_revision,
@@ -67,14 +67,10 @@ from .content_gate_parts.notices import (
     emit_execution_nudge,
     emit_external_dod_cap_pause_notice,
     emit_external_dod_unmet_notice,
-    emit_plan_verification_passed_notice,
-    emit_plan_verifier_failure_notice,
-    emit_plan_verifier_replan_required_notice,
     land_execution_nudge_exhausted,
 )
 from .content_gate_parts.plan_verifier_failure import (
     _failed_predicate_fingerprints,
-    build_plan_verifier_failure,
 )
 
 # These bundle-inspection limits and the plan-verifier fingerprint helper now
@@ -230,23 +226,6 @@ def _contract_required_paths_for_alias(alias: str) -> list[str]:
         return out
     except Exception:  # noqa: BLE001 — finish gate degrades to other path sources
         return []
-
-
-def _plan_predicates(plan: PlanEvent) -> list[Any]:
-    return [step.done_condition for step in plan.steps if step.done_condition is not None]
-
-
-def _plan_dod_spec(plan: PlanEvent | None) -> DoDSpec | None:
-    if plan is None:
-        return None
-    predicates = _plan_predicates(plan)
-    if not predicates:
-        return None
-    return DoDSpec(
-        predicates=predicates,
-        created_at=plan.timestamp.isoformat(),
-        note=f"approved-plan:{plan.id}:revision:{plan.revision}",
-    )
 
 
 async def _dictated_content_fallback_paths(loop: _LoopFacet, events: list[Event]) -> list[str]:
@@ -548,43 +527,32 @@ class _ContentGateService(_FinishGateComponent):
             return None
 
     async def finish_dod_gate_passed(self) -> bool:
-        """Evaluate immutable external requirements and the current plan separately."""
+        """Evaluate immutable external requirements only.
+
+        Plan ``done_condition`` values are agent-authored progress diagnostics. They
+        remain available to the step-level advisory evaluator, but are not acceptance
+        authority and cannot refuse finish. The external DoD is host-owned and remains
+        fail-closed.
+        """
         events = await self._loop._events()
         external_spec = await self._loop.store.get_external_dod_spec(self._loop.conversation_id)
         plan = signals.latest_approved_plan(events)
         if await self._reject_dangling_plan_evidence(events, plan):
             return False
-        plan_spec = _plan_dod_spec(plan)
-        if external_spec is None and plan_spec is None:
+        if external_spec is None:
             return True
         evaluator = await self._dod_evaluator_or_pause()
         if evaluator is None:
             return False
 
-        if external_spec is not None:
-            external_verdict = await evaluator.evaluate(
-                external_spec,
-                conversation_id=self._loop.conversation_id,
-            )
-            if not external_verdict.passed:
-                return await self._record_external_dod_failure(external_verdict)
-            self._loop._dod_refusals = 0
-
-        if plan_spec is None or plan is None:
-            return True
-        plan_verdict = await evaluator.evaluate(
-            plan_spec,
+        external_verdict = await evaluator.evaluate(
+            external_spec,
             conversation_id=self._loop.conversation_id,
         )
-        if plan_verdict.passed:
-            await emit_plan_verification_passed_notice(
-                self._loop,
-                plan,
-                predicate_fingerprints(_plan_predicates(plan)),
-                plan_verdict.spec_fingerprint,
-            )
-            return True
-        return await self._record_plan_verifier_failure(plan, plan_verdict, events)
+        if not external_verdict.passed:
+            return await self._record_external_dod_failure(external_verdict)
+        self._loop._dod_refusals = 0
+        return True
 
     async def _record_external_dod_failure(self, verdict: Any) -> bool:
         """Fail closed on immutable external authority with a bounded pause."""
@@ -601,36 +569,6 @@ class _ContentGateService(_FinishGateComponent):
             return False
         self._loop._dod_refusals += 1
         await emit_external_dod_unmet_notice(self._loop, verdict)
-        return False
-
-    async def _record_plan_verifier_failure(
-        self,
-        plan: PlanEvent,
-        verdict: Any,
-        events: list[Event],
-    ) -> bool:
-        """Record a typed plan failure, then bound repair → replan → STUCK."""
-        failure, failed_results = build_plan_verifier_failure(plan, verdict, events)
-        await emit_plan_verifier_failure_notice(self._loop, plan, failure, failed_results)
-
-        if not failure.replan_allowed:
-            await self._loop._land_blocked(
-                reason=f"unchanged plan verifier failed again at revision {plan.revision}",
-                guidance=(
-                    f"{len(failed_results)} plan-owned predicate(s) failed again on "
-                    f"attempt {failure.attempt_for_approved_plan} after replacement plan "
-                    f"revision {plan.revision} was approved. Explicit user review is "
-                    "required before another unchanged plan can run."
-                ),
-                legacy_status=ConversationStatus.STUCK,
-                legacy_detail="plan_verifier_replan_exhausted",
-            )
-            return False
-
-        if failure.attempt_for_approved_plan >= 2:
-            self._loop.mode = OperatingMode.PLANNING
-            self._loop._plan_explore_reads = 0
-            await emit_plan_verifier_replan_required_notice(self._loop)
         return False
 
     async def build_dod_evaluator(self) -> DoDEvaluator:

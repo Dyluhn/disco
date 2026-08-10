@@ -106,20 +106,19 @@ async def _refuse_verify_command(
 
 
 async def finish_verify_passed(gate: Any, command: str) -> tuple[bool, bool]:
-    """Run the agent's stated acceptance check before allowing `finish`
-    (verify-on-finish post-condition gate). The agent attaches a shell
-    command to finish whose exit 0 means the deliverable is good; we run it,
-    VISIBLE in the trace, and on failure REFUSE the finish so the agent fixes
-    the real problem instead of declaring a broken build complete.
+    """Run the agent's advisory finish check and retain its exact result.
+
+    The command is visible in the trace, but it is not acceptance authority:
+    pass, failure, or infrastructure error all return to the host-owned finish
+    gates without reopening the builder.
 
     The verify command is NOT privileged: it passes the same hard-deny gate
     AND the same confirmation policy as any action. A command that would
-    normally require confirmation is refused here (we don't silently run a
-    gated command as a 'verification') — the agent is told to run it as an
-    ordinary, gated action first. Ordinary test/build/lint checks assess as
-    MEDIUM and run unimpeded. Returns (passed, malformed): `passed` is True
-    iff the check ran and passed; `malformed` is True iff the verify command
-    itself is broken (command-not-found / SyntaxError) rather than the task.
+    normally require confirmation is omitted here rather than run silently.
+    Ordinary test/build/lint checks assess as MEDIUM and run unimpeded. Returns
+    (passed, malformed): `passed` is True iff the check ran and passed;
+    `malformed` is True iff the verify command itself is broken
+    (command-not-found / SyntaxError) rather than the task.
     """
 
     if _appkit_finish_verify_bypass(gate):
@@ -149,7 +148,8 @@ async def finish_verify_passed(gate: Any, command: str) -> tuple[bool, bool]:
             (
                 "<system-reminder>\n"
                 f"The verify command attached to finish is hard-denied ({deny}); it "
-                "will not run. Provide a safe verify command, or finish without one.\n"
+                "will not run. Host-owned acceptance continues without this advisory "
+                "check.\n"
                 "</system-reminder>"
             ),
         )
@@ -165,9 +165,8 @@ async def finish_verify_passed(gate: Any, command: str) -> tuple[bool, bool]:
                 "<system-reminder>\n"
                 f"The verify command attached to finish (`{command}`) assessed "
                 f"{getattr(risk, 'level', risk)} and needs confirmation to run, so "
-                "it won't be executed silently as a verification. Next move: run "
-                "that exact command as a normal action first (it will go through "
-                "the confirm gate), then finish.\n"
+                "it won't be executed silently as a verification. Host-owned "
+                "acceptance continues without this advisory check.\n"
                 "</system-reminder>"
             ),
         )

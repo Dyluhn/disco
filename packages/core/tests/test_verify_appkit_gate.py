@@ -1139,12 +1139,16 @@ async def test_appkit_build_refuses_on_appkit_fail_verdict() -> None:
     execu = AppKitVerifyExecutor([_appkit_verdict(passed=False, fp="FP1")])
     loop, store = _gate_loop(agent, execu)
     await loop.send_message("build me a lead-gen app")
-    await loop.run()
+    state = await loop.run()
 
     events = await store.get_events("conv")
-    assert execu.appkit_calls >= 1
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
     assert execu.web_calls == 0
-    assert any("verify_appkit_app did not pass" in m for m in _env(events)), _env(events)
+    assert ("RUNNING", "unverified_release") in _statuses(events)
+    assert any("WITHOUT a passing verify_appkit_app verdict" in m for m in _env(events)), _env(
+        events
+    )
 
 
 @pytest.mark.asyncio
@@ -1170,6 +1174,10 @@ async def test_appkit_direct_failed_verifier_diagnostics_halt_autonomous_no_prog
     assert execu.appkit_calls == 2
     assert not any(status == "FINISHED" for status, _detail in statuses)
     assert any(
+        (detail or "").startswith("debug_probe_budget_exhausted:") for _status, detail in statuses
+    )
+    assert any("debug tools are now withdrawn" in message for message in _env(events))
+    assert not any(
         detail == "verifier_no_progress"
         or (detail or "").startswith("verifier_no_progress:verify_appkit_app:")
         for _status, detail in statuses
@@ -1193,7 +1201,8 @@ async def test_appkit_failing_primitive_verify_refuses_finish() -> None:
     events = await store.get_events("conv")
     env = _env(events)
     statuses = _statuses(events)
-    assert state.execution_status.value != "FINISHED"
-    assert not any(s == "FINISHED" for s, _ in statuses), statuses
-    assert any("verify_appkit_app did not pass" in m for m in env), env
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
+    assert ("RUNNING", "unverified_release") in statuses
+    assert any("WITHOUT a passing verify_appkit_app verdict" in m for m in env), env
     assert any("primitive_verify:template_only" in m for m in env), env

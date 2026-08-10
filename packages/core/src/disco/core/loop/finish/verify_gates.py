@@ -127,11 +127,10 @@ _render_workflow_output_path = _pt_workflow_paths.render_workflow_output_path
 
 class _FinishVerifyService(_FinishGateComponent):
     async def finish_verify_passed(self, command: str) -> tuple[bool, bool]:
-        """Run the agent's stated acceptance check before allowing `finish`
-        (verify-on-finish post-condition gate). The agent attaches a shell
-        command to finish whose exit 0 means the deliverable is good; we run it,
-        VISIBLE in the trace, and on failure REFUSE the finish so the agent fixes
-        the real problem instead of declaring a broken build complete.
+        """Run the agent's advisory finish check and retain its exact result.
+
+        The command is visible in the trace but cannot veto completion. External
+        DoD and host-owned verification remain authoritative.
 
         The verify command is NOT privileged: it passes the same hard-deny gate
         AND the same confirmation policy as any action. A command that would
@@ -499,19 +498,10 @@ class _BrowserVerifyGateService(_FinishGateComponent):
         step: AgentStep | None = None,
         appkit_prepared: (tuple[VerifierStartedEvent, HostVerificationDeliverable] | None) = None,
     ) -> Disp:
-        """W-45 — verdict-consuming finish gate replacing `_browser_verified()` for web
-        builds with "the latest structured verifier verdict since the last productive
-        edit". At finish it drives once: pass → finish; fail → surface the verdict's
-        evidence and next action, then CONTINUE.
+        """Consume one current structured-verifier verdict at finish.
 
-        LOOP BREAKER: the verdict is cached by `_last_productive_seq` — a browser/
-        navigate/verify probe is NOT a productive edit, so re-verifying without an
-        edit reads the SAME cached verdict (no real re-run). When the SAME
-        `failure_fingerprint` recurs without a productive edit that changes the
-        served output, the gate marks the run STUCK instead of reloading 25-40×.
-        The 3-refusal release no longer
-        silently converts repeated failed verification into 'done' — it finishes
-        ONLY with an explicit blocked/incomplete summary."""
+        Ordinary builds pass cleanly or terminalize explicitly unverified.
+        Governed AppKit targets retain their admitted fail-closed contract."""
         return await _gate_verify_web_app_fn(
             self._coordinator,
             events,
@@ -578,15 +568,7 @@ class _BrowserVerifyGateService(_FinishGateComponent):
         return await _actionless_static_finish_fn(self, events)
 
     async def _verifier_unavailable_disposition(self, tool_name: str = "verify_web_app") -> Disp:
-        """P1-2 — disposition when the structured verifier is advertised but produced NO
-        usable verdict (verifier execution error / empty / the driven verify
-        failed). On the build/web surface a clean FINISH requires a real PASS
-        verdict, so this must NOT fall through to finalization (the W-32 regression
-        codex found). Refuse-and-continue with a "verification could not run"
-        reminder while under the cap; at the cap, release EXPLICITLY as unverified
-        (distinct status marker + visible message) rather than a silent clean
-        finish. Bounded by the shared `_browser_verify_refusals` cap so a verifier
-        that can never run still terminates."""
+        """Terminalize one unavailable ordinary verifier attempt honestly."""
         return await verifier_unavailable_disposition(self, tool_name)
 
     async def _browser_verify_delegated_to_host(self, step: AgentStep, events: list[Event]) -> bool:

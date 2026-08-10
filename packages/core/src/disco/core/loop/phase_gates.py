@@ -26,10 +26,13 @@ from .control import Disp
 from .messages import _stuck_escape_reminder
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .stuck import (
+    DEBUG_PROBE_BUDGET_DETAIL,
     RewriteDirective,
     StuckResult,
     VerifierEvidenceInvalid,
     VerifierFailureNoProgress,
+    debug_probe_budget,
+    debug_probe_budget_notice_active,
     no_progress_detected,
     repeated_failed_verifier_no_progress,
 )
@@ -541,13 +544,20 @@ class ProgressGateMixin(_ValveHost):
             events, marker_seq
         ):
             return await self._emit_no_progress_finish_hint()
+        actions_after_marker = sum(
+            1
+            for event in events
+            if isinstance(event, ActionEvent)
+            and event.seq is not None
+            and event.seq > marker_seq
+        )
         await self.land_blocked(
             reason="no_progress",
             guidance=(
                 "The verifier outcome stayed the same after the corrective "
                 "no-progress nudge and another edit attempt; the last "
                 f"`verify_web_app` on record still does not pass and "
-                f"{len([e for e in events if isinstance(e, ActionEvent) and e.seq is not None and e.seq > marker_seq])} "
+                f"{actions_after_marker} "
                 "action(s) have been taken since the nudge."
             ),
             legacy_status=ConversationStatus.STUCK,
@@ -557,6 +567,42 @@ class ProgressGateMixin(_ValveHost):
 
     async def gate_no_progress(self, events: list[Event]) -> Disp:
         """Escalate invalid, repeated, or unchanged verification evidence."""
+        budget = debug_probe_budget(events)
+        if budget.exhausted:
+            if not debug_probe_budget_notice_active(events, budget):
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                "You have used both structured debugging checks for the "
+                                "current artifact bytes. Rechecking unchanged files cannot "
+                                "add evidence, so those debug tools are now withdrawn. Wrap "
+                                "up and call `finish`, or make one real deliverable change "
+                                "if the evidence identified a concrete defect; a trusted "
+                                "mutation restores the two-check allowance.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                        meta={
+                            "diagnostic": DEBUG_PROBE_BUDGET_DETAIL,
+                            "debug_probe_calls": budget.calls,
+                            "mutation_floor_seq": budget.mutation_floor_seq,
+                        },
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail=budget.marker_detail,
+                    )
+                )
+                return Disp.CONTINUE
+            # The tools are already absent from the next model request. Do not
+            # turn the same evidence into the older verifier-no-progress STUCK.
+            return Disp.FALLTHROUGH
         finding = repeated_failed_verifier_no_progress(events)
         if isinstance(finding, VerifierEvidenceInvalid):
             return await self._land_invalid_verifier_evidence(finding)

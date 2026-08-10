@@ -493,8 +493,13 @@ class TestMappingStatic:
             # The live-readiness correction adds four focused ids in existing
             # router/preflight files: complete and terminal-stream success
             # signaling, cache refresh, and concurrent transient supersession.
-            "python_test_file_count": 834,
-            "python_static_test_id_count": 10084,
+            # The KISS completion boundary adds eleven focused package ids:
+            # six in the new debug-probe budget file and five across existing
+            # completion/verification contract files. Nothing is parametrized,
+            # so static and collected counts advance together; the one new file
+            # advances the Python test-file count once.
+            "python_test_file_count": 835,
+            "python_static_test_id_count": 10095,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -839,7 +844,8 @@ class TestCollectedCounts:
             # The host-verifier timeout correction adds two package ids.
             # The FINISHED exact-projection reuse correction adds one package id.
             # The live-readiness correction adds four package ids.
-            "packages": 10490,
+            # The KISS completion boundary adds eleven package ids.
+            "packages": 10501,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -943,7 +949,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12233 == sum(expected.values())
+        assert collected["total"] == 12244 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -959,7 +965,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12233}
+        assert result == {"collected_total": 12244}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -978,9 +984,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10084,
+            "python_static_ids": 10095,
             "typescript_static_ids": 1203,
-            "collected_total": 12233,
+            "collected_total": 12244,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

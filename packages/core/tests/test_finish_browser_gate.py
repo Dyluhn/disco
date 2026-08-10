@@ -261,15 +261,10 @@ def test_latest_browser_error_full_history():
 # ---- gate behavior through the REAL loop (order matrix a, c, d, e) ----------
 #
 # ScriptedAgent + a per-tool executor drive AgentLoop.run() end-to-end; the
-# assertions read the persisted event log — nudges/⚠ are checked VERBATIM, not
-# re-derived from the helpers.
+# assertions read the persisted event log, including the explicit unverified
+# terminal result for an ordinary build whose single browser check does not pass.
 
-_NUDGE_VERBATIM = (
-    "Before finishing: verify your app the way a user would. "
-    "Use the browser tool to navigate to http://127.0.0.1:8000/, "
-    "read the CONSOLE output, and fix any errors you see. "
-    "Finish only after a clean load."
-)
+_UNVERIFIED_PREFIX = "⚠ Finished WITHOUT a clean browser verification"
 
 
 class BrowserExecutor(FakeExecutor):
@@ -339,12 +334,12 @@ def _env_messages(events) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_loop_refuses_then_release_valve():
-    # (a) + (e): web deliverable, agent NEVER browses, insists on finishing.
-    # Expect exactly 3 verbatim nudges, then the ⚠ valve message, then FINISHED.
+    # An ordinary web deliverable gets one host-owned browser check. Failure is
+    # terminal and explicit; it never reopens the builder for a retry cycle.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
-            finish_step(),  # ScriptedAgent repeats the last step on every refusal
+            finish_step(),
         ]
     )
     loop, store = _gate_loop(agent, BrowserExecutor(console=[]))
@@ -353,11 +348,15 @@ async def test_loop_refuses_then_release_valve():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    nudges = [m for m in env if m == _NUDGE_VERBATIM]
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
-    assert len(nudges) == 3, f"expected 3 verbatim refusal nudges, got {len(nudges)}: {env}"
-    assert len(warns) == 1, f"expected one ⚠ valve message, got: {env}"
-    assert "none seen" in warns[0]  # agent never looked at all
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
+    assert len(warns) == 1, f"expected one explicit unverified result, got: {env}"
+    assert "page rendered no meaningful content" in warns[0]
+    assert not any(m.startswith("Before finishing:") for m in env)
+    assert sum(call.tool_name == "browser" for call in loop.executor.calls) == 1
+    assert any(
+        isinstance(event, StatusEvent) and event.detail == "unverified_release"
+        for event in events
+    )
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses  # the valve released the run — no deadlock
 
@@ -381,15 +380,15 @@ async def test_loop_clean_browse_finishes_first_try():
     events = await store.get_events("conv")
     env = _env_messages(events)
     assert not any(m.startswith("Before finishing:") for m in env), env
-    assert not any(m.startswith("⚠ finished WITHOUT") for m in env), env
+    assert not any(m.startswith(_UNVERIFIED_PREFIX) for m in env), env
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses
 
 
 @pytest.mark.asyncio
 async def test_loop_error_console_quotes_error_in_nudge():
-    # (d) through the loop: the page throws; every refusal quotes the first
-    # error line, and the eventual ⚠ valve carries it too.
+    # The one-shot result preserves the concrete console failure without
+    # sending the model through a repair cycle.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
@@ -406,10 +405,9 @@ async def test_loop_error_console_quotes_error_in_nudge():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    quoting = [m for m in env if "The last load had errors: Uncaught SyntaxError: boom" in m]
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
-    assert len(quoting) == 3, f"expected 3 error-quoting nudges, got {len(quoting)}: {env}"
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
     assert len(warns) == 1 and "Uncaught SyntaxError: boom" in warns[0]
+    assert not any(m.startswith("Before finishing:") for m in env)
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses
 
@@ -437,11 +435,10 @@ async def test_loop_post_browse_edit_still_quotes_seen_error():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
     assert len(warns) == 1
     assert "BP05-SEEDED-ERROR" in warns[0], f"valve erased the seen error: {warns[0]!r}"
-    quoting = [m for m in env if "The last load had errors: BP05-SEEDED-ERROR" in m]
-    assert len(quoting) == 3, f"nudges should quote the seen error: {env}"
+    assert not any(m.startswith("Before finishing:") for m in env)
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses
 
@@ -513,8 +510,8 @@ class ConfigurableBrowserExecutor(FakeExecutor):
 
 
 def _never_browses_agent():
-    # Web deliverable written, then the agent insists on finishing WITHOUT ever
-    # browsing. ScriptedAgent repeats the last step (finish) on every refusal.
+    # Web deliverable written, then the agent finishes without browsing. The
+    # host-owned finish check supplies the one browser probe.
     return ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "<h1>x</h1>"}),
@@ -595,8 +592,7 @@ def test_browser_content_meaningful_pure():
 @pytest.mark.asyncio
 async def test_active_probe_drives_browser_when_agent_never_browsed_console_error():
     # (a) Agent never browses; the gate DRIVES the probe, which surfaces a console
-    # error → finish REFUSED and the nudge quotes the error. Bounded: 3 nudges
-    # then the ⚠ valve releases (no hang).
+    # error → one explicit unverified terminal result that quotes the error.
     execu = ConfigurableBrowserExecutor(
         console=[{"level": "error", "text": "Uncaught ReferenceError: boom"}],
         text="A rendered page with plenty of visible text content here",
@@ -607,12 +603,10 @@ async def test_active_probe_drives_browser_when_agent_never_browsed_console_erro
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    quoting = [m for m in env if "The last load had errors: Uncaught ReferenceError: boom" in m]
-    assert len(quoting) == 3, f"gate should drive + quote the error 3×: {env}"
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
     assert len(warns) == 1 and "Uncaught ReferenceError: boom" in warns[0]
     # the gate itself drove the browse (agent never emitted a browser step)
-    assert execu.browser_calls >= 1
+    assert execu.browser_calls == 1
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses  # valve released — no deadlock
 
@@ -633,7 +627,7 @@ async def test_active_probe_clean_render_finishes():
     events = await store.get_events("conv")
     env = _env_messages(events)
     assert not any(m.startswith("Before finishing:") for m in env), env
-    assert not any(m.startswith("⚠ finished WITHOUT") for m in env), env
+    assert not any(m.startswith(_UNVERIFIED_PREFIX) for m in env), env
     assert execu.browser_calls >= 1  # the gate verified for the overclaiming agent
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses
@@ -642,8 +636,8 @@ async def test_active_probe_clean_render_finishes():
 @pytest.mark.asyncio
 async def test_active_probe_blank_render_refused():
     # (c) Clean console BUT the page rendered nothing (empty text, no elements) —
-    # serves-200-but-blank. The blank-render guard refuses the finish even though
-    # the console is clean.
+    # serves-200-but-blank. It cannot pass, but an ordinary build terminalizes
+    # honestly instead of reopening the builder.
     execu = ConfigurableBrowserExecutor(console=[], title="t", text="", elements=[])
     loop, store = _gate_loop(_never_browses_agent(), execu)
     await loop.send_message("build me a page")
@@ -651,11 +645,10 @@ async def test_active_probe_blank_render_refused():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    nudges = [m for m in env if m == _NUDGE_VERBATIM]
-    assert len(nudges) == 3, f"blank render should be refused (clean console ≠ works): {env}"
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
     assert len(warns) == 1
-    assert execu.browser_calls >= 1
+    assert "page rendered no meaningful content" in warns[0]
+    assert execu.browser_calls == 1
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses
 
@@ -663,8 +656,8 @@ async def test_active_probe_blank_render_refused():
 @pytest.mark.asyncio
 async def test_active_probe_browser_unavailable_degrades():
     # (d) Browserless backend (no `browser` tool): the probe is a no-op and the
-    # gate degrades to today's passive nudge/release — no hang, no crash, and the
-    # gate never emits a browser action it can't run.
+    # gate emits one honest terminal result — no hang, no crash, and it never
+    # emits a browser action it cannot run.
     execu = ConfigurableBrowserExecutor(has_browser=False)
     loop, store = _gate_loop(_never_browses_agent(), execu)
     await loop.send_message("build me a page")
@@ -672,10 +665,8 @@ async def test_active_probe_browser_unavailable_degrades():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    nudges = [m for m in env if m == _NUDGE_VERBATIM]
-    assert len(nudges) == 3, f"degrade path should still nudge 3×: {env}"
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
-    assert len(warns) == 1 and "none seen" in warns[0]
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
+    assert len(warns) == 1 and "No clean, meaningful browser render" in warns[0]
     # the probe never emitted a browser action (no browser backend to drive)
     assert execu.browser_calls == 0
     from disco.core import ActionEvent
@@ -789,7 +780,7 @@ async def test_active_probe_drives_resolved_random_port_and_finishes():
     events = await store.get_events("conv")
     env = _env_messages(events)
     assert not any(m.startswith("Before finishing:") for m in env), env
-    assert not any(m.startswith("⚠ finished WITHOUT") for m in env), env
+    assert not any(m.startswith(_UNVERIFIED_PREFIX) for m in env), env
     # the gate drove the probe against the RESOLVED port, never :8000
     from disco.core import ActionEvent
 
@@ -808,8 +799,7 @@ async def test_active_probe_drives_resolved_random_port_and_finishes():
 async def test_active_probe_foreign_port_observation_is_rejected():
     # The preview is resolved to :54321 but the browser observation comes back on a
     # FOREIGN port (:9999) with a clean console + meaningful content. Binding to the
-    # resolved preview must REJECT it — so the gate refuses (3 nudges, pointed at the
-    # resolved :54321) then releases the valve, never landing the foreign page as done.
+    # resolved preview must reject it and name :54321 in the unverified result.
     execu = ConfigurableBrowserExecutor(
         console=[],
         title="Unrelated",
@@ -823,13 +813,10 @@ async def test_active_probe_foreign_port_observation_is_rejected():
 
     events = await store.get_events("conv")
     env = _env_messages(events)
-    nudges = [
-        m for m in env if m.startswith("Before finishing:") and "http://127.0.0.1:54321/" in m
-    ]
-    assert len(nudges) == 3, f"foreign-port obs must be rejected + nudge at :54321: {env}"
-    assert not any("8000" in m for m in nudges)  # never the dead fixed port
-    warns = [m for m in env if m.startswith("⚠ finished WITHOUT a clean browser verification")]
+    warns = [m for m in env if m.startswith(_UNVERIFIED_PREFIX)]
     assert len(warns) == 1
+    assert "http://127.0.0.1:54321/" in warns[0]
+    assert "8000" not in warns[0]
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" in statuses  # valve released — no deadlock
 

@@ -197,7 +197,7 @@ def _impl_test_failed_verifier_concrete_mutation_receipt_resets(tool: str, struc
     assert repeated_failed_verifier_no_progress(events) is None
 
 
-async def _impl_test_failed_verifier_gate_nudges_then_halts_after_varied_diagnostic():
+async def _impl_test_debug_probe_budget_nudges_once_then_falls_through():
     agent = ScriptedAgent([finish_step()])
     loop, store = build_loop(agent, autonomous=True)
     await store.append(CID, user_msg("build the app"))
@@ -213,7 +213,7 @@ async def _impl_test_failed_verifier_gate_nudges_then_halts_after_varied_diagnos
     nudged = await store.get_events(CID)
     assert any(
         isinstance(event, StatusEvent)
-        and (event.detail or "").startswith("verifier_no_progress:verify_appkit_app:")
+        and (event.detail or "").startswith("debug_probe_budget_exhausted:")
         for event in nudged
     )
     reminder = next(
@@ -221,31 +221,25 @@ async def _impl_test_failed_verifier_gate_nudges_then_halts_after_varied_diagnos
         for event in nudged
         if isinstance(event, MessageEvent)
         and event.source == EventSource.ENVIRONMENT
-        and "same failed verification fingerprint" in (event.message.content or "").lower()
+        and "debug tools are now withdrawn" in (event.message.content or "").lower()
     )
-    assert "do not call `finish`" in (reminder.message.content or "").lower()
-    assert "repair the worker route" in (reminder.message.content or "").lower()
+    assert "wrap up and call `finish`" in (reminder.message.content or "").lower()
 
     read = action(thought="inspect another file", tool="file_read", args={"path": "worker.ts"})
     await store.append(CID, read)
     await store.append(CID, observation(action_id=read.id, tool="file_read", content="source"))
     disp = await loop._valve.gate_no_progress(await store.get_events(CID))
-    assert disp is Disp.HALT
+    assert disp is Disp.FALLTHROUGH
     events = await store.get_events(CID)
-    assert_blocked_question_landing(
-        events,
-        legacy_detail="verifier_no_progress",
-        flavor="terminal",
-    )
     assert not any(
-        isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+        isinstance(event, StatusEvent)
+        and event.status in {ConversationStatus.FINISHED, ConversationStatus.STUCK}
         for event in events
     )
-    assert agent.calls == 0, "host-owned convergence terminal must not spend another model call"
+    assert agent.calls == 0
 
 
-async def _impl_test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_streak():
-    """Sanitized RUN-548: another verifier diagnostic cannot hide web failure A."""
+async def _impl_test_debug_probe_budget_is_shared_across_verifier_tools():
 
     agent = ScriptedAgent([finish_step()])
     loop, store = build_loop(agent, autonomous=True)
@@ -263,14 +257,13 @@ async def _impl_test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_
 
     assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
 
-    # The one bounded diagnostic is a different verifier and a different
-    # fingerprint. It is not evidence that the unresolved web verdict improved.
+    # A different verifier is still part of the same two-probe allowance.
     for event in _structured_verifier_probe(fp="APPKIT-B", tool="verify_appkit_app"):
         await store.append(CID, event)
-    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.HALT
+    assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.FALLTHROUGH
 
     events = await store.get_events(CID)
-    assert any(
+    assert not any(
         isinstance(event, StatusEvent)
         and event.status == ConversationStatus.STUCK
         and event.detail == "verifier_no_progress"
@@ -283,7 +276,7 @@ async def _impl_test_failed_verifier_cross_tool_r9_shape_retains_unresolved_web_
     assert agent.calls == 0
 
 
-async def _impl_test_failed_verifier_old_marker_does_not_survive_new_mutation_streak():
+async def _impl_test_debug_probe_budget_marker_resets_after_trusted_mutation():
     agent = ScriptedAgent([finish_step()])
     loop, store = build_loop(agent, autonomous=True)
     await store.append(CID, user_msg("build the app"))
@@ -306,13 +299,14 @@ async def _impl_test_failed_verifier_old_marker_does_not_survive_new_mutation_st
         event
         for event in await store.get_events(CID)
         if isinstance(event, StatusEvent)
-        and (event.detail or "").startswith("verifier_no_progress:verify_web_app:")
+        and (event.detail or "").startswith("debug_probe_budget_exhausted:")
     ]
     assert len(markers) == 2
+    assert markers[0].detail != markers[1].detail
     assert agent.calls == 0
 
 
-async def _impl_test_failed_verifier_marker_metadata_cannot_substitute_for_semantic_detail():
+async def _impl_test_legacy_verifier_marker_cannot_substitute_for_budget_marker():
     agent = ScriptedAgent([finish_step()])
     loop, store = build_loop(agent, autonomous=True)
     await store.append(CID, user_msg("build the app"))
@@ -335,7 +329,7 @@ async def _impl_test_failed_verifier_marker_metadata_cannot_substitute_for_seman
     assert await loop._valve.gate_no_progress(await store.get_events(CID)) is Disp.CONTINUE
     assert any(
         isinstance(event, StatusEvent)
-        and (event.detail or "").startswith("verifier_no_progress:verify_web_app:")
+        and (event.detail or "").startswith("debug_probe_budget_exhausted:")
         for event in await store.get_events(CID)
     )
     assert agent.calls == 0
@@ -565,9 +559,8 @@ async def _impl_test_t2_circuit_breaker_recovery_message_carries_search_and_envi
     assert "environment" in content
 
 
-async def _impl_test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan():
-    """#37d live regression: a stable PASS verifier outcome means DONE, not a
-    blocked user question, even when effective plan marks are stale/incomplete."""
+async def _impl_test_debug_probe_budget_preempts_legacy_pass_churn_hint():
+    """Repeated PASS probes on unchanged bytes get one direct wrap-up notice."""
     from disco.core.events import PlanEvent, PlanStep
 
     loop, store = build_loop(ScriptedAgent([finish_step()]))
@@ -593,9 +586,15 @@ async def _impl_test_no_progress_gate_finish_hints_when_latest_verify_passes_des
         await store.append(CID, e)
 
     disp = await loop._valve.gate_no_progress(await store.get_events(CID))
-    assert disp is Disp.CONTINUE
+    assert disp is Disp.FALLTHROUGH
     events = await store.get_events(CID)
-    assert any(isinstance(e, StatusEvent) and e.detail == "no_progress_finish_hint" for e in events)
+    assert any(
+        isinstance(e, StatusEvent) and (e.detail or "").startswith("debug_probe_budget_exhausted:")
+        for e in events
+    )
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == "no_progress_finish_hint" for e in events
+    )
     assert not any(
         isinstance(e, StatusEvent)
         and e.status == ConversationStatus.AWAITING_USER_QUESTION

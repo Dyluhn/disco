@@ -31,7 +31,7 @@ from disco.core.llm import (
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.prompts import DriverPrompts
 
-_PLANNING_SHA256 = "77d82107668389e9bed99861f80d3730cc06c1850648352e7106bc13c060a3c4"
+_PLANNING_SHA256 = "bf9e2c8a1803cb61a0483a04fbdecb089c670520808f37809da513771dd3fc59"
 _RESUME_SHA256 = "427a1ece08ac8b6e41ad3afe3757aae72e679814667dd79aaa622758c8a4f9a2"
 _EXPECTED_KEYS = (
     "model",
@@ -209,7 +209,7 @@ async def test_planning_request_matches_accepted_ordered_bytes() -> None:
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 321, 11_213, 10_600, 430, 2, 2)
+    assert _budget_values(estimate) == (65_536, 321, 11_217, 10_604, 430, 2, 2)
     assert response.routing is not None and response.routing.attempt == 1
     assert captured[0][1] == "golden-plan"
     _assert_request(

@@ -1,8 +1,8 @@
-"""Verify-on-finish — the post-condition gate (Claude-Code 'run the tests before
-you claim done'). When the agent attaches a `verify` shell command to `finish`,
-the loop RUNS it and refuses the finish unless it passes. The check is not
-privileged: it passes the same hard-deny gate and confirmation policy as any
-action.
+"""Verify-on-finish is bounded model-authored debugging evidence.
+
+When the agent attaches a ``verify`` command, the loop runs it once through the
+normal safety policy. Its result is retained, but only host-owned acceptance can
+veto completion; a failed or malformed model-authored check cannot reopen build.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from disco.core import (
     MessageEvent,
     ObservationEvent,
     SecurityRisk,
+    StatusEvent,
     ToolCall,
     ToolResult,
     WorkspaceMutationEvent,
@@ -31,10 +32,14 @@ from loop_fakes import FakeAnalyzer, FakeExecutor, SequenceProvider, build_loop
 CID = "conv"
 
 
-def _agent(scripted):
+def _agent_and_provider(scripted):
     provider = SequenceProvider(scripted)
     router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
-    return RouterAgent(router, conversation_id=CID)
+    return RouterAgent(router, conversation_id=CID), provider
+
+
+def _agent(scripted):
+    return _agent_and_provider(scripted)[0]
 
 
 def _finish(verify=None, summary="done"):
@@ -125,9 +130,7 @@ async def test_finish_probe_executes_the_persisted_view_stamped_action():
 
 
 async def test_verify_fails_then_finish_is_refused_and_loop_continues():
-    # Call 1: finish with a verify that FAILS → refused, loop keeps going.
-    # Call 2: finish WITHOUT verify → the run finishes.
-    agent = _agent([_finish(verify="pytest -q"), _finish(verify=None)])
+    agent, provider = _agent_and_provider([_finish(verify="pytest -q"), _finish(verify=None)])
     failing = ToolResult(
         call_id="c", tool_name="shell", success=False, content="2 failed", error="exit 1"
     )
@@ -137,19 +140,20 @@ async def test_verify_fails_then_finish_is_refused_and_loop_continues():
     await loop.send_message("ship it")
     state = await loop.run()
 
-    # It ultimately finished (via the second, verify-less finish)...
     assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 1
+    assert len(executor.calls) == 1
     events = await store.get_events(CID)
-    # ...but the failed verify was recorded as an error (the agent saw it)...
     assert any(isinstance(e, AgentErrorEvent) for e in events)
-    # ...and there is exactly ONE FINISHED status (the first finish did NOT land).
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "finish_verify_advisory_failed" for e in events
+    )
     finishes = [e for e in events if getattr(e, "status", None) == ConversationStatus.FINISHED]
     assert len(finishes) == 1
 
 
 async def test_hard_denied_verify_is_refused_without_running():
-    # A catastrophic verify command is refused BEFORE execution.
-    agent = _agent([_finish(verify="rm -rf /"), _finish(verify=None)])
+    agent, provider = _agent_and_provider([_finish(verify="rm -rf /"), _finish(verify=None)])
     executor = FakeExecutor()
     loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
 
@@ -157,6 +161,7 @@ async def test_hard_denied_verify_is_refused_without_running():
     state = await loop.run()
 
     assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 1
     # The dangerous command NEVER reached the executor.
     assert executor.calls == []
     events = await store.get_events(CID)
@@ -167,7 +172,7 @@ async def test_verify_needing_confirmation_is_refused_not_silently_run():
     # Under ConfirmRisky, a verify command the analyzer flags HIGH must NOT be
     # silently auto-run as a 'verification' — it's refused with guidance to run
     # it as a normal, gated action first.
-    agent = _agent([_finish(verify="deploy --prod"), _finish(verify=None)])
+    agent, provider = _agent_and_provider([_finish(verify="deploy --prod"), _finish(verify=None)])
     executor = FakeExecutor()
     loop, store = build_loop(
         agent,
@@ -180,6 +185,7 @@ async def test_verify_needing_confirmation_is_refused_not_silently_run():
     state = await loop.run()
 
     assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 1
     assert executor.calls == []  # never silently executed
     events = await store.get_events(CID)
     assert any(isinstance(e, AgentErrorEvent) and "needs confirmation" in e.error for e in events)

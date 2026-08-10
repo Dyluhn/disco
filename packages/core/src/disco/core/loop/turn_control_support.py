@@ -26,15 +26,16 @@ from . import signals
 from .boundaries import AgentStep
 from .control import Disp
 from .ordinals import ordinal
-from .turn_control_serve_refusals import (
-    serve_target_shape_guidance as _serve_target_shape_guidance,
-    questions_v2_attempts_since_last_plan as _questions_v2_attempts_since_last_plan,
-    serve_argument_refusal,
-    serve_spend_escalation,
-)
 from .stuck import (
     F6_FILE_MUTATING_TOOLS,
     VerifierFailureNoProgress,
+)
+from .turn_control_serve_refusals import (
+    serve_argument_refusal,
+    serve_spend_escalation,
+)
+from .turn_control_serve_refusals import (
+    serve_target_shape_guidance as _serve_target_shape_guidance,
 )
 
 if TYPE_CHECKING:
@@ -91,10 +92,9 @@ def _serve_next_move(events: list[Event]) -> str:
 
     That sentence hands the done-determination back to the agent — the one
     determination the agent is worst placed to make and the platform already
-    holds. `_plan_done_and_verified` sits forty lines below and answers it from
-    the durable log; `effective_plan_progress` is the single source of truth for
-    per-step completion. The message asked the model to re-derive, from memory,
-    a fact the host had computed. The 97903 cell took that fork into its F47 red.
+    holds. `effective_plan_progress` is the single source of truth for per-step
+    completion. The message asked the model to re-derive, from memory, a fact the
+    host had computed. The 97903 cell took that fork into its F47 red.
 
     So the fork is gone. This returns exactly one move, drawn from the SAME
     projection the loop grades with, or says plainly that nothing is outstanding.
@@ -115,22 +115,9 @@ def _serve_next_move(events: list[Event]) -> str:
                 f"Next move: plan step {index}{named} is not marked done. Do that "
                 "step, then call `finish`."
             )
-    if not _last_verify_web_app_passed(events):
-        if plan is None or not plan.steps:
-            return (
-                "Next move: call `finish`. The record shows no plan step "
-                "outstanding and no passing `verify_web_app` on file — if this "
-                "deliverable needs one, run it first."
-            )
-        return (
-            "Next move: every plan step is marked done, but there is no passing "
-            "`verify_web_app` result on record. Run that verification, then call "
-            "`finish`."
-        )
-    return (
-        "Next move: call `finish`. Every plan step is marked done and the latest "
-        "`verify_web_app` passed."
-    )
+    if plan is None or not plan.steps:
+        return "Next move: call `finish`. The record shows no plan step outstanding."
+    return "Next move: call `finish`. Every plan step is marked done."
 
 
 def _serve_handoff_guidance(repeats: int, events: list[Event]) -> str:

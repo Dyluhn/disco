@@ -38,6 +38,7 @@ from .driver_read_escape import (
     trusted_receipt_since,
 )
 from .messages import _describe_llm_error
+from .no_progress_detector import debug_probe_blocked_tools
 from .progress import reduce_progress
 
 if TYPE_CHECKING:
@@ -162,7 +163,9 @@ def prepare_drive_context(
     recovered = escape_seq is not None and trusted_receipt_since(events, escape_seq)
     in_escape = escape_seq is not None and not recovered
     escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-    blocked_tools = stuck_escape_blocked_tools_for_step(events)
+    blocked_tools = (
+        stuck_escape_blocked_tools_for_step(events) | debug_probe_blocked_tools(events)
+    )
     _record_progress(driver, events, in_escape)
     mode = _effective_mode(driver, view, events)
     fresh_session = (

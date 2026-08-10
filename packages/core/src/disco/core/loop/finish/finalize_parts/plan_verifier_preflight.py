@@ -1,9 +1,8 @@
-"""Plan-verifier preflight for the finish gate.
+"""Legacy plan-verifier preflight helpers retained for log compatibility.
 
-Sole owner of "does an unchanged, still-failing plan-verifier fingerprint
-block the optional model-owned finish verifier" policy. Extracted from
-``_FinalizeMixin._preflight_failed_plan_verifier`` in ``finalize.py``, which
-now delegates here.
+Model-authored plan conditions are advisory and the finish path no longer calls
+this module. The pure readers remain temporarily available to historical tests
+and downstream imports while that compatibility surface is retired separately.
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ async def preflight_failed_plan_verifier(
     events: list[Event],
     finish_dod_gate_passed: Callable[[], Awaitable[bool]],
 ) -> bool:
-    """Recheck an unchanged failing plan gate before optional verification.
+    """Evaluate the retired preflight rule for compatibility callers.
 
     Find the currently approved plan predicate fingerprints. If the same
     predicate set has a prior typed ``plan_verifier_failure`` and no
@@ -65,8 +64,8 @@ async def preflight_failed_plan_verifier(
     ``finish_dod_gate_passed`` first. If it returns False, return True so
     the caller returns ``Disp.CONTINUE`` before the optional verifier.
 
-    Returns True when the optional shell verifier must be skipped (the
-    caller should return CONTINUE).
+    Production finish does not call this function because a model-authored plan
+    condition cannot block either the advisory shell check or completion.
     """
     predicate_fps = _plan_predicate_fingerprints(events)
     if predicate_fps is None:

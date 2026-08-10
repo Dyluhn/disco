@@ -45,6 +45,8 @@ from ..common import (
 from .host_authority import bind_host_verification_authority
 from .host_claims import governed_verification_required, user_verification_material
 
+# Compatibility re-exports only. Medium detection no longer synthesizes this
+# requirement; an admitted target may still supply the exact claim explicitly.
 _GAME_INTERACTION_CLAIM_ID = "web.interaction:canvas-keyboard-smoke"
 _GAME_INTERACTION_EXPECTED = (
     "host browser completed canvas click, Space, ArrowRight, and post-interaction capture"
@@ -303,7 +305,12 @@ async def with_host_verification_profile(
     deliverable: HostVerificationDeliverable,
     events: list[Event],
 ) -> HostVerificationDeliverable:
-    """Lower deterministic target-medium evidence into exact host claims."""
+    """Select the observed medium without inventing behavioral requirements.
+
+    Interaction claims come only from an admitted target/check contract. A canvas
+    heuristic can select the browser probe implementation, but it cannot infer that
+    every game must accept a canvas click followed by Space and ArrowRight.
+    """
 
     check = deliverable.verification_check
     contract = deliverable.verification_contract
@@ -317,23 +324,7 @@ async def with_host_verification_profile(
     paths = [deliverable.artifact_path]
     hint = await gate._verifier_medium_hint(paths)
     medium = hint.kind if hint is not None else "web"
-    claims = list(deliverable.required_claims)
-    if (
-        medium == "game"
-        and (check is None or VerificationClaimKind.INTERACTION in check.accepted_claim_kinds)
-        and not any(claim.claim_id == _GAME_INTERACTION_CLAIM_ID for claim in claims)
-    ):
-        claims.append(
-            HostVerificationClaim(
-                claim_id=_GAME_INTERACTION_CLAIM_ID,
-                kind=VerificationClaimKind.INTERACTION,
-                expected=_GAME_INTERACTION_EXPECTED,
-                source_authority="target.game.functional_interaction@1",
-            )
-        )
-    return deliverable.model_copy(
-        update={"verification_medium": medium, "required_claims": tuple(claims)}
-    )
+    return deliverable.model_copy(update={"verification_medium": medium})
 
 
 def verdict_label(verdict: dict | None) -> str | None:

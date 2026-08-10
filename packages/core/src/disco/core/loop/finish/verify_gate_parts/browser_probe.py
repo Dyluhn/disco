@@ -303,6 +303,7 @@ async def maybe_honest_unverifiable_static_actionless_finish(
         return False
     # All guards hold — finish honestly instead of pausing actionless. Same honest
     # marker as the finish-gate path, then a clean terminal FINISHED (NOT PAUSED).
+    actionless_pauses = signals.actionless_pause_count_current_execution_segment(events)
     await gate._loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -320,7 +321,7 @@ async def maybe_honest_unverifiable_static_actionless_finish(
                     "passed, but this backend cannot run a headless browser and no "
                     "preview server is reachable, so the only remaining plan step "
                     "(browser verification) could not run here. This run reached "
-                    f"the honest-unverifiable finish after {signals.actionless_pause_count_current_execution_segment(events)} "
+                    f"the honest-unverifiable finish after {actionless_pauses} "
                     "actionless pause(s). The files are "
                     "delivered; note clearly in your summary that the render is "
                     "UNVERIFIED."
@@ -334,37 +335,12 @@ async def maybe_honest_unverifiable_static_actionless_finish(
 
 
 async def verifier_unavailable_disposition(gate: Any, tool_name: str = "verify_web_app") -> Disp:
-    """P1-2 — disposition when the structured verifier is advertised but produced NO
-    usable verdict (verifier execution error / empty / the driven verify
-    failed). On the build/web surface a clean FINISH requires a real PASS
-    verdict, so this must NOT fall through to finalization (the W-32 regression
-    codex found). Refuse-and-continue with a "verification could not run"
-    reminder while under the cap; at the cap, release EXPLICITLY as unverified
-    (distinct status marker + visible message) rather than a silent clean
-    finish. Bounded by the shared `_browser_verify_refusals` cap so a verifier
-    that can never run still terminates.
+    """Terminalize one unavailable ordinary verifier attempt honestly.
+
+    Governed targets do not call this compatibility disposition; their typed
+    contract path remains fail-closed. An ordinary build gets one host-owned
+    attempt and an explicit unverified release, never a repair loop.
     """
-    if gate._loop._browser_verify_refusals < 3:
-        gate._loop._browser_verify_refusals += 1
-        await gate._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        f"verification could not run: {tool_name} did not return a "
-                        "usable verdict (the verifier failed to execute, or the preview "
-                        "server is not reachable on its port). The build is NOT verified "
-                        "— start/repair the dev server on the preview port, then finish "
-                        "again and it will re-verify."
-                    ),
-                ),
-            )
-        )
-        return Disp.CONTINUE
-    # Cap reached — bounded release, but EXPLICITLY unverified (never a clean
-    # done): distinct terminal marker + visible message, mirroring the FAIL
-    # release above.
     await gate._loop._emit(
         StatusEvent(
             status=ConversationStatus.RUNNING,
@@ -378,8 +354,8 @@ async def verifier_unavailable_disposition(gate: Any, tool_name: str = "verify_w
                 role="user",
                 content=(
                     f"⚠ Finished WITHOUT a {tool_name} verdict — the verifier could "
-                    "not run after 3 attempts, so the deliverable is UNVERIFIED and may "
-                    "be INCOMPLETE. Note this clearly in your summary."
+                    "not run, so the deliverable is UNVERIFIED and may be INCOMPLETE. "
+                    "Note this clearly in your summary."
                 ),
             ),
         )

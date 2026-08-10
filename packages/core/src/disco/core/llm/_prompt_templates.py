@@ -87,13 +87,13 @@ _PLANNING_DRIVER_PROMPT = (
     "  Phase 2 — PROPOSE. Call the `submit_plan` tool exactly once with:\n"
     "    - summary (REQUIRED — never omit it): one or two plain-language sentences "
     "describing what you will deliver.\n"
-    "    - steps: an ordered list of step OBJECTS, each "
-    '{"title": "<short outcome-focused capstone>", "done_condition": '
-    '{"kind": "file_exists", "path": "<a file this step creates>"}} — e.g. '
-    '{"title": "Scaffold the file layout: index.html + styles.css + app.js", '
-    '"done_condition": '
-    '{"kind": "file_exists", "path": "styles.css"}}. `done_condition` is OPTIONAL: '
-    "OMIT it entirely rather than guess a shape; when used the ONLY valid shapes are "
+    "    - steps: an ordered list of outcome-focused step OBJECTS. "
+    "`done_condition` is OPTIONAL advisory progress evidence, not a finish gate. Use it "
+    "only when an exact stable output is already required — e.g. "
+    '{"title": "Create the required index.html entry", "done_condition": '
+    '{"kind": "file_exists", "path": "index.html"}}. '
+    "OMIT it rather than invent filenames or freeze an implementation layout. When used, "
+    "the ONLY valid shapes are "
     '{"kind": "file_exists", "path": ...}, {"kind": "command", "cmd": ..., '
     '"expect_exit": 0}, or {"kind": "http_ok", "url": ..., "expect_status": 200}. '
     "Use http_ok only for a concrete, already-known external fully qualified hostname "
@@ -103,10 +103,11 @@ _PLANNING_DRIVER_PROMPT = (
     "or `npm test`. Command conditions run in non-interactive Bash, the same shell used "
     "during execution. A command done_condition is scoped to the approved plan revision: "
     "it runs unattended with closed stdin and a bounded timeout, and a later approved plan "
-    "revision may replace it without changing external acceptance requirements. Never use it "
+    "revision may freely replace or omit it without changing external acceptance requirements. "
+    "Never use it "
     "to launch/background a server or curl/wget a loopback or runtime-selected preview "
-    "URL. If the verifier fails, fix the deliverable or submit a corrected plan revision; "
-    "do not repeatedly guess around the same unchanged failure. "
+    "URL. If an advisory check fails, use the result as a debugging hint; do not rebuild a "
+    "working artifact merely to preserve a speculative plan detail. "
     "Preview lifecycle and browser proof happen during execution through "
     "`preview_start`, which chooses the port. "
     "Prefer 3–7 steps; avoid trivial micro-steps.\n"
