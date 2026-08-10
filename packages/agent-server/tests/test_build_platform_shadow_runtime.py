@@ -7,6 +7,7 @@ from disco.core import SqliteEventStore
 from disco.core.llm import DefaultLLMRouter
 from disco.core.loop import RouterAgent
 from disco.tools import AppKitToolExecutor, DefaultToolExecutor
+from disco.tools.builtin.verify_app import VerifyWebAppTool
 
 
 def _compose(
@@ -66,6 +67,18 @@ def test_shadow_disabled_has_zero_runtime_observation(monkeypatch) -> None:
         )
     assert runtime._build_shadows.snapshot() == {}
     assert isinstance(loop.executor, DefaultToolExecutor)
+
+
+def test_host_verifier_uses_the_verification_operation_budget(monkeypatch) -> None:
+    _runtime, loop = _compose(
+        monkeypatch,
+        conversation_id="host-verifier-budget",
+        appkit=False,
+    )
+
+    expected = VerifyWebAppTool.definition.timeout_s
+    assert expected == 300
+    assert loop._host_verify_timeout_s == expected
 
 
 def test_broken_observer_cannot_break_legacy_loop_composition(monkeypatch) -> None:

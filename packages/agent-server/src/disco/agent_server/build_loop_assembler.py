@@ -21,6 +21,7 @@ from disco.core.loop import (
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.workflow import WorkflowRun
 from disco.tools import WORKFLOW_ROUTER_ALLOWED_TOOLS, AppKitPhase, DefaultToolExecutor
+from disco.tools.builtin.verify_app import VerifyWebAppTool
 
 from .build_loop_components import (
     ComposeContext,
@@ -79,6 +80,7 @@ class _LoopPresentation:
 @dataclass(frozen=True, slots=True)
 class _LoopHooks:
     host_verifier: HostVerifierDispatcher
+    host_verify_timeout_s: float
     verifier_judge: ModelVerifier
     verifier_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None
     authoritative: bool
@@ -203,6 +205,9 @@ class BuildLoopAssembler:
         router: DefaultLLMRouter,
         executor: DefaultToolExecutor,
     ) -> _LoopHooks:
+        host_verify_timeout_s = VerifyWebAppTool.definition.timeout_s
+        if host_verify_timeout_s is None:
+            raise RuntimeError("verify_web_app must declare its host verification budget")
         web_verifier = HostWebAppVerifier(executor)
         host_verifier = HostVerifierDispatcher(
             {
@@ -216,6 +221,7 @@ class BuildLoopAssembler:
         )
         return _LoopHooks(
             host_verifier=host_verifier,
+            host_verify_timeout_s=float(host_verify_timeout_s),
             verifier_judge=ModelVerifier(router, conversation_id=conversation_id),
             verifier_hook=self._contract._host_verify_canary_hook_for(
                 conversation_id,
@@ -240,6 +246,7 @@ class BuildLoopAssembler:
             "quiet": presentation.quiet,
             "finish_alias": presentation.finish_alias,
             "host_verifier": hooks.host_verifier,
+            "host_verify_timeout_s": hooks.host_verify_timeout_s,
             "verifier_judge": hooks.verifier_judge,
             "host_verifier_verdict_hook": hooks.verifier_hook,
             "host_verify_authoritative": hooks.authoritative,

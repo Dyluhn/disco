@@ -634,6 +634,20 @@ def test_aggregate_itself_rejects_cross_generation_checks() -> None:
     assert coverage.missing_claim_ids == ("native.launch", "native.interaction")
 
 
+def test_unavailable_result_retains_the_admitted_check_authority() -> None:
+    check = _check("launch", _claim("native.launch", "bundle launches"))
+    deliverable = _deliverable(_contract((check,)), check)
+
+    receipt = unavailable_verification_result(
+        deliverable=deliverable,
+        reason="the admitted verifier timed out",
+    )
+
+    assert receipt.verifier_id == check.issuer_id
+    assert receipt.tool_id == check.operation
+    assert receipt.is_current_for(deliverable, observed_url="")
+
+
 class _NativeVerifier:
     def __init__(self, *, available: bool = True) -> None:
         self.available = available

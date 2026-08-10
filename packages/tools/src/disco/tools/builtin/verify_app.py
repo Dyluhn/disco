@@ -67,6 +67,7 @@ from .verify_app_parts._trusted_components import (
     _merge_component_checks,
 )
 
+
 def _verify_web_app_failure_recipe(http_status: int | None = None) -> str:
     """The verify_web_app recipe, PROJECTED from what the probe actually saw.
 
@@ -146,6 +147,10 @@ class VerifyWebAppTool:
         needs=frozenset({Capability.NETWORK, Capability.DISPLAY, Capability.SHELL}),
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
+        # The host FINISHED verifier invokes this same operation out of band.
+        # Its outer deadline is projected from this declaration so neither path
+        # can acquire an independently drifting timeout budget.
+        timeout_s=300,
         behavior=declares(EffectCapability.ARTIFACT_VERIFY, planner_safe=False),
     )
 
