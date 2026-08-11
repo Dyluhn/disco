@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 from ._shared import (
     _CID,
     INACTIVE_TIMEOUT,
@@ -167,7 +169,7 @@ async def _impl_test_h347_no_dangling_action_keeps_ordinary_inactivity(tmp_path,
 async def _impl_test_h347_malformed_durable_action_grants_no_extension(tmp_path, monkeypatch):
     db = tmp_path / "disco.db"
     _h347_seed(db)
-    with sqlite3.connect(str(db)) as conn:
+    with closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "UPDATE events SET payload = ? WHERE conversation_id = ? AND seq = 3",
             ("{", _CID),
@@ -188,7 +190,7 @@ async def _impl_test_h347_malformed_durable_action_grants_no_extension(tmp_path,
 async def _impl_test_h347_row_payload_identity_mismatch_grants_no_extension(tmp_path, monkeypatch):
     db = tmp_path / "disco.db"
     _h347_seed(db)
-    with sqlite3.connect(str(db)) as conn:
+    with closing(sqlite3.connect(str(db))) as conn, conn:
         conn.execute(
             "UPDATE events SET kind = ? WHERE conversation_id = ? AND seq = 3",
             ("status", _CID),
@@ -211,7 +213,7 @@ async def _impl_test_h347_unreadable_snapshot_cannot_restart_same_action_deadlin
 ):
     db = tmp_path / "disco.db"
     _h347_seed(db)
-    with sqlite3.connect(str(db)) as conn:
+    with closing(sqlite3.connect(str(db))) as conn, conn:
         original_payload = conn.execute(
             "SELECT payload FROM events WHERE conversation_id = ? AND seq = 3",
             (_CID,),
@@ -221,7 +223,7 @@ async def _impl_test_h347_unreadable_snapshot_cannot_restart_same_action_deadlin
         if reads not in {2, 3}:
             return
         payload = "{" if reads == 2 else original_payload
-        with sqlite3.connect(str(db)) as conn:
+        with closing(sqlite3.connect(str(db))) as conn, conn:
             conn.execute(
                 "UPDATE events SET payload = ? WHERE conversation_id = ? AND seq = 3",
                 (payload, _CID),

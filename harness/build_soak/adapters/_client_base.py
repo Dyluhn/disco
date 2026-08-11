@@ -47,7 +47,11 @@ class _ClientBase:
         self._snapshot_wait_s = snapshot_wait_s
         self._require_workspace_commit = require_workspace_commit
         self._collected_workspace_dirs: dict[str, Path] = {}
-        self._verified_workspace_cache = tempfile.TemporaryDirectory(prefix="disco-soak-verified-")
+        # A client that never opens an immutable version needs no scratch tree.
+        # The live batch owner closes clients explicitly; lazy allocation also
+        # keeps narrow adapter users from acquiring a resource they cannot use.
+        self._verified_workspace_cache: tempfile.TemporaryDirectory[str] | None = None
+        self._closed = False
         self.last_conversation_id = None
         self.scenario_evidence = {}
         self._live_thrash_scenario: dict[str, Any] | None = None
@@ -69,6 +73,48 @@ class _ClientBase:
         self._efficiency_ledger_path: str | None = None
         self._efficiency_ledger_offset = 0
         self._efficiency_ledger_calls = 0
+
+    def _verified_workspace_cache_dir(self) -> Path:
+        """Return this client's lazily-owned immutable-version scratch root."""
+
+        if self._closed:
+            raise RuntimeError("DiscoApiClient is closed")
+        cache = self._verified_workspace_cache
+        if cache is None:
+            cache = tempfile.TemporaryDirectory(prefix="disco-soak-verified-")
+            self._verified_workspace_cache = cache
+        return Path(cache.name)
+
+    async def aclose(self) -> None:
+        """Release every task and filesystem resource owned by this client."""
+
+        if self._closed:
+            return
+        self._closed = True
+
+        for stop in self._inspect_stop_events.values():
+            stop.set()
+        tasks: set[asyncio.Task[Any]] = set(self._inspect_poll_tasks.values())
+        tasks.update(self._inspect_finish_tasks.values())
+        current = asyncio.current_task()
+        owned_tasks = [task for task in tasks if task is not current]
+        for task in owned_tasks:
+            if not task.done():
+                task.cancel()
+        if owned_tasks:
+            await asyncio.gather(*owned_tasks, return_exceptions=True)
+
+        self._inspect_poll_tasks.clear()
+        self._inspect_finish_tasks.clear()
+        self._inspect_stop_events.clear()
+        self._inspect_sample_locks.clear()
+        self._inspect_aggregations.clear()
+        self._collected_workspace_dirs.clear()
+
+        cache = self._verified_workspace_cache
+        self._verified_workspace_cache = None
+        if cache is not None:
+            cache.cleanup()
 
     @staticmethod
     def _default_tool_timeout_s() -> float:

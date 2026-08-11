@@ -49,3 +49,29 @@ def _hermetic_provider_ledger_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in _LEDGER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+async def _close_test_owned_soak_clients(monkeypatch: pytest.MonkeyPatch):
+    """Give ad-hoc test clients the same explicit owner as the batch runner.
+
+    Individual oracle tests construct ``DiscoApiClient`` directly so they can
+    exercise one boundary without running a batch. Retain those clients until
+    teardown, then close them explicitly; otherwise their immutable-version
+    scratch roots are left to garbage collection and resource leaks stay hidden
+    under Python's default warning filters.
+    """
+
+    from harness.build_soak.adapters.disco_api import DiscoApiClient
+
+    clients: list[DiscoApiClient] = []
+    original_init = DiscoApiClient.__init__
+
+    def tracked_init(self: DiscoApiClient, *args, **kwargs) -> None:
+        original_init(self, *args, **kwargs)
+        clients.append(self)
+
+    monkeypatch.setattr(DiscoApiClient, "__init__", tracked_init)
+    yield
+    for client in reversed(clients):
+        await client.aclose()

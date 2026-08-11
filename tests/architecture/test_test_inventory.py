@@ -498,8 +498,11 @@ class TestMappingStatic:
             # completion/verification contract files. Nothing is parametrized,
             # so static and collected counts advance together; the one new file
             # advances the Python test-file count once.
-            "python_test_file_count": 835,
-            "python_static_test_id_count": 10095,
+            # The Build Soak lifecycle correction adds two focused harness ids in
+            # one new file: explicit verified-cache cleanup and inspect-task
+            # cancellation. Static and collected counts advance together.
+            "python_test_file_count": 836,
+            "python_static_test_id_count": 10097,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -897,7 +900,8 @@ class TestCollectedCounts:
             # including the F1 wrapper's explicit-seed requirement.
             # V9 cleanup ownership adds one collected harness id.
             # The response-ready handoff correction adds four harness ids.
-            "harness": 1340,
+            # The Build Soak lifecycle correction adds two harness ownership ids.
+            "harness": 1342,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -949,7 +953,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12244 == sum(expected.values())
+        assert collected["total"] == 12246 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -965,7 +969,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12244}
+        assert result == {"collected_total": 12246}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -984,9 +988,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10095,
+            "python_static_ids": 10097,
             "typescript_static_ids": 1203,
-            "collected_total": 12244,
+            "collected_total": 12246,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
