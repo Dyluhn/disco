@@ -487,6 +487,10 @@ def test_preview_selection_normalizes_only_the_sandbox_workspace_root() -> None:
     assert nested.contains_artifact("site/index.html")
     assert not nested.contains_artifact("index.html")
     assert foreign is None
+    rebound = root.model_copy(update={"url": "http://replacement-preview.test"})
+    replaced = root.model_copy(update={"projection_id": "pv_" + "b" * 32})
+    assert rebound.operational_identity == root.operational_identity
+    assert replaced.operational_identity != root.operational_identity
 
 
 def test_pre_field_builtin_web_contract_replays_with_authoritative_modality() -> None:
