@@ -33,6 +33,7 @@ def _result(
 ) -> dict:
     result = {
         "suite_id": "live-build-shapes",
+        "kind": "generic",
         "status": status,
         "reason": "test",
         "claims": ["build.api_shapes_live"],
@@ -144,6 +145,24 @@ def test_duplicate_build_soak_trial_identity_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="already credited"):
         _record(state, "c2", "subject", result, evaluator="evaluator-b")
+
+
+def test_suite_result_cannot_omit_its_kind() -> None:
+    state = empty_state()
+    result = _result(PASS, 1)
+    result.pop("kind")
+
+    with pytest.raises(ValueError, match="unsupported kind"):
+        _record(state, "c1", "subject", result)
+
+
+def test_build_soak_units_require_exact_trial_ids() -> None:
+    state = empty_state()
+    result = _result(PASS, 1)
+    result["kind"] = "build_soak"
+
+    with pytest.raises(ValueError, match="requires exact trial_ids"):
+        _record(state, "c1", "subject", result)
 
 
 def test_new_revision_starts_after_fix_streak_from_zero() -> None:
