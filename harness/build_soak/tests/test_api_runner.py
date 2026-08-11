@@ -993,6 +993,18 @@ async def test_h348_active_agent_step_hits_hard_cap_as_progressing(*args, **kwar
 async def test_h348_tainted_active_span_grants_no_extension(*args, **kwargs):
     return await _c25._impl_test_h348_tainted_active_span_grants_no_extension(*args, **kwargs)
 
+@wraps(_c25._impl_test_h349_host_verifier_pairing_requires_exact_later_verdict)
+def test_h349_host_verifier_pairing_requires_exact_later_verdict(*args, **kwargs):
+    return _c25._impl_test_h349_host_verifier_pairing_requires_exact_later_verdict(*args, **kwargs)
+
+@wraps(_c25._impl_test_h349_host_verifier_outlives_ordinary_inactivity)
+async def test_h349_host_verifier_outlives_ordinary_inactivity(*args, **kwargs):
+    return await _c25._impl_test_h349_host_verifier_outlives_ordinary_inactivity(*args, **kwargs)
+
+@wraps(_c25._impl_test_h349_host_verifier_expires_at_its_bounded_deadline)
+async def test_h349_host_verifier_expires_at_its_bounded_deadline(*args, **kwargs):
+    return await _c25._impl_test_h349_host_verifier_expires_at_its_bounded_deadline(*args, **kwargs)
+
 @wraps(_c26._impl_test_bf2a_overlapping_windows_retain_more_than_ring_and_derive_projections)
 async def test_bf2a_overlapping_windows_retain_more_than_ring_and_derive_projections(*args, **kwargs):
     return await _c26._impl_test_bf2a_overlapping_windows_retain_more_than_ring_and_derive_projections(*args, **kwargs)

@@ -60,7 +60,11 @@ AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
 # values are pinned to the product definitions by cross-module regression tests.
 _DEFAULT_TOOL_TIMEOUT_S = 300.0
 _SLIDES_GENERATE_TIMEOUT_S = 900.0
-_TOOL_TIMEOUT_OVERRIDES_S = {"slides_generate": _SLIDES_GENERATE_TIMEOUT_S}
+_HOST_VERIFY_DELIVERABLE_TIMEOUT_S = 300.0
+_TOOL_TIMEOUT_OVERRIDES_S = {
+    "slides_generate": _SLIDES_GENERATE_TIMEOUT_S,
+    "host.verify_deliverable": _HOST_VERIFY_DELIVERABLE_TIMEOUT_S,
+}
 _ACTION_RESULT_PERSISTENCE_GRACE_S = 10.0
 
 # ---- progress-aware terminal-wait sentinels (Bug 15) ------------------------
