@@ -52,6 +52,31 @@ def _file_mutation_receipt(
     )
 
 
+def _file_mutation_receipt_from_digests(
+    path: str,
+    *,
+    before_sha256: str | None,
+    after_sha256: str | None,
+    after_size_bytes: int | None,
+) -> MutationReceipt:
+    """Rebuild the same receipt from backend-proven batch digests."""
+    resource = ResourceKey(namespace="workspace.file", identifier=_canonical(path))
+    return MutationReceipt(
+        resource=resource,
+        before=(
+            ResourceRevision(resource=resource, digest=before_sha256)
+            if before_sha256 is not None
+            else None
+        ),
+        after=(
+            ResourceRevision(resource=resource, digest=after_sha256)
+            if after_sha256 is not None
+            else None
+        ),
+        after_size_bytes=after_size_bytes,
+    )
+
+
 async def _resolved_workspace_file(sandbox: Any, path: str) -> str:
     """Resolve aliases in the sandbox's namespace before naming an exact receipt."""
     resolver = getattr(sandbox, "resolve_relpath", None)
