@@ -29,6 +29,7 @@ from disco.tools.sandbox._container import (
     PUBLISHED_PORTS,
     loopback_port_bindings,
 )
+from disco.tools.sandbox.file_batch import SandboxFileMutation
 
 
 class FakeContainer:
@@ -42,6 +43,7 @@ class FakeContainer:
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.exec_calls: list[list[str]] = []
         self.remove_kwargs: dict | None = None
+        self.put_calls: list[tuple[str, bytes]] = []
         # podman-py Container.name — the sidecar setup reads it to build the
         # `podman --url … exec <name> …` CLI argv. The fake's `name` follows
         # the create-kwarg convention (matches the real podman-py .name).
@@ -66,6 +68,7 @@ class FakeContainer:
         return (0, b"", b"")
 
     def put_archive(self, path, data):
+        self.put_calls.append((path, data))
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for m in tar.getmembers():
                 f = tar.extractfile(m)
@@ -473,6 +476,28 @@ async def test_workspace_archive_export_is_one_argv_only_stream(monkeypatch, tmp
     assert destination.stat().st_mode & 0o777 == 0o600
     with tarfile.open(destination, "r:") as archive:
         assert archive.getnames() == ["index.html"]
+
+
+async def test_file_batch_uses_one_archive_upload_and_one_native_exec():
+    svc, client, cli = _svc()
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert client.last is not None
+    uploads_before = len(client.last.put_calls)
+    calls_before = len(cli.calls)
+    cli.results = [(0, b'{"version":1,"status":"ok","changes":[]}', b"")]
+
+    result = await inst._commit_file_batch(
+        tuple(SandboxFileMutation(f"file-{index}.txt", b"content") for index in range(18)),
+        commit_last=("file-17.txt",),
+    )
+
+    assert result.changes == ()
+    assert len(client.last.put_calls) == uploads_before + 1
+    assert client.last.put_calls[-1][0] == "/tmp"
+    assert len(cli.calls) == calls_before + 1
+    argv = cli.calls[-1]
+    assert argv[:5] == ["podman", "--url", svc._cli_url, "exec", f"disco-sbx-{inst.id}"]
+    assert argv[5:8] == ["python3", "-I", "-c"]
 
 
 def test_workspace_export_guest_filter_never_opens_runtime_secrets(tmp_path):

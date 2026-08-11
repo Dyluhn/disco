@@ -43,6 +43,7 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+from .file_batch import SandboxFileBatchResult, SandboxFileMutation
 from .session_parts import fetch_inside as _fetch_inside_part
 from .session_parts import lifecycle as _lifecycle_part
 from .session_parts import memory_recovery as _memory_recovery_part
@@ -329,6 +330,23 @@ class SandboxSession:
                 await i.write_file(path, data)
 
         await self._resilient(_aw)
+
+    async def _commit_file_batch(
+        self,
+        mutations: tuple[SandboxFileMutation, ...],
+        *,
+        commit_last: tuple[str, ...] = (),
+    ) -> SandboxFileBatchResult | None:
+        """Use an optional backend batch seam; ``None`` selects portable fallback."""
+
+        async def _commit(instance: SandboxInstance) -> SandboxFileBatchResult | None:
+            commit = getattr(instance, "_commit_file_batch", None)
+            if not callable(commit):
+                return None
+            commit_fn = cast(Callable[..., Awaitable[SandboxFileBatchResult]], commit)
+            return await commit_fn(mutations, commit_last=commit_last)
+
+        return await self._resilient(_commit)
 
     async def resolve_relpath(self, path: str) -> str:
         """CD-TOOLS-4 — delegate the REAL (symlink-followed) workspace-relative resolution so the

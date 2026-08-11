@@ -54,6 +54,7 @@ from ..anatomy import Capability
 from ._container_parts import atomic_write as _atomic_write_part
 from ._container_parts import aux_reconcile as _aux_reconcile_part
 from ._container_parts import failure_classification as _failure_classification_part
+from ._container_parts import file_batch as _file_batch_part
 from ._container_parts import guest_scripts as _guest_scripts_part
 from ._container_parts import host_discovery as _host_discovery_part
 from ._container_parts import lifecycle as _lifecycle_part
@@ -77,6 +78,7 @@ from .base import (
     strip_redundant_workspace_prefix,
 )
 from .base import SandboxUnavailableError as SandboxUnavailableError
+from .file_batch import SandboxFileBatchResult, SandboxFileMutation
 
 if TYPE_CHECKING:
     from .config import SandboxConfig
@@ -600,6 +602,19 @@ class ContainerInstance:
         `_container_parts.atomic_write` for the full contract (the staged,
         SELinux-safe commit-via-rename)."""
         await _atomic_write_part.atomic_write(self, path, data)
+
+    async def _commit_file_batch(
+        self,
+        mutations: Iterable[SandboxFileMutation],
+        *,
+        commit_last: Iterable[str] = (),
+    ) -> SandboxFileBatchResult:
+        """Commit a deterministic file plan through one container crossing."""
+        return await _file_batch_part.commit_file_batch(
+            self,
+            tuple(mutations),
+            commit_last=tuple(commit_last),
+        )
 
     async def resolve_relpath(self, path: str) -> str:
         """CD-TOOLS-4: the REAL (symlink-followed) guest path RELATIVE to the workspace root,

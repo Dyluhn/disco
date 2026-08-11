@@ -14,9 +14,9 @@ file acts as their canonical retry/consistency marker.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from disco.core.effects import (
     EffectCapability,
@@ -25,6 +25,11 @@ from disco.core.effects import (
 )
 
 from ..anatomy import ToolContext, ToolOutcome
+from ..sandbox.file_batch import (
+    SandboxFileBatchResult,
+    SandboxFileChange,
+    SandboxFileMutation,
+)
 from .files import (
     _canonical,
     _clear_grounding,
@@ -32,6 +37,7 @@ from .files import (
     _commit_file_mutation,
     _file_mutation_receipt,
 )
+from .files_parts._mutation import _file_mutation_receipt_from_digests
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +66,7 @@ def _prevalidation_failure(
     error: str,
     message: str,
     path: str | None = None,
-    underlying: dict[str, str] | None = None,
+    underlying: dict[str, Any] | None = None,
 ) -> ToolOutcome:
     structured: dict[str, Any] = {"kind": "deterministic_batch_prevalidation_failed"}
     if path is not None:
@@ -254,6 +260,149 @@ def _order_commits(effective: set[str], commit_last_resolved: list[str]) -> list
     )
 
 
+def _receipts_from_backend_changes(
+    ctx: ToolContext,
+    changes: tuple[SandboxFileChange, ...],
+) -> tuple[list[str], list[MutationReceipt]]:
+    applied: list[str] = []
+    receipts: list[MutationReceipt] = []
+    for change in changes:
+        receipt = _file_mutation_receipt_from_digests(
+            change.path,
+            before_sha256=change.before_sha256,
+            after_sha256=change.after_sha256,
+            after_size_bytes=change.after_size_bytes,
+        )
+        receipts.append(receipt)
+        applied.append(change.path)
+        _clear_grounding(ctx.conversation_id, change.path)
+    return applied, receipts
+
+
+def _handled_backend_batch(
+    ctx: ToolContext,
+    result: SandboxFileBatchResult,
+) -> DeterministicBatchResult | ToolOutcome:
+    applied, exact_receipts = _receipts_from_backend_changes(ctx, result.changes)
+    failure = result.failure
+    if failure is None:
+        return DeterministicBatchResult(tuple(applied), tuple(exact_receipts))
+    if failure.phase == "prevalidation":
+        if applied:
+            prevalidation_receipts: list[MutationReceipt | OpaqueEffectReceipt] = list(
+                exact_receipts
+            )
+            prevalidation_receipts.append(
+                OpaqueEffectReceipt(
+                    capability=EffectCapability.WORKSPACE_MUTATE,
+                    reason="backend reported mutations during batch prevalidation",
+                )
+            )
+            return _commit_failure(
+                applied=applied,
+                receipts=prevalidation_receipts,
+                failed_path=failure.path or "<batch>",
+                failed_path_state="unknown",
+                reason=failure.message,
+                underlying=failure.underlying,
+            )
+        return _prevalidation_failure(
+            error=failure.error,
+            message=failure.message,
+            path=failure.path,
+            underlying=failure.underlying,
+        )
+    if failure.phase == "stale" and not applied:
+        path = failure.path or "<batch>"
+        structured: dict[str, Any] = {
+            "kind": "stale_file_context",
+            "path": path,
+            "next_required_action": "file_read",
+            "suggested_args": {"path": path},
+        }
+        if failure.details:
+            structured.update(failure.details)
+        return ToolOutcome(
+            success=False,
+            error="STALE_FILE_CONTEXT",
+            content=failure.message,
+            structured=structured,
+        )
+    state = failure.failed_path_state or "unknown"
+    receipts: list[MutationReceipt | OpaqueEffectReceipt] = list(exact_receipts)
+    if state == "unknown":
+        receipts.append(
+            OpaqueEffectReceipt(
+                capability=EffectCapability.WORKSPACE_MUTATE,
+                reason=(
+                    "deterministic batch state could not be attributed after a backend failure"
+                ),
+            )
+        )
+    return _commit_failure(
+        applied=applied,
+        receipts=receipts,
+        failed_path=failure.path or "<batch>",
+        failed_path_state=state,
+        reason=failure.message,
+        underlying=failure.underlying,
+    )
+
+
+async def _try_backend_batch(
+    ctx: ToolContext,
+    intents: Sequence[PlannedFileMutation],
+    commit_last: Sequence[str],
+) -> DeterministicBatchResult | ToolOutcome | None:
+    """Use one optional backend crossing; ``None`` selects the portable path."""
+    assert ctx.sandbox is not None
+    commit = getattr(ctx.sandbox, "_commit_file_batch", None)
+    if not callable(commit):
+        return None
+    commit_fn = cast(
+        Callable[..., Awaitable[SandboxFileBatchResult | None]],
+        commit,
+    )
+    try:
+        result = await commit_fn(
+            tuple(SandboxFileMutation(intent.path, intent.after) for intent in intents),
+            commit_last=tuple(commit_last),
+        )
+    except Exception as exc:  # noqa: BLE001 - dispatch may have crossed the mutation boundary
+        detail = _exception_detail(exc)
+        return _commit_failure(
+            applied=[],
+            receipts=[
+                OpaqueEffectReceipt(
+                    capability=EffectCapability.WORKSPACE_MUTATE,
+                    reason="container file-batch dispatch ended without attributable evidence",
+                )
+            ],
+            failed_path=_canonical(intents[0].path),
+            failed_path_state="unknown",
+            reason=f"{detail['type']}: {detail['message']}",
+            underlying=detail,
+        )
+    if result is None:
+        return None
+    if not isinstance(result, SandboxFileBatchResult):
+        detail = {"type": "InvalidBatchEvidence", "message": type(result).__name__}
+        return _commit_failure(
+            applied=[],
+            receipts=[
+                OpaqueEffectReceipt(
+                    capability=EffectCapability.WORKSPACE_MUTATE,
+                    reason="sandbox returned invalid file-batch evidence",
+                )
+            ],
+            failed_path=_canonical(intents[0].path),
+            failed_path_state="unknown",
+            reason="sandbox returned invalid file-batch evidence",
+            underlying=detail,
+        )
+    return _handled_backend_batch(ctx, result)
+
+
 async def _attribute_commit_failure(
     ctx: ToolContext,
     sandbox: Any,
@@ -390,6 +539,10 @@ async def commit_deterministic_file_batch(
     sandbox = ctx.sandbox
     if not intents:
         return DeterministicBatchResult(changed_paths=(), receipts=())
+
+    backend_result = await _try_backend_batch(ctx, intents, commit_last)
+    if backend_result is not None:
+        return backend_result
 
     resolved_plan = await _resolve_planned_intents(ctx, intents, commit_last)
     if isinstance(resolved_plan, ToolOutcome):

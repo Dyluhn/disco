@@ -13,6 +13,12 @@ from disco.tools.builtin.mutation_batch import (
     commit_deterministic_file_batch,
 )
 from disco.tools.sandbox import ProcessSandboxService, SandboxSpec
+from disco.tools.sandbox.file_batch import (
+    SandboxFileBatchFailure,
+    SandboxFileBatchResult,
+    SandboxFileChange,
+    SandboxFileMutation,
+)
 from tool_fakes import FakeSandboxInstance
 
 pytestmark = pytest.mark.asyncio
@@ -55,6 +61,105 @@ class _RecordingSandbox(FakeSandboxInstance):
     async def delete_file(self, path: str) -> None:
         self.commits.append(("delete", path))
         await super().delete_file(path)
+
+
+class _BatchSandbox(_RecordingSandbox):
+    def __init__(self, result: SandboxFileBatchResult) -> None:
+        super().__init__()
+        self.batch_result = result
+        self.batch_calls: list[tuple[tuple[SandboxFileMutation, ...], tuple[str, ...]]] = []
+
+    async def _commit_file_batch(
+        self,
+        mutations: tuple[SandboxFileMutation, ...],
+        *,
+        commit_last: tuple[str, ...],
+    ) -> SandboxFileBatchResult:
+        self.batch_calls.append((mutations, commit_last))
+        return self.batch_result
+
+
+class _FailingBatchSandbox(_RecordingSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dispatches = 0
+
+    async def _commit_file_batch(self, *_args, **_kwargs):
+        self.dispatches += 1
+        raise OSError("transport ended after dispatch")
+
+
+async def test_backend_batch_dispatches_once_and_rebuilds_exact_receipts():
+    before = hashlib.sha256(b"old").hexdigest()
+    after = hashlib.sha256(b"new").hexdigest()
+    sandbox = _BatchSandbox(
+        SandboxFileBatchResult(
+            changes=(SandboxFileChange("a.txt", before, after, 3),),
+        )
+    )
+
+    result = await commit_deterministic_file_batch(
+        _ctx(sandbox),
+        [PlannedFileMutation("a.txt", b"new")],
+        commit_last=("a.txt",),
+    )
+
+    assert isinstance(result, DeterministicBatchResult)
+    assert len(sandbox.batch_calls) == 1
+    mutations, commit_last = sandbox.batch_calls[0]
+    assert mutations == (SandboxFileMutation("a.txt", b"new"),)
+    assert commit_last == ("a.txt",)
+    assert sandbox.commits == []
+    assert result.changed_paths == ("a.txt",)
+    assert result.receipts[0].before is not None
+    assert result.receipts[0].before.digest == before
+    assert result.receipts[0].after is not None
+    assert result.receipts[0].after.digest == after
+
+
+async def test_backend_batch_stale_after_proven_prefix_preserves_partial_truth():
+    first_before = hashlib.sha256(b"a").hexdigest()
+    first_after = hashlib.sha256(b"a2").hexdigest()
+    sandbox = _BatchSandbox(
+        SandboxFileBatchResult(
+            changes=(SandboxFileChange("a.txt", first_before, first_after, 2),),
+            failure=SandboxFileBatchFailure(
+                phase="stale",
+                error="STALE_FILE_CONTEXT",
+                kind="stale_file_context",
+                message="b.txt changed before commit",
+                path="b.txt",
+                failed_path_state="unchanged",
+            ),
+        )
+    )
+
+    result = await commit_deterministic_file_batch(
+        _ctx(sandbox),
+        [PlannedFileMutation("a.txt", b"a2"), PlannedFileMutation("b.txt", b"b2")],
+    )
+
+    assert isinstance(result, ToolOutcome)
+    assert result.error == "BATCH_PARTIAL_COMMIT"
+    assert result.artifacts == ["a.txt"]
+    assert len(result.effect_receipts) == 1
+    assert isinstance(result.effect_receipts[0], MutationReceipt)
+
+
+async def test_backend_batch_transport_failure_is_opaque_and_never_retried():
+    sandbox = _FailingBatchSandbox()
+
+    result = await commit_deterministic_file_batch(
+        _ctx(sandbox),
+        [PlannedFileMutation("a.txt", b"new")],
+    )
+
+    assert isinstance(result, ToolOutcome)
+    assert result.error == "BATCH_COMMIT_UNCERTAIN"
+    assert sandbox.dispatches == 1
+    assert sandbox.commits == []
+    assert len(result.effect_receipts) == 1
+    assert isinstance(result.effect_receipts[0], OpaqueEffectReceipt)
 
 
 async def test_success_commits_sorted_then_marker_last_with_exact_write_and_delete_receipts():
