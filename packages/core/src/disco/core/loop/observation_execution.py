@@ -32,6 +32,7 @@ from .dedup import (
 )
 from .dedup_plan_notice import _w39_plan_progress_reminder
 from .observation_dedup import (
+    _emit_redirect_observation,
     _has_confirmed_prior_append,
     _redirect_marker_write_with_read_provenance,
 )
@@ -294,7 +295,10 @@ async def _prepare_observation(
     # proved non-weakening. No parallel silent list remains.
     from .dedup_generic_notice import _W39_GENERIC_EXCLUDED
 
-    is_generic = call.tool_name not in _W39_NOTICE_TOOLS and call.tool_name not in _W39_GENERIC_EXCLUDED
+    is_generic = (
+        call.tool_name not in _W39_NOTICE_TOOLS
+        and call.tool_name not in _W39_GENERIC_EXCLUDED
+    )
     if not loop._assist and call.tool_name not in _W39_NOTICE_TOOLS and not is_generic:
         return False, None
     events = await loop._events()
@@ -372,23 +376,17 @@ async def _redirect_marker_append(
         path,
         call.call_id,
     )
-    await loop._emit(
-        MessageEvent(
-            source=EventSource.ENVIRONMENT,
-            message=LLMMessage(
-                role="user",
-                content=(
-                    "<system-reminder>\nYour last file_append `content` was"
-                    " the engine's internal elision placeholder (a"
-                    " context-saving stand-in), NOT real text — and that"
-                    f" content was ALREADY appended to {path} earlier. Do"
-                    " NOT re-issue it; re-appending would DUPLICATE it."
-                    " Continue with the next step of your plan (file_read"
-                    " the path first if you need to confirm its current"
-                    " content).\n</system-reminder>"
-                ),
-            ),
-        )
+    await _emit_redirect_observation(
+        loop,
+        action,
+        "<system-reminder>\nYour last file_append `content` was"
+        " the engine's internal elision placeholder (a"
+        " context-saving stand-in), NOT real text — and that"
+        f" content was ALREADY appended to {path} earlier. Do"
+        " NOT re-issue it; re-appending would DUPLICATE it."
+        " Continue with the next step of your plan (file_read"
+        " the path first if you need to confirm its current"
+        " content).\n</system-reminder>",
     )
     return True
 

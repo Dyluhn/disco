@@ -473,11 +473,9 @@ async def test_k1_redirects_marker_write_to_scaffolded_read_only_path():
     scaffolded file (npm create vite authored it; the model only ever READ it).
     There is no authored content to re-expand and writing the file's own bytes
     back would fabricate a revision that never happened — so the guard REDIRECTS
-    (message, no execution, no (action, error) pair) instead of marching a
+    (successful no-op observation, no execution, no error) instead of marching a
     mid-recovery model to the frozen thrash boundary with repeated identical
     rejections."""
-    from disco.core.events import EventSource, MessageEvent
-
     ex = _SpyExecutor()
     loop = _make_loop(ex, model_policy=ModelExecutionPolicy.standard())
     # A CONFIRMED prior read of the scaffolded file (action + success observation).
@@ -498,20 +496,25 @@ async def test_k1_redirects_marker_write_to_scaffolded_read_only_path():
         ),
     )
     marker = _marker_for("B" * 2_891)
-    events = await _drive(loop, _write("w_copy", marker, path="src/App.css"))
+    copyback = _write("w_copy", marker, path="src/App.css")
+    events = await _drive(loop, copyback)
 
     errs = [e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "w_copy"]
     assert errs == [], "a read-provenance marker write must REDIRECT, not error"
     assert ex.calls == [], "a marker write must never execute"
-    redirects = [
+    observations = [
         e
         for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.ENVIRONMENT
-        and "elision placeholder" in (e.message.content or "")
-        and "src/App.css" in (e.message.content or "")
+        if isinstance(e, ObservationEvent)
+        and e.action_id == copyback.id
+        and e.tool_result.call_id == "w_copy"
     ]
-    assert redirects, "the redirect system-reminder must name the path and the recovery"
+    assert len(observations) == 1
+    result = observations[0].tool_result
+    assert result.tool_name == "file_write"
+    assert result.success is True
+    assert "elision placeholder" in (result.content or "")
+    assert "src/App.css" in (result.content or "")
 
 
 async def test_k1_marker_write_without_read_or_write_provenance_still_errors():

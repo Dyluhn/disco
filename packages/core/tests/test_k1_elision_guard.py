@@ -47,8 +47,6 @@ from disco.core import (
     ActionEvent,
     AgentErrorEvent,
     Event,
-    EventSource,
-    MessageEvent,
     ObservationEvent,
     SqliteEventStore,
     ToolCall,
@@ -498,7 +496,8 @@ def test_snip_args_rewords_to_sentinel_and_round_trips():
 # A file_append whose content is PURELY the marker, when a CONFIRMED prior
 # append to the SAME path already landed, is a CONFUSED copy-back of an
 # already-applied append: REDIRECT (no re-execute → no double-append) and emit
-# NO (action,error) pair so it can't accrue repeated_action_error→STUCK.
+# a successful no-op observation for the action so it can't become either an
+# action-without-observation or repeated_action_error→STUCK.
 # ---------------------------------------------------------------------------
 
 
@@ -532,23 +531,26 @@ async def test_file_append_marker_copyback_of_confirmed_append_redirects():
     copyback = _append_action("call_a2", path="styles.css", content=marker)
     events = await _drive_execute(loop, copyback)
 
-    # REDIRECT, not rejection: NO (action,error) pair for the copy-back (would feed
+    # REDIRECT, not rejection: no (action,error) pair for the copy-back (would feed
     # repeated_action_error → stuck_escape → STUCK).
     assert not [
         e for e in events if isinstance(e, AgentErrorEvent) and e.tool_call_id == "call_a2"
     ], "redirect must NOT emit an AgentErrorEvent for the copy-back"
     # The executor was NEVER called for the copy-back — no double-append.
     assert len(loop.executor.calls) == 0
-    # A redirect ENVIRONMENT message told the model it was already appended.
-    redirects = [
+    # The safe no-op is still the durable outcome of this exact action/call.
+    observations = [
         e
         for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.ENVIRONMENT
-        and "already" in (e.message.content or "").lower()
-        and "append" in (e.message.content or "").lower()
+        if isinstance(e, ObservationEvent) and e.action_id == copyback.id
     ]
-    assert redirects, "expected a redirect ENVIRONMENT message"
+    assert len(observations) == 1
+    result = observations[0].tool_result
+    assert result.call_id == "call_a2"
+    assert result.tool_name == "file_append"
+    assert result.success is True
+    assert "already" in (result.content or "").lower()
+    assert "append" in (result.content or "").lower()
 
 
 async def test_file_append_marker_without_confirmed_prior_is_still_rejected():

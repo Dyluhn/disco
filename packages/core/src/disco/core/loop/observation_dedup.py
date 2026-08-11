@@ -9,13 +9,32 @@ from ..events import (
     ActionEvent,
     AgentErrorEvent,
     Event,
-    EventSource,
-    LLMMessage,
-    MessageEvent,
     ObservationEvent,
+    ToolResult,
 )
 
 _LOG = logging.getLogger("disco.loop")
+
+
+async def _emit_redirect_observation(
+    loop: Any,
+    action: ActionEvent,
+    content: str,
+) -> None:
+    """Persist the truthful successful outcome of a safe no-op redirect."""
+    assert action.tool_call is not None
+    call = action.tool_call
+    await loop._emit(
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=True,
+                content=content,
+            ),
+            action_id=action.id,
+        )
+    )
 
 
 def _confirmed_and_failed_call_ids(events: list[Event]) -> tuple[set[str], set[str]]:
@@ -130,20 +149,14 @@ async def _redirect_marker_write_with_read_provenance(
         path,
         action.tool_call.call_id,
     )
-    await loop._emit(
-        MessageEvent(
-            source=EventSource.ENVIRONMENT,
-            message=LLMMessage(
-                role="user",
-                content=(
-                    "<system-reminder>\nYour last file_write `content` was the engine's"
-                    " internal elision placeholder (a context-saving stand-in for content"
-                    f" shown to you earlier), NOT real text. {path} was NOT modified — it"
-                    f" still holds its actual current bytes. To revise it: file_read {path}"
-                    " now, then send file_write with the COMPLETE revised content as real"
-                    " text (never the placeholder).\n</system-reminder>"
-                ),
-            ),
-        )
+    await _emit_redirect_observation(
+        loop,
+        action,
+        "<system-reminder>\nYour last file_write `content` was the engine's"
+        " internal elision placeholder (a context-saving stand-in for content"
+        f" shown to you earlier), NOT real text. {path} was NOT modified — it"
+        f" still holds its actual current bytes. To revise it: file_read {path}"
+        " now, then send file_write with the COMPLETE revised content as real"
+        " text (never the placeholder).\n</system-reminder>",
     )
     return True
