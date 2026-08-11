@@ -114,8 +114,8 @@ class VerifyWebAppArgs(BaseModel):
     url: str = Field(
         default="",
         description=(
-            "Preview URL to verify (e.g. http://127.0.0.1:8000/). Leave empty to "
-            "auto-detect the running preview server."
+            "Exact in-sandbox URL returned by preview_start. Leave empty to "
+            "auto-detect the running preview server; never guess a fixed port."
         ),
     )
     medium: Literal["web", "deck", "mobile", "game"] = Field(
@@ -135,13 +135,16 @@ class VerifyWebAppTool:
     definition = ToolDef(
         name="verify_web_app",
         description=(
-            "Self-test the running web app and return a STRUCTURED pass/fail verdict "
+            "Optionally debug the running web app with a STRUCTURED pass/fail verdict "
             "(not a raw page dump). Checks: server reachable, HTTP 2xx/3xx, no console "
             "errors, no critical network failures, and a meaningful (non-blank) render. "
             "Returns verdict (pass/fail/degraded), the failing console/network details, "
             "a screenshot path, a stable failure_fingerprint, and the exact next_action "
-            "to fix. Call this ONCE after a change to decide if the build is done — do "
-            "not reload the page repeatedly. Auto-detects the preview port if no url given."
+            "to fix. This is limited runtime/render evidence, not semantic completeness or "
+            "completion authority. One use spends one of the TWO debug calls shared with "
+            "verify_appkit_app and design_lint for the current artifact bytes; only a real "
+            "successful artifact mutation resets that allowance. Auto-detects the preview "
+            "port if no url is given."
         ),
         args_model=VerifyWebAppArgs,
         needs=frozenset({Capability.NETWORK, Capability.DISPLAY, Capability.SHELL}),

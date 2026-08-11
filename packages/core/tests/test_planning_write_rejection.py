@@ -363,7 +363,7 @@ async def test_strict_appkit_rejects_noncanonical_gates_then_accepts_canonical_p
         "not a canonical strict AppKit finish gate" in message
         and ".disco/appspec.json" in message
         and ".disco/designspec.json" in message
-        and "verify_appkit_app owns behavioral proof" in message
+        and "host finish gate owns behavioral proof" in message
         for message in feedback
     )
 

@@ -183,7 +183,7 @@ _APPKIT_CANONICAL_DOD_FILES = frozenset({APPSPEC_RELPATH, DESIGNSPEC_RELPATH})
 def validate_appkit_plan_done_conditions(plan: PlanEvent) -> list[str]:
     """Reject finish gates outside the strict AppKit semantic contract.
 
-    AppKit owns and regenerates its source tree, while ``verify_appkit_app`` owns
+    AppKit owns and regenerates its source tree, while the host finish gate owns
     behavioral proof. The only durable files a strict semantic plan may name as
     immutable existence gates are the two canonical specs that drive generation.
     A custom-build widening disables this validator at the caller, restoring the
@@ -206,13 +206,13 @@ def validate_appkit_plan_done_conditions(plan: PlanEvent) -> list[str]:
                 f"step {index} file_exists path {predicate.path!r} is not a "
                 "canonical strict AppKit finish gate. Generated source locations "
                 "are owned by AppKit and must not be guessed. Omit the condition "
-                f"or name only {canonical}; verify_appkit_app owns behavioral proof."
+                f"or name only {canonical}; the host finish gate owns behavioral proof."
             )
             continue
         errors.append(
             f"step {index} {predicate.kind} is not a canonical strict AppKit "
             "finish gate. Strict AppKit plans may omit done_condition or use "
-            f"file_exists only for {canonical}; verify_appkit_app owns behavioral proof."
+            f"file_exists only for {canonical}; the host finish gate owns behavioral proof."
         )
     return errors
 

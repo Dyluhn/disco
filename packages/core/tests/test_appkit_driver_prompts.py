@@ -58,6 +58,8 @@ def test_strict_appkit_planning_names_only_canonical_done_conditions() -> None:
     assert ".disco/designspec.json" in prompt
     assert "never guess a generated source path" in prompt
     assert "do not use command or HTTP conditions" in prompt
+    assert "bounded, optional diagnostics" in prompt
+    assert "host finish gate owns behavioral proof" in prompt
 
 
 def test_strict_appkit_planning_never_routes_local_list_to_add_on_primitive() -> None:
@@ -86,6 +88,9 @@ def test_strict_appkit_execution_never_routes_local_list_to_add_on_primitive(
     assert "never call `app_add_primitive` for it" in prompt
     assert "For another supported base" in prompt
     assert "remains available only for a compatible add-on" in prompt
+    assert "optional diagnostics sharing TWO calls" in prompt
+    assert "A pass is evidence, not completion authority" in prompt
+    assert "host finish gate owns acceptance" in prompt
 
 
 @pytest.mark.parametrize("mode", [OperatingMode.PLANNING, OperatingMode.LONG_HORIZON])

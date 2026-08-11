@@ -58,9 +58,12 @@ def _fake_loop(*, finish_alias, mode=OperatingMode.LONG_HORIZON):
     )
 
 
+def _offered_tools(finish_alias, mode=OperatingMode.LONG_HORIZON):
+    return Driver(_fake_loop(finish_alias=finish_alias, mode=mode)).tools_for_step()
+
+
 def _offered_names(finish_alias, mode=OperatingMode.LONG_HORIZON):
-    tools = Driver(_fake_loop(finish_alias=finish_alias, mode=mode)).tools_for_step()
-    return {getattr(t, "name", None) for t in tools}
+    return {tool.name for tool in _offered_tools(finish_alias, mode)}
 
 
 def test_active_contract_advertises_the_alias() -> None:
@@ -70,9 +73,16 @@ def test_active_contract_advertises_the_alias() -> None:
 
 
 def test_no_contract_advertises_finish_only() -> None:
-    names = _offered_names(None)
+    tools = _offered_tools(None)
+    names = {tool.name for tool in tools}
     assert "finish" in names
     assert _ALIAS not in names  # no fabricated finalizer for a plain build
+    finish = next(tool for tool in tools if tool.name == "finish")
+    assert "optional `verify` argument runs one finite advisory diagnostic" in finish.description
+    assert "cannot veto completion" in finish.description
+    verify_description = finish.parameters_schema["properties"]["verify"]["description"]
+    assert "does not certify or veto completion" in verify_description
+    assert "localhost:8000" not in verify_description
 
 
 def test_alias_not_advertised_in_planning_mode_like_finish() -> None:

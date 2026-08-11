@@ -278,8 +278,9 @@ def workflow_finish_tool_description(defn: WorkflowDefinition) -> str:
     )
     if workflow_finish_supports_verify(defn):
         return (
-            f"{base} You may optionally provide a shell `verify` command; a failed "
-            "verification refuses completion until fixed or capped."
+            f"{base} You may optionally provide one finite shell `verify` diagnostic. "
+            "Its result is advisory evidence and cannot veto completion; the workflow's "
+            "host-owned output-contract gates remain authoritative."
         )
     return (
         f"{base} Completion is checked by the workflow's host-owned output-contract "
@@ -297,7 +298,10 @@ def workflow_finish_tool_schema(defn: WorkflowDefinition) -> dict[str, object]:
     if workflow_finish_supports_verify(defn):
         properties["verify"] = {
             "type": "string",
-            "description": "Optional shell completion check; exit 0 means success.",
+            "description": (
+                "Optional finite shell diagnostic. Its exit result is advisory evidence; "
+                "host-owned output-contract gates decide completion."
+            ),
         }
     return {"type": "object", "properties": properties, "required": []}
 

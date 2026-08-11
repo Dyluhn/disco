@@ -767,6 +767,8 @@ def test_tool_definition_registered_low_risk():
     assert d.name == "verify_web_app"
     assert d.base_risk == SecurityRisk.LOW
     assert d.runs_in == "sandbox"
+    assert "not semantic completeness or completion authority" in d.description
+    assert "TWO debug calls shared" in d.description
 
 
 class _FsSandbox:
