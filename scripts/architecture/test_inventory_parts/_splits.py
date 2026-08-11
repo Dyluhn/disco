@@ -188,6 +188,33 @@ def line_drift_pairs(
     return drifted
 
 
+def unaccounted_fixture_line_drift(
+    additions: list[dict[str, Any]],
+    previous: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove the current half of an exact same-file fixture line move.
+
+    ``_assert_no_deletions`` already authorizes the historical half.  Without
+    pairing the corresponding current row here, regeneration mistakes the same
+    fixture at its new line for a newly owned fixture and duplicates its
+    additive-transition claim.
+    """
+    drifted = line_drift_pairs(previous, current, _FIXTURE_IDENTITY)
+    budget: dict[tuple[Any, ...], int] = {}
+    for row in drifted:
+        key = (row.get("path"), *_identity(row, _FIXTURE_IDENTITY))
+        budget[key] = budget.get(key, 0) + 1
+    unaccounted: list[dict[str, Any]] = []
+    for row in additions:
+        key = (row.get("path"), *_identity(row, _FIXTURE_IDENTITY))
+        if budget.get(key, 0) > 0:
+            budget[key] -= 1
+        else:
+            unaccounted.append(row)
+    return unaccounted
+
+
 def _relocated_rows(
     deleted: list[dict[str, Any]], current: list[dict[str, Any]],
     record: dict[str, Any], fields: tuple[str, ...],

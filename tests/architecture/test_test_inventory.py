@@ -521,8 +521,10 @@ class TestMappingStatic:
             # The host-verifier progress correction adds three static harness ids:
             # exact later verdict ownership, completion beyond ordinary inactivity,
             # and expiry at the existing product verifier deadline.
-            "python_test_file_count": 837,
-            "python_static_test_id_count": 10118,
+            # The fixture-line ownership correction adds one architecture id in
+            # one small new file; no fixture count changes.
+            "python_test_file_count": 838,
+            "python_static_test_id_count": 10119,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -977,11 +979,12 @@ class TestCollectedCounts:
             # 394 UNCHANGED at PKG-19-CLEAN-SLATE: no `tests` ids added here; the
             # two `test_classifier.py` ids land under `harness` and the seven F59
             # ids plus the F47 extension land under `packages`.
-            "tests": 394,
+            # Fixture-line ownership adds one architecture fitness id.
+            "tests": 395,
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12267 == sum(expected.values())
+        assert collected["total"] == 12268 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -997,7 +1000,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12267}
+        assert result == {"collected_total": 12268}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1016,9 +1019,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10118,
+            "python_static_ids": 10119,
             "typescript_static_ids": 1203,
-            "collected_total": 12267,
+            "collected_total": 12268,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

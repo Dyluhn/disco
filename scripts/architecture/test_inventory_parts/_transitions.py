@@ -34,6 +34,7 @@ MAPPING_ADDITION_KEYS = {
     "fixtures",
 }
 PYTHON_ROOTS = {"packages", "harness", "integrations", "tests"}
+_FIXTURE_FIELDS = {"path", "line", "fixture", "scope"}
 
 
 def row_key(row: dict[str, Any]) -> str:
@@ -65,6 +66,44 @@ def row_additions(value: Any, label: str, problems: list[str]) -> list[dict[str,
     if len(keys) != len(set(keys)):
         problems.append(f"{label} must be unique")
     return value
+
+
+def fixture_claim_key(row: dict[str, Any]) -> str:
+    """Stable fixture ownership identity; source line is observational metadata."""
+    return json.dumps(
+        {key: row[key] for key in ("path", "fixture", "scope")},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def fixture_additions(
+    value: Any,
+    label: str,
+    problems: list[str],
+) -> list[dict[str, Any]]:
+    rows = row_additions(value, label, problems)
+    valid: list[dict[str, Any]] = []
+    for row in rows:
+        strings_valid = all(
+            isinstance(row.get(key), str) and bool(row[key])
+            for key in ("path", "fixture", "scope")
+        )
+        line = row.get("line")
+        if (
+            set(row) != _FIXTURE_FIELDS
+            or not strings_valid
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or line < 1
+        ):
+            problems.append(f"{label} fixture row schema mismatch")
+            continue
+        valid.append(row)
+    identities = [fixture_claim_key(row) for row in valid]
+    if len(identities) != len(set(identities)):
+        problems.append(f"{label} contains duplicate fixture ownership identities")
+    return valid
 
 
 def claim_disjoint(
@@ -222,9 +261,13 @@ def check_mapping_additions(
     for key in sorted(MAPPING_ADDITION_KEYS):
         label = f"{owner}.mapping_static_additions.{key}"
         if key == "fixtures":
-            rows = row_additions(additions[key], label, problems)
-            values = [row_key(row) for row in rows]
-            authority = [row_key(row) for row in current.get(key, []) if isinstance(row, dict)]
+            rows = fixture_additions(additions[key], label, problems)
+            values = [fixture_claim_key(row) for row in rows]
+            authority = [
+                fixture_claim_key(row)
+                for row in current.get(key, [])
+                if isinstance(row, dict) and set(row) == _FIXTURE_FIELDS
+            ]
         else:
             unique = key.endswith("_files")
             values = string_additions(
