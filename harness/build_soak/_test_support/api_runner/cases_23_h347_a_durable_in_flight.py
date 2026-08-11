@@ -309,9 +309,15 @@ async def _impl_test_h347_slides_override_is_behaviorally_honored(tmp_path, monk
 
 def _impl_test_h347_timeout_constants_are_bound_to_product_definitions():
     from disco.tools.builtin.slides import SlidesTool
+    from disco.tools.builtin.verify_app import VerifyWebAppTool
     from disco.tools.executor import DefaultToolExecutor
 
     default = inspect.signature(DefaultToolExecutor).parameters["default_timeout_s"].default
     assert _disco_mod._DEFAULT_TOOL_TIMEOUT_S == default == 300
     assert _disco_mod._SLIDES_GENERATE_TIMEOUT_S == SlidesTool.definition.timeout_s == 900
+    assert (
+        _disco_mod._TOOL_TIMEOUT_OVERRIDES_S["host.verify_deliverable"]
+        == VerifyWebAppTool.definition.timeout_s
+        == 300
+    )
     assert 0 < _disco_mod._ACTION_RESULT_PERSISTENCE_GRACE_S <= 30

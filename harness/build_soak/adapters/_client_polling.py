@@ -84,6 +84,59 @@ def _latest_dangling_action_from(
     return None if paired else (action_id, tool_name)
 
 
+def _latest_dangling_verifier_from(
+    events: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    latest = next(
+        (event for event in reversed(events) if event.get("kind") == "verifier_started"),
+        None,
+    )
+    if latest is None:
+        return None
+    started_id = latest.get("id")
+    raw_operation = latest.get("operation")
+    started_seq = seq_of(latest)
+    if (
+        not isinstance(started_id, str)
+        or not started_id
+        or not isinstance(raw_operation, str)
+        or latest.get("source") != "system"
+        or latest.get("verifier") != "host"
+        or started_seq < 0
+    ):
+        return None
+    operation = raw_operation or "host.verify_deliverable"
+    paired = any(
+        event.get("kind") == "verifier_verdict"
+        and event.get("requested_by_event_id") == started_id
+        and seq_of(event) > started_seq
+        for event in events
+    )
+    return None if paired else (started_id, operation)
+
+
+def _latest_inflight_operation_from(
+    events: list[dict[str, Any]],
+) -> tuple[str, str] | None:
+    candidates = tuple(
+        candidate
+        for candidate in (
+            _latest_dangling_action_from(events),
+            _latest_dangling_verifier_from(events),
+        )
+        if candidate is not None
+    )
+    if not candidates:
+        return None
+    candidate_ids = {candidate[0] for candidate in candidates}
+    latest_id = next(
+        str(event["id"])
+        for event in reversed(events)
+        if event.get("id") is not None and str(event["id"]) in candidate_ids
+    )
+    return next(candidate for candidate in candidates if candidate[0] == latest_id)
+
+
 @dataclass
 class _PollProgress:
     start: float
@@ -91,8 +144,8 @@ class _PollProgress:
     marker: tuple[int, int]
     last_status: str | None = None
     seen_active: bool = False
-    dangling_action_id: str | None = None
-    dangling_action_deadline: float = 0.0
+    inflight_operation_id: str | None = None
+    inflight_operation_deadline: float = 0.0
 
 
 async def _live_thrash_stop(
@@ -168,28 +221,28 @@ def _record_poll_progress(
     progress.last_progress = now
 
 
-def _record_running_action(
+def _record_running_work(
     owner: Any,
     conversation_id: str,
     now: float,
     progress: _PollProgress,
 ) -> None:
-    action_state = owner._durable_action_state(conversation_id)
-    if action_state is not None:
-        action_marker, dangling = action_state
-        if action_marker != progress.marker:
-            progress.marker = action_marker
+    inflight_state = owner._durable_inflight_state(conversation_id)
+    if inflight_state is not None:
+        inflight_marker, inflight = inflight_state
+        if inflight_marker != progress.marker:
+            progress.marker = inflight_marker
             progress.last_progress = now
-        if dangling is None:
-            progress.dangling_action_id = None
-            progress.dangling_action_deadline = 0.0
+        if inflight is None:
+            progress.inflight_operation_id = None
+            progress.inflight_operation_deadline = 0.0
         else:
-            action_id, tool_name = dangling
-            if action_id != progress.dangling_action_id:
-                progress.dangling_action_id = action_id
-                progress.dangling_action_deadline = (
+            operation_id, operation_name = inflight
+            if operation_id != progress.inflight_operation_id:
+                progress.inflight_operation_id = operation_id
+                progress.inflight_operation_deadline = (
                     now
-                    + owner._action_timeout_s(tool_name)
+                    + owner._action_timeout_s(operation_name)
                     + owner._action_result_persistence_grace_s()
                 )
     if owner._active_agent_step_request_id(conversation_id) is not None:
@@ -206,9 +259,12 @@ def _poll_timeout(
     inactive_for = now - progress.last_progress
     if now - progress.start >= hard_cap_s:
         return PROGRESSING_TIMEOUT if inactive_for < inactivity_s else INACTIVE_TIMEOUT
-    if progress.dangling_action_id is not None and now >= progress.dangling_action_deadline:
+    if (
+        progress.inflight_operation_id is not None
+        and now >= progress.inflight_operation_deadline
+    ):
         return INACTIVE_TIMEOUT
-    if progress.dangling_action_id is None and inactive_for >= inactivity_s:
+    if progress.inflight_operation_id is None and inactive_for >= inactivity_s:
         return INACTIVE_TIMEOUT
     return None
 
@@ -245,16 +301,14 @@ class _PollingMixin(_ClientBase):
             conn.close()
         return (int(row[0]), int(row[1])) if row else (0, -1)
 
-    def _durable_action_state(
+    def _durable_events_state(
         self, conversation_id: str
-    ) -> tuple[tuple[int, int], tuple[str, str] | None] | None:
-        """Read one durable progress/action snapshot, or fail closed on bad evidence.
+    ) -> tuple[tuple[int, int], list[dict[str, Any]]] | None:
+        """Read one normalized durable progress snapshot, or fail closed.
 
-        The returned marker and action pairing come from the SAME SQLite read. This
-        prevents a response persisted between separate marker/pairing reads from being
-        mistaken for inactivity. Only the most recent action can still be executing:
-        an older missing response followed by a newer completed action is an evidence
-        defect, not a reason to grant another tool deadline.
+        The marker and operation pairing are derived from the SAME SQLite read. This
+        prevents a completion persisted between separate marker/pairing reads from being
+        mistaken for inactivity.
         """
         try:
             raw_events = self._read_events(conversation_id)
@@ -267,12 +321,35 @@ class _PollingMixin(_ClientBase):
             len(raw_events),
             max((int(event["seq"]) for event in raw_events), default=-1),
         )
+        return marker, events
+
+    def _durable_action_state(
+        self, conversation_id: str
+    ) -> tuple[tuple[int, int], tuple[str, str] | None] | None:
+        state = self._durable_events_state(conversation_id)
+        if state is None:
+            return None
+        marker, events = state
         return marker, _latest_dangling_action_from(events)
+
+    def _durable_inflight_state(
+        self, conversation_id: str
+    ) -> tuple[tuple[int, int], tuple[str, str] | None] | None:
+        state = self._durable_events_state(conversation_id)
+        if state is None:
+            return None
+        marker, events = state
+        return marker, _latest_inflight_operation_from(events)
 
     def _latest_dangling_action(self, conversation_id: str) -> tuple[str, str] | None:
         """Return the most recent durable action iff it lacks a later typed response."""
         state = self._durable_action_state(conversation_id)
         return None if state is None else state[1]
+
+    def _latest_dangling_verifier(self, conversation_id: str) -> tuple[str, str] | None:
+        """Return the latest host-verifier start iff its exact verdict is absent."""
+        state = self._durable_events_state(conversation_id)
+        return None if state is None else _latest_dangling_verifier_from(state[1])
 
     def _active_agent_step_request_id(self, conversation_id: str) -> str | None:
         """Return a current same-conversation model request from trusted inspect state."""
@@ -297,16 +374,18 @@ class _PollingMixin(_ClientBase):
         """The shared PROGRESS-AWARE terminal wait (Bug 15). Poll GET /state until EITHER:
           (a) a genuine terminal / gate / pause status is reached → return it; OR
           (b) the build goes GENUINELY INACTIVE — no NEW events/status change for
-              `inactivity_s`, and no durable action remains legally in flight through its
-              product timeout + persistence grace → return INACTIVE_TIMEOUT; OR
+              `inactivity_s`, and no durable action or host verification remains legally
+              in flight through its product timeout + persistence grace → return
+              INACTIVE_TIMEOUT; OR
           (c) the generous `hard_cap_s` ceiling is hit. If the build was STILL progressing
               within the last inactivity window when the cap hit → PROGRESSING_TIMEOUT
               (inconclusive, NOT a product fail); otherwise → INACTIVE_TIMEOUT.
 
         A still-actively-progressing build is NEVER cut off by a mere wall-clock elapsing:
         the inactivity timer RESETS whenever the event count / max seq advances OR the status
-        transitions. A durable unpaired action suppresses only the ordinary inactivity window;
-        its own bounded deadline and the unchanged hard ceiling still end the wait.
+        transitions. A durable unpaired action or host-verifier start suppresses only the
+        ordinary inactivity window; its own bounded deadline and the unchanged hard ceiling
+        still end the wait.
 
         IDLE RACE (live-surfaced): POST /messages KICKS the loop ASYNCHRONOUSLY, so a freshly
         -created conversation reads IDLE for a beat before the kick stamps RUNNING. IDLE is
@@ -340,10 +419,10 @@ class _PollingMixin(_ClientBase):
             now = time.monotonic()
             _record_poll_progress(self, conversation_id, last, now, progress)
             if last == "RUNNING":
-                _record_running_action(self, conversation_id, now, progress)
+                _record_running_work(self, conversation_id, now, progress)
             else:
-                progress.dangling_action_id = None
-                progress.dangling_action_deadline = 0.0
+                progress.inflight_operation_id = None
+                progress.inflight_operation_deadline = 0.0
             timeout = _poll_timeout(
                 now,
                 progress,
