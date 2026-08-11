@@ -162,13 +162,14 @@ def test_baseline_all_gates_pass(synthetic: dict[str, object]) -> None:
 
 
 def test_baseline_main_is_green_and_never_executes_external_evidence(
-    synthetic: dict[str, object],
+    synthetic: dict[str, object], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The happy path reaches GREEN (real proof suite, exact counts) and the declared
     external evidence is verified but NEVER executed: running it would create the
     canary file."""
     canary = synthetic["canary"]
     assert isinstance(canary, Path)
+    monkeypatch.setenv("PYTHONWARNINGS", "error")
     assert _run_main(synthetic) == 0
     assert not canary.exists(), "the receipt EXECUTED declared external evidence"
 

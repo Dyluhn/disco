@@ -501,8 +501,13 @@ class TestMappingStatic:
             # The Build Soak lifecycle correction adds two focused harness ids in
             # one new file: explicit verified-cache cleanup and inspect-task
             # cancellation. Static and collected counts advance together.
-            "python_test_file_count": 836,
-            "python_static_test_id_count": 10097,
+            # The multifile requirement-target correction adds two focused package
+            # ids in existing files: typed CSS-source/HTML-target host claims and
+            # exact per-artifact dictated-content inspection.
+            # The shared loop-helper ownership fixture adds one Python test file
+            # and one autouse fixture, but no collected test id.
+            "python_test_file_count": 837,
+            "python_static_test_id_count": 10099,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1203,
         }
@@ -536,8 +541,9 @@ class TestMappingStatic:
     def test_mapping_static_fixture_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         fixtures = baseline["mapping_static"]["fixtures"]
-        # The Build Soak client cleanup owner is an autouse fixture.
-        assert len(fixtures) == 178
+        # The Build Soak client cleanup and shared loop-store cleanup owners are
+        # autouse fixtures.
+        assert len(fixtures) == 179
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -849,7 +855,7 @@ class TestCollectedCounts:
             # The FINISHED exact-projection reuse correction adds one package id.
             # The live-readiness correction adds four package ids.
             # The KISS completion boundary adds eleven package ids.
-            "packages": 10501,
+            "packages": 10503,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -954,7 +960,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12246 == sum(expected.values())
+        assert collected["total"] == 12248 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -970,7 +976,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12246}
+        assert result == {"collected_total": 12248}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -989,9 +995,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10097,
+            "python_static_ids": 10099,
             "typescript_static_ids": 1203,
-            "collected_total": 12246,
+            "collected_total": 12248,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

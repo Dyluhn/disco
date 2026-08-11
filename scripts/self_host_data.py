@@ -17,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -132,9 +133,13 @@ def _scan_items(
 def _sqlite_backup(source: Path, destination: Path) -> None:
     try:
         source_uri = f"file:{source}?mode=ro"
-        with sqlite3.connect(source_uri, uri=True) as src, sqlite3.connect(destination) as dst:
-            src.backup(dst)
-        with sqlite3.connect(f"file:{destination}?mode=ro", uri=True) as check:
+        with (
+            closing(sqlite3.connect(source_uri, uri=True)) as src,
+            closing(sqlite3.connect(destination)) as dst,
+        ):
+            with dst:
+                src.backup(dst)
+        with closing(sqlite3.connect(f"file:{destination}?mode=ro", uri=True)) as check:
             result = check.execute("PRAGMA integrity_check").fetchone()
     except sqlite3.Error as exc:
         raise DataLifecycleError(f"could not create SQLite backup for {source}: {exc}") from exc
@@ -272,7 +277,9 @@ def _verify_restored_entries(extracted_data: Path, manifest: dict[str, object]) 
 
 
 def _verify_restored_database(extracted_data: Path) -> None:
-    with sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True) as check:
+    with closing(
+        sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True)
+    ) as check:
         result = check.execute("PRAGMA integrity_check").fetchone()
     if result != ("ok",):
         raise DataLifecycleError(f"restored SQLite integrity check failed: {result!r}")

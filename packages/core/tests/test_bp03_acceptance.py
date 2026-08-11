@@ -118,11 +118,17 @@ def test_verify_mandates_lead_with_structured_verifier():
         _HOST_VERIFY_MANDATE_SMALL,
     ]
     for mandate in mandates:
-        assert "verify_web_app" in mandate
-        assert "single pass/fail verdict" in mandate
-        assert "never a guessed :8000" in mandate
-        assert "Verify once and stop" in mandate
-        assert "browser tool once" not in mandate
+        normalized = mandate.lower()
+        for tool_name in ("verify_web_app", "verify_appkit_app", "design_lint"):
+            assert tool_name in mandate
+        assert "two" in normalized and "calls" in normalized
+        assert "not" in normalized and "authority" in normalized
+        assert "finish" in normalized and "acceptance" in normalized
+        assert "no-op" in normalized
+        assert "does not reset" in normalized or "do not reset" in normalized
+        assert ":8000" not in mandate
+        assert "single pass/fail verdict" not in mandate
+        assert "Verify once and stop" not in mandate
 
 
 def test_planning_prompt_environment():

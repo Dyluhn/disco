@@ -28,6 +28,8 @@ from disco.core.llm import (
 )
 from disco.core.loop import AgentLoop, AgentStep, NeverConfirm
 
+_IMPLICIT_STORES: list[SqliteEventStore] = []
+
 # ---- fake Agent (scripted) --------------------------------------------------
 
 
@@ -240,6 +242,12 @@ class SequenceProvider:
 # ---- loop builder -----------------------------------------------------------
 
 
+def close_implicit_test_stores() -> None:
+    """Close stores owned by ``build_loop`` rather than by its caller."""
+    while _IMPLICIT_STORES:
+        _IMPLICIT_STORES.pop().close()
+
+
 def build_loop(
     agent,
     *,
@@ -281,7 +289,9 @@ def build_loop(
     the gate degrades to a no-op — see `_DoDWorkspaceUnavailable`). Tests
     that want to drive the C1c gate inject a factory that returns a
     hermetic DoDEvaluator (fake command_runner / http_probe)."""
-    store = store or SqliteEventStore(":memory:")
+    if store is None:
+        store = SqliteEventStore(":memory:")
+        _IMPLICIT_STORES.append(store)
     loop = AgentLoop(
         conversation_id,
         store,

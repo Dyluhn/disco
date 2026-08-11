@@ -204,7 +204,11 @@ async def governed_check_deliverables(
     if contract is None:
         return (deliverable,), None
     checks, target_claims, target_claim_ids = _governed_required_checks(contract)
-    all_claims = host_verification_claims(gate._verifier_contract_payload(), events)
+    all_claims = host_verification_claims(
+        gate._verifier_contract_payload(),
+        events,
+        artifact_path=deliverable.artifact_path,
+    )
     external = tuple(claim for claim in all_claims if claim.claim_id not in target_claim_ids)
     errors = _governed_claim_conflict_errors(all_claims, target_claims)
     assigned, assignment_errors = _governed_claim_assignment(checks, external)
