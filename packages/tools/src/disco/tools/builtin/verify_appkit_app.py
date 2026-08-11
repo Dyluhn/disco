@@ -335,8 +335,8 @@ class VerifyAppKitAppArgs(BaseModel):
     url: str = Field(
         default="",
         description=(
-            "Preview base URL of the running app (e.g. http://127.0.0.1:8000/). "
-            "Leave empty to auto-detect the running preview server."
+            "Exact in-sandbox preview URL when already known. Leave empty to auto-detect "
+            "the running preview server; never guess a fixed port."
         ),
     )
 
@@ -369,7 +369,9 @@ class VerifyAppKitAppTool:
             "the verified state) and move to your remaining plan steps. The route/section "
             "coverage and primitive_live checks are observations of the preview AT THAT "
             "MOMENT, so a PASS here is not by itself a finish condition: the finish gate "
-            "decides that."
+            "decides that. This optional probe spends one of the TWO debug calls shared "
+            "with verify_web_app and design_lint for the current artifact bytes; only a "
+            "real successful artifact mutation resets that allowance."
         ),
         args_model=VerifyAppKitAppArgs,
         needs=frozenset(

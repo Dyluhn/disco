@@ -510,8 +510,11 @@ _PLANNING_TOOL_REFUSAL_SUFFIX = (
 )
 
 
-def _planning_tool_refusal_message(tool_name: str, *, streak: int, read_calls_remaining: int) -> str:
-    detail = f"REFUSED: `{tool_name}` is not available in PLANNING mode. {_PLANNING_TOOL_REFUSAL_SUFFIX}"
+def _planning_tool_refusal_message(
+    tool_name: str, *, streak: int, read_calls_remaining: int
+) -> str:
+    detail = f"REFUSED: `{tool_name}` is not available in PLANNING mode."
+    detail += f" {_PLANNING_TOOL_REFUSAL_SUFFIX}"
     # Constraint 4 (F51): every planning-mode refusal is now repetition-aware,
     # even the first. `planning_tool_refusal_streak` counts consecutive planning
     # refusals (any tool) in this planning segment, not retries of one tool
@@ -519,7 +522,8 @@ def _planning_tool_refusal_message(tool_name: str, *, streak: int, read_calls_re
     # consequence/next move, otherwise the model has nothing new to act on.
     if streak <= 1:
         detail += (
-            f"\n\nThis is planning-mode refusal 1 of this run. You have {read_calls_remaining} read calls remaining before the allowed tools narrow. "
+            "\n\nThis is planning-mode refusal 1 of this run. You have "
+            f"{read_calls_remaining} read calls remaining before the allowed tools narrow. "
             "Your next move: call `submit_plan` with the current plan."
         )
     if streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
@@ -625,16 +629,15 @@ _REMEMBER_SCHEMA = {
 # intercepts the call and emits a DeliverableEvent that the UI renders as a real
 # handoff (Open the live app / Download the files) — the difference between "the
 # run ended" and "here is your thing." Non-blocking: the agent keeps working (it
-# usually serves, then verifies, then finishes).
+# usually serves, optionally debugs, then finishes).
 _SERVE_DESCRIPTION = (
-    "Hand off a finished deliverable to the user. Call this when you've produced "
-    "something they should open or download. Set `kind`='app' for a runnable "
-    "result they open in the live preview (a built site / running dev server "
-    "selected by the entry file at `path`) — make sure your server is serving on port 8000 (the "
-    "workspace auto-serves the 'preview' session there by default). Set "
+    "Hand off a finished deliverable to the user when you've produced something they "
+    "should open or download. Set `kind`='app' for a runnable result opened in the live "
+    "preview (a built site / running dev server selected by the entry file at `path`) — "
+    "start it with `preview_start` and use the platform-assigned preview; never assume a port. Set "
     "`kind`='files' for artifacts to download (`path` = the file or folder). "
-    "Give a short human `title`. This does NOT end the run — serve the "
-    "deliverable, verify it, THEN call finish."
+    "Give a short human `title`. This does NOT end the run. Use optional debugging "
+    "only when it can guide a concrete fix, then call finish; platform acceptance runs separately."
 )
 _SERVE_SCHEMA = {
     "type": "object",
@@ -663,15 +666,13 @@ _SERVE_SCHEMA = {
     "required": ["title", "path"],
 }
 _FINISH_DESCRIPTION = (
-    "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
-    "step is done and verified — it is the single affirmative way to finish. A "
-    "plain message without this tool does NOT end the run. Provide a short "
-    "`summary` of what you built / accomplished. STRONGLY PREFERRED: attach a "
-    "`verify` shell command that proves the deliverable works (the build "
-    "compiles, the tests pass, the server responds) — exit 0 means good. If it "
-    "fails you'll see exactly what broke and should fix it before finishing; after "
-    "a few failures the run finishes anyway with a warning, so make your check real "
-    "and your fix correct rather than relying on a broken verify to pass."
+    "Declare the requested implementation and handoff complete and ask the platform to "
+    "run its final acceptance gates. This is the single affirmative way to end the run; "
+    "a plain message does not. Provide a short `summary`. The optional "
+    "`verify` argument runs one finite advisory diagnostic and records its result, "
+    "but it is not completion proof and cannot veto completion. Do not attach a "
+    "check from habit or reshape working output to satisfy one you authored; host-owned "
+    "acceptance independently determines the final disposition."
 )
 _FINISH_SCHEMA = {
     "type": "object",
@@ -680,13 +681,12 @@ _FINISH_SCHEMA = {
         "verify": {
             "type": "string",
             "description": (
-                "Optional check that proves completion (exit 0 = success). One of: a "
-                "shell command (`npm test`, `python -m pytest -q`); for a STATIC page "
-                "the literal `static` (checks index.html exists + parses) or "
-                "`static:<path>`; or for a RUNNING web app the literal `app` (GETs "
-                "http://localhost:8000/ and requires HTTP 200 + a non-empty body) or "
-                "`app:<url>` for another address — make sure your server is serving on "
-                "port 8000 first. If it fails, the finish is refused and you must fix the problem."
+                "Optional finite advisory diagnostic. Use a shell command (`npm test`, "
+                "`python -m pytest -q`); `static` or `static:<path>` for an HTML parse check; "
+                "`app` to resolve and probe the managed preview automatically; "
+                "or `app:<url>` for an exact known address. Its exit/result is recorded "
+                "as debugging evidence but does not certify or veto completion; the "
+                "host-owned acceptance gates decide the final disposition."
             ),
         },
     },

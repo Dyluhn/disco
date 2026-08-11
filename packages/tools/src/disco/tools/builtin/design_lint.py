@@ -624,8 +624,11 @@ class DesignLintTool:
             "glass sanity. Findings are ranked rows with rule_id, severity, path, line, evidence, "
             "choice_key, and a fix message. Web off-default values are suppressed only when "
             ".disco/designspec.json carries a substantive justification for the choice_key. "
-            "Read-only — run it to CHECK a build, not to change it. Scans the workspace root "
-            "unless `root` is given."
+            "Read-only heuristic advice, not semantic proof or completion authority. One use "
+            "spends one of the TWO debug calls shared with verify_web_app and "
+            "verify_appkit_app for the current artifact bytes; only a real successful "
+            "artifact mutation resets that allowance. Scans the workspace root unless "
+            "`root` is given."
         ),
         args_model=DesignLintArgs,
         needs=frozenset({Capability.FILESYSTEM}),

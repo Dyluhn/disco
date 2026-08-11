@@ -20,6 +20,7 @@ from disco.core.workflow import (
     render_workflow_output_path,
     validate_definition,
     workflow_finish_supports_verify,
+    workflow_finish_tool_description,
     workflow_finish_tool_schema,
 )
 from pydantic import ValidationError
@@ -257,7 +258,15 @@ def test_workflow_finish_verify_requires_explicit_shell_scope() -> None:
     assert workflow_finish_supports_verify(no_shell) is False
     assert "verify" not in workflow_finish_tool_schema(no_shell)["properties"]
     assert workflow_finish_supports_verify(with_shell) is True
-    assert "verify" in workflow_finish_tool_schema(with_shell)["properties"]
+    verify = workflow_finish_tool_schema(with_shell)["properties"]["verify"]
+    assert isinstance(verify, dict)
+    description = verify["description"]
+    assert isinstance(description, str)
+    assert "advisory evidence" in description
+    assert "host-owned output-contract gates decide completion" in description
+    finish_description = workflow_finish_tool_description(with_shell)
+    assert "cannot veto completion" in finish_description
+    assert "host-owned output-contract gates remain authoritative" in finish_description
 
 
 def test_compile_workflow_scope_rejects_unknown_builtin_tool() -> None:

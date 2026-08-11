@@ -1066,18 +1066,22 @@ def test_prompt_self_verify_mandate_softens_only_when_authoritative() -> None:
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "Before declaring a web build finished, do ONE structured verify pass" in off
-    assert "with `verify_web_app` after `preview_start`" in off
-    assert "after handing it off with `serve(...)`" not in off
+    assert "Structured verification tools are OPTIONAL DEBUGGING aids" in off
+    assert "share a budget of TWO calls for the current artifact bytes" in off
+    assert "platform's finish gate independently runs applicable acceptance checks" in off
+    assert "host verifier independently runs applicable acceptance checks" not in off
+    assert "Treat that single pass/fail verdict as the finish check" not in off
 
     on = DriverPrompts(host_verify_authoritative=True).system_prompt(
         model_family="gpt",
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "Before declaring a web build finished, do ONE structured verify pass" not in on
-    assert "with `verify_web_app` after handing it off with `serve(...)`" in on
-    assert "The platform also runs the host verifier at the finish gate" in on
+    assert "Structured verification tools are OPTIONAL DEBUGGING aids" in on
+    assert "share a budget of TWO calls for the current artifact bytes" in on
+    assert "host verifier independently runs applicable acceptance checks" in on
+    assert "names any governed defect" in on
+    assert "Treat that single pass/fail verdict as the finish check" not in on
 
     small = DriverPrompts(host_verify_authoritative=True).system_prompt(
         model_family="gpt",
@@ -1085,6 +1089,7 @@ def test_prompt_self_verify_mandate_softens_only_when_authoritative() -> None:
         role=ModelRole.AGENT_DRIVER,
         assist=True,
     )
-    assert "WEB BUILDS — before declaring finished, do ONE verify-pass" not in small
-    assert "WEB BUILDS — do ONE structured verify pass with `verify_web_app`" in small
-    assert "will refuse finish with a concrete failure" in small
+    assert "DEBUGGING — `verify_web_app`, `verify_appkit_app`, and `design_lint`" in small
+    assert "They share TWO calls for the current artifact bytes" in small
+    assert "host verifier checks acceptance and names any governed defect" in small
+    assert "Treat that single pass/fail verdict as the finish check" not in small

@@ -989,6 +989,8 @@ async def test_tool_is_read_only_and_registered():
     from disco.tools.builtin import build_default_registry
 
     assert DesignLintTool.definition.read_only is True
+    assert "not semantic proof or completion authority" in DesignLintTool.definition.description
+    assert "TWO debug calls shared" in DesignLintTool.definition.description
     assert build_default_registry().names().issuperset({"design_lint"})
 
 
