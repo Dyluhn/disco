@@ -174,6 +174,61 @@ async def test_game_host_lowers_exact_interaction_probe_without_vision(
 
 
 @pytest.mark.asyncio
+async def test_same_preview_generation_accepts_initial_url_maturation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _preview_selection().model_copy(update={"url": ""})
+    deliverable = _deliverable().model_copy(
+        update={
+            "deployment_url": "",
+            "preview_selection": selection,
+            "preview_binding_required": True,
+        }
+    )
+
+    async def status_run(self, args, ctx):  # noqa: ANN001
+        del self, args, ctx
+        live = _preview_status(selection)
+        live["url"] = "http://127.0.0.1:8123/"
+        return ToolOutcome(
+            success=True,
+            content="running",
+            structured={"previews": [live]},
+        )
+
+    monkeypatch.setattr(PreviewStatusTool, "run", status_run)
+
+    assert await HostWebAppVerifier._preview_live_match(deliverable, object()) is True
+
+
+@pytest.mark.asyncio
+async def test_host_locator_rebinding_does_not_change_preview_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selection = _preview_selection()
+    deliverable = _deliverable().model_copy(
+        update={
+            "preview_selection": selection,
+            "preview_binding_required": True,
+        }
+    )
+
+    async def status_run(self, args, ctx):  # noqa: ANN001
+        del self, args, ctx
+        live = _preview_status(selection)
+        live["url"] = "http://127.0.0.1:9999/"
+        return ToolOutcome(
+            success=True,
+            content="running",
+            structured={"previews": [live]},
+        )
+
+    monkeypatch.setattr(PreviewStatusTool, "run", status_run)
+
+    assert await HostWebAppVerifier._preview_live_match(deliverable, object()) is True
+
+
+@pytest.mark.asyncio
 async def test_changed_live_preview_projection_fails_before_browser_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

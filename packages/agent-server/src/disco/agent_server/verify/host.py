@@ -266,7 +266,6 @@ class HostWebAppVerifier:
             "projection_id": selected.projection_id,
             "name": selected.session_name,
             "port": selected.port,
-            "url": selected.url or None,
             "launch_kind": selected.launch_kind,
             "intent_digest": selected.intent_digest,
             "sandbox_instance_id": selected.sandbox_instance_id,
@@ -275,10 +274,6 @@ class HostWebAppVerifier:
         return bool(
             live.get("status") in {"running", "unavailable"}
             and all(live.get(key) == value for key, value in exact.items())
-            and (
-                not deliverable.deployment_url
-                or selected.url.rstrip("/") == deliverable.deployment_url.rstrip("/")
-            )
             and selected.contains_artifact(deliverable.artifact_path)
         )
 

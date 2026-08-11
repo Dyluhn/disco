@@ -520,8 +520,8 @@ class PreviewSelectionIdentity(BaseModel):
         return root == "." or artifact == root or artifact.startswith(f"{root}/")
 
     @property
-    def operational_identity(self) -> tuple[str, str, int, str, str, str, int, str]:
-        """Live selection identity excluding replay-event provenance."""
+    def operational_identity(self) -> tuple[str, str, int, str, str, str, int]:
+        """Live selection identity excluding replay provenance and host locator."""
 
         return (
             self.projection_id,
@@ -531,7 +531,6 @@ class PreviewSelectionIdentity(BaseModel):
             self.intent_digest,
             self.sandbox_instance_id,
             self.sandbox_generation,
-            self.url,
         )
 
     def verification_target_url(self, artifact_path: str) -> str | None:
