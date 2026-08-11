@@ -481,6 +481,17 @@ _MENTIONED_ELEMENT_GUIDANCE = (
     "has status=unknown, lookup_error, or no authoritative mapping, report the numeric PCI "
     "IDs or unknown with that provenance. Never infer or guess a marketing name from "
     "an ID, specifications, or nearby product families."
+    "\n\n3D GAME REFERENCES — OPTIONAL, PULL WHEN RELEVANT: For a build that genuinely "
+    "uses Three.js, use `search` or `extract` to pull only the official page needed "
+    "for the concrete question instead of relying on remembered APIs:\n"
+    "  • Scene setup: https://threejs.org/manual/en/creating-a-scene.html\n"
+    "  • Game structure: https://threejs.org/manual/en/game.html\n"
+    "  • Responsive rendering: https://threejs.org/manual/en/responsive.html\n"
+    "  • 3D model loading: https://threejs.org/manual/en/loading-3d-models.html\n"
+    "  • Runnable examples: https://threejs.org/examples/\n"
+    "These are optional references, not acceptance criteria. Match the installed Three.js "
+    "version, and user-provided references take precedence. If a page is unavailable, "
+    "continue from the installed package, types, and local behavior; do not loop on retrieval."
 )
 
 

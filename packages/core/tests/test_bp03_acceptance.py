@@ -8,6 +8,7 @@ from disco.core.llm.prompts import (
     _EXECUTION_DRIVER_PROMPT_SMALL,
     _HOST_VERIFY_MANDATE_CAPABLE,
     _HOST_VERIFY_MANDATE_SMALL,
+    _MENTIONED_ELEMENT_GUIDANCE,
     _PLANNING_DRIVER_PROMPT,
     _SELF_VERIFY_MANDATE_CAPABLE,
     _SELF_VERIFY_MANDATE_SMALL,
@@ -79,6 +80,19 @@ def test_prompt_contract_text():
     assert "pkill http.server" not in _EXECUTION_DRIVER_PROMPT
     assert "run_server" not in _EXECUTION_DRIVER_PROMPT
     assert "restart_preview" not in _EXECUTION_DRIVER_PROMPT
+
+    # Ordinary build prompts carry a small optional Three.js reference shelf.
+    assert "3D GAME REFERENCES" in _MENTIONED_ELEMENT_GUIDANCE
+    for url in (
+        "https://threejs.org/manual/en/creating-a-scene.html",
+        "https://threejs.org/manual/en/game.html",
+        "https://threejs.org/manual/en/responsive.html",
+        "https://threejs.org/manual/en/loading-3d-models.html",
+        "https://threejs.org/examples/",
+    ):
+        assert url in _MENTIONED_ELEMENT_GUIDANCE
+    assert "user-provided references take precedence" in _MENTIONED_ELEMENT_GUIDANCE
+    assert "do not loop on retrieval" in _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_scanfix_prompt_surgery_contract():
