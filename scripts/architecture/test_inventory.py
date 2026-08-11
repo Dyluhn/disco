@@ -626,6 +626,11 @@ def regenerate_inventory(
             "fixtures",
         )
     }
+    static_added["fixtures"] = _splits.unaccounted_fixture_line_drift(
+        static_added["fixtures"],
+        previous_mapping["fixtures"],
+        current_mapping["fixtures"],
+    )
     marker_added = _assert_no_deletions(
         "mapping_static.markers",
         previous_mapping["markers"],
