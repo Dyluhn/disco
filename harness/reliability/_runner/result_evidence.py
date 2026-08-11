@@ -235,6 +235,22 @@ def _build_soak_result(
     return PASS, units, f"{passed} build-soak trial(s) passed"
 
 
+def _build_soak_pass_identity(run: dict[str, Any], index: int) -> tuple[str, str, str]:
+    """Parse one PASS owner without mixing row validation into cohort selection."""
+
+    seed = run.get("seed")
+    conversation_id = run.get("conversation_id")
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+        return "", "", f"PASS run {index} has no exact nonnegative seed"
+    if (
+        not isinstance(conversation_id, str)
+        or not conversation_id
+        or conversation_id != conversation_id.strip()
+    ):
+        return "", "", f"PASS run {index} has no exact conversation_id"
+    return f"build-soak-seed:{seed}", conversation_id, ""
+
+
 def _build_soak_pass_identities(
     out: Path,
     *,
@@ -259,17 +275,10 @@ def _build_soak_pass_identities(
     for index, run in enumerate(runs):
         if not isinstance(run, dict) or run.get("status") != "PASS":
             continue
-        seed = run.get("seed")
-        conversation_id = run.get("conversation_id")
-        if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
-            return [], frozenset(), f"PASS run {index} has no exact nonnegative seed"
-        if (
-            not isinstance(conversation_id, str)
-            or not conversation_id
-            or conversation_id != conversation_id.strip()
-        ):
-            return [], frozenset(), f"PASS run {index} has no exact conversation_id"
-        trial_ids.append(f"build-soak-seed:{seed}")
+        trial_id, conversation_id, identity_error = _build_soak_pass_identity(run, index)
+        if identity_error:
+            return [], frozenset(), identity_error
+        trial_ids.append(trial_id)
         conversation_ids.append(conversation_id)
     if len(trial_ids) != len(set(trial_ids)):
         return [], frozenset(), "PASS runs repeat a seed identity"
