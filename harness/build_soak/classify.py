@@ -36,6 +36,7 @@ __all__ = [
     "_tool_scope_from_inspect",
     "classify",
     "classify_run_folder",
+    "classify_run_folder_read_only",
     "intermittent_classification",
 ]
 
@@ -136,8 +137,21 @@ def classify_run_folder(
     """Classify a frozen run folder: load the manifest, verify evidence integrity
     (a mismatch -> INVALID_RUN), read the event log, classify, and write
     classification.json into the folder. Returns the classification dict."""
+    classification = classify_run_folder_read_only(folder, scenario=scenario)
+    write_classification(folder, classification)
+    return classification
+
+
+def classify_run_folder_read_only(
+    folder: str | Path,
+    *,
+    scenario: dict[str, Any] | None = None,
+    revision_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay frozen evidence without mutating the original dossier."""
+
     dossier = load_run_folder(folder, scenario=scenario)
-    classification = classify(
+    return classify(
         dossier["events_raw"],
         scenario=dossier["scenario"],
         run_id=dossier["run_id"],
@@ -146,6 +160,7 @@ def classify_run_folder(
         seed=dossier["seed"],
         evidence_intact=dossier["evidence_intact"],
         autonomous=dossier["autonomous"],
+        revision_meta=revision_meta,
         provider_ledger=dossier["provider_ledger"],
         inspect_trace=dossier["inspect_trace"],
         product_evidence=dossier["product_evidence"],
@@ -153,5 +168,3 @@ def classify_run_folder(
         preview=dossier["preview"],
         browser_evidence_paths=dossier["browser_evidence_paths"],
     )
-    write_classification(folder, classification)
-    return classification

@@ -221,17 +221,61 @@ def _build_soak_result(
         return INVALID, 0, f"build-soak summary {summary_path} declares no batch_id"
     runs = report.get("runs") or []
     statuses = Counter(str(run.get("status")) for run in runs if isinstance(run, dict))
+    passed = statuses["PASS"]
     if statuses["FAIL"]:
         return FAIL, 0, f"{statuses['FAIL']} build-soak trial(s) failed"
     if statuses["INVALID_RUN"]:
-        return INVALID, 0, f"{statuses['INVALID_RUN']} build-soak trial(s) invalid"
+        return INVALID, passed, f"{statuses['INVALID_RUN']} build-soak trial(s) invalid"
     if statuses["INFRA_FAILURE"]:
-        return INFRA, 0, f"{statuses['INFRA_FAILURE']} build-soak infrastructure failure(s)"
+        return INFRA, passed, f"{statuses['INFRA_FAILURE']} build-soak infrastructure failure(s)"
     if exit_code != 0:
-        return INFRA, 0, f"build soak exited {exit_code} without a classified failure"
-    if statuses["PASS"] < units or len(runs) < units:
-        return INVALID, 0, f"only {statuses['PASS']}/{units} required build trials passed"
-    return PASS, units, f"{statuses['PASS']} build-soak trial(s) passed"
+        return INFRA, passed, f"build soak exited {exit_code} without a classified failure"
+    if passed < units or len(runs) < units:
+        return INVALID, passed, f"only {passed}/{units} required build trials passed"
+    return PASS, units, f"{passed} build-soak trial(s) passed"
+
+
+def _build_soak_pass_identities(
+    out: Path,
+    *,
+    expected_batch_id: str | None = None,
+) -> tuple[list[str], frozenset[str], str]:
+    """Return exact seed and conversation owners for every completed PASS cell."""
+
+    summary_path, refusal = _select_build_soak_summary(
+        out, expected_batch_id=expected_batch_id
+    )
+    if summary_path is None:
+        return [], frozenset(), refusal
+    try:
+        report = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return [], frozenset(), f"build-soak summary is unreadable: {exc}"
+    runs = report.get("runs") if isinstance(report, dict) else None
+    if not isinstance(runs, list):
+        return [], frozenset(), "build-soak summary runs must be a list"
+    trial_ids: list[str] = []
+    conversation_ids: list[str] = []
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict) or run.get("status") != "PASS":
+            continue
+        seed = run.get("seed")
+        conversation_id = run.get("conversation_id")
+        if not isinstance(seed, int) or isinstance(seed, bool) or seed < 0:
+            return [], frozenset(), f"PASS run {index} has no exact nonnegative seed"
+        if (
+            not isinstance(conversation_id, str)
+            or not conversation_id
+            or conversation_id != conversation_id.strip()
+        ):
+            return [], frozenset(), f"PASS run {index} has no exact conversation_id"
+        trial_ids.append(f"build-soak-seed:{seed}")
+        conversation_ids.append(conversation_id)
+    if len(trial_ids) != len(set(trial_ids)):
+        return [], frozenset(), "PASS runs repeat a seed identity"
+    if len(conversation_ids) != len(set(conversation_ids)):
+        return [], frozenset(), "PASS runs repeat a conversation identity"
+    return trial_ids, frozenset(conversation_ids), ""
 
 
 def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:

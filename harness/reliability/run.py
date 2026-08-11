@@ -152,6 +152,12 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="nonnegative first seed for selected build-soak suites (commissioned per campaign)",
     )
+    parser.add_argument(
+        "--build-soak-units",
+        type=int,
+        default=None,
+        help="run a smaller fresh cohort for one selected build-soak suite",
+    )
     args = parser.parse_args(argv)
     try:
         if args.memory_reserve_gib <= 0 or args.disk_reserve_gib <= 0:
@@ -162,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             int(args.parallel_suites)
         if args.seed_base is not None and args.seed_base < 0:
             raise ValueError("--seed-base must be nonnegative")
+        if args.build_soak_units is not None and args.build_soak_units <= 0:
+            raise ValueError("--build-soak-units must be positive")
         return asyncio.run(_amain(args))
     except (ValueError, OSError) as exc:
         print(f"reliability campaign configuration error: {exc}", file=sys.stderr)

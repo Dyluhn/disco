@@ -9,6 +9,7 @@ from typing import Any
 
 from ..efficiency import LiveEfficiencyProgress, efficiency_record
 from ..events import (
+    KIND_ACTION,
     NormalizationError,
     normalize_events,
 )
@@ -21,6 +22,31 @@ from ._api_types import (
     TERMINAL_STATES,
 )
 from ._client_base import _ClientBase
+from ._client_polling import _latest_dangling_action_from
+
+
+def _settled_live_event_prefix(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Exclude the newest action until its durable outcome exists.
+
+    Live polling can observe an ActionEvent while its tool is still running. A
+    later action proves an older outcome-less action is durable history, but the
+    newest one is only a provisional prefix. The terminal classifier continues
+    to receive the complete frozen stream.
+    """
+
+    dangling = _latest_dangling_action_from(events)
+    if dangling is None:
+        return events
+    action_id, _tool_name = dangling
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        if event.get("kind") == KIND_ACTION and str(event.get("id")) == action_id:
+            return events[:index]
+    return events
+
+
+def _live_thrash_events(events: list[dict[str, Any]], *, terminal: bool) -> list[dict[str, Any]]:
+    return events if terminal else _settled_live_event_prefix(events)
 
 
 class _ObservabilityMixin(_ClientBase):
@@ -278,10 +304,10 @@ class _ObservabilityMixin(_ClientBase):
     ) -> bool:
         """Evaluate one in-run snapshot; require two matching live samples.
 
-        A just-committed ActionEvent may not have its ObservationEvent yet. Two
-        matching samples prevent that transient prefix from being reported as a
-        tool-error finding. At a terminal state the event prefix is stable, so a
-        single sample is conclusive.
+        A just-committed ActionEvent may not have its ObservationEvent yet. The
+        live monitor evaluates only the settled prefix; two matching samples then
+        confirm a stable finding. At a terminal state the complete event stream
+        is frozen, so a single sample is conclusive.
         """
 
         scenario = self._live_thrash_scenario
@@ -296,6 +322,8 @@ class _ObservabilityMixin(_ClientBase):
             # malformed prefix as a stream of failed actions.
             _LOG.error("live thrash sampler could not normalize events: %s", exc)
             return False
+        terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
+        normalized_events = _live_thrash_events(normalized_events, terminal=terminal)
         failed = [
             result.to_dict()
             for result in ThrashOracle().check(
@@ -326,7 +354,6 @@ class _ObservabilityMixin(_ClientBase):
         else:
             self._live_thrash_candidate = fingerprint
             self._live_thrash_candidate_count = 1
-        terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
         if not terminal and self._live_thrash_candidate_count < 2:
             return False
         if fingerprint in self._live_thrash_recorded:

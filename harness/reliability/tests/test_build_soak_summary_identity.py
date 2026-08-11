@@ -21,6 +21,7 @@ import os
 import time
 from pathlib import Path
 
+from harness.reliability._runner.result_evidence import _build_soak_pass_identities
 from harness.reliability.run import (
     INFRA,
     INVALID,
@@ -37,7 +38,14 @@ def _summary(path: Path, *, batch_id: str, passes: int, age_s: float = 0.0) -> P
             {
                 "schema_version": 1,
                 "batch_id": batch_id,
-                "runs": [{"status": "PASS"} for _ in range(passes)],
+                "runs": [
+                    {
+                        "status": "PASS",
+                        "seed": index,
+                        "conversation_id": f"conv_{index}",
+                    }
+                    for index in range(passes)
+                ],
             }
         ),
         encoding="utf-8",
@@ -86,6 +94,23 @@ def test_an_older_diagnostic_cannot_be_resurrected_either(tmp_path):
     # diagnostic's 9 must not be borrowed to cover the gap.
     assert status == INVALID
     assert "2/5" in reason
+
+
+def test_invalid_or_interrupted_cohort_keeps_only_completed_pass_units(tmp_path):
+    path = _summary(tmp_path / "promotion" / "batch-summary.json", batch_id="promo", passes=3)
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["runs"].append({"status": "INVALID_RUN"})
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert _build_soak_result(tmp_path, exit_code=2, units=5)[:2] == (INVALID, 3)
+    trial_ids, conversations, reason = _build_soak_pass_identities(tmp_path)
+    assert reason == ""
+    assert trial_ids == ["build-soak-seed:0", "build-soak-seed:1", "build-soak-seed:2"]
+    assert conversations == frozenset({"conv_0", "conv_1", "conv_2"})
+
+    report["runs"].pop()
+    path.write_text(json.dumps(report), encoding="utf-8")
+    assert _build_soak_result(tmp_path, exit_code=2, units=5)[:2] == (INFRA, 3)
 
 
 def test_an_unknown_batch_id_is_refused_not_defaulted(tmp_path):

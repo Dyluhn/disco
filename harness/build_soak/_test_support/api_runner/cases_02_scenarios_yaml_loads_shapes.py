@@ -120,6 +120,59 @@ def _impl_test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(tm
     assert client.live_thrash_monitor["findings"] == []
 
 
+def _impl_test_live_thrash_monitor_waits_for_latest_action_outcome(tmp_path):
+    """A slow in-flight tool is not a second durable missing outcome."""
+
+    scenario = _smoke_scenario()
+    events = [
+        action(43, "file_append", action_id="append-elided", args={"path": "index.html"}),
+        {
+            "id": "reminder-44",
+            "seq": 44,
+            "kind": "message",
+            "source": "environment",
+            "message": {"role": "user", "content": "the elided append was not submitted"},
+        },
+        action(46, "file_read", action_id="read-after-reminder", args={"path": "index.html"}),
+        observation(47, "read-after-reminder", tool="file_read"),
+        action(49, "file_append", action_id="append-in-flight", args={"path": "index.html"}),
+    ]
+
+    client = _client(FakeTransport(tmp_path / "running.db", states=["RUNNING"]), tmp_path)
+    client.enable_live_thrash_monitor(scenario)
+    assert not client.observe_live_thrash_snapshot(events, None, terminal_status="RUNNING")
+    assert not client.observe_live_thrash_snapshot(events, None, terminal_status="RUNNING")
+    assert client.live_thrash_monitor["findings"] == []
+
+    completed = [*events, observation(50, "append-in-flight", tool="file_append")]
+    assert not client.observe_live_thrash_snapshot(completed, None, terminal_status="RUNNING")
+
+    # A stable terminal prefix has no in-flight call. Preserve fail-closed
+    # adjudication for two genuinely outcome-less actions.
+    terminal = _client(FakeTransport(tmp_path / "terminal.db", states=["IDLE"]), tmp_path)
+    terminal.enable_live_thrash_monitor(scenario)
+    assert terminal.observe_live_thrash_snapshot(events, None, terminal_status="IDLE")
+    finding = terminal.live_thrash_monitor["findings"][0]["oracle_results"][0]
+    assert finding["code"] == "TOOL_ERROR_THRASH"
+    assert finding["facts"]["action_seqs"] == [43, 49]
+
+    # Removing the one provisional suffix must not hide already-settled repeated
+    # failures earlier in the stream.
+    genuine_repeat = [
+        action(1, "file_append", action_id="failed-1", args={"path": "index.html"}),
+        observation(2, "failed-1", tool="file_append", success=False),
+        action(3, "file_append", action_id="failed-2", args={"path": "index.html"}),
+        observation(4, "failed-2", tool="file_append", success=False),
+        action(5, "file_append", action_id="still-running", args={"path": "index.html"}),
+    ]
+    looping = _client(FakeTransport(tmp_path / "looping.db", states=["RUNNING"]), tmp_path)
+    looping.enable_live_thrash_monitor(scenario)
+    assert not looping.observe_live_thrash_snapshot(genuine_repeat, None, terminal_status="RUNNING")
+    assert looping.observe_live_thrash_snapshot(genuine_repeat, None, terminal_status="RUNNING")
+    finding = looping.live_thrash_monitor["findings"][0]["oracle_results"][0]
+    assert finding["facts"]["action_seqs"] == [1, 3]
+
+
 def _impl_test_live_thrash_monitor_distinguishes_recovery_from_restart_loop(tmp_path):
     scenario = _smoke_scenario()
     recovery = [

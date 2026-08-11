@@ -4,13 +4,17 @@ import multiprocessing as mp
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from harness.reliability.matrix import load_matrix
 from harness.reliability.state import (
     FAIL,
     INFRA,
+    INVALID,
     PASS,
     empty_state,
     load_state,
+    product_subject_identity,
     promotion_report,
     record_campaign,
     source_revision,
@@ -20,7 +24,13 @@ from harness.reliability.state import (
 MATRIX = Path(__file__).parents[1] / "matrix.yaml"
 
 
-def _result(status: str, units: int, *, device: str | None = None) -> dict:
+def _result(
+    status: str,
+    units: int,
+    *,
+    device: str | None = None,
+    trial_ids: list[str] | None = None,
+) -> dict:
     result = {
         "suite_id": "live-build-shapes",
         "status": status,
@@ -30,10 +40,20 @@ def _result(status: str, units: int, *, device: str | None = None) -> dict:
     }
     if device:
         result["fresh_device_id"] = device
+    if trial_ids is not None:
+        result["kind"] = "build_soak"
+        result["trial_ids"] = trial_ids
     return result
 
 
-def _record(state: dict, campaign: str, revision: str, result: dict) -> None:
+def _record(
+    state: dict,
+    campaign: str,
+    revision: str,
+    result: dict,
+    *,
+    evaluator: str | None = None,
+) -> None:
     record_campaign(
         state,
         campaign_id=campaign,
@@ -43,6 +63,8 @@ def _record(state: dict, campaign: str, revision: str, result: dict) -> None:
         started_at="start",
         finished_at="finish",
         results=[result],
+        product_subject_identity=revision,
+        evaluator_identity=evaluator or revision,
     )
 
 
@@ -81,6 +103,47 @@ def test_infrastructure_failure_does_not_taint_but_never_counts() -> None:
     report = promotion_report(state, matrix, revision="r1", claim_ids={"build.api_shapes_live"})
     assert report["tainted"] is False
     assert report["claims"][0]["observed"] == 100
+
+
+def test_invalid_cohort_preserves_its_completed_pass_cells() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    trials = [f"build-soak-seed:{seed}" for seed in range(53)]
+    _record(state, "c1", "subject", _result(INVALID, 53, trial_ids=trials), evaluator="v19")
+
+    report = promotion_report(
+        state, matrix, revision="subject", claim_ids={"build.api_shapes_live"}
+    )
+
+    assert report["tainted"] is False
+    assert report["claims"][0]["observed"] == 53
+
+
+def test_evaluator_change_preserves_credit_but_product_failure_taints_it() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    _record(state, "c1", "subject", _result(PASS, 100), evaluator="evaluator-a")
+    _record(state, "c2", "subject", _result(PASS, 100), evaluator="evaluator-b")
+    report = promotion_report(
+        state, matrix, revision="subject", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["claims"][0]["observed"] == 200
+
+    _record(state, "c3", "subject", _result(FAIL, 0), evaluator="evaluator-c")
+    report = promotion_report(
+        state, matrix, revision="subject", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["tainted"] is True
+    assert report["claims"][0]["observed"] == 0
+
+
+def test_duplicate_build_soak_trial_identity_is_rejected() -> None:
+    state = empty_state()
+    result = _result(PASS, 1, trial_ids=["build-soak-seed:92419"])
+    _record(state, "c1", "subject", result, evaluator="evaluator-a")
+
+    with pytest.raises(ValueError, match="already credited"):
+        _record(state, "c2", "subject", result, evaluator="evaluator-b")
 
 
 def test_new_revision_starts_after_fix_streak_from_zero() -> None:
@@ -137,3 +200,21 @@ def test_nested_untracked_file_bytes_change_source_revision(tmp_path: Path) -> N
 
     assert dirty is True
     assert first != second
+
+
+def test_product_subject_identity_ignores_evaluator_bytes_only(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    product = tmp_path / "packages" / "core" / "src" / "disco" / "runtime.py"
+    harness = tmp_path / "harness" / "reliability" / "oracle.py"
+    product.parent.mkdir(parents=True)
+    harness.parent.mkdir(parents=True)
+    product.write_text("VALUE = 1\n", encoding="utf-8")
+    harness.write_text("RULE = 1\n", encoding="utf-8")
+    first = product_subject_identity(tmp_path, bindings={"model": "deepseek"})
+
+    harness.write_text("RULE = 2\n", encoding="utf-8")
+    assert product_subject_identity(tmp_path, bindings={"model": "deepseek"}) == first
+
+    product.write_text("VALUE = 2\n", encoding="utf-8")
+    assert product_subject_identity(tmp_path, bindings={"model": "deepseek"}) != first
+    assert product_subject_identity(tmp_path, bindings={"model": "other"}) != first

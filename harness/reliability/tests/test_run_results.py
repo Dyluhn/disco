@@ -6,11 +6,13 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from harness.build_soak.resources import GIB, HostResources
 from harness.reliability._runner import resource_pool
+from harness.reliability._runner.suite_execution import _adjudicate_provider_evidence
 from harness.reliability.matrix import Suite
 from harness.reliability.run import (
     _build_soak_result,
@@ -375,6 +377,70 @@ def test_provider_evidence_requires_exact_host_model_and_trial_coverage(tmp_path
         expected_model="deepseek-v4-flash",
         units=3,
     )[:2] == (PASS, 3)
+
+
+def test_provider_evidence_can_prove_pass_subset_without_rejecting_invalid_cell(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        path,
+        [
+            {
+                "host": "opencode.ai",
+                "model": "deepseek-v4-flash",
+                "conversation_id": conversation_id,
+            }
+            for conversation_id in ("conv_pass", "conv_invalid")
+        ],
+    )
+
+    assert _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+        required_conversation_ids=frozenset({"conv_pass"}),
+    )[:2] == (PASS, 1)
+
+    status, units, reason = _provider_evidence_result(
+        path,
+        expected_host="opencode.ai",
+        expected_model="deepseek-v4-flash",
+        units=1,
+        required_conversation_ids=frozenset({"conv_missing"}),
+    )
+    assert (status, units) == (INVALID, 0)
+    assert "missing 1 required PASS conversation" in reason
+
+
+def test_provider_fallback_taints_even_when_suite_was_already_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger = tmp_path / "provider.jsonl"
+    _write_provider_ledger(
+        ledger,
+        [
+            {
+                "host": "fallback.example",
+                "model": "other",
+                "conversation_id": "conv_1",
+            }
+        ],
+    )
+    monkeypatch.setenv("DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST", "opencode.ai")
+    monkeypatch.setenv("DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL", "deepseek-v4-flash")
+    suite = _provider_suite(conversation_manifest=False)
+    launch = SimpleNamespace(
+        provider_ledger_path=ledger,
+        provider_conversation_manifest_path=None,
+    )
+
+    status, units, _, _ = _adjudicate_provider_evidence(
+        suite, launch, INVALID, 0, "harness evidence invalid"
+    )
+
+    assert (status, units) == (FAIL, 0)
 
 
 def test_provider_evidence_accepts_complete_sanitized_request_shape(tmp_path: Path) -> None:
