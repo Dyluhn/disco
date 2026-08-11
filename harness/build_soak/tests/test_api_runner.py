@@ -125,6 +125,10 @@ def test_live_thrash_monitor_confirms_repeated_model_repair(*args, **kwargs):
 def test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(*args, **kwargs):
     return _c02._impl_test_live_thrash_monitor_normalizes_sqlite_rows_before_adjudication(*args, **kwargs)
 
+@wraps(_c02._impl_test_live_thrash_monitor_waits_for_latest_action_outcome)
+def test_live_thrash_monitor_waits_for_latest_action_outcome(*args, **kwargs):
+    return _c02._impl_test_live_thrash_monitor_waits_for_latest_action_outcome(*args, **kwargs)
+
 @wraps(_c02._impl_test_live_thrash_monitor_distinguishes_recovery_from_restart_loop)
 def test_live_thrash_monitor_distinguishes_recovery_from_restart_loop(*args, **kwargs):
     return _c02._impl_test_live_thrash_monitor_distinguishes_recovery_from_restart_loop(*args, **kwargs)

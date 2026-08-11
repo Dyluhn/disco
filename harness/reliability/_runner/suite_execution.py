@@ -28,6 +28,7 @@ from .provider_evidence import (
 )
 from .resource_pool import GIB, WeightedSuitePool
 from .result_evidence import (
+    _build_soak_pass_identities,
     _build_soak_result,
     _fresh_device_fingerprint,
     _fresh_device_result,
@@ -465,6 +466,8 @@ def _adjudicate_provider_evidence(
     status: str,
     units_passed: int,
     reason: str,
+    *,
+    required_conversation_ids: frozenset[str] | None = None,
 ) -> tuple[str, int, str, dict[str, Any] | None]:
     if not suite.provider_evidence:
         return status, units_passed, reason, None
@@ -472,9 +475,10 @@ def _adjudicate_provider_evidence(
         launch.provider_ledger_path,
         expected_host=os.environ.get(_EXPECTED_PROVIDER_HOST_ENV, ""),
         expected_model=os.environ.get(_EXPECTED_PROVIDER_MODEL_ENV, ""),
-        units=suite.units,
+        units=units_passed or suite.units,
         conversation_manifest_path=launch.provider_conversation_manifest_path,
         expected_conversations=(suite.provider_conversation_count if status == PASS else None),
+        required_conversation_ids=required_conversation_ids,
     )
     evidence: dict[str, Any] = {
         "status": provider_status,
@@ -484,8 +488,12 @@ def _adjudicate_provider_evidence(
     }
     if launch.provider_conversation_manifest_path is not None:
         evidence["conversation_manifest_path"] = str(launch.provider_conversation_manifest_path)
+    if provider_status == FAIL:
+        return FAIL, 0, provider_reason, evidence
     if status == PASS and provider_status != PASS:
         return provider_status, 0, provider_reason, evidence
+    if units_passed and provider_status != PASS:
+        return status, 0, f"{reason}; provider evidence: {provider_reason}", evidence
     if status != PASS and provider_status != PASS:
         reason = f"{reason}; provider evidence: {provider_reason}"
     return status, units_passed, reason, evidence
@@ -508,8 +516,25 @@ async def _run_suite(
     status, units_passed, reason = _classify_suite_result(
         suite, launch, exit_code=exit_code, timed_out=timed_out
     )
+    trial_ids: list[str] = []
+    pass_conversations: frozenset[str] | None = None
+    if suite.kind == "build_soak" and units_passed:
+        trial_ids, pass_conversations, identity_reason = _build_soak_pass_identities(
+            launch.suite_out
+        )
+        if identity_reason or len(trial_ids) != units_passed:
+            status = INVALID
+            units_passed = 0
+            trial_ids = []
+            pass_conversations = None
+            reason = identity_reason or "PASS trial identity count does not match completed units"
     status, units_passed, reason, provider_evidence = _adjudicate_provider_evidence(
-        suite, launch, status, units_passed, reason
+        suite,
+        launch,
+        status,
+        units_passed,
+        reason,
+        required_conversation_ids=pass_conversations,
     )
     result = {
         **launch.base,
@@ -523,6 +548,8 @@ async def _run_suite(
     }
     if provider_evidence is not None:
         result["provider_evidence"] = provider_evidence
+    if units_passed and trial_ids:
+        result["trial_ids"] = trial_ids
     if suite.proof == "fresh_device":
         result["fresh_device_id"] = _fresh_device_fingerprint(launch.structured_path or Path())
     print(f"[reliability] {status} {suite.id}: {reason}")

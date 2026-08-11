@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from harness.reliability._runner.campaign import _suite_seed_bases
+from harness.reliability._runner.campaign import _override_build_soak_units, _suite_seed_bases
 from harness.reliability._runner.suite_execution import _prepare_suite_launch
 from harness.reliability.matrix import load_matrix
 from harness.reliability.run import main
@@ -117,3 +117,28 @@ def test_build_soak_suites_receive_disjoint_seed_ranges() -> None:
         "live-build-revisions": "90100",
         "live-agent-general": "90200",
     }
+
+
+def test_build_soak_continuation_rewrites_units_and_iterations_together() -> None:
+    suite = load_matrix(MATRIX).suites["live-build-shapes"]
+
+    selected = _override_build_soak_units(
+        argparse.Namespace(build_soak_units=47), [suite]
+    )
+
+    assert selected[0].units == 47
+    index = selected[0].command.index("--iterations")
+    assert selected[0].command[index + 1] == "47"
+
+
+def test_build_soak_continuation_refuses_ambiguous_or_oversized_selection() -> None:
+    matrix = load_matrix(MATRIX)
+    with pytest.raises(ValueError, match="exactly one build-soak suite"):
+        _override_build_soak_units(
+            argparse.Namespace(build_soak_units=47),
+            [matrix.suites["live-build-shapes"], matrix.suites["live-build-revisions"]],
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        _override_build_soak_units(
+            argparse.Namespace(build_soak_units=101), [matrix.suites["live-build-shapes"]]
+        )

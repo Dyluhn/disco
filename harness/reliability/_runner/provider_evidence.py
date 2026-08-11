@@ -128,6 +128,7 @@ def _provider_scope_result(
     manifest_conversations: frozenset[str] | None,
     expected_conversations: int | None,
     units: int,
+    required_conversation_ids: frozenset[str] | None,
 ) -> tuple[str, str]:
     conversations = scope.conversations
     if manifest_conversations is not None and conversations != manifest_conversations:
@@ -148,6 +149,22 @@ def _provider_scope_result(
         return INVALID, (
             f"{without_tools} manifest conversation ID(s) have no tool-bearing provider call"
         )
+    if required_conversation_ids is not None:
+        if len(required_conversation_ids) != units:
+            return INVALID, (
+                f"required PASS conversation scope has {len(required_conversation_ids)}/{units} IDs"
+            )
+        missing_required = required_conversation_ids - conversations
+        if missing_required:
+            return INVALID, (
+                f"missing {len(missing_required)} required PASS conversation ID(s)"
+            )
+        required_without_tools = required_conversation_ids - scope.tool_conversations
+        if required_without_tools:
+            return INVALID, (
+                f"{len(required_without_tools)} required PASS conversation ID(s) have no "
+                "tool-bearing provider call"
+            )
     if expected_conversations is not None and len(conversations) != expected_conversations:
         return INVALID, (
             f"provider ledger covers {len(conversations)}/{expected_conversations} "
@@ -168,6 +185,7 @@ def _provider_evidence_result(
     units: int,
     conversation_manifest_path: Path | None = None,
     expected_conversations: int | None = None,
+    required_conversation_ids: frozenset[str] | None = None,
 ) -> tuple[str, int, str]:
     """Fail closed on absent, malformed, or fallback provider-call evidence."""
 
@@ -196,6 +214,7 @@ def _provider_evidence_result(
         manifest_conversations=manifest_conversations,
         expected_conversations=expected_conversations,
         units=units,
+        required_conversation_ids=required_conversation_ids,
     )
     if validation_status != PASS:
         return validation_status, 0, validation_reason

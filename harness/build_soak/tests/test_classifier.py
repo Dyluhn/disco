@@ -6,10 +6,13 @@ from __future__ import annotations
 import json
 
 from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
-
-from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 from disco.core.loop.engine_contracts import _planning_tool_refusal_message
-from harness.build_soak.classify import classify, classify_run_folder
+
+from harness.build_soak.classify import (
+    classify,
+    classify_run_folder,
+    classify_run_folder_read_only,
+)
 from harness.build_soak.evidence import (
     EvidenceManifest,
     compute_evidence_hashes,
@@ -300,6 +303,43 @@ def test_classify_run_folder_writes_classification(tmp_path):
     assert written["run_id"] == "run1"
 
 
+def test_read_only_replay_does_not_create_or_replace_classification(tmp_path):
+    conv = tmp_path / "conversations" / "conv_x"
+    conv.mkdir(parents=True)
+    events_path = conv / "events.jsonl"
+    events_path.write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()) + "\n", encoding="utf-8"
+    )
+    files = {"events": "conversations/conv_x/events.jsonl"}
+    write_manifest(
+        tmp_path,
+        EvidenceManifest(
+            run_id="run1",
+            scenario_id="s",
+            evidence_files=files,
+            evidence_hashes=compute_evidence_hashes(tmp_path, files),
+        ),
+    )
+    classification_path = tmp_path / "classification.json"
+    classification_path.write_bytes(b"preserved historical verdict\n")
+
+    result = classify_run_folder_read_only(
+        tmp_path,
+        scenario={
+            "id": "s",
+            "assertions": {"event_chain": {"require_plan_before_execution": True}},
+        },
+        revision_meta={
+            "declared_followup_seqs": [],
+            "declared_followup_requires_revision": [],
+            "harness_injected_user_seqs": [],
+        },
+    )
+
+    assert result["status"] == "PASS"
+    assert classification_path.read_bytes() == b"preserved historical verdict\n"
+
+
 def test_classify_run_folder_detects_tamper(tmp_path):
     conv = tmp_path / "conversations" / "conv_x"
     conv.mkdir(parents=True)
@@ -444,7 +484,9 @@ def test_planning_gate_refusal_fixture_is_derived_from_production():
     from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE as _needle
 
     bare = f"<system-reminder>\nREFUSED: `file_write` {_needle}. {prod_suffix}\n</system-reminder>"
-    assert len(_PLANNING_GATE_REFUSAL) > len(bare), "repetition-aware streak-1 must extend the bare suffix composition"
+    assert len(_PLANNING_GATE_REFUSAL) > len(bare), (
+        "repetition-aware streak-1 must extend the bare suffix composition"
+    )
     assert len(expected) > len(bare)
     assert _PLANNING_GATE_REFUSAL != bare
     assert expected != bare
@@ -459,7 +501,6 @@ def test_planning_gate_refusal_fixture_drift_would_fail_binding():
     derived composition moves, while classifier logic remains independently
     exercised on generic input.
     """
-    import copy
 
     from disco.core.loop import engine_contracts
 
@@ -468,15 +509,22 @@ def test_planning_gate_refusal_fixture_drift_would_fail_binding():
     mutated_suffix = original_suffix + " (mutated drift)"
     try:
         engine_contracts._PLANNING_TOOL_REFUSAL_SUFFIX = mutated_suffix
-        mutated = engine_contracts._planning_tool_refusal_message("file_write", streak=1, read_calls_remaining=999)
+        mutated = engine_contracts._planning_tool_refusal_message(
+            "file_write", streak=1, read_calls_remaining=999
+        )
         # The derived fixture (computed before mutation) must differ from mutated composition,
         # proving that a production reword would move the expected value and the
         # binding test `test_planning_gate_refusal_fixture_is_derived_from_production` would go red.
-        assert _PLANNING_GATE_REFUSAL != mutated, "fixture must change when production suffix changes"
+        assert _PLANNING_GATE_REFUSAL != mutated, (
+            "fixture must change when production suffix changes"
+        )
         assert "mutated drift" in mutated
         assert "mutated drift" not in _PLANNING_GATE_REFUSAL
-        # Conversely, recomputing from mutated production must equal mutated, proving the fixture follows production
-        assert mutated == engine_contracts._planning_tool_refusal_message("file_write", streak=1, read_calls_remaining=999)
+        # Conversely, recomputing from mutated production must equal mutated,
+        # proving the fixture follows production.
+        assert mutated == engine_contracts._planning_tool_refusal_message(
+            "file_write", streak=1, read_calls_remaining=999
+        )
     finally:
         engine_contracts._PLANNING_TOOL_REFUSAL_SUFFIX = original_suffix
 
@@ -522,19 +570,19 @@ def test_classifier_implementation_does_not_import_production():
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    assert not alias.name.startswith("disco."), f"{path.name} must not import {alias.name}"
+                    assert not alias.name.startswith("disco."), (
+                        f"{path.name} must not import {alias.name}"
+                    )
             if isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
                 assert not mod.startswith("disco."), f"{path.name} must not import from {mod}"
     # Also prove the classifier uses needle, not full production string
-    from harness.build_soak._classification._pipeline import run_oracle_pipeline  # noqa: F401
-    import harness.build_soak.classify as classify_mod
     import inspect
 
+    import harness.build_soak.classify as classify_mod
     src = inspect.getsource(classify_mod)
     assert "disco.core.loop.engine_contracts" not in src
     # The classifier's planning-gate logic keys on the needle value, not the suffix
-    from disco.core.loop.driver_retry import _PLANNING_TOOL_REFUSAL_NEEDLE
 
     # Generic needle detection: classifier must still treat needle as pass, non-needle as fail
     events_needle = [
@@ -552,7 +600,9 @@ def test_classifier_implementation_does_not_import_production():
     ]
     scenario = {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
     c2 = classify(events_needle, scenario=scenario)
-    assert c2["status"] == "PASS", "needle-based planning refusal must be recognized as non-violation"
+    assert c2["status"] == "PASS", (
+        "needle-based planning refusal must be recognized as non-violation"
+    )
 
 
 def test_classifier_still_independent_of_producer():
