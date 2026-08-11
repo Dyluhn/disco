@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from harness.build_soak.resources import GIB, HostResources
+from harness.reliability._runner import resource_pool
 from harness.reliability.matrix import Suite
 from harness.reliability.run import (
     _build_soak_result,
@@ -31,6 +33,29 @@ class _ImmediatePool:
     @asynccontextmanager
     async def slot(self, _memory_bytes: int):
         yield None
+
+
+@pytest.mark.asyncio
+async def test_suite_pool_waits_when_only_current_memory_pressure_blocks_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    low = HostResources(128 * GIB, 40 * GIB, 16, 100 * GIB)
+    recovered = HostResources(128 * GIB, 60 * GIB, 16, 100 * GIB)
+    readings = iter((low, recovered))
+    monkeypatch.setattr(resource_pool, "read_host_resources", lambda **_kwargs: next(readings))
+
+    pool = resource_pool.WeightedSuitePool(
+        disk_path=tmp_path,
+        memory_reserve_bytes=32 * GIB,
+        disk_reserve_bytes=10 * GIB,
+        max_parallel=1,
+        poll_s=0.001,
+        wait_timeout_s=1,
+    )
+
+    async with pool.slot(18 * GIB) as admitted:
+        assert admitted == recovered
 
 
 def _generic_suite(suite_id: str, command: tuple[str, ...], cwd: Path) -> Suite:

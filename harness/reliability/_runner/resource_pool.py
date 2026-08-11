@@ -34,7 +34,10 @@ class WeightedSuitePool:
         self.poll_s = poll_s
         self.wait_timeout_s = wait_timeout_s
         initial = read_host_resources(disk_path=disk_path)
-        self.memory_budget = max(0, initial.memory_available_bytes - memory_reserve_bytes)
+        # Total memory defines whether a suite can ever fit. Available memory is
+        # transient and is re-checked below so temporary desktop pressure waits
+        # for the configured admission timeout instead of failing immediately.
+        self.memory_budget = max(0, initial.memory_total_bytes - memory_reserve_bytes)
         self._active_memory = 0
         self._active_count = 0
         self._lock = asyncio.Lock()
