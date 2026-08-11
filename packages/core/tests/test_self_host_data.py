@@ -7,6 +7,7 @@ import json
 import sqlite3
 import stat
 import tarfile
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -64,7 +65,7 @@ def test_backup_uses_sqlite_api_and_restores_complete_data_tree(tmp_path: Path) 
     archive.seek(0)
     lifecycle.restore_archive(archive, restored)
     assert not (restored / "disco.db-wal").exists()
-    with sqlite3.connect(restored / "disco.db") as database:
+    with closing(sqlite3.connect(restored / "disco.db")) as database:
         assert database.execute("SELECT id, title FROM projects").fetchall() == [
             ("project-1", "Restored project")
         ]

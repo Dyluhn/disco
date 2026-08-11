@@ -30,6 +30,7 @@ from disco.core import ConversationStatus, DeliverableEvent, EventSource, Status
 from disco.core.llm import OperatingMode
 from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP, _safe_deliverable_file_path
 from disco.core.loop.finish import content_gates as content_gates_module
+from disco.core.loop.plan_conditions import dictated_content_conditions_from_events
 from loop_fakes import ScriptedAgent, action_step, build_loop
 
 
@@ -261,6 +262,67 @@ async def test_selected_app_entry_proof_skips_redundant_bundle_listing(tmp_path:
 
     assert state.execution_status == ConversationStatus.FINISHED, _env_messages(events)
     assert listing_calls == 0
+    assert not any(
+        isinstance(event, StatusEvent)
+        and event.detail in {"dictated_content_inspection_incomplete", "dictated_content_release"}
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_multifile_literal_cannot_be_satisfied_by_the_wrong_html_artifact(
+    tmp_path: Path,
+):
+    """An about-page heading copied onto the entry page is not completion evidence."""
+
+    (tmp_path / "index.html").write_text(
+        '<h1>Welcome Home</h1><span>About Us</span><nav class="site-nav"></nav>',
+        encoding="utf-8",
+    )
+    (tmp_path / "about.html").write_text(
+        '<h1>Wrong heading</h1><nav class="site-nav"></nav>',
+        encoding="utf-8",
+    )
+    (tmp_path / "style.css").write_text(".site-nav { display: flex; }", encoding="utf-8")
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-exact-html-target",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message(
+        "Give index.html an <h1> heading exactly 'Welcome Home' and about.html an "
+        "<h1> heading exactly 'About Us'. Both pages use the CSS class 'site-nav'."
+    )
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-exact-html-target",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="site",
+            path="index.html",
+            artifact_kind="app",
+        ),
+    )
+    loop.mode = OperatingMode.LONG_HORIZON
+
+    events = await store.get_events("dictated-exact-html-target")
+    assert [
+        (condition.literal, condition.document_artifact)
+        for condition in dictated_content_conditions_from_events(events)
+    ] == [
+        ("Welcome Home", "index.html"),
+        ("About Us", "about.html"),
+        ("site-nav", None),
+    ]
+    assert await loop._finish.dictated_content_gate_passed(events) is False
+    events = await store.get_events("dictated-exact-html-target")
+    assert any(
+        "About Us" in message and "`about.html`" in message for message in _env_messages(events)
+    )
     assert not any(
         isinstance(event, StatusEvent)
         and event.detail in {"dictated_content_inspection_incomplete", "dictated_content_release"}

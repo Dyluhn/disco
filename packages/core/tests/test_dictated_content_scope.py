@@ -12,7 +12,9 @@ and finish-gate refusal/cap behavior.
 from __future__ import annotations
 
 from _dictated_content_support import _plan, _scoped_edit_directive, _status, _user
+from disco.core.loop.finish.verify_gate_parts.host_claims import host_verification_claims
 from disco.core.loop.plan_conditions import dictated_content_conditions_from_events
+from disco.core.verification import VerificationClaimKind
 
 
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():
@@ -128,3 +130,49 @@ def test_document_scope_is_clause_bound_not_sentence_bound():
     scoped = {c.literal: c.document_artifact for c in conditions}
 
     assert scoped == {"internal only": "notes.txt", "Public View": None}
+
+
+def test_multifile_requirements_keep_source_surface_and_exact_html_target():
+    """The generic host may only judge visible text on the artifact it opened.
+
+    A CSS identifier is source text, not rendered copy, and a heading assigned
+    to ``about.html`` is not a requirement on the selected ``index.html`` page.
+    Both remain dictated-content conditions for exact workspace inspection.
+    """
+
+    prompt = (
+        "Create a small multi-page static website with three files: index.html "
+        "(the Home page), about.html (the About page), and a shared style.css. "
+        "Give index.html an <h1> heading exactly 'Welcome Home' and about.html "
+        "an <h1> heading exactly 'About Us'. Both pages must include a navigation "
+        "bar using the CSS class 'site-nav' (defined in style.css) with links "
+        "between the pages."
+    )
+    events = [_user(prompt, 1), _plan(1, 2)]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [
+        (condition.literal, condition.content_surface, condition.document_artifact)
+        for condition in conditions
+    ] == [
+        ("Welcome Home", "visible_text", "index.html"),
+        ("About Us", "visible_text", "about.html"),
+        ("site-nav", "source_text", None),
+    ]
+
+    index_claims = host_verification_claims({}, events, artifact_path="index.html")
+    index_visible_text = {
+        claim.expected
+        for claim in index_claims
+        if claim.kind is VerificationClaimKind.VISIBLE_TEXT and claim.required
+    }
+    assert index_visible_text == {"Welcome Home"}
+
+    about_claims = host_verification_claims({}, events, artifact_path="about.html")
+    about_visible_text = {
+        claim.expected
+        for claim in about_claims
+        if claim.kind is VerificationClaimKind.VISIBLE_TEXT and claim.required
+    }
+    assert about_visible_text == {"About Us"}

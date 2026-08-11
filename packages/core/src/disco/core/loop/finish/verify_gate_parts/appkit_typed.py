@@ -190,6 +190,7 @@ def _appkit_bound_deliverable(
                 gate._verifier_contract_payload(),
                 events,
                 check=check,
+                artifact_path=current.path,
             ),
             "verification_check": check,
             "execution_identity": execution_identity,

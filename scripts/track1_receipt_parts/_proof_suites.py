@@ -14,6 +14,7 @@ attribute of it.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -151,7 +152,13 @@ def run_proof_tests(repo: Path, inventory: dict[str, object], python: Path) -> C
         "no:cacheprovider",
         f"--junitxml={junit}",
     ]
-    proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True)
+    proof_env = os.environ.copy()
+    # The receipt certifies the candidate's pinned proof command, not whatever
+    # warning policy happened to wrap the receipt itself. In particular, an
+    # outer Werror run must not turn a third-party plugin warning in a synthetic
+    # proof checkout into a pytest startup crash before JUnit can be written.
+    proof_env.pop("PYTHONWARNINGS", None)
+    proc = subprocess.run(argv, cwd=repo, env=proof_env, capture_output=True, text=True)
     try:
         root = ET.parse(junit).getroot()
         ts = root if root.tag == "testsuite" else root.find("testsuite")

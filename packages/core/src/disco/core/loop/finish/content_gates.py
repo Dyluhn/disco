@@ -384,17 +384,41 @@ class _ContentGateService(_FinishGateComponent):
     ) -> tuple[DictatedContentCondition, list[str]] | None:
         """Compute the first unmet condition, or raise the short-circuit-pass signal.
 
-        A selected app checks its authoritative entry first (existential proof
-        needs no sibling discovery), widening to the full bundle only if that
-        alone doesn't prove every literal; otherwise scans the ordinary
-        deliverable-path surface.
+        Explicitly artifact-scoped conditions are checked against that exact
+        artifact first. Remaining unscoped conditions use the selected entry as
+        an existential fast path, widening to the full bundle only when needed.
         """
+
+        targeted: dict[str, list[DictatedContentCondition]] = {}
+        unscoped: list[DictatedContentCondition] = []
+        for condition in conditions:
+            if condition.document_artifact is None:
+                unscoped.append(condition)
+                continue
+            target = _safe_deliverable_file_path(condition.document_artifact)
+            if target is None:
+                raise _DictatedContentInspectionIncomplete(
+                    "a dictated-content artifact target is unsafe or invalid"
+                )
+            targeted.setdefault(target, []).append(condition)
+
+        for target, target_conditions in targeted.items():
+            miss = await self._first_dictated_content_miss(
+                target_conditions,
+                [target],
+                strict=selected_app,
+            )
+            if miss is not None:
+                return miss
+
+        if not unscoped:
+            return None
 
         if not selected_app:
             paths = await self._dictated_content_deliverable_paths(events)
             if not paths:
                 raise _DictatedContentShortCircuitPass
-            return await self._first_dictated_content_miss(conditions, paths, strict=False)
+            return await self._first_dictated_content_miss(unscoped, paths, strict=False)
 
         async with asyncio.timeout(_DICTATED_CONTENT_BUNDLE_WALL_CLOCK_S):
             selected_entry = await self._dictated_content_selected_app_entry(events)
@@ -402,16 +426,18 @@ class _ContentGateService(_FinishGateComponent):
                 raise _DictatedContentShortCircuitPass
             try:
                 entry_miss = await self._first_dictated_content_miss(
-                    conditions, [selected_entry], strict=True,
+                    unscoped,
+                    [selected_entry],
+                    strict=True,
                 )
             except _DictatedContentInspectionIncomplete:
-                entry_miss = (conditions[0], [])
+                entry_miss = (unscoped[0], [])
             if entry_miss is None:
                 return None
             paths = await self._dictated_content_deliverable_paths(events)
             if not paths:
                 raise _DictatedContentShortCircuitPass
-            return await self._first_dictated_content_miss(conditions, paths, strict=True)
+            return await self._first_dictated_content_miss(unscoped, paths, strict=True)
 
     async def _dictated_content_report_inspection_incomplete(
         self, inspection_error: _DictatedContentInspectionIncomplete

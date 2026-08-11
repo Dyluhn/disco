@@ -138,6 +138,7 @@ def _bound_required_claims(
             gate._verifier_contract_payload(),
             events,
             check=selected_check,
+            artifact_path=deliverable.artifact_path,
         )
     return ()
 

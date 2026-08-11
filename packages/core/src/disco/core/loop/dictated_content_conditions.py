@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import shlex
 from dataclasses import dataclass
+from typing import Literal
 
 from ..events import (
     Event,
@@ -38,6 +39,7 @@ class DictatedContentCondition:
     requirement_slot: str | None = None
     supersedes_source_event_id: str | None = None
     document_artifact: str | None = None
+    content_surface: Literal["visible_text", "source_text"] = "visible_text"
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class _DictatedContentLiteral:
     requirement_slot: str | None
     replaces_slot: bool
     document_artifact: str | None = None
+    content_surface: Literal["visible_text", "source_text"] = "visible_text"
 
 
 _QUOTED_LITERAL_RE = re.compile(r"(?<!\w)'([^'\n]{2,80})'(?!\w)|(?<!\w)\"([^\"\n]{2,80})\"(?!\w)")
@@ -106,6 +109,17 @@ _DOCUMENT_ARTIFACT_RE = re.compile(
     r"\b([\w./-]+\.(?:md|markdown|txt|rst|csv|tsv|json|ya?ml|log|ini|toml))\b",
     re.IGNORECASE,
 )
+_HTML_ARTIFACT_ASSIGNMENT_RE = re.compile(
+    r"\b(?:give\s+)?([\w./-]+\.html?)\s+(?:an?|the)\s+"
+    r"(?:<h[1-6]>\s*)?(?:heading|title|text|copy|label|content)\b[^.!?;]*$",
+    re.IGNORECASE,
+)
+_SOURCE_TEXT_CONTEXT_RE = re.compile(
+    r"\b(?:css\s+)?(?:class|selector|id|custom\s+property|variable|data\s+attribute)\s+"
+    r"(?:(?:named|called|set\s+to|equal\s+to)\s+)?(?:exactly\s+)?$",
+    re.IGNORECASE,
+)
+_CSS_SELECTOR_LITERAL_RE = re.compile(r"^[.#][A-Za-z_][\w-]*$")
 
 
 def _has_unspaced_slash(text: str) -> bool:
@@ -241,8 +255,33 @@ def _dictated_content_literal_slot(text: str, quote_start: int) -> tuple[str | N
 def _dictated_content_literal_document(text: str, quote_start: int) -> str | None:
     prefix = text[max(0, quote_start - 320) : quote_start]
     clause = re.split(r"[.!?]\s|;\s*|\s+and\s+|\s+then\s+|\s+but\s+", prefix)[-1]
-    matches = _DOCUMENT_ARTIFACT_RE.findall(clause)
-    return matches[-1] if matches else None
+    documents = _DOCUMENT_ARTIFACT_RE.findall(clause)
+    if documents:
+        return documents[-1]
+    html_assignment = _HTML_ARTIFACT_ASSIGNMENT_RE.search(clause)
+    return html_assignment.group(1) if html_assignment is not None else None
+
+
+def _dictated_content_surface(
+    text: str,
+    quote_start: int,
+    literal: str,
+) -> Literal["visible_text", "source_text"]:
+    """Classify what kind of bytes the quoted literal names.
+
+    Identifiers assigned to CSS/source constructs are still exact workspace
+    requirements, but they are not rendered page copy. Keeping that distinction
+    here prevents a generic browser verifier from demanding that implementation
+    identifiers be exposed to users or accessibility APIs.
+    """
+
+    if _CSS_SELECTOR_LITERAL_RE.fullmatch(literal):
+        return "source_text"
+    prefix = text[max(0, quote_start - 240) : quote_start]
+    sentence = re.split(r"[.!?;]", prefix)[-1]
+    if _SOURCE_TEXT_CONTEXT_RE.search(sentence):
+        return "source_text"
+    return "visible_text"
 
 
 def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
@@ -269,6 +308,7 @@ def _dictated_content_literals(text: str) -> list[_DictatedContentLiteral]:
                 requirement_slot=slot,
                 replaces_slot=replaces,
                 document_artifact=_dictated_content_literal_document(text, mt.start()),
+                content_surface=_dictated_content_surface(text, mt.start(), literal),
             )
         )
     return out
@@ -384,6 +424,7 @@ def _build_condition_from_candidate(
         requirement_slot=candidate.requirement_slot,
         supersedes_source_event_id=supersedes_source_event_id,
         document_artifact=candidate.document_artifact,
+        content_surface=candidate.content_surface,
     )
 
 

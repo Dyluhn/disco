@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 from typing import Any
 
@@ -114,6 +115,8 @@ def _dictated_content_claims(
     conditions: list[DictatedContentCondition],
     accepted: frozenset[VerificationClaimKind],
     contract_accepted: frozenset[VerificationClaimKind],
+    *,
+    artifact_path: str | None,
 ) -> list[HostVerificationClaim]:
     """Bind quoted-user-literal conditions to host claims.
 
@@ -149,8 +152,9 @@ def _dictated_content_claims(
                     source_authority=f"user_event:{condition.source_event_id}",
                 )
             )
-        # A literal the user assigned to a WRITTEN document (REPORT.md, notes.txt)
-        # is not a claim about the SERVED page, and demanding it in the rendered DOM
+        # A literal assigned to a different artifact (REPORT.md, about.html) is
+        # not a claim about the page this verifier actually opened. Likewise,
+        # source identifiers are not rendered copy. Demanding either in this DOM
         # makes the build unsatisfiable for an agent that obeys the instruction.
         # Epic-4 seed 460009: "Create REPORT.md headed exactly 'Ledger Audit 460009'
         # ... Update index.html to show 'Ledger Audited 460009'" required both
@@ -159,7 +163,11 @@ def _dictated_content_claims(
         # because they happened to put the report heading on the page too. Exactly
         # the mutually-exclusive-claims failure the application.title slot above
         # already guards (seed 406431), one slot over.
-        if VerificationClaimKind.VISIBLE_TEXT in accepted and condition.document_artifact is None:
+        if (
+            VerificationClaimKind.VISIBLE_TEXT in accepted
+            and condition.content_surface == "visible_text"
+            and _condition_targets_artifact(condition, artifact_path)
+        ):
             claims.append(
                 HostVerificationClaim(
                     claim_id=f"web.visible_text:{digest}",
@@ -171,11 +179,32 @@ def _dictated_content_claims(
     return claims
 
 
+def _condition_targets_artifact(
+    condition: DictatedContentCondition,
+    artifact_path: str | None,
+) -> bool:
+    """Whether a visible-text condition belongs to the artifact being observed."""
+
+    target = condition.document_artifact
+    if target is None:
+        return True
+    if artifact_path is None:
+        return False
+    observed = posixpath.normpath(artifact_path.removeprefix("/workspace/"))
+    if observed in {"", "."}:
+        observed = "index.html"
+    elif not posixpath.splitext(observed)[1]:
+        observed = posixpath.join(observed, "index.html")
+    expected = posixpath.normpath(target.removeprefix("/workspace/"))
+    return observed == expected
+
+
 def host_verification_claims(
     contract: dict[str, Any],
     events: list[Event],
     *,
     check: VerificationCheckContract | None = None,
+    artifact_path: str | None = None,
 ) -> tuple[HostVerificationClaim, ...]:
     admission = current_build_platform_admission(events)
     claims = list(
@@ -188,7 +217,14 @@ def host_verification_claims(
     accepted = check.accepted_claim_kinds if check is not None else frozenset(VerificationClaimKind)
     contract_accepted = _contract_accepted_claim_kinds(check, admission, accepted)
     conditions = dictated_content_conditions_from_events(events)
-    claims.extend(_dictated_content_claims(conditions, accepted, contract_accepted))
+    claims.extend(
+        _dictated_content_claims(
+            conditions,
+            accepted,
+            contract_accepted,
+            artifact_path=artifact_path,
+        )
+    )
     requested_claims, _ = user_verification_material(events)
     # Free-form user references and semantic wishes remain valuable evidence, but
     # they are not automatically target-owned acceptance authority. The ordinary
