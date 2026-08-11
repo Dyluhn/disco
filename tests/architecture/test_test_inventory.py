@@ -536,7 +536,8 @@ class TestMappingStatic:
     def test_mapping_static_fixture_count_drift_fails(self, monkeypatch: pytest.MonkeyPatch):
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         fixtures = baseline["mapping_static"]["fixtures"]
-        assert len(fixtures) == 177
+        # The Build Soak client cleanup owner is an autouse fixture.
+        assert len(fixtures) == 178
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
