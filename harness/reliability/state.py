@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .matrix import ReliabilityMatrix
+from .matrix import KINDS, ReliabilityMatrix
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -208,12 +208,15 @@ def _validated_result_trial_ids(result: dict[str, Any]) -> list[str]:
     status = result.get("status")
     if status not in STATUSES:
         raise ValueError(f"suite result has unsupported status {status!r}")
+    kind = result.get("kind")
+    if kind not in KINDS:
+        raise ValueError(f"suite result has unsupported kind {kind!r}")
     units_passed = result.get("units_passed")
     if not isinstance(units_passed, int) or units_passed < 0:
         raise ValueError("suite result units_passed must be a nonnegative integer")
     raw_trial_ids = result.get("trial_ids")
     if raw_trial_ids is None:
-        if result.get("kind") == "build_soak" and units_passed > 0:
+        if kind == "build_soak" and units_passed > 0:
             raise ValueError("counted build-soak evidence requires exact trial_ids")
         return []
     if not isinstance(raw_trial_ids, list) or not all(
