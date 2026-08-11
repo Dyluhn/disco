@@ -387,7 +387,7 @@ class _FreezeMixin(_ClientBase):
             if store.status() != StorageStatus.OK:
                 return None
             cache_key = hashlib.sha256(f"{conversation_id}:{version_seq}".encode()).hexdigest()
-            ws = Path(self._verified_workspace_cache.name) / cache_key
+            ws = self._verified_workspace_cache_dir() / cache_key
             with store.open_verified_version(conversation_id, version_seq) as verified:
                 record = verified.record
                 _materialize_verified_files(verified, ws)

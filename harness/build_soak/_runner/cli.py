@@ -291,23 +291,26 @@ async def _run_iteration(execution: _BatchExecution, index: int) -> dict[str, An
                 snapshot_wait_s=args.snapshot_wait,
                 require_workspace_commit=True,
             )
-            classification = await run_once(
-                client,
-                scenario,
-                run_id=run_id,
-                out_root=execution.batch_dir,
-                model=execution.model,
-                autonomous=bool(args.autonomous or scenario.get("autonomous")),
-                commit=execution.commit,
-                repo_revision=execution.repo_revision,
-                repo_dirty=execution.repo_dirty,
-                kernel=args.kernel,
-                timeout_s=args.timeout,
-                hard_cap_s=args.hard_cap,
-                require_inspect_trace=bool(scenario.get("requires_inspect_trace", True)),
-                parallel_workers=execution.resources.workers,
-                seed=task_seed,
-            )
+            try:
+                classification = await run_once(
+                    client,
+                    scenario,
+                    run_id=run_id,
+                    out_root=execution.batch_dir,
+                    model=execution.model,
+                    autonomous=bool(args.autonomous or scenario.get("autonomous")),
+                    commit=execution.commit,
+                    repo_revision=execution.repo_revision,
+                    repo_dirty=execution.repo_dirty,
+                    kernel=args.kernel,
+                    timeout_s=args.timeout,
+                    hard_cap_s=args.hard_cap,
+                    require_inspect_trace=bool(scenario.get("requires_inspect_trace", True)),
+                    parallel_workers=execution.resources.workers,
+                    seed=task_seed,
+                )
+            finally:
+                await client.aclose()
     except TimeoutError as exc:
         classification = _infra_failure_record(
             execution.batch_dir,

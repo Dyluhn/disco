@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import closing
+
 from ._shared import (
     _CID,
     UTC,
@@ -98,7 +100,7 @@ class FakeTransport:
         if path.endswith("/kill"):
             self._killed = True
             try:
-                with sqlite3.connect(str(self.db_path)) as conn:
+                with closing(sqlite3.connect(str(self.db_path))) as conn, conn:
                     row = conn.execute(
                         "SELECT COALESCE(MAX(seq), 0) FROM events WHERE conversation_id = ?",
                         (self.cid,),
