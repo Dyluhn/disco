@@ -86,9 +86,12 @@ def _line_refusal_read(
 
     canon = _canonical(path)
     st = _conv_state(conv_id)
+    prior = st["reads"].get(canon) or {}
+    anchored_full = prior.get("sha") == sha and bool(prior.get("anchored_full"))
     st["reads"][canon] = {
         "sha": sha,
         "full": full,
+        "anchored_full": anchored_full,
         "ranges": [(start, end)],
     }
     st["targeted_read_grounded"].add(canon)
@@ -130,10 +133,24 @@ def _with_line_refusal_read(
     )
     structured = dict(outcome.structured or {})
     structured["delivered_read"] = delivered
+    structured["next_required_action"] = "retry_targeted_edit"
+    structured.pop("suggested_args", None)
+    reason = structured.get("reason")
+    if not isinstance(reason, str) or not reason:
+        reason = (
+            "the file changed since your last read"
+            if outcome.error == "STALE_FILE_CONTEXT"
+            else "the attempted region was not grounded"
+        )
+    guidance = (
+        f"Edit refused — {reason}; nothing was changed. Fresh current content for {path} "
+        "is included below and now counts as the required read for a corrected targeted edit. "
+        "Retry the corrected edit directly; call file_read only if you need a different region."
+    )
     return ToolOutcome(
         success=False,
         error=outcome.error,
-        content=(outcome.content or "") + fresh_content,
+        content=guidance + fresh_content,
         structured=structured,
     )
 

@@ -5,8 +5,11 @@ provider SELECTION is tested by type."""
 from __future__ import annotations
 
 import asyncio
+import json
 
+import httpx
 from disco.retrieval.bundled_providers import (
+    BraveSearchProvider,
     DdgsSearchProvider,
     FirecrawlExtractionProvider,
     LocalExtractionProvider,
@@ -20,6 +23,7 @@ from disco.retrieval.source_adapters import (
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
 )
+from disco.retrieval.url_policy import url_allowed
 
 # ---- provider selection (config → instance) ---------------------------------
 
@@ -76,6 +80,48 @@ def test_ddgs_degrades_to_empty_on_failure(monkeypatch):
     # _blocking_search(query, limit, timelimit) — timelimit added for DR-3.
     monkeypatch.setattr(prov, "_blocking_search", lambda q, n, tl=None: [])
     assert asyncio.run(prov.search("anything", limit=3)) == []
+
+
+def test_domain_policy_matches_only_exact_hosts_and_subdomains(monkeypatch):
+    assert url_allowed("https://docs.example.com/a", frozenset({"example.com"}), None)
+    assert not url_allowed("https://notexample.com/a", frozenset({"example.com"}), None)
+    assert not url_allowed("https://example.com.evil/a", frozenset({"example.com"}), None)
+
+    provider = DdgsSearchProvider()
+    monkeypatch.setattr(
+        provider,
+        "_blocking_search",
+        lambda q, n, tl=None: [
+            {"href": "https://example.com/good", "title": "Good"},
+            {"href": "https://notexample.com/bad", "title": "Bad"},
+        ],
+    )
+    hits = asyncio.run(provider.search("q", domains_allow=frozenset({"example.com"})))
+    assert [hit.url for hit in hits] == ["https://example.com/good"]
+
+
+async def test_paid_search_providers_thread_recency_and_domain_controls():
+    def tavily_handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["time_range"] == "week"
+        assert payload["include_domains"] == ["example.com"]
+        assert payload["exclude_domains"] == ["blocked.example"]
+        return httpx.Response(200, json={"results": []})
+
+    tavily = TavilySearchProvider("key", transport=httpx.MockTransport(tavily_handler))
+    await tavily.search(
+        "q",
+        time_filter="week",
+        domains_allow=frozenset({"example.com"}),
+        domains_deny=frozenset({"blocked.example"}),
+    )
+
+    def brave_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["freshness"] == "pm"
+        return httpx.Response(200, json={"web": {"results": []}})
+
+    brave = BraveSearchProvider("key", transport=httpx.MockTransport(brave_handler))
+    await brave.search("q", time_filter="month")
 
 
 def test_paid_providers_no_key_is_safe():

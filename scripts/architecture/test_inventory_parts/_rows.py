@@ -26,7 +26,11 @@ LIVE_CONFIGS = ("live-smoke.config.ts", "playwright.live.config.ts")
 
 def collection_env(root: Path) -> dict[str, str]:
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(root)
+    # Bind collection to the requested checkout. A shared multi-worktree venv
+    # may contain editable .pth files for another checkout; the explicit src
+    # roots must win rather than silently collecting foreign package code.
+    package_srcs = sorted(str(path) for path in (root / "packages").glob("*/src") if path.is_dir())
+    env["PYTHONPATH"] = os.pathsep.join([*package_srcs, str(root)])
     env["PYTEST_ADDOPTS"] = ""
     return env
 

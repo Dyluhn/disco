@@ -200,6 +200,14 @@ describe("W-01: firstUserTask recovers the real task from the stream", () => {
     expect(firstUserTask([e])).toBe("summarize the report");
   });
 
+  it("does not treat an explicit environment message as human", () => {
+    const events: AgentEvent[] = [
+      messageEvent("brief", "environment", "<build_brief>{}</build_brief>", "user"),
+      messageEvent("human", "user", "build a racer"),
+    ];
+    expect(firstUserTask(events)).toBe("build a racer");
+  });
+
   it("trims whitespace and ignores blank user messages", () => {
     const events: AgentEvent[] = [
       messageEvent("m0", "user", "   "),

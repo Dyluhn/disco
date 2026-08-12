@@ -14,6 +14,7 @@ from typing import Any
 from disco.core import ReportSection
 
 from ...models import Passage as RetrievalPassage
+from ...url_policy import source_url_key
 from ..gather import SubQuestionResult
 
 
@@ -45,13 +46,15 @@ def collect_report_data(
     all_hits: list[Any] = []
     hit_urls: set[str] = set()
     for h in carried_hits:
-        if h.url not in hit_urls:
-            hit_urls.add(h.url)
+        key = source_url_key(h.url)
+        if key not in hit_urls:
+            hit_urls.add(key)
             all_hits.append(h)
     for r in results:
         for h in r.all_hits:
-            if h.url not in hit_urls:
-                hit_urls.add(h.url)
+            key = source_url_key(h.url)
+            if key not in hit_urls:
+                hit_urls.add(key)
                 all_hits.append(h)
     unsupported_total = sum(s.unsupported_count for s in sections)
     return all_passages, all_hits, unsupported_total

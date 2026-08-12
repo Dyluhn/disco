@@ -202,10 +202,15 @@ async def iterative_refine(
         return await judge_claims(claims, router=cast(_Completer, run._router))
 
     async def refine_section(sec: ReportSection, weak: list[ClaimVerdict]) -> ReportSection:
+        if run._source_budget.remaining <= 0:
+            return sec
         orig = _seed_orig_passages(sec, passages_by_id_obj)
         new_subq = _build_refine_subq(sec, weak)
         # One fresh gather leg, seeded with `orig` (NOT the upload passages).
-        steer_budget = max(1, run._bound.max_sources // max(1, len(sections)))
+        steer_budget = min(
+            run._source_budget.remaining,
+            max(1, run._bound.max_sources // max(1, len(sections))),
+        )
         _subq, task, _sid, namespace, leg_context = run._start_one_steer_task(
             new_subq, steer_budget, emit=emit, extra_passages=orig
         )
