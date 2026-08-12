@@ -23,8 +23,6 @@ from disco.core import (
     ConversationStatus,
     ErrorEvent,
     Event,
-    EventSource,
-    MessageEvent,
     ObservationEvent,
     PlanEvent,
     ReportEvent,
@@ -44,16 +42,10 @@ _LOG = logging.getLogger(__name__)
 
 
 def resolve_query(events: list[Event], plan: PlanEvent) -> str:
-    """The query is the user's last (pre-plan) message; the plan summary is
-    the fallback for the (should-not-happen) case of no user message."""
-    return next(
-        (
-            e.message.content
-            for e in events
-            if isinstance(e, MessageEvent) and e.source == EventSource.USER
-        ),
-        plan.summary,
-    )
+    """Use the same canonical query+revisions that produced the approved plan."""
+    from .plan import build_query_with_constraints
+
+    return build_query_with_constraints(events) or plan.summary
 
 
 async def build_retrieval_deps(
@@ -101,9 +93,7 @@ def build_router_and_engine(
     providers through the SAME engine, so deep-research citations can come
     from the MCP tier identically to bundled providers."""
     search, extraction = service._provider.compose_mcp_retrieval(deps)
-    router = service._drivers.router(
-        pick=service._settings._get_model_override(conversation_id)
-    )
+    router = service._drivers.router(pick=service._settings._get_model_override(conversation_id))
     retrieval_engine = DefaultRetrievalEngine(
         search=search,
         extraction=extraction,

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ...behavior import declares
-from ._constants import _FS
+from ._constants import _FS, _MODEL_WRITE_CHUNK_MAX_CHARS
 from ._fresh_edit_guard import guard_fresh_edit
 from ._governed import _governed_guard
 from ._mutation import _gated_write, _write_artifact_structured
@@ -22,7 +22,10 @@ class FileInsertLinesArgs(BaseModel):
     after_line: int = Field(
         description="Insert AFTER this 1-based line (0 = at the very top of the file)."
     )
-    text: str = Field(description="Text to insert (can be multi-line).")
+    text: str = Field(
+        description="Text to insert (can be multi-line; keep this call under 12,000 characters).",
+        json_schema_extra={"maxLength": _MODEL_WRITE_CHUNK_MAX_CHARS},
+    )
 
 
 class FileInsertLinesTool:
@@ -34,7 +37,8 @@ class FileInsertLinesTool:
         description=(
             "Insert `text` AFTER line `after_line` (1-based; 0 = top) of a file, without "
             "replacing anything. Read the file for line numbers first. The reliable way "
-            "to ADD a block to a large file."
+            "to ADD a block to a large file. Keep each inserted text argument under "
+            "12,000 characters; use additional bounded insertions for a larger block."
         ),
         args_model=FileInsertLinesArgs,
         needs=_FS,

@@ -117,6 +117,9 @@ async def test_outside_success_view_refusal_delivers_numbered_content_and_retry_
     assert "Line numbers may have shifted" in outside_view.content
     assert "\t<footer>OLD FOOTER</footer>" in outside_view.content
     assert (outside_view.structured or {})["delivered_read"]["full"] is True
+    assert (outside_view.structured or {})["next_required_action"] == "retry_targeted_edit"
+    assert "counts as the required read" in outside_view.content
+    assert "Read index.html first" not in outside_view.content
 
     retry = await FileReplaceLinesTool().run(
         FileReplaceLinesArgs(

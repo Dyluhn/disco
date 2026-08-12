@@ -966,8 +966,9 @@ class TestFrontendPublicApi:
         # — the same case, on the class the facade was installed onto. 8 after
         # 13-C records FinishGate's explicit typed-service methods without
         # asserting a false relocation origin. 9 records AgentErrorEvent's
-        # exact semantic failure-classification fields.
-        assert len(baseline["member_transitions"]) == 9
+        # exact semantic failure-classification fields. PKG-19 v25 adds the
+        # three exact retrieval-contract transitions below.
+        assert len(baseline["member_transitions"]) == 12
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -978,6 +979,9 @@ class TestFrontendPublicApi:
             "ConversationRuntime",
             "FinishGate",
             "AgentErrorEvent",
+            "RetrievalRequest",
+            "SearchHit",
+            "DepthBound",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

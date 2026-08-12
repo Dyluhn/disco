@@ -17,12 +17,12 @@ import hashlib
 import logging
 import re
 from html.parser import HTMLParser
-from urllib.parse import urlparse
 
 import httpx
 from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted_url
 
 from .models import ExtractedDoc, Passage, SearchHit
+from .url_policy import url_allowed
 
 _LOG = logging.getLogger("disco.retrieval.providers")
 
@@ -75,19 +75,6 @@ _DDGS_MAX_ATTEMPTS = 3
 _DDGS_BACKOFF_S = 1.5
 
 
-def _host(url: str) -> str:
-    return (urlparse(url).hostname or "").lower()
-
-
-def _allowed(url: str, allow: frozenset[str] | None, deny: frozenset[str] | None) -> bool:
-    host = _host(url)
-    denied = {d.lower() for d in (deny or frozenset())}
-    allowed = {d.lower() for d in allow} if allow else None
-    if any(d in host for d in denied):
-        return False
-    return allowed is None or any(d in host for d in allowed)
-
-
 # ===== SEARCH ================================================================
 
 
@@ -121,7 +108,7 @@ class DdgsSearchProvider:
             url = r.get("href") or r.get("url") or ""
             if not url:
                 continue
-            if domains_deny and any(d in url for d in domains_deny):
+            if not url_allowed(url, domains_allow, domains_deny):
                 continue
             hits.append(
                 SearchHit(
@@ -172,8 +159,9 @@ class TavilySearchProvider:
 
     name = "tavily"
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._key = api_key
+        self._transport = transport
 
     async def search(
         self,
@@ -184,16 +172,29 @@ class TavilySearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        del time_filter
         if not self._key:
             return []
+        payload: dict[str, object] = {
+            "api_key": self._key,
+            "query": query,
+            "max_results": limit,
+        }
+        if time_filter in {"week", "month"}:
+            payload["time_range"] = time_filter
+        if domains_allow:
+            payload["include_domains"] = sorted(domains_allow)
+        if domains_deny:
+            payload["exclude_domains"] = sorted(domains_deny)
         try:
             async with httpx.AsyncClient(
-                timeout=_TIMEOUT, trust_env=False, follow_redirects=False
+                timeout=_TIMEOUT,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as c:
                 r = await c.post(
                     "https://api.tavily.com/search",
-                    json={"api_key": self._key, "query": query, "max_results": limit},
+                    json=payload,
                 )
                 r.raise_for_status()
                 data = r.json()
@@ -208,7 +209,7 @@ class TavilySearchProvider:
                 rank=i,
             )
             for i, h in enumerate(data.get("results", []))
-            if h.get("url") and _allowed(h.get("url", ""), domains_allow, domains_deny)
+            if h.get("url") and url_allowed(h.get("url", ""), domains_allow, domains_deny)
         ]
 
 
@@ -217,9 +218,16 @@ class BraveSearchProvider:
 
     name = "brave"
 
-    def __init__(self, api_key: str, *, base_url: str = "https://api.search.brave.com"):
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = "https://api.search.brave.com",
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._key = api_key
         self._base = base_url.rstrip("/")
+        self._transport = transport
 
     async def search(
         self,
@@ -230,16 +238,22 @@ class BraveSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        del time_filter
         if not self._key:
             return []
+        params: dict[str, str | int] = {"q": query, "count": max(1, min(limit, 20))}
+        freshness = {"week": "pw", "month": "pm"}.get(time_filter or "")
+        if freshness:
+            params["freshness"] = freshness
         try:
             async with httpx.AsyncClient(
-                timeout=_TIMEOUT, trust_env=False, follow_redirects=False
+                timeout=_TIMEOUT,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as c:
                 r = await c.get(
                     f"{self._base}/res/v1/web/search",
-                    params={"q": query, "count": max(1, min(limit, 20))},
+                    params=params,
                     headers={"X-Subscription-Token": self._key},
                 )
                 r.raise_for_status()
@@ -250,7 +264,7 @@ class BraveSearchProvider:
         hits: list[SearchHit] = []
         for i, h in enumerate(results):
             url = h.get("url", "")
-            if not url or not _allowed(url, domains_allow, domains_deny):
+            if not url or not url_allowed(url, domains_allow, domains_deny):
                 continue
             hits.append(
                 SearchHit(

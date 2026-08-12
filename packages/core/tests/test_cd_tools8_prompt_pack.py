@@ -1,7 +1,7 @@
 """CD-TOOLS-8 — the build/driver prompts teach Claude Design tool discipline. The CAPABLE prompt
 names the new tools (exact_replace gated on the anchored-edit capability), the WEAK prompt never
 names a withheld anchored-edit tool, and the universal edit discipline (run_project_script /
-guarded file_write / fresh-read / no-elision) is in both."""
+guarded file_write / fresh-read / host-metadata discipline) is in both."""
 
 from __future__ import annotations
 
@@ -54,7 +54,8 @@ def test_capable_execution_prompt_has_universal_discipline():
     assert "ONE atomic transaction" not in p
     assert "allow_shrink=true" in p
     assert "FRESH_READ_REQUIRED" in p  # the recovery rule
-    assert "elided" in p  # the never-echo-elision-marker rule
+    assert "Host transcript metadata about omitted historical arguments" in p
+    assert "DISCO-ELIDED" not in p
     assert (
         "whole file for a small" in p.lower() or "whole file for a small" in p
     )  # no-whole-rewrite
@@ -66,5 +67,6 @@ def test_weak_execution_prompt_has_universal_discipline_minus_anchored():
     assert "prevalidates a batch" in p
     assert "ONE transaction" not in p
     assert "allow_shrink=true" in p
-    assert "elided" in p
+    assert "Host transcript metadata about omitted historical arguments" in p
+    assert "DISCO-ELIDED" not in p
     assert "exact_replace" not in p  # still no withheld tool
