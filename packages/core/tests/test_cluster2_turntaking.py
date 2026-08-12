@@ -276,6 +276,35 @@ def test_count_recent_failures_ignores_update_plan_progress():
     assert signals.count_recent_failures(reals) == 3
 
 
+def test_count_recent_failures_ignores_debug_infrastructure():
+    from disco.core import ActionEvent, AgentErrorEvent, ToolCall
+
+    browser_errors: list = []
+    for reason in ("selector_not_found", "interaction_blocked", "interaction_blocked"):
+        action = ActionEvent(
+            thought="inspect the preview",
+            tool_call=ToolCall(tool_name="browser", arguments={"action": "click"}),
+        )
+        browser_errors += [
+            action,
+            AgentErrorEvent(
+                error="browser action failed",
+                action_id=action.id,
+                failure_class="browser_action_failed",
+                failure_reason=reason,
+            ),
+        ]
+
+    assert signals.count_recent_failures(browser_errors) == 0
+
+    shell = ActionEvent(
+        thought="run build",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "false"}),
+    )
+    product_error = AgentErrorEvent(error="exit 1", action_id=shell.id)
+    assert signals.count_recent_failures([shell, product_error, *browser_errors]) == 1
+
+
 # ---- BW-02/M3: repeated actionless pauses are event-persisted ----------------
 
 

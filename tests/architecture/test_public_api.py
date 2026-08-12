@@ -965,8 +965,9 @@ class TestFrontendPublicApi:
         # 13-B1 deleted 29 ConversationRuntime delegates at an unchanged origin
         # — the same case, on the class the facade was installed onto. 8 after
         # 13-C records FinishGate's explicit typed-service methods without
-        # asserting a false relocation origin.
-        assert len(baseline["member_transitions"]) == 8
+        # asserting a false relocation origin. 9 records AgentErrorEvent's
+        # exact semantic failure-classification fields.
+        assert len(baseline["member_transitions"]) == 9
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -976,6 +977,7 @@ class TestFrontendPublicApi:
             "BuildPlatformRegistry",
             "ConversationRuntime",
             "FinishGate",
+            "AgentErrorEvent",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

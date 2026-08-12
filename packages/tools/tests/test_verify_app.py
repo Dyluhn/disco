@@ -59,6 +59,7 @@ def test_verdict_pass_clean_page():
     assert v["next_action"], "a passing verdict must still tell the agent where it stands"
     assert "finish" in v["next_action"]
     assert "material change" in v["next_action"]
+    assert "semantic completeness is outside" in v["next_action"]
     assert v["meaningful_content"] is True
     # clean fingerprint is stable + non-empty
     assert v["failure_fingerprint"] == _failure_fingerprint([], [])
@@ -473,6 +474,48 @@ async def test_run_game_medium_interacts_and_keeps_canvas_meaningful(monkeypatch
     interaction = out.structured["game_interaction"]
     assert interaction["before_screenshot_path"].endswith("navigate.png")
     assert interaction["after_screenshot_path"].endswith("screenshot.png")
+    assert interaction["status"] == "smoke_passed"
+    assert interaction["scope"] == "bounded_input_smoke"
+    assert interaction["certifies_gameplay"] is False
+    assert out.structured["verification_scope"] == "surface_runtime"
+    assert "does not certify gameplay" in out.content
+
+
+@pytest.mark.asyncio
+async def test_game_smoke_failure_is_reported_without_claiming_gameplay(monkeypatch):
+    async def fake_browser_run(self, args, ctx):
+        if args.action == "click":
+            return ToolOutcome(
+                success=False,
+                content="browser click could not be completed",
+                error="browser click could not be completed",
+                structured={
+                    "error_class": "browser_action_failed",
+                    "error_reason": "interaction_blocked",
+                },
+            )
+        return ToolOutcome(
+            success=True,
+            content="b",
+            structured=_structured(text="", elements=[], title="Canvas Game")
+            | {
+                "canvas_count": 1,
+                "screenshot_path": f".pmx/screenshots/{args.action}.png",
+            },
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/", medium="game"),
+        _ctx(FakeSandbox("200")),
+    )
+
+    assert out.structured["passed"] is True
+    interaction = out.structured["game_interaction"]
+    assert interaction["status"] == "smoke_failed"
+    assert interaction["steps"][0]["error_reason"] == "interaction_blocked"
+    assert "gameplay was not certified" in out.structured["summary"]
+    assert "SMOKE_FAILED" in out.content.upper()
 
 
 @pytest.mark.asyncio

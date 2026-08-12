@@ -24,6 +24,12 @@ from .bootstrap import _detect_project_bootstrap
 from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
+from .no_progress_detector import (
+    BROWSER_INTERACTION_BUDGET_DETAIL,
+    BrowserInteractionFailure,
+    browser_interaction_notice_active,
+    repeated_browser_interaction_failure,
+)
 from .planning_harvest import harvest_revision_plan_after_refusal
 from .stuck import (
     DEBUG_PROBE_BUDGET_DETAIL,
@@ -58,6 +64,53 @@ if TYPE_CHECKING:
     pass
 
 _LOG = logging.getLogger("disco.loop")
+
+
+async def _emit_browser_interaction_budget_notice(
+    host: _ValveHost,
+    failure: BrowserInteractionFailure,
+) -> Disp:
+    await host._loop._emit(
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content=(
+                    "<system-reminder>\n"
+                    f"Two browser {failure.browser_action} interactions failed on unchanged "
+                    f"artifact bytes for the same reason ({failure.failure_reason}). Changing "
+                    "selector syntax is not new evidence, so the browser debug "
+                    "surface is now withdrawn. Wrap up and call finish, or make one "
+                    "real deliverable change if this exposed a concrete defect; that "
+                    "mutation restores browser access.\n"
+                    "</system-reminder>"
+                ),
+            ),
+            meta={
+                "diagnostic": BROWSER_INTERACTION_BUDGET_DETAIL,
+                "browser_failure_reason": failure.failure_reason,
+                "browser_failure_repeats": failure.repeats,
+                "mutation_floor_seq": failure.mutation_floor_seq,
+            },
+        )
+    )
+    await host._loop._emit(
+        StatusEvent(
+            status=ConversationStatus.RUNNING,
+            detail=failure.marker_detail,
+        )
+    )
+    return Disp.CONTINUE
+
+
+async def _gate_browser_interaction_budget(
+    host: _ValveHost,
+    events: list[Event],
+) -> Disp | None:
+    failure = repeated_browser_interaction_failure(events)
+    if failure is None or browser_interaction_notice_active(events, failure):
+        return None
+    return await _emit_browser_interaction_budget_notice(host, failure)
 
 
 class PhaseGateMixin(_ValveHost):
@@ -567,6 +620,9 @@ class ProgressGateMixin(_ValveHost):
 
     async def gate_no_progress(self, events: list[Event]) -> Disp:
         """Escalate invalid, repeated, or unchanged verification evidence."""
+        browser_gate = await _gate_browser_interaction_budget(self, events)
+        if browser_gate is not None:
+            return browser_gate
         budget = debug_probe_budget(events)
         if budget.exhausted:
             if not debug_probe_budget_notice_active(events, budget):

@@ -18,6 +18,8 @@ async def _capture_game_interaction(
 ) -> dict[str, Any]:
     interaction: dict[str, Any] = {
         "before_screenshot_path": str(before.get("screenshot_path") or ""),
+        "scope": "bounded_input_smoke",
+        "certifies_gameplay": False,
         "steps": [],
     }
     latest = before
@@ -35,8 +37,20 @@ async def _capture_game_interaction(
         if outcome.success and outcome.structured:
             latest = outcome.structured
             step["screenshot_path"] = str(latest.get("screenshot_path") or "")
-        elif outcome.error:
-            step["error"] = outcome.error[:300]
+        else:
+            diagnostic = outcome.structured or {}
+            if diagnostic.get("error_class"):
+                step["error_class"] = str(diagnostic["error_class"])
+            if diagnostic.get("error_reason"):
+                step["error_reason"] = str(diagnostic["error_reason"])
+            detail = outcome.error or outcome.content
+            if detail:
+                step["error"] = detail[:300]
         interaction["steps"].append(step)
+    interaction["status"] = (
+        "smoke_passed"
+        if all(bool(step.get("success")) for step in interaction["steps"])
+        else "smoke_failed"
+    )
     interaction["after_screenshot_path"] = str(latest.get("screenshot_path") or "")
     return {**latest, "game_interaction": interaction}

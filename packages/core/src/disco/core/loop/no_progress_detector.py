@@ -50,6 +50,8 @@ FAILED_VERIFIER_REPEAT_LIMIT = 2
 DEBUG_PROBE_LIMIT = 2
 DEBUG_PROBE_TOOLS = frozenset({"verify_web_app", "verify_appkit_app", "design_lint"})
 DEBUG_PROBE_BUDGET_DETAIL = "debug_probe_budget_exhausted"
+BROWSER_INTERACTION_BUDGET_DETAIL = "browser_interaction_budget_exhausted"
+_BROWSER_STATE_ACTIONS = frozenset({"navigate", "back", "click", "press", "fill", "submit"})
 _VERIFIER_FILE_RECEIPT_TOOLS = F6_FILE_MUTATING_TOOLS
 _VERIFIER_APPKIT_RECEIPT_TOOLS = frozenset(
     {
@@ -118,6 +120,23 @@ class DebugProbeBudget:
     @property
     def marker_detail(self) -> str:
         return f"{DEBUG_PROBE_BUDGET_DETAIL}:{self.mutation_floor_seq}"
+
+
+@dataclass(frozen=True)
+class BrowserInteractionFailure:
+    """A repeated same-action/reason browser failure on unchanged bytes."""
+
+    mutation_floor_seq: int
+    browser_action: str
+    failure_reason: str
+    repeats: int
+    latest_failure_seq: int
+
+    @property
+    def marker_detail(self) -> str:
+        signature = f"{self.browser_action}:{self.failure_reason}"
+        reason = hashlib.sha256(signature.encode("utf-8")).hexdigest()[:12]
+        return f"{BROWSER_INTERACTION_BUDGET_DETAIL}:{self.mutation_floor_seq}:{reason}"
 
 
 def _after_last_user_message(events: list[Event]) -> list[Event]:
@@ -226,9 +245,18 @@ def debug_probe_budget(events: list[Event]) -> DebugProbeBudget:
 
 
 def debug_probe_blocked_tools(events: list[Event]) -> frozenset[str]:
-    """Withdraw high-level debug probes once the current-byte budget is spent."""
+    """Withdraw exhausted debug surfaces for the current artifact bytes.
 
-    return DEBUG_PROBE_TOOLS if debug_probe_budget(events).exhausted else frozenset()
+    Browser withdrawal is deliberately tool-wide: after the semantic failure
+    limit, observation variants are more opportunities to loop, not new
+    evidence. A trusted artifact mutation restores the surface. Successful
+    state actions can still reset a streak before it reaches that limit.
+    """
+
+    blocked = set(DEBUG_PROBE_TOOLS if debug_probe_budget(events).exhausted else ())
+    if repeated_browser_interaction_failure(events) is not None:
+        blocked.add("browser")
+    return frozenset(blocked)
 
 
 def debug_probe_budget_notice_active(events: list[Event], budget: DebugProbeBudget) -> bool:
@@ -238,6 +266,88 @@ def debug_probe_budget_notice_active(events: list[Event], budget: DebugProbeBudg
         isinstance(event, StatusEvent)
         and event.detail == budget.marker_detail
         and (event.seq or 0) > budget.mutation_floor_seq
+        for event in events
+    )
+
+
+def _browser_interaction_outcome(
+    event: Event,
+    actions: dict[str, ActionEvent],
+) -> tuple[str, str] | None:
+    """Return action/reason, an empty reason on success, or None if unrelated."""
+    if not isinstance(event, ObservationEvent | AgentErrorEvent):
+        return None
+    action = actions.get(event.action_id or "")
+    if action is None or action.tool_call.tool_name != "browser":
+        return None
+    browser_action = str(action.tool_call.arguments.get("action") or "")
+    if browser_action not in _BROWSER_STATE_ACTIONS:
+        return None
+    if isinstance(event, ObservationEvent):
+        return (browser_action, "") if event.tool_result.success else None
+    if event.failure_class != "browser_action_failed":
+        return None
+    return (browser_action, event.failure_reason or "unknown")
+
+
+def repeated_browser_interaction_failure(
+    events: list[Event],
+    *,
+    repeats: int = DEBUG_PROBE_LIMIT,
+) -> BrowserInteractionFailure | None:
+    """Find two same-action/reason browser failures without real progress.
+
+    Selector spelling is deliberately not part of the key: changing from text
+    to CSS does not make a covered or disabled target actionable. A successful
+    navigation or interaction proves the page state changed and resets the
+    streak; a trusted artifact mutation restores the allowance globally.
+    """
+    if repeats <= 0:
+        return None
+    actions = {
+        event.id: event
+        for event in events
+        if isinstance(event, ActionEvent) and event.tool_call is not None
+    }
+    floor = _latest_trusted_mutation_floor(events, actions)
+    signature: tuple[str, str] | None = None
+    count = 0
+    latest_seq = 0
+    for index, event in enumerate(events, start=1):
+        seq = _event_order(event, index)
+        if seq <= floor:
+            continue
+        outcome = _browser_interaction_outcome(event, actions)
+        if outcome is None:
+            continue
+        action, reason = outcome
+        if not reason:
+            signature = None
+            count = 0
+            latest_seq = 0
+            continue
+        count = count + 1 if outcome == signature else 1
+        signature = outcome
+        latest_seq = seq
+    if count < repeats or signature is None:
+        return None
+    return BrowserInteractionFailure(
+        mutation_floor_seq=floor,
+        browser_action=signature[0],
+        failure_reason=signature[1],
+        repeats=count,
+        latest_failure_seq=latest_seq,
+    )
+
+
+def browser_interaction_notice_active(
+    events: list[Event],
+    failure: BrowserInteractionFailure,
+) -> bool:
+    return any(
+        isinstance(event, StatusEvent)
+        and event.detail == failure.marker_detail
+        and (event.seq or 0) > failure.latest_failure_seq
         for event in events
     )
 

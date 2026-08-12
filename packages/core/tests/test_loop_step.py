@@ -89,6 +89,10 @@ async def test_tool_failure_result_yields_agent_error():
         success=False,
         content="",
         error="exit 1",
+        structured={
+            "error_class": "browser_action_failed",
+            "error_reason": "interaction_blocked",
+        },
         action_profile=profile,
         effect_receipts=(receipt,),
     )
@@ -101,6 +105,8 @@ async def test_tool_failure_result_yields_agent_error():
     assert len(errs) == 1 and "exit 1" in errs[0].error
     assert errs[0].action_profile == profile
     assert errs[0].effect_receipts == (receipt,)
+    assert errs[0].failure_class == "browser_action_failed"
+    assert errs[0].failure_reason == "interaction_blocked"
 
 
 async def test_dangling_action_is_detectable_after_crash():

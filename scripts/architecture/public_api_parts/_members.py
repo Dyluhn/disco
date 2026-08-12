@@ -21,7 +21,7 @@ a record exists for the identity, and it is fail-closed on every prong:
    **live** signature bytes, so a record authorizes exactly one transition;
 3. ``old_origin == new_origin == record["origin"]`` — sameness is asserted,
    not merely permitted; an origin *change* remains a bridge's job;
-4. the member delta computed from the two signatures equals
+4. the method/field delta computed from the two signatures equals
    ``removed_members``/``added_members`` exactly — no over-authorization.
    Full member strings are stored rather than bare names, so a record cannot
    silently absorb a signature change to a *surviving* member;
@@ -52,14 +52,23 @@ def signature_sha256(signature: Any) -> str:
 
 
 def _members_of(signature: Any) -> list[str] | None:
+    """Return every exact class member governed by a transition.
+
+    The public-surface scanner records methods and typed fields separately,
+    but both are semantic members of a public class. Omitting fields here made
+    an exact, same-origin field change impossible to authorize.
+    """
     if not isinstance(signature, dict):
         return None
     members = signature.get("members")
-    if not isinstance(members, list) or not all(
-        isinstance(item, str) for item in members
+    fields = signature.get("fields")
+    if (
+        not isinstance(members, list)
+        or not isinstance(fields, list)
+        or not all(isinstance(item, str) for item in [*members, *fields])
     ):
         return None
-    return members
+    return [*members, *fields]
 
 
 def commit_resolves(root: Path, value: str) -> bool:

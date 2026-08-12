@@ -107,10 +107,9 @@ def _decide(
             "no console/network errors."
         ),
         next_action=(
-            "Verified — this claim is now proven and recorded for this URL. "
-            "Re-running the same verification without changing the app proves "
-            "nothing new. Move to your remaining plan steps, and if none are "
-            "outstanding, finish; re-verify only after a material change."
+            "Surface/runtime health passed and is recorded for this URL; semantic "
+            "completeness is outside this probe's scope. Move to the remaining plan "
+            "steps, or finish if none remain. Re-run only after a material change."
         ),
     )
 

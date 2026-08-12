@@ -21,6 +21,16 @@ def _render(verdict: dict[str, Any]) -> str:
         f"fingerprint: {verdict['failure_fingerprint']}",
         f"summary: {verdict['summary']}",
     ]
+    scope = str(verdict.get("verification_scope") or "")
+    if scope:
+        lines.append(f"scope: {scope} (not semantic completeness)")
+    interaction = verdict.get("game_interaction")
+    if isinstance(interaction, dict) and interaction:
+        lines.append(
+            "game_input_smoke: "
+            f"{interaction.get('status', 'unverified')} "
+            "(bounded evidence; does not certify gameplay)"
+        )
     if verdict["console_errors"]:
         lines.append(f"console_errors ({len(verdict['console_errors'])}):")
         for e in verdict["console_errors"][:5]:

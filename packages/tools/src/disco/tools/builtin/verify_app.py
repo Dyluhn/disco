@@ -303,8 +303,26 @@ class VerifyWebAppTool:
             structured=structured,
             meaningful=meaningful,
         )
+        verdict["verification_scope"] = "surface_runtime"
         if args.medium == "game" and structured is not None:
-            verdict["game_interaction"] = structured.get("game_interaction") or {}
+            interaction = structured.get("game_interaction") or {}
+            verdict["game_interaction"] = interaction
+            if verdict["passed"]:
+                if interaction.get("status") == "smoke_passed":
+                    verdict["summary"] = (
+                        f"{verdict['summary']} A bounded click/keyboard smoke completed; "
+                        "gameplay correctness was not certified."
+                    )
+                else:
+                    verdict["summary"] = (
+                        f"{verdict['summary']} The bounded click/keyboard smoke failed; "
+                        "gameplay was not certified."
+                    )
+                verdict["next_action"] = (
+                    "This proves only surface/runtime health. Use the interaction details "
+                    "for one concrete debug step if needed; otherwise continue the plan. "
+                    "Do not rerun without a material app change."
+                )
         if args.medium != "web":
             verdict["medium"] = args.medium
         verdict = await self._fold_trusted_components(

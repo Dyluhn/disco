@@ -139,6 +139,29 @@ async def test_context_pack_flag_on_prefix_and_narrow_recitation(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_context_pack_projects_todo_from_event_progress(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "on")
+    fs = _MemFS()
+    await ArtifactMemoryStore(fs).seed_todo("- [ ] 1. Add auth")
+    progress = ActionEvent(
+        thought="record completed work",
+        tool_call=ToolCall(
+            tool_name="update_plan_progress",
+            arguments={"steps": [{"index": 1, "state": "done"}]},
+        ),
+    )
+    events = with_seqs([user_msg("build it"), _plan(), progress])
+
+    view = await ViewBuilder(_make_loop(sandbox=fs, cadence=1)).build(events)
+    pack = next(
+        message.content for message in view.messages if message.content.startswith("<context-pack>")
+    )
+
+    assert "- [x] 1. Add auth" in pack
+    assert "- [ ] 1. Add auth" not in pack
+
+
+@pytest.mark.asyncio
 async def test_context_pack_inclusion_is_visible_to_inspect(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_CONTEXT_PACK", "on")
     monkeypatch.setenv("DISCO_INSPECT", "1")

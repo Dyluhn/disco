@@ -41,9 +41,18 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from disco.core import ActionEvent, LLMMessage, ObservationEvent, ToolCall, ToolResult
+from disco.core.effects import (
+    ActionProfile,
+    EffectCapability,
+    MutationReceipt,
+    ResourceKey,
+    ResourceRevision,
+)
 from disco.core.loop.dedup import collapse_superseded_reads
 from disco.core.loop.file_state import (
     _STALE_NOTICE_SENTINEL,
@@ -52,6 +61,7 @@ from disco.core.loop.file_state import (
 )
 from disco.core.loop.view_render import (
     _WS_PER_FILE_CHARS,
+    ViewBuilder,
     workspace_snapshot_message,
 )
 from event_fakes import with_seqs
@@ -465,6 +475,66 @@ def test_tracker_record_str_content():
     t.record_agent_io("mod.py", text, seq=1)
     expected_sha = hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
     assert t.get_sha("mod.py") == expected_sha
+
+
+def test_tracker_applies_each_host_mutation_revision_once():
+    tracker = FileStateTracker()
+    first = hashlib.sha256(b"agent write").hexdigest()
+    external = hashlib.sha256(b"external edit").hexdigest()
+
+    tracker.record_mutation_revision("app.js", first, seq=4)
+    tracker.record_agent_io("app.js", b"external edit", seq=0)
+    tracker.record_mutation_revision("app.js", first, seq=4)
+
+    assert tracker.get_sha("app.js") == external
+
+
+@pytest.mark.asyncio
+async def test_authenticated_write_receipt_is_not_reported_as_external():
+    old = b"old bytes"
+    written = b"agent bytes"
+    external = b"external bytes"
+    path = "app.js"
+    resource = ResourceKey(namespace="workspace.file", identifier=path)
+    action = _write_event(path, written.decode())
+    receipt = MutationReceipt(
+        resource=resource,
+        after=ResourceRevision(
+            resource=resource,
+            digest=hashlib.sha256(written).hexdigest(),
+        ),
+        after_size_bytes=len(written),
+    )
+    result = ObservationEvent(
+        tool_result=ToolResult(
+            call_id=action.tool_call.call_id,
+            tool_name=action.tool_call.tool_name,
+            success=True,
+            content="write complete",
+            action_profile=ActionProfile(
+                capabilities=frozenset({EffectCapability.WORKSPACE_MUTATE})
+            ),
+            effect_receipts=(receipt,),
+        ),
+        action_id=action.id,
+    )
+    events = with_seqs([action, result])
+    sandbox = _FakeSandbox({path: written})
+    builder = ViewBuilder(SimpleNamespace(executor=SimpleNamespace(sandbox=sandbox)))
+    builder._file_tracker.record_agent_io(path, old, seq=0)
+
+    _, stale = await builder._compute_stale_paths(events)
+    assert stale == []
+
+    sandbox._files[path] = external
+    _, stale = await builder._compute_stale_paths(events)
+    assert stale == [path]
+
+    # The next snapshot accepts the external bytes as its baseline. Replaying
+    # the old receipt must not manufacture another warning.
+    builder._file_tracker.record_agent_io(path, external, seq=0)
+    _, stale = await builder._compute_stale_paths(events)
+    assert stale == []
 
 
 def test_tracker_empty_path_is_no_op():

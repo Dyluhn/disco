@@ -6,6 +6,7 @@ code stays where it is and is called after retention exactly as today.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,12 +28,13 @@ from .product_evidence import (
 )
 
 CLASSIFICATION_NAME = "classification.json"
+MODEL_MESSAGES_NAME = "model-messages.jsonl"
 _BROWSER_EVIDENCE_COLLECTION_ERROR_NAME = "browser-evidence-collection-error.json"
 
 
-def _events_jsonl(events: list[dict[str, Any]]) -> str:
-    """One canonical full-event dict per line."""
-    lines: list[str] = []
+def _event_payloads(events: list[dict[str, Any]]) -> list[Any]:
+    """Extract the canonical event payloads retained in a dossier."""
+    payloads: list[Any] = []
     for row in events:
         payload = row.get("payload")
         if isinstance(payload, str):
@@ -42,8 +44,80 @@ def _events_jsonl(events: list[dict[str, Any]]) -> str:
                 payload = row
         elif not isinstance(payload, dict):
             payload = row
-        lines.append(json.dumps(payload, sort_keys=True))
+        payloads.append(payload)
+    return payloads
+
+
+def _events_jsonl(events: list[dict[str, Any]]) -> str:
+    """One canonical full-event dict per line."""
+    lines = [json.dumps(payload, sort_keys=True) for payload in _event_payloads(events)]
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _image_reference(image: str) -> dict[str, Any]:
+    """Retain image identity without duplicating base64 bodies into the dossier."""
+    media_type = ""
+    if image.startswith("data:") and ";" in image:
+        media_type = image[5 : image.index(";")]
+    return {
+        "sha256": hashlib.sha256(image.encode("utf-8")).hexdigest(),
+        "characters": len(image),
+        "media_type": media_type,
+    }
+
+
+def _model_messages_jsonl(events: list[dict[str, Any]]) -> str:
+    """Rebuild the pure event-view messages used for product-failure RCA.
+
+    This is intentionally labelled as a reconstruction: runtime-only snapshot,
+    context-pack, and router system-prompt additions are not persisted in the
+    event stream. Image bodies remain recoverable from events but are recorded
+    here by digest so one diagnostic does not double dossier storage.
+    """
+    from disco.core.events import EventAdapter
+    from disco.core.migration import migrate_event
+    from disco.core.view import View
+
+    metadata: dict[str, Any] = {
+        "kind": "metadata",
+        "schema": "disclaude-reconstructed-event-view-v1",
+        "basis": "disco.core.View.of(events)",
+        "exact_provider_prompt": False,
+    }
+    try:
+        parsed = [
+            EventAdapter.validate_python(migrate_event(payload))
+            for payload in _event_payloads(events)
+            if isinstance(payload, dict)
+        ]
+        view = View.of(parsed)
+    except (KeyError, TypeError, ValueError) as exc:
+        metadata.update(
+            {
+                "status": "reconstruction_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc)[:1000],
+            }
+        )
+        return json.dumps(metadata, sort_keys=True) + "\n"
+
+    metadata.update(
+        {
+            "status": "ok",
+            "event_count": view.total_events,
+            "forgotten_count": view.forgotten_count,
+            "visible_event_seqs": view.visible_seqs,
+            "message_count": len(view.messages),
+        }
+    )
+    rows = [metadata]
+    for index, message in enumerate(view.messages):
+        body = message.model_dump(mode="json")
+        images = body.pop("images", None) or []
+        if images:
+            body["image_refs"] = [_image_reference(image) for image in images]
+        rows.append({"kind": "message", "message_index": index, "message": body})
+    return "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n"
 
 
 def _timeline_md(scenario: dict[str, Any], run: CollectedRun) -> str:
@@ -80,6 +154,9 @@ class FilesystemEvidenceSink:
         )
         (base / "timeline.md").write_text(_timeline_md(scenario, run), encoding="utf-8")
         (conv / "events.jsonl").write_text(_events_jsonl(run.events), encoding="utf-8")
+        (conv / MODEL_MESSAGES_NAME).write_text(
+            _model_messages_jsonl(run.events), encoding="utf-8"
+        )
         (conv / "state.initial.json").write_text(
             json.dumps(run.state_initial, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -164,6 +241,7 @@ class FilesystemEvidenceSink:
         evidence_files = {
             "scenario.json": "scenario.json",
             "events.jsonl": f"{conv_rel}/events.jsonl",
+            MODEL_MESSAGES_NAME: f"{conv_rel}/{MODEL_MESSAGES_NAME}",
             "state.initial.json": f"{conv_rel}/state.initial.json",
             "state.final.json": f"{conv_rel}/state.final.json",
             "workspace-manifest.json": f"{conv_rel}/workspace-manifest.json",

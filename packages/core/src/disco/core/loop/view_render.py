@@ -41,10 +41,14 @@ from ..events import (
 from ..inspect import inspect_enabled
 from ..llm import Difficulty, OperatingMode, OverflowSignal
 from ..obs import log_event
-from ..view import View, microcompact
+from ..view import View, effective_plan_progress, microcompact
 from . import signals
 from .context_budget import ContextCaps, derive_context_caps
-from .context_builder import build_context_pack, render_context_pack
+from .context_builder import (
+    build_context_pack,
+    render_context_pack,
+    render_plan_as_todo_markdown,
+)
 from .context_live import context_pack_enabled, protected_context_compaction_seqs
 from .dedup import (
     _F8_PREFIX_CHARS,
@@ -52,7 +56,11 @@ from .dedup import (
     _f8_confirmed_file_writes,
     collapse_superseded_reads,
 )
-from .file_state import FileStateTracker, file_state_notice
+from .file_state import (
+    FileStateTracker,
+    file_state_notice,
+    reconcile_mutation_receipts,
+)
 from .messages import _workspace_paths_from_events
 from .observe import _ground_read
 from .view_snapshot import (  # noqa: F401 — re-exported for back-compat
@@ -498,6 +506,17 @@ class ViewBuilder:
                     exc_info=True,
                 )
 
+        # todo.md remains a durable seed/human artifact.  Live execution
+        # progress comes from the event log's single progress reducer, so a
+        # stale unchecked seed can never contradict completed plan steps.
+        plan, states = effective_plan_progress(events)
+        if plan is not None:
+            todo_text = render_plan_as_todo_markdown(
+                plan,
+                states,
+                include_heading=False,
+            )
+
         pack = build_context_pack(
             events,
             base_ledger=base_ledger,
@@ -640,6 +659,7 @@ class ViewBuilder:
         availability and a non-empty working set.
         """
         sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
+        reconcile_mutation_receipts(self._file_tracker, events)
         mutated, read_only = _workspace_paths_from_events(events)
         working_set = mutated + read_only
         stale: list[str] = []

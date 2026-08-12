@@ -179,6 +179,13 @@ def hard_deny_reason(action: ActionEvent) -> str | None:
 # bookkeeping hiccup is NOT "the model is stuck on the task" — counting it toward the
 # Cluster-2 breaker would escalate a trivial build to AWAITING_USER for nothing.
 _NONCRITICAL_FAILURE_TOOLS = frozenset({"update_plan_progress"})
+_NON_PRODUCT_FAILURE_CLASSES = frozenset(
+    {
+        "browser_action_failed",
+        "browser_daemon_unavailable",
+        "freshness_protocol_invalid",
+    }
+)
 
 
 def count_recent_failures(events: list[Event]) -> int:
@@ -186,8 +193,9 @@ def count_recent_failures(events: list[Event]) -> int:
     successful ObservationEvent or a USER message (a fresh instruction).
     Interleaved ActionEvents and agent/env messages do NOT reset. Drives the
     Cluster 2 circuit breaker. Failures from non-critical informational tools
-    (`_NONCRITICAL_FAILURE_TOOLS`) are TRANSPARENT — they neither increment nor
-    reset the streak (a real failure before them is still counted)."""
+    are TRANSPARENT, as are failures from debug infrastructure. They neither
+    increment nor reset the streak (a real product failure before them is still
+    counted)."""
     tool_by_action = {
         e.id: e.tool_call.tool_name
         for e in events
@@ -196,6 +204,8 @@ def count_recent_failures(events: list[Event]) -> int:
     streak = 0
     for e in reversed(events):
         if isinstance(e, AgentErrorEvent):
+            if e.failure_class in _NON_PRODUCT_FAILURE_CLASSES:
+                continue
             action_id = e.action_id
             if (
                 action_id is not None
