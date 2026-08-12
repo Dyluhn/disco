@@ -10,9 +10,8 @@
  *    reset (which discards the session). onRetry is wired to b.resume.
  *
  *  - CLEAN TITLE ON RESUME: re-entering a session seeds task="(resumed)"; the H1 must
- *    prefer the STORED auto-title (fetched from /state) over the raw first prompt, and
- *    when no stored title exists, fall back to a TRUNCATED first task — never the giant
- *    wall of text the user originally typed.
+ *    prefer the STORED auto-title (fetched from /state) and show a neutral label while
+ *    it hydrates — never the raw prompt or hidden environment brief.
  */
 
 import { render, screen, waitFor } from "@testing-library/react";
@@ -32,7 +31,11 @@ vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
 }));
 vi.mock("@/hooks/useProjects", () => ({
-  useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useDownloadProject: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
   useProjectRelease: () => ({ data: undefined }),
@@ -52,7 +55,9 @@ vi.mock("@/components/toastApi", () => ({
 
 import { BuildSurface } from "@/components/BuildSurface";
 
-function baseBuild(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function baseBuild(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     cid: "cid-1",
     status: "RUNNING" as ConversationStatus,
@@ -128,12 +133,10 @@ function stubStateFetch(title: string | null) {
 
 beforeEach(() => {
   stubStateFetch(null);
-  canonicalPreviewBootstrapUrlMock.mockResolvedValue(
-    {
-      url: "http://127.0.0.2:19120/__disco/preview-auth",
-      intent: "signed-body-intent",
-    },
-  );
+  canonicalPreviewBootstrapUrlMock.mockResolvedValue({
+    url: "http://127.0.0.2:19120/__disco/preview-auth",
+    intent: "signed-body-intent",
+  });
 });
 
 afterEach(() => {
@@ -181,7 +184,9 @@ describe("RECOVERY: errored build — 'Try again' resumes (never resets)", () =>
     expect(
       screen.getByLabelText(/choose the model that runs the agent/i),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /try again/i }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -203,7 +208,9 @@ describe("finished app handoff isolation", () => {
     const open = vi.fn(() => popup as unknown as Window);
     vi.stubGlobal("open", open);
     const submissions: Array<{ action: string; intent: string }> = [];
-    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (this: HTMLFormElement) {
+    vi.spyOn(HTMLFormElement.prototype, "submit").mockImplementation(function (
+      this: HTMLFormElement,
+    ) {
       submissions.push({
         action: this.action,
         intent: (this.elements.namedItem("intent") as HTMLInputElement).value,
@@ -212,35 +219,50 @@ describe("finished app handoff isolation", () => {
     buildState = baseBuild({ status: "FINISHED", events: appEvents });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
-    const button = await screen.findByRole("button", { name: /open the deliverable/i });
+    const button = await screen.findByRole("button", {
+      name: /open the deliverable/i,
+    });
     await waitFor(() =>
       expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
         "cid-1",
         "/?_disco_refresh=0",
       ),
     );
-    expect(canonicalPreviewBootstrapUrlMock).not.toHaveBeenCalledWith("cid-1", "/");
+    expect(canonicalPreviewBootstrapUrlMock).not.toHaveBeenCalledWith(
+      "cid-1",
+      "/",
+    );
     await userEvent.click(button);
     expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/");
-    expect(open).toHaveBeenCalledWith("about:blank", expect.stringMatching(/^disco-preview-popup-/));
+    expect(open).toHaveBeenCalledWith(
+      "about:blank",
+      expect.stringMatching(/^disco-preview-popup-/),
+    );
     expect(popup.opener).toBeNull();
     await waitFor(() =>
-      expect(submissions).toEqual(expect.arrayContaining([
-        {
-          action: "http://127.0.0.2:19120/__disco/preview-auth",
-          intent: "signed-body-intent",
-        },
-      ])),
+      expect(submissions).toEqual(
+        expect.arrayContaining([
+          {
+            action: "http://127.0.0.2:19120/__disco/preview-auth",
+            intent: "signed-body-intent",
+          },
+        ]),
+      ),
     );
   });
 
   it("closes the blank popup when an isolated handoff cannot be minted", async () => {
     const popup = { opener: window, close: vi.fn() };
-    vi.stubGlobal("open", vi.fn(() => popup as unknown as Window));
+    vi.stubGlobal(
+      "open",
+      vi.fn(() => popup as unknown as Window),
+    );
     buildState = baseBuild({ status: "FINISHED", events: appEvents });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
-    const button = await screen.findByRole("button", { name: /open the deliverable/i });
+    const button = await screen.findByRole("button", {
+      name: /open the deliverable/i,
+    });
     await waitFor(() =>
       expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
         "cid-1",
@@ -252,14 +274,19 @@ describe("finished app handoff isolation", () => {
     );
     await userEvent.click(button);
     await waitFor(() =>
-      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/"),
+      expect(canonicalPreviewBootstrapUrlMock).toHaveBeenCalledWith(
+        "cid-1",
+        "/",
+      ),
     );
     await waitFor(() => expect(popup.close).toHaveBeenCalled());
     expect(showToastMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Couldn’t open preview" }),
     );
     expect(button).toBeEnabled();
-    expect(document.body.innerHTML).not.toContain("/conversations/cid-1/preview-app/");
+    expect(document.body.innerHTML).not.toContain(
+      "/conversations/cid-1/preview-app/",
+    );
   });
 });
 
@@ -283,9 +310,12 @@ describe("CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt", () => {
       ),
     );
     // the giant wall is NOT the heading
-    expect(screen.getByRole("heading", { level: 1 }).textContent).not.toBe(WALL);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).not.toBe(
+      WALL,
+    );
   });
 
+  // Historical sealed id retained; raw prompt fallback is no longer allowed.
   it("falls back to a TRUNCATED first task when no stored title exists", async () => {
     stubStateFetch(null); // titler hasn't landed yet
     buildState = baseBuild({
@@ -295,11 +325,8 @@ describe("CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt", () => {
     renderSurface(<BuildSurface resumeCid="cid-1" />);
 
     const h1 = await screen.findByRole("heading", { level: 1 });
-    // never the full wall — capped (~80 chars + ellipsis)
-    expect(h1.textContent).not.toBe(WALL);
-    expect(h1.textContent!.endsWith("…")).toBe(true);
-    expect(h1.textContent!.length).toBeLessThanOrEqual(82);
-    expect(WALL.startsWith(h1.textContent!.replace(/…$/, "").trimEnd())).toBe(true);
+    expect(h1.textContent).toBe("Resumed project");
+    expect(h1.textContent).not.toContain("<build_brief>");
   });
 
   it("leaves a FRESH (non-resumed) run's task untouched", async () => {

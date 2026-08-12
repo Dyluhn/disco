@@ -104,7 +104,7 @@ class ReportEvent(BaseEvent, LLMConvertible):
     (the long body would blow the context window; we render headers only).
 
     `bounded_by` names the hard-cap that terminated the run, if any: "sources"
-    (max_sources hit), "rounds" (max_rounds_per_subq hit on all sub-questions),
+    (max_sources hit), "rounds" (max_rounds_per_subq hit on a sub-question),
     "wall_clock" (max_wall_clock_s hit), or "subquestions" (decompose produced
     more than max_subquestions). None means the run completed naturally."""
 

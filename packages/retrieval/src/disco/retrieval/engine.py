@@ -89,7 +89,7 @@ class DefaultRetrievalEngine:
             hit_lists.append(
                 await self._search.search(
                     q,
-                    limit=max(req.top_k * 3, 10),
+                    limit=req.discover_limit or max(req.top_k * 3, 10),
                     domains_allow=req.domains_allow,
                     domains_deny=req.domains_deny,
                     time_filter=req.recency_window,
@@ -113,11 +113,19 @@ class DefaultRetrievalEngine:
         queries = await self._transform(req)
 
         all_hits = await self._discover(req, queries)
-        candidate_hits = all_hits[: self._candidate_cap]
+        candidate_cap = min(self._candidate_cap, req.extract_cap or self._candidate_cap)
+        candidate_hits = all_hits[:candidate_cap]
         if candidate_hits:
             extracted = await extract_discovered_hits(self._extraction, candidate_hits)
         else:
             extracted = []
+
+        # Discovery and extraction are different facts.  Carry extraction
+        # truth back onto every attempted hit; leave unattempted hits as None.
+        status_by_url = {doc.url: doc.status for doc in extracted}
+        all_hits = [
+            hit.model_copy(update={"status": status_by_url.get(hit.url)}) for hit in all_hits
+        ]
 
         # Passages come from EXTRACTED content + corpora — never from snippets.
         candidates: list[Passage] = [p for doc in extracted if doc.fetched_ok for p in doc.passages]
@@ -129,5 +137,10 @@ class DefaultRetrievalEngine:
             all_hits=all_hits,  # full discovery set incl. failed/blocked (§2.2)
             extracted=extracted,
             issued_queries=queries,
-            notes={"candidates": len(candidates), "depth": req.depth},
+            notes={
+                "candidates": len(candidates),
+                "depth": req.depth,
+                "discovered": len(all_hits),
+                "extracted": len(extracted),
+            },
         )

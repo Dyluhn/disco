@@ -93,8 +93,10 @@ def test_fraction_supported_and_weak_claims() -> None:
 
 
 def test_fraction_supported_empty_is_vacuously_one() -> None:
-    # No claims → nothing to re-search → the gate is satisfied (1.0), not a div-by-zero.
-    assert fraction_supported([]) == 1.0
+    # Historical sealed id retained; an empty evidence set no longer certifies
+    # a section as grounded.
+    # No judgeable evidence cannot certify a section as grounded.
+    assert fraction_supported([]) == 0.0
     assert weak_claims([]) == []
 
 

@@ -32,7 +32,7 @@ import { useDeepResearchSession } from "./useDeepResearchParts/useDeepResearchSe
 export function useDeepResearch(
   resumeCid?: string | null,
   initialLeaderId?: string | null,
-  initialSources: string[] = ["ddgs"],
+  initialSources: string[] = [],
 ) {
   const sessionApi = useDeepResearchSession(resumeCid, initialLeaderId, initialSources);
 
@@ -57,7 +57,7 @@ export function useDeepResearch(
     recoveredQuery: derived.recoveredQuery,
   });
 
-  const exportsApi = useDeepResearchExports(sessionApi.session, stream);
+  const exportsApi = useDeepResearchExports(sessionApi.session);
 
   return {
     started: sessionApi.session !== null,
@@ -97,9 +97,8 @@ export function useDeepResearch(
     followUps: derived.followUps,
     exportReport: exportsApi.exportReport,
     exportReportByFmt: exportsApi.exportReportByFmt,
-    /** fix-c #4: which export (if any) is currently in-flight on the server.
-     *  null when idle. The surface uses this to disable + spin the matching
-     *  top-bar button. MD is excluded (synchronous). */
+    /** Which server export (if any) is in flight. The surface disables both
+     *  controls and spins the matching format until it settles. */
     exportPending: exportsApi.exportPending,
     ...stream,
     // A failed create was silent (empty state, no message). Expose it to the UI.

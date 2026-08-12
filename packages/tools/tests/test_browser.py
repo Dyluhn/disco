@@ -29,7 +29,7 @@ from disco.core import (
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop import ConfirmRisky
 from disco.core.security import RuleBasedAnalyzer
-from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, _quarantine
+from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, BrowserTool, _quarantine
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope
 from disco.tools.sandbox.base import ExecResult
@@ -184,6 +184,15 @@ def test_submit_is_high_and_gated_read_is_not():
     read_risk = _risk({"action": "navigate", "url": "http://news.example"})
     assert submit_risk == SecurityRisk.HIGH and gate.should_confirm(submit_risk) is True
     assert read_risk == SecurityRisk.LOW and gate.should_confirm(read_risk) is False
+
+
+def test_browser_schema_makes_navigation_precondition_and_url_scope_explicit():
+    definition = BrowserTool.definition
+    schema = definition.args_model.model_json_schema()
+
+    assert "Always call navigate first" in definition.description
+    assert "does not navigate" in definition.description
+    assert "ignored by other actions" in schema["properties"]["url"]["description"]
 
 
 # ---- BP-00: vision screenshot transport --------------------------------------

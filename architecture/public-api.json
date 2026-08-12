@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+  "source_identity": "20c3ccb28ae665593885690b7b8d1df871a735f0",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -2929,6 +2929,8 @@
             "detail: str | None",
             "effect_receipts: tuple[EffectReceipt, ...]",
             "error: str",
+            "failure_class: str | None",
+            "failure_reason: str | None",
             "kind: Literal[EventKind.AGENT_ERROR]",
             "source: EventSource",
             "tool_call_id: str | None"
@@ -14368,8 +14370,10 @@
           "fields": [
             "corpus_ids: frozenset[str]",
             "depth: Literal['shallow', 'standard', 'deep']",
+            "discover_limit: int | None",
             "domains_allow: frozenset[str] | None",
             "domains_deny: frozenset[str] | None",
+            "extract_cap: int | None",
             "provider: str | None",
             "query: str",
             "recency_window: Literal['month', 'week'] | None",
@@ -14406,6 +14410,7 @@
             "rank: int",
             "snippet: str",
             "source_engine: str",
+            "status: Literal['ok', 'paywalled', 'blocked', 'not_found', 'error'] | None",
             "title: str",
             "url: str"
           ]
@@ -14576,7 +14581,8 @@
             "max_sources: int",
             "max_subquestions: int",
             "max_wall_clock_s: int",
-            "rerank_top_k: int"
+            "rerank_top_k: int",
+            "retrieval_depth: Literal['shallow', 'standard', 'deep']"
           ]
         },
         "DepthTier": {
@@ -22900,7 +22906,7 @@
         {
           "kind": "function",
           "name": "useDeepResearch",
-          "signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [\"ddgs\"], )"
+          "signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [], )"
         }
       ]
     },
@@ -22940,7 +22946,7 @@
         {
           "kind": "function",
           "name": "useDeepResearchExports",
-          "signature": "export function useDeepResearchExports( session: DeepResearchSession | null, stream: DeepResearchStream, )"
+          "signature": "export function useDeepResearchExports( session: DeepResearchSession | null, )"
         }
       ]
     },
@@ -28116,14 +28122,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
-      "public_name": "useDeepResearchExports",
-      "target_sha256": "11bf18b7e51c86c55f80a65bd9b9924f2a27ffe99d1bf7a16d39fd5b059f0ae3",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
       "public_name": "DeepResearchLifecycleParams",
       "target_sha256": "a16af191b5110b46cd1c0917ad9b7d2714d9c26abe74c33098a87032277731f2",
@@ -29385,10 +29383,104 @@
       "target_sha256": "3fc95ecee6760bccc1e70ca465ac74c51c0cd7976e6de56b17962f365a3e86fc",
       "owner_package": "PKG-13-FACADES",
       "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearch.ts",
+      "public_name": "useDeepResearch",
+      "target_sha256": "065dcc39011f00069fda99437bbfc4c93a347dd788f32eaa36c1ada77d130761",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "PKG-19 v25 leaves deep-research source selection to the governed backend policy instead of forcing DDGS in the UI hook."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
+      "public_name": "useDeepResearchExports",
+      "target_sha256": "d302c5be343f659581650a0fcb17408ebdaff825b18fcbc151f72e0ff67b21a9",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "PKG-19 v25 exports the authoritative completed research session without coupling export metadata to transient stream state."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "AgentErrorEvent",
+      "target_sha256": "d3f1aa93564d5ed51564f88daf1801a2f60220969ab87860264031958cc44283",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "Record AgentErrorEvent's typed infrastructure-failure classification without parsing error prose."
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "RetrievalRequest",
+      "target_sha256": "44a53d18ca91dcb87d2513bee7c70433eeb8b30dc933c091d626f1e476a34361",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "PKG-19 v25 carries explicit optional discovery and extraction budgets through the public retrieval request."
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "SearchHit",
+      "target_sha256": "5bdfc167651e8d2be000bc953a1cd49984a5ba3b5e1f45afc29cea3f8d5a7951",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "PKG-19 v25 preserves typed extraction status on public search hits so research can distinguish usable and failed sources."
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "target_sha256": "a07a99fa6fc11c256d0e2be1f8bab09a04f44f79491b672eda6001bd5b429f82",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "reason": "PKG-19 v25 binds each research-depth budget to its explicit retrieval depth."
     }
   ],
   "compatibility_bridges": [],
   "member_transitions": [
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "RetrievalRequest",
+      "origin": "disco.retrieval.models.RetrievalRequest",
+      "removed_members": [],
+      "added_members": [
+        "discover_limit: int | None",
+        "extract_cap: int | None"
+      ],
+      "old_signature_sha256": "952bcda6a1ff8ae2ca74cc83410bfcd586bb6e16c03c8cda4791eb94e02b535b",
+      "new_signature_sha256": "101fac26c6f6c462e3577da662147fae86f3313d2aa712e0939b3fc77c21613a",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "20c3ccb28ae665593885690b7b8d1df871a735f0",
+      "accepting_receipt": "automation/runtime/boundary-20260812-pkg19-v25-refinement/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "origin": "disco.retrieval.deep_research.depth.DepthBound",
+      "removed_members": [],
+      "added_members": [
+        "retrieval_depth: Literal['shallow', 'standard', 'deep']"
+      ],
+      "old_signature_sha256": "7abbb7a9d91f8d5b50e4682a4417e8bf987a348414e8fc74a6afaffe8abd9872",
+      "new_signature_sha256": "06bbbd3e63418beae2b0269f3502da45d8d26fdf25261b133918d15fa4278dfc",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "20c3ccb28ae665593885690b7b8d1df871a735f0",
+      "accepting_receipt": "automation/runtime/boundary-20260812-pkg19-v25-refinement/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "SearchHit",
+      "origin": "disco.retrieval.models.SearchHit",
+      "removed_members": [],
+      "added_members": [
+        "status: Literal['ok', 'paywalled', 'blocked', 'not_found', 'error'] | None"
+      ],
+      "old_signature_sha256": "b9a94f50ce84f4fbc8e8facd7468665743c57fa65ad6d9258b29e1af24fab3f4",
+      "new_signature_sha256": "d63e3dd5791edaacee401325ceef1db98c40f37078138bf310ea1c41ea83894c",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "20c3ccb28ae665593885690b7b8d1df871a735f0",
+      "accepting_receipt": "automation/runtime/boundary-20260812-pkg19-v25-refinement/BOUNDARY-RECEIPT.md"
+    },
     {
       "surface": "python",
       "path": "packages/tools/src/disco/tools/__init__.py",
@@ -29536,6 +29628,22 @@
     },
     {
       "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "AgentErrorEvent",
+      "origin": "disco.core.events.AgentErrorEvent",
+      "removed_members": [],
+      "added_members": [
+        "failure_class: str | None",
+        "failure_reason: str | None"
+      ],
+      "old_signature_sha256": "a7fc8017dcd78f649a74dae673945dd6a5f00cf18af8c7478dafedde7849ba76",
+      "new_signature_sha256": "12f6141485c51932b4c9ff6ff2c1bbbf9d988e32dddc7cb25b7cfbb8b3b7f0ef",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "ac0118926145f7cda57775d077e0387e912d2f36",
+      "accepting_receipt": "automation/runtime/boundary-20260811-pkg19-kiss-root-cause-v24/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
       "public_name": "ConversationRuntime",
       "origin": "disco.agent_server.runtime.ConversationRuntime",
@@ -29595,6 +29703,32 @@
     }
   ],
   "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearch.ts",
+      "public_name": "useDeepResearch",
+      "declaration_kind": "function",
+      "old_signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [\"ddgs\"], )",
+      "new_signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [], )",
+      "old_target_sha256": "5e24a464c4f289416b65f9c19b32d40586ef02a70148309820df6fa7dd11117b",
+      "new_target_sha256": "065dcc39011f00069fda99437bbfc4c93a347dd788f32eaa36c1ada77d130761",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "20c3ccb28ae665593885690b7b8d1df871a735f0",
+      "accepting_receipt": "automation/runtime/boundary-20260812-pkg19-v25-refinement/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
+      "public_name": "useDeepResearchExports",
+      "declaration_kind": "function",
+      "old_signature": "export function useDeepResearchExports( session: DeepResearchSession | null, stream: DeepResearchStream, )",
+      "new_signature": "export function useDeepResearchExports( session: DeepResearchSession | null, )",
+      "old_target_sha256": "11bf18b7e51c86c55f80a65bd9b9924f2a27ffe99d1bf7a16d39fd5b059f0ae3",
+      "new_target_sha256": "d302c5be343f659581650a0fcb17408ebdaff825b18fcbc151f72e0ff67b21a9",
+      "owner_package": "PKG-19-CERT-COUNTED",
+      "accepting_commit": "20c3ccb28ae665593885690b7b8d1df871a735f0",
+      "accepting_receipt": "automation/runtime/boundary-20260812-pkg19-v25-refinement/BOUNDARY-RECEIPT.md"
+    },
     {
       "surface": "frontend",
       "path": "frontend/src/lib/harness/productEvidence.ts",

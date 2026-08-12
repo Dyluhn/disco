@@ -6,11 +6,11 @@ returned by `decompose_query`; the gate / approval / re-plan flow is owned by
 the agent loop's plan-mode intercept (we reuse the Build plan mode without
 modification).
 
-The run is bounded: the first cap hit (`sources`, `rounds`, `wall_clock`,
-`subquestions`) terminates with a partial-but-honest report and `bounded_by`
-set on the ReportEvent. Progress events flow through the injected `emit`
-callback so the agent-server appends them as ActionEvents / ObservationEvents
-to the conversation log.
+The run is bounded: any cap hit (`sources`, `rounds`, `wall_clock`,
+`subquestions`) terminates with a partial-but-honest report and the strongest
+terminal reason is set as `bounded_by` on the ReportEvent. Progress events flow
+through the injected `emit` callback so the agent-server appends them as
+ActionEvents / ObservationEvents to the conversation log.
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from ..engine import RetrievalEngine
 from ..models import Passage as RetrievalPassage
 from ..ranking import Embedder
 from ..vectorstore import VectorStore
-from ._engine_parts._drain import drain_and_synthesize
+from ._budget import SourceBudget
+from ._engine_parts._drain import _dominant_bound, drain_and_synthesize
 from ._engine_parts._plan import prepare_plan, start_gather_tasks, start_one_steer_task
 from ._engine_parts._refine import iterative_refine
 from ._engine_parts._report import collect_report_data
@@ -163,6 +164,8 @@ class DeepResearchRun:
         # → protected) and passes it on every tier. `None` (the default, used by
         # hermetic tests) = UNBOUNDED.
         self._gather_concurrency = gather_concurrency if (gather_concurrency or 0) > 0 else None
+        self._source_budget = SourceBudget(self._bound.max_sources)
+        self._scheduled_subquestions = 0
 
     @property
     def bound(self) -> DepthBound:
@@ -285,6 +288,61 @@ class DeepResearchRun:
             pop_injected_sources=pop_injected_sources,
         )
 
+    def _seconds_left(self, started: float) -> float:
+        return max(0.0, self._bound.max_wall_clock_s - (time.monotonic() - started))
+
+    async def _refine_before_deadline(
+        self,
+        sections: list[ReportSection],
+        results: list[SubQuestionResult],
+        carried_passages: list[RetrievalPassage],
+        emit: EmitFn,
+        started: float,
+    ) -> tuple[list[ReportSection], list[RetrievalPassage], list[Any], bool]:
+        remaining = self._seconds_left(started)
+        if remaining <= 0:
+            return sections, [], [], True
+        try:
+            refined, passages, hits = await asyncio.wait_for(
+                self._iterative_refine(sections, results, carried_passages, emit),
+                timeout=remaining,
+            )
+        except TimeoutError:
+            return sections, [], [], True
+        return refined, passages, hits, False
+
+    async def _coherence_before_deadline(
+        self,
+        sections: list[ReportSection],
+        passages: list[RetrievalPassage],
+        started: float,
+    ) -> tuple[str, bool]:
+        remaining = self._seconds_left(started)
+        if remaining <= 0:
+            return self._wall_clock_summary(), True
+        try:
+            summary = await asyncio.wait_for(
+                coherence_pass(
+                    self._query,
+                    sections,
+                    router=self._router,
+                    passages=passages,
+                    nli=self._nli,
+                    recency_window=self._recency_window,
+                ),
+                timeout=remaining,
+            )
+        except TimeoutError:
+            return self._wall_clock_summary(), True
+        return summary, False
+
+    @staticmethod
+    def _wall_clock_summary() -> str:
+        return (
+            "Research reached its time limit. The completed sections below contain "
+            "the source-grounded findings available before the deadline."
+        )
+
     async def run(
         self,
         plan_steps: list[str],
@@ -322,6 +380,10 @@ class DeepResearchRun:
           passages are folded into subsequent sections' candidate sets. Default
           None → OFF-path, byte-identical."""
         started = time.monotonic()
+        # DeepResearchRun is documented as single-shot, but resetting here makes
+        # the execution-scoped cap explicit and keeps defensive test reuse honest.
+        self._source_budget = SourceBudget(self._bound.max_sources)
+        self._scheduled_subquestions = 0
         (
             bounded_by,
             pending,
@@ -359,9 +421,16 @@ class DeepResearchRun:
         # entered — the judge/refine loop never runs, nothing new is emitted,
         # and `sections` is exactly what `_drain_and_synthesize` produced.
         if self._iterative:
-            sections, refine_passages, refine_hits = await self._iterative_refine(
-                sections, results, carried_passages, emit
+            (
+                sections,
+                refine_passages,
+                refine_hits,
+                refine_timed_out,
+            ) = await self._refine_before_deadline(
+                sections, results, carried_passages, emit, started
             )
+            if refine_timed_out:
+                bounded_by = _dominant_bound(bounded_by, "wall_clock")
             # Fold the refine legs' fresh passages into the report's passage set so
             # a section's fresh `[[id]]` citations resolve to source cards in
             # `_assemble_report` (deduped by id there). OFF-path: never reached.
@@ -372,15 +441,21 @@ class DeepResearchRun:
             # _assemble_report).
             if refine_hits:
                 carried_hits = carried_hits + refine_hits
+            if self._source_budget.remaining <= 0:
+                bounded_by = _dominant_bound(bounded_by, "sources")
 
         # ---- reduce step: coherence pass produces the executive summary ----
         await emit("phase", {"phase": "coherence"})
-        summary = await coherence_pass(
-            self._query,
+        summary, coherence_timed_out = await self._coherence_before_deadline(
             sections,
-            router=self._router,
-            recency_window=self._recency_window,
+            [
+                *carried_passages,
+                *(passage for result in results for passage in result.passages),
+            ],
+            started,
         )
+        if coherence_timed_out:
+            bounded_by = _dominant_bound(bounded_by, "wall_clock")
 
         return self._assemble_report(
             sections=sections,

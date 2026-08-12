@@ -221,7 +221,7 @@ export function deriveSourceTiers(report: ReportEvent | null): SourceTiers {
     if (citedUrls.has(url)) continue; // cited already covered
     // a hit with status="ok" is at least "reviewed" (we fetched + extracted it
     // even if no passage was cited). status != "ok" → discovered (failed).
-    const status = String((hit as Record<string, unknown>).status ?? "ok");
+    const status = String((hit as Record<string, unknown>).status ?? "unread");
     if (status === "ok") reviewed.push(hit);
     else discovered.push(hit);
   }

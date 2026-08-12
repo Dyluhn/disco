@@ -428,7 +428,8 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 
     fake_reranker.rerank = _rerank
     fake_nli = MagicMock()
-    fake_nli.predict = MagicMock(return_value=[])
+    fake_nli.entail = MagicMock(return_value="entail")
+    fake_nli.score = MagicMock(return_value=1.0)
     # NOTE: stream_complete is a plain `def` returning an AsyncIterator per the
     # LLMRouter Protocol (core/llm/routing.py). The caller does
     # `async for chunk in router.stream_complete(req)` — that iterates the
@@ -447,7 +448,7 @@ async def test_seed_passages_in_stream_research_answer() -> None:
 
     async def _fake_token_stream(req: Any) -> AsyncIterator[Any]:
         chunk = MagicMock()
-        chunk.delta_text = "The answer is 42."
+        chunk.delta_text = "The answer is 42. [[up_notes_0]]"
         yield chunk
 
     fake_router.stream_complete = _fake_token_stream

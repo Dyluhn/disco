@@ -67,6 +67,7 @@ def _fresh_edit_violation(
     rec: dict[str, Any] | None,
     grounded: bool,
     edit_lines: tuple[int, int] | None,
+    anchored: bool = False,
 ) -> ToolOutcome | None:
     """Classify the (rec, grounded) state into the blocking outcome it implies,
     or None when the edit is fully grounded. Checks, in order: (1) the file
@@ -100,6 +101,8 @@ def _fresh_edit_violation(
     # after an exact find missed), we cannot prove the mutated lines were seen → fail closed so a
     # partial read can't mutate unread lines (Codex round-1).
     if rec is not None and not rec.get("full"):
+        if anchored and rec.get("anchored_full"):
+            return None
         if edit_lines is None:
             return _fresh_read_required(
                 path,
@@ -151,7 +154,12 @@ def guard_fresh_edit(
     # plus targeted_read_grounded; that grounds corrected targeted edits, not blind file_write.
     rec, grounded = _read_grounding(conv_id, path, sha, anchored=anchored)
     violation = _fresh_edit_violation(
-        path, sha=sha, rec=rec, grounded=grounded, edit_lines=edit_lines
+        path,
+        sha=sha,
+        rec=rec,
+        grounded=grounded,
+        edit_lines=edit_lines,
+        anchored=anchored,
     )
     if violation is None:
         return None

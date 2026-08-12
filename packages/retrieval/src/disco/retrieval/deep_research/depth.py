@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Literal
 
 
 class DepthTier(str, Enum):
@@ -30,13 +31,14 @@ class DepthBound:
     (not silent truncation). max_subquestions also bounds the plan width — a
     too-wide decompose returns truncated steps with the same `bounded_by` mark."""
 
-    max_sources: int  # whole-run cap: passages accumulated in the corpus
+    max_sources: int  # one-execution cap: unique web passages; uploads are excluded
     max_rounds_per_subq: int  # retrieve-reason-refine round budget per sub-q
     max_wall_clock_s: int  # whole-run wall clock cap
     max_subquestions: int  # plan width cap
     discover_limit: int  # search results requested per query (per round)
     extract_cap: int  # max extractions per round (controls page fetching)
     rerank_top_k: int  # passages kept per round after rerank
+    retrieval_depth: Literal["shallow", "standard", "deep"] = "standard"
 
 
 _TIERS: dict[DepthTier, DepthBound] = {
@@ -55,6 +57,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
         discover_limit=8,
         extract_cap=4,
         rerank_top_k=4,
+        retrieval_depth="shallow",
     ),
     # Standard-deep: the everyday Deep Research run. ~7-9 minutes on local Qwen
     # when the auxiliary roles are routed to a light model; longer when those
@@ -71,6 +74,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
         discover_limit=10,
         extract_cap=6,
         rerank_top_k=6,
+        retrieval_depth="standard",
     ),
     # Exhaustive: long-form survey, 15-30+ minutes on local Qwen. 12 sub-
     # questions × up to 5 rounds. ~150 sources. Map-reduce earns its place.
@@ -82,6 +86,7 @@ _TIERS: dict[DepthTier, DepthBound] = {
         discover_limit=12,
         extract_cap=8,
         rerank_top_k=8,
+        retrieval_depth="deep",
     ),
 }
 
