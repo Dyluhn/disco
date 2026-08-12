@@ -41,6 +41,8 @@ from disco.retrieval.deep_research.decompose import SubQuestion
 from disco.retrieval.deep_research.gather import (
     GatherLegContext,
     SubQuestionResult,
+    _gap_reason,
+    _run_retrieval_round,
     gather_for_subquestion,
 )
 from disco.retrieval.engine import DefaultRetrievalEngine
@@ -436,7 +438,10 @@ async def test_full_run_produces_multi_section_report() -> None:
     # the headline: 3 sections + an executive summary
     assert len(result.sections) == 3
     assert [s.title for s in result.sections] == plan_steps
-    assert result.summary.startswith("This report surveys X")
+    # The model's uncited summary is rejected; the reducer falls back to
+    # already-verified section findings with resolvable citations.
+    assert result.summary.startswith("The basics of X")
+    assert "[[p0]]" in result.summary
     # bounded_by is None when nothing hit the caps
     assert result.bounded_by is None
     # each section grounds in the corpus + has at least one cited passage id
@@ -662,12 +667,80 @@ def test_bounds_for_three_tiers_are_distinct_and_ordered() -> None:
     assert quick.max_sources < std.max_sources < deep.max_sources
     assert quick.max_subquestions < std.max_subquestions < deep.max_subquestions
     assert quick.max_wall_clock_s < std.max_wall_clock_s < deep.max_wall_clock_s
+    assert [quick.retrieval_depth, std.retrieval_depth, deep.retrieval_depth] == [
+        "shallow",
+        "standard",
+        "deep",
+    ]
 
 
 def test_bounds_for_accepts_string_value() -> None:
     a = bounds_for("standard_deep")
     b = bounds_for(DepthTier.STANDARD_DEEP)
     assert a == b
+
+
+@pytest.mark.parametrize(
+    ("tier", "expected_depth"),
+    [
+        (DepthTier.QUICK, "shallow"),
+        (DepthTier.STANDARD_DEEP, "standard"),
+        (DepthTier.EXHAUSTIVE, "deep"),
+    ],
+)
+async def test_each_tier_reaches_retrieval_with_its_real_strategy_and_limits(
+    tier: DepthTier, expected_depth: str
+) -> None:
+    requests: list[RetrievalRequest] = []
+
+    class _CaptureEngine:
+        async def retrieve(self, req: RetrievalRequest) -> RetrievalResult:
+            requests.append(req)
+            return RetrievalResult(passages=[], all_hits=[], extracted=[], issued_queries=[])
+
+    async def emit(_kind: str, _payload: dict[str, object]) -> None:
+        return None
+
+    bound = bounds_for(tier)
+    await _run_retrieval_round(
+        _CaptureEngine(),
+        SubQuestion(title="What changed?"),
+        "What changed?",
+        0,
+        100,
+        bound,
+        None,
+        frozenset(),
+        emit,
+    )
+    request = requests[0]
+    assert request.depth == expected_depth
+    assert request.discover_limit == bound.discover_limit
+    assert request.extract_cap == bound.extract_cap
+
+
+async def test_gap_reasoner_failure_requests_one_bounded_fallback_search() -> None:
+    class _FailingRouter(_ScriptedRouter):
+        async def complete(
+            self, request: CompletionRequest, *, context: Any = None
+        ) -> CompletionResponse:
+            raise RuntimeError("reasoner unavailable")
+
+    passage = Passage(
+        id="p0",
+        source_url="https://example.com",
+        source_title="Source",
+        text="Some incomplete evidence about the question.",
+    )
+    sufficient, queries, rationale = await _gap_reason(
+        _FailingRouter(),
+        SubQuestion(title="What changed?"),
+        [passage],
+        CallContext(conversation_id="gap-test"),
+    )
+    assert sufficient is False
+    assert queries == ["What changed? primary sources evidence"]
+    assert rationale == "gap reasoner failed"
 
 
 # ============================================================================

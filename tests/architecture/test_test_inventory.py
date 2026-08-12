@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -529,10 +530,20 @@ class TestMappingStatic:
             # package test files: write provenance (2), live progress (1),
             # cumulative condensation (1), failure classification (1), bounded
             # browser interaction (4), and honest game-smoke scope (1).
-            "python_test_file_count": 840,
-            "python_static_test_id_count": 10139,
+            # V25 adds 38 static Python ids and two focused files across the
+            # Deep Research source/grounding/bound/follow-up audit and the
+            # successful-trace repairs (fresh reads, transcript elision,
+            # multi-page verification, Preview re-handoff, and browser/tool
+            # guidance). Two TypeScript ids cover canonical DR titles and
+            # environment-message filtering; existing TS files own both.
+            # V26 adds one focused provider-history regression in the existing
+            # tool-call defense file; file counts remain unchanged.
+            # V27 adds two driver-catalogue route-identity regressions in the
+            # existing pricing test file; file counts remain unchanged.
+            "python_test_file_count": 842,
+            "python_static_test_id_count": 10180,
             "typescript_test_file_count": 239,
-            "typescript_static_test_id_count": 1203,
+            "typescript_static_test_id_count": 1205,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -662,11 +673,11 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1153, 176)
+            == (1155, 176)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1153
+        assert len(set(frontend["vitest_ids_list"])) == 1155
         assert len(set(frontend["vitest_files_list"])) == 176
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
@@ -881,7 +892,13 @@ class TestCollectedCounts:
             # The Preview locator-maturation correction adds two package ids.
             # The container file-batch correction adds nine package ids.
             # The KISS root-cause correction adds ten package ids.
-            "packages": 10524,
+            # V25 adds 41 collected package ids across the same Deep Research
+            # correctness and successful-trace refinement owners described by
+            # the static ratchet above. Harness/integration/architecture roots
+            # remain unchanged.
+            # V26 adds the same one provider-history package id.
+            # V27 adds the same two provider/model route-identity package ids.
+            "packages": 10568,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -993,7 +1010,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12288 == sum(expected.values())
+        assert collected["total"] == 12332 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1009,7 +1026,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12288}
+        assert result == {"collected_total": 12332}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1028,9 +1045,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10139,
-            "typescript_static_ids": 1203,
-            "collected_total": 12288,
+            "python_static_ids": 10180,
+            "typescript_static_ids": 1205,
+            "collected_total": 12332,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
@@ -1444,8 +1461,14 @@ class TestInventoryRules:
 
 class TestCollectorFailure:
     def test_collection_env_sets_pythonpath(self, tmp_path: Path) -> None:
+        (tmp_path / "packages" / "zeta" / "src").mkdir(parents=True)
+        (tmp_path / "packages" / "alpha" / "src").mkdir(parents=True)
         env = test_inventory._collection_env(tmp_path)
-        assert env["PYTHONPATH"] == str(tmp_path)
+        assert env["PYTHONPATH"].split(os.pathsep) == [
+            str(tmp_path / "packages" / "alpha" / "src"),
+            str(tmp_path / "packages" / "zeta" / "src"),
+            str(tmp_path),
+        ]
         assert env["PYTEST_ADDOPTS"] == ""
 
     def test_collection_roots_are_four(self):

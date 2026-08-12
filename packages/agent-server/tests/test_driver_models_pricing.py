@@ -121,3 +121,78 @@ def test_driver_models_excludes_models_the_live_router_cannot_wire(tmp_path):
 
     assert [model["id"] for model in out["models"]] == ["ready"]
     assert out["default"] == "ready"
+
+
+def test_driver_models_keep_same_model_id_from_distinct_providers(tmp_path):
+    """Provider route is part of a selectable model's identity.
+
+    Two providers may serve the same upstream model ID. Hiding the later entry
+    makes a configured default impossible to select when another provider was
+    inserted first.
+    """
+    cfg = RouterConfig(
+        models={
+            "provider-a": ModelEntry(
+                model_id="shared-model",
+                provider="provider-a",
+                context_window=8192,
+                base_url="https://a.example/v1",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+            "provider-b": ModelEntry(
+                model_id="shared-model",
+                provider="provider-b",
+                context_window=8192,
+                base_url="https://b.example/v1",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+            "provider-a-alias": ModelEntry(
+                model_id="shared-model",
+                provider="provider-a",
+                context_window=8192,
+                base_url="https://a.example/v1",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+        },
+        default_model="provider-b",
+    )
+    _seed_probe("https://a.example/v1", "https://b.example/v1")
+    store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
+    rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
+    rt.drivers._origin_approved = lambda *_args: True
+
+    out = rt.drivers.catalog()
+
+    assert [model["id"] for model in out["models"]] == ["provider-a", "provider-b"]
+    assert out["default"] == "provider-b"
+
+
+def test_driver_models_prefer_default_within_route_aliases(tmp_path):
+    cfg = RouterConfig(
+        models={
+            "first-alias": ModelEntry(
+                model_id="shared-model",
+                provider="shared-provider",
+                context_window=8192,
+                base_url="https://shared.example/v1",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+            "default-alias": ModelEntry(
+                model_id="shared-model",
+                provider="shared-provider",
+                context_window=8192,
+                base_url="https://shared.example/v1",
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            ),
+        },
+        default_model="default-alias",
+    )
+    _seed_probe("https://shared.example/v1")
+    store_cfg = ConfigStore(path=tmp_path / "absent.json", base_factory=lambda: cfg)
+    rt = ConversationRuntime(SqliteEventStore(":memory:"), config_store=store_cfg)
+    rt.drivers._origin_approved = lambda *_args: True
+
+    out = rt.drivers.catalog()
+
+    assert [model["id"] for model in out["models"]] == ["default-alias"]
+    assert out["default"] == "default-alias"

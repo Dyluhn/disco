@@ -8,6 +8,7 @@ the SAME GroundingPipeline as bundled providers.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ from typing import Any
 
 from disco.retrieval.bundled_providers import chunk_passages
 from disco.retrieval.models import ExtractedDoc, SearchHit
+from disco.retrieval.url_policy import source_url_key, url_allowed
 
 _LOG = logging.getLogger(__name__)
 
@@ -24,6 +26,95 @@ _LOG = logging.getLogger(__name__)
 # with input schemas containing "query" / "id" respectively.
 _SEARCH_TOOL_NAMES: frozenset[str] = frozenset({"search", "web_search", "brave_search"})
 _FETCH_TOOL_NAMES: frozenset[str] = frozenset({"fetch", "web_fetch", "fetch_url", "extract"})
+
+
+def _first_advertised(input_fields: frozenset[str], candidates: tuple[str, ...]) -> str | None:
+    return next((field for field in candidates if field in input_fields), None)
+
+
+def _add_domain_argument(
+    arguments: dict[str, object],
+    input_fields: frozenset[str],
+    values: frozenset[str] | None,
+    candidates: tuple[str, str],
+) -> None:
+    field = _first_advertised(input_fields, candidates)
+    if values and field:
+        arguments[field] = sorted(values)
+
+
+def _mcp_search_arguments(
+    input_fields: frozenset[str],
+    query: str,
+    limit: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+    time_filter: str | None,
+) -> dict[str, object] | None:
+    arguments: dict[str, object] = {"query": query}
+    limit_field = _first_advertised(input_fields, ("limit", "count", "max_results"))
+    if limit_field:
+        arguments[limit_field] = limit
+    recency_field = _first_advertised(
+        input_fields, ("time_filter", "time_range", "recency", "freshness")
+    )
+    if time_filter and not recency_field:
+        return None
+    if time_filter and recency_field:
+        arguments[recency_field] = (
+            {"week": "pw", "month": "pm"}.get(time_filter, time_filter)
+            if recency_field == "freshness"
+            else time_filter
+        )
+    _add_domain_argument(
+        arguments, input_fields, domains_allow, ("domains_allow", "include_domains")
+    )
+    _add_domain_argument(arguments, input_fields, domains_deny, ("domains_deny", "exclude_domains"))
+    return arguments
+
+
+def _mcp_result_items(raw: dict, provider_name: str) -> list[dict[str, Any]]:
+    if raw.get("isError") or raw.get("is_error"):
+        _LOG.warning("MCP search %r returned an error result", provider_name)
+        return []
+    content_text = _extract_text(raw)
+    if not content_text:
+        return []
+    try:
+        parsed = json.loads(content_text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    items = parsed.get("results") if isinstance(parsed, dict) else parsed
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _mcp_search_hits(
+    items: list[dict[str, Any]],
+    *,
+    provider_name: str,
+    limit: int,
+    domains_allow: frozenset[str] | None,
+    domains_deny: frozenset[str] | None,
+) -> list[SearchHit]:
+    hits: list[SearchHit] = []
+    for item in items:
+        url = str(item.get("url", ""))
+        if not url or not url_allowed(url, domains_allow, domains_deny):
+            continue
+        hits.append(
+            SearchHit(
+                url=url,
+                title=str(item.get("title", "")),
+                snippet=str(item.get("snippet", item.get("description", ""))),
+                source_engine=provider_name,
+                rank=len(hits),
+            )
+        )
+        if len(hits) >= limit:
+            break
+    return hits
 
 
 class _MCPRetrievalSearchProvider:
@@ -41,12 +132,14 @@ class _MCPRetrievalSearchProvider:
         tool_name: str,
         call_fn: Any,
         description: str = "",
+        input_fields: frozenset[str] = frozenset(),
     ) -> None:
         self.name = f"mcp__{server}__{tool_name}"
         self._server = server
         self._tool_name = tool_name
         self._call = call_fn
         self._description = description
+        self._input_fields = input_fields
 
     async def search(
         self,
@@ -58,49 +151,28 @@ class _MCPRetrievalSearchProvider:
         time_filter: str | None = None,
     ) -> list[SearchHit]:
         """Call the MCP search tool and convert results to SearchHits."""
+        arguments = _mcp_search_arguments(
+            self._input_fields,
+            query,
+            limit,
+            domains_allow,
+            domains_deny,
+            time_filter,
+        )
+        if arguments is None:
+            return []
         try:
-            raw = await self._call(self._server, self._tool_name, {"query": query})
+            raw = await self._call(self._server, self._tool_name, arguments)
         except Exception as exc:
             _LOG.warning("MCP search %r failed: %s", self.name, exc)
             return []
-        if raw.get("isError") or raw.get("is_error"):
-            _LOG.warning("MCP search %r returned an error result", self.name)
-            return []
-
-        # Try to extract results from the MCP response.
-        # The MCP tool returns {"content": [{"text": ...}, ...]} — we parse
-        # the text as JSON and look for a "results" key.
-        content_text = _extract_text(raw)
-        if not content_text:
-            return []
-
-        try:
-            parsed = json.loads(content_text)
-        except (json.JSONDecodeError, TypeError):
-            return []
-
-        if isinstance(parsed, dict) and "results" in parsed:
-            items = parsed["results"]
-        elif isinstance(parsed, list):
-            items = parsed
-        else:
-            return []
-        if not isinstance(items, list):
-            return []
-
-        hits: list[SearchHit] = []
-        for item in items[:limit]:
-            if isinstance(item, dict) and item.get("url"):
-                hits.append(
-                    SearchHit(
-                        url=str(item.get("url", "")),
-                        title=str(item.get("title", "")),
-                        snippet=str(item.get("snippet", item.get("description", ""))),
-                        source_engine=self.name,
-                        rank=0,
-                    )
-                )
-        return hits
+        return _mcp_search_hits(
+            _mcp_result_items(raw, self.name),
+            provider_name=self.name,
+            limit=limit,
+            domains_allow=domains_allow,
+            domains_deny=domains_deny,
+        )
 
 
 class _MCPRetrievalExtractionProvider:
@@ -136,7 +208,11 @@ class _MCPRetrievalExtractionProvider:
             return ExtractedDoc(
                 url=url,
                 title="",
-                content=f"Extraction failed: {exc}",
+                content="",
+                passages=[],
+                fetched_ok=False,
+                error=f"Extraction failed: {exc}",
+                status="error",
             )
 
         content_text = _extract_text(raw)
@@ -265,6 +341,7 @@ def build_retrieval_providers(
                 tool_name,
                 call_fn,
                 description=getattr(tool_obj, "description", "") or "",
+                input_fields=_tool_input_fields(tool_obj),
             )
             search_providers.append(provider)
             _LOG.debug("MCP retrieval: registered search provider %r", provider.name)
@@ -339,15 +416,18 @@ class CompositeSearchProvider:
         domains_deny: frozenset[str] | None,
         time_filter: str | None,
     ) -> list[tuple[Any, list[SearchHit]]]:
-        batches: list[tuple[Any, list[SearchHit]]] = []
-        for provider in self._providers:
-            hits = await self._search_one(
-                provider, query, limit, domains_allow, domains_deny, time_filter
+        providers = list(self._providers)
+        results = await asyncio.gather(
+            *(
+                self._search_one(provider, query, limit, domains_allow, domains_deny, time_filter)
+                for provider in providers
             )
-            if hits is None:
-                continue
-            batches.append((provider, hits))
-        return batches
+        )
+        return [
+            (provider, hits)
+            for provider, hits in zip(providers, results, strict=True)
+            if hits is not None
+        ]
 
     @staticmethod
     async def _search_one(
@@ -368,7 +448,15 @@ class CompositeSearchProvider:
             )
         except TypeError:
             # An MCP provider with a narrower signature — call positionally.
-            return await provider.search(query, limit=limit)
+            try:
+                return await provider.search(query, limit=limit)
+            except Exception as exc:  # noqa: BLE001 — isolate the narrow provider too
+                _LOG.warning(
+                    "Composite search: provider %r failed: %s",
+                    getattr(provider, "name", "?"),
+                    exc,
+                )
+                return None
         except Exception as exc:  # noqa: BLE001 — one bad provider must not sink discovery
             _LOG.warning(
                 "Composite search: provider %r failed: %s",
@@ -393,12 +481,13 @@ class CompositeSearchProvider:
     def _record_hit(
         provider: Any, hit: SearchHit, merged: list[SearchHit], seen: dict[str, int]
     ) -> None:
-        if hit.url and hit.url in seen:
+        key = source_url_key(hit.url)
+        if hit.url and key in seen:
             # Dedup the candidate URL, but not its provenance. Provider
             # affinity is required downstream: an MCP fetch tool may be
             # the only extractor able to read a URL that bundled search
             # also happened to discover.
-            index = seen[hit.url]
+            index = seen[key]
             existing = merged[index]
             source = hit.source_engine or getattr(provider, "name", "")
             engines = [part for part in existing.source_engine.split("|") if part]
@@ -408,7 +497,7 @@ class CompositeSearchProvider:
                 )
             return
         if hit.url:
-            seen[hit.url] = len(merged)
+            seen[key] = len(merged)
         merged.append(hit)
 
 

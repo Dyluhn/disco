@@ -338,16 +338,26 @@ class DriverRuntime:
 
     def catalog(self) -> dict[str, object]:
         cfg = self._config_store.load()
-        seen: set[str] = set()
         models: list[dict[str, object]] = []
-        for key, entry in cfg.models.items():
-            model = self._catalog_model(key, entry, seen)
-            if model is not None:
-                models.append(model)
         try:
             default = cfg.model_for(ModelRole.AGENT_DRIVER)
         except Exception:  # noqa: BLE001 — no assignment means no highlighted default
             default = None
+
+        # A provider/model pair is one executable route, but the same model ID
+        # served by another provider is a distinct selectable route. Within an
+        # exact route alias group, prefer the configured driver default; if it
+        # cannot be wired, retain the first eligible alias as before.
+        groups: dict[tuple[str, str], list[tuple[str, ModelEntry]]] = {}
+        for key, entry in cfg.models.items():
+            groups.setdefault((entry.provider, entry.model_id), []).append((key, entry))
+        for candidates in groups.values():
+            candidates.sort(key=lambda item: item[0] != default)
+            for key, entry in candidates:
+                model = self._catalog_model(key, entry)
+                if model is not None:
+                    models.append(model)
+                    break
         selected = default if any(model["id"] == default for model in models) else None
         return {"models": models, "default": selected}
 
@@ -373,7 +383,6 @@ class DriverRuntime:
         self,
         key: str,
         entry: ModelEntry,
-        seen: set[str],
     ) -> dict[str, object] | None:
         if entry.base_url is None or Requirement.TOOL_CALLING not in entry.capabilities:
             return None
@@ -388,9 +397,6 @@ class DriverRuntime:
         api_key = self._resolve_secret(entry.api_key_env)
         if entry.api_key_env and not api_key:
             return None
-        if entry.model_id in seen:
-            return None
-        seen.add(entry.model_id)
         live = self._probes.probe_live_model(entry.base_url, api_key, entry.model_id)
         pricing_mode = entry.pricing_mode
         if pricing_mode is None:

@@ -9,12 +9,9 @@
  * (from api/agent.ts) opens /ws/conversations/{cid} and streams events. We
  * REUSE that WebSocket subscription verbatim — no new transport layer.
  *
- * Export is markdown (the same Blob → URL.createObjectURL → invisible
- * <a download> pattern as Projects). The agent-server doesn't currently
- * have a report-export endpoint, so we serialize a ReportEvent to markdown
- * client-side using the exact shape the prior pmx-deep-verify.py script
- * produced — keeping the artifact format consistent between server-driven
- * and client-driven exports.
+ * Report downloads use the agent-server export endpoint so Markdown and PDF
+ * share the stored generated title and selected follow-up turns. The local
+ * serializer remains available for offline fixtures and focused rendering.
  */
 
 import { agentFetch, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
@@ -53,11 +50,9 @@ export async function createDeepResearchConversation(
     "/conversations",
     {
       surface: "deep_research",
-      // BW-09: this is a SEED, not the final stored title. The backend sanitizes
-      // it (word-boundary, ~60-char `fallback_title`) before persisting, so the
-      // verbose raw query is never written + masked by a CSS truncate at render.
-      // The slice just caps what we send over the wire.
-      title: opts.query.slice(0, 100),
+      // Leave title unset. RunController schedules the shared TitleService after
+      // the first user message lands; pre-seeding the query would make that
+      // canonical summarizer treat a fallback snippet as a finished title.
       model_override: opts.leaderId ?? null,
       // depth_tier is read by the runtime's set_depth path; pass it through
       // (the backend tolerates the extra field — Pydantic ignores when not
@@ -78,9 +73,7 @@ export async function createDeepResearchConversation(
 /** Export format for the report export endpoint. */
 export type ReportExportFmt = "md" | "pdf";
 
-/** Export a finished ReportEvent as a markdown document downloaded to the
- * user's machine. Reuses Projects' Blob → URL.createObjectURL → invisible
- * <a download> pattern; client-side serialization (no new endpoint). */
+/** Export a finished ReportEvent locally for offline/fixture consumers. */
 export function exportReportAsMarkdown(
   report: ReportEvent,
   followUps?: Array<[string, string]>,
@@ -89,8 +82,8 @@ export function exportReportAsMarkdown(
   downloadBlob(new Blob([md], { type: "text/markdown;charset=utf-8" }), report.query, ".md");
 }
 
-/** Server-side report export (PDF). Hits the new backend endpoint.
- * For `md`, we still use the client-side serializer to avoid the round-trip.
+/** Server-side report export (Markdown or PDF). Hits the report endpoint so
+ * every format uses the stored generated conversation title.
  * The UI should gate pdf: if the call returns a non-OK response (e.g.
  * weasyprint isn't installed), surface the error to the user.
  * Never silent — missing report → error detail; unknown fmt → error detail.
@@ -103,11 +96,6 @@ export async function exportReport(
   fmt: ReportExportFmt,
   followUpSeqs?: number[],
 ): Promise<boolean> {
-  // MD stays client-side for now (the endpoint also supports it, but the
-  // client-side path is zero-latency and byte-identical).
-  if (fmt === "md") {
-    throw new Error("Use exportReportAsMarkdown for md exports (client-side).");
-  }
   const body = followUpSeqs && followUpSeqs.length > 0
     ? JSON.stringify({ follow_up_seqs: followUpSeqs })
     : undefined;
@@ -127,7 +115,7 @@ export async function exportReport(
     throw new Error(`Export failed (${res.status}): ${detail}`);
   }
   const blob = await res.blob();
-  downloadBlob(blob, `report-${cid}`, ".pdf");
+  downloadBlob(blob, `report-${cid}`, fmt === "md" ? ".md" : ".pdf");
   return true;
 }
 

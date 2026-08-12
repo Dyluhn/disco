@@ -190,6 +190,10 @@ async def continue_truncated_section(
                 CompletionRequest(
                     profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                     messages=[
+                        LLMMessage(
+                            role="system",
+                            content=_synthesis._EVIDENCE_SYSTEM_PROMPT,
+                        ),
                         LLMMessage(role="user", content=instruction),
                         LLMMessage(role="assistant", content=markdown.rstrip()),
                         LLMMessage(

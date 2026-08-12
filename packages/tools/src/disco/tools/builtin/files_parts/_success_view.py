@@ -49,16 +49,29 @@ def _record_success_grounding(
     start_line: int,
     end_line: int,
     full: bool,
+    model_authored_full: bool,
+    preserve_prior_anchored_full: bool,
 ) -> None:
-    """A successful mutator's returned view is fresh grounding for that path."""
+    """Advance model-visible grounding across a successful owned mutation.
+
+    A whole-file write is fully known because the model supplied every committed
+    byte. Likewise, a targeted edit preserves an earlier full-file view: the
+    model knew the old file and supplied the exact change. Partial views remain
+    partial, so edits into genuinely unseen regions still fail closed.
+    """
     canon = _canonical(path)
     st = _conv_state(conv_id)
+    prior = st["reads"].get(canon) or {}
+    prior_anchored_full = preserve_prior_anchored_full and bool(
+        prior.get("full") or prior.get("anchored_full")
+    )
     st["read_since_write"].add(canon)
     st["edit_grounded"].add(canon)
     st["targeted_read_grounded"].add(canon)
     st["reads"][canon] = {
         "sha": hashlib.sha256(post_write_bytes).hexdigest(),
         "full": full,
+        "anchored_full": model_authored_full or prior_anchored_full,
         "ranges": [(start_line, end_line)],
     }
     st["no_op_edit_counts"].pop(canon, None)
@@ -73,6 +86,8 @@ def _updated_region_success_content(
     prefix: str,
     changed_lines: tuple[int, int] | None = None,
     file_write_head: bool = False,
+    model_authored_full: bool = False,
+    preserve_prior_anchored_full: bool = True,
 ) -> str:
     text = post_write_bytes.decode("utf-8", errors="replace")
     total = len(text.splitlines())
@@ -129,5 +144,7 @@ def _updated_region_success_content(
         start_line=start,
         end_line=delivered_end,
         full=full,
+        model_authored_full=file_write_head or model_authored_full,
+        preserve_prior_anchored_full=preserve_prior_anchored_full,
     )
     return f"{prefix}\n\n{view}"
