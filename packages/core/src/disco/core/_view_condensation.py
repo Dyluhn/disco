@@ -23,8 +23,10 @@ from .events import (
     AgentErrorEvent,
     CondensationEvent,
     Event,
+    EventSource,
     LLMConvertible,
     LLMMessage,
+    MessageEvent,
     ObservationEvent,
 )
 
@@ -178,14 +180,54 @@ def _compute_condense_span(
     return span
 
 
+def _is_cumulative_model_summary(event: CondensationEvent) -> bool:
+    """Whether one tombstone is the cumulative LLM-authored history summary."""
+    return event.reason == "tokens" and not event.summary.startswith("[microcompacted:")
+
+
+def _summary_input_messages(events: list[Event], span: list[Event]) -> list[LLMMessage]:
+    """Build the bounded delta given to the summarizer.
+
+    Keep the first user task as an anchor, the latest prior cumulative summary,
+    and only the newly forgotten span.  Recent live history, workspace snapshots,
+    and older superseded summaries are intentionally excluded.
+    """
+    start_seq = span[0].seq or 0
+    messages: list[LLMMessage] = []
+    anchor = next(
+        (
+            event
+            for event in events
+            if isinstance(event, MessageEvent)
+            and event.source == EventSource.USER
+            and (event.seq or 0) < start_seq
+        ),
+        None,
+    )
+    if anchor is not None:
+        messages.append(anchor.to_llm_message())
+    prior = [
+        event
+        for event in events
+        if isinstance(event, CondensationEvent)
+        and _is_cumulative_model_summary(event)
+        and event.forgotten_end_seq < start_seq
+    ]
+    if prior:
+        latest = max(prior, key=lambda event: event.seq or 0)
+        messages.append(LLMMessage(role=latest.summary_role, content=latest.summary))
+    messages.extend(event.to_llm_message() for event in span if isinstance(event, LLMConvertible))
+    return messages
+
+
 async def _summarize_with_repair(
     summarizer: Summarizer,
-    view: View,
+    messages: list[LLMMessage],
     start_seq: int,
     end_seq: int,
 ) -> str | None:
     """Call the summarizer, with one bounded repair on protocol-markup rejection."""
-    summary = await summarizer.summarize(view.messages)
+    summary = await summarizer.summarize(messages)
     if not summary.strip():
         return None
     rejection = summary_rejection_reason(summary)
@@ -193,7 +235,7 @@ async def _summarize_with_repair(
         return summary
     _LOG.warning("summarizer output rejected (%s); requesting one repair", rejection)
     repaired = await summarizer.summarize(
-        [*view.messages, LLMMessage(role="user", content=_SUMMARY_REPAIR_INSTRUCTION)]
+        [*messages, LLMMessage(role="user", content=_SUMMARY_REPAIR_INSTRUCTION)]
     )
     if repaired.strip() and summary_rejection_reason(repaired) is None:
         return repaired
@@ -290,7 +332,12 @@ class LLMSummarizingCondenser:
                 reason="hard_reset",
             )
 
-        summary = await _summarize_with_repair(summarizer, view, start_seq, end_seq)
+        summary = await _summarize_with_repair(
+            summarizer,
+            _summary_input_messages(events, span),
+            start_seq,
+            end_seq,
+        )
         if summary is None:
             return None
         return CondensationEvent(

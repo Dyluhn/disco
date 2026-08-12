@@ -82,7 +82,7 @@ def _normalized_tree(root: Path) -> dict[str, bytes]:
 def _minimal_run() -> CollectedRun:
     return CollectedRun(
         conversation_id="conv-retained",
-        events=[],
+        events=clean_smoke_log(),
         state_initial={},
         state_final={"execution_status": "FINISHED"},
         workspace_manifest={},
@@ -338,6 +338,16 @@ async def test_sink_preserves_dossier_bytes_and_all_outcome_paths(
     assert old_base.relative_to(tmp_path / "old") == Path("run-pass")
     assert new_base.relative_to(tmp_path / "new") == Path("run-pass")
     assert _normalized_tree(old_base) == _normalized_tree(new_base)
+    messages_path = new_base / "conversations/conv-retained/model-messages.jsonl"
+    reconstructed = [json.loads(line) for line in messages_path.read_text().splitlines()]
+    assert reconstructed[0]["status"] == "ok"
+    assert reconstructed[0]["exact_provider_prompt"] is False
+    assert any(
+        row.get("message", {}).get("role") == "user"
+        for row in reconstructed[1:]
+    )
+    manifest = json.loads((new_base / "manifest.json").read_text())
+    assert "model-messages.jsonl" in manifest["evidence_hashes"]
 
     infra = sink.record_infra_failure(
         tmp_path / "out",

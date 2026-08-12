@@ -147,6 +147,11 @@ class AgentErrorEvent(BaseEvent, LLMConvertible):
     # the classifier key on it — while `detail` carries the actionable text ("(N lines) valid range
     # 1..N+1") so the model isn't left retrying blind against a bare error code.
     detail: str | None = None
+    # Machine-readable tool failure classification.  Keep it alongside the
+    # human guidance so recovery policy can distinguish product/action errors
+    # from unavailable or exhausted debug instrumentation.
+    failure_class: str | None = None
+    failure_reason: str | None = None
     action_id: str | None = None  # the action that failed, if any
     tool_call_id: str | None = None  # for pairing with the assistant tool_call
     # A validated invocation may fail after exercising capabilities or even

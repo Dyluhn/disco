@@ -11,6 +11,7 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
+from ._view_condensation import _is_cumulative_model_summary
 from ._view_plan import _latest_plan, effective_plan_progress
 from .events import (
     ActionEvent,
@@ -136,6 +137,7 @@ def microcompact(events: list[Event]) -> list[CondensationEvent]:
                     "dropped — an identical call succeeded later]"
                 ),
                 summary_role="user",
+                reason="events",
             )
         )
     return tombstones
@@ -459,12 +461,19 @@ def _setup_view_projection(
 ]:
     """Build the projection setup: forgotten ranges, summaries, pinned seqs,
     and action/result maps. Returns all the lookup structures."""
-    forgotten: list[tuple[int, int]] = []
+    tombstones = [event for event in events if isinstance(event, CondensationEvent)]
+    forgotten = [(event.forgotten_start_seq, event.forgotten_end_seq) for event in tombstones]
     summary_at_start: dict[int, CondensationEvent] = {}
-    for e in events:
-        if isinstance(e, CondensationEvent):
-            forgotten.append((e.forgotten_start_seq, e.forgotten_end_seq))
-            summary_at_start.setdefault(e.forgotten_start_seq, e)
+    cumulative = [event for event in tombstones if _is_cumulative_model_summary(event)]
+    if cumulative:
+        # Each new model summary updates the previous one with a fresh delta.
+        # Render only that latest cumulative summary, at the first forgotten
+        # position, instead of stacking every historical rewrite in the prompt.
+        summary_at_start[min(event.forgotten_start_seq for event in cumulative)] = cumulative[-1]
+    for event in tombstones:
+        if _is_cumulative_model_summary(event):
+            continue
+        summary_at_start.setdefault(event.forgotten_start_seq, event)
     pinned = _pinned_seqs(events)
     from .loop.resource_context import (
         read_receipt_records,

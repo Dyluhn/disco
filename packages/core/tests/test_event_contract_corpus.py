@@ -79,6 +79,8 @@ _PAYLOAD_KEYS = {
     "agent_error": (
         "error",
         "detail",
+        "failure_class",
+        "failure_reason",
         "action_id",
         "tool_call_id",
         "action_profile",
@@ -233,7 +235,7 @@ _EXPECTED_DIGESTS = {
     "message": "8b4eaffafef7a82c230158b3087b85c8389c20b640031dba839088a986099da6",
     "action": "34ac3440ad4758d4fb4ffa3f15c9c7da3de919b866aae7f296074fabae502ca5",
     "observation": "b3c5dd8c7f142e3a05491ee2302d45e579c35cdd93c32d30f620c620f9f254ec",
-    "agent_error": "17bb6a4935ddfc70c828630423c793482b995263ca63b28a7b042590424e98d4",
+    "agent_error": "cb5ae5cd5ed70bce12f07fd7211ae54e3ad8b6a49ec6eefc1473c52d79dc2f6c",
     "condensation": "cd3508bfd412fa344bf7002f99464ebc9cf1525c533712bcc8b8212a1852e744",
     "status": "c93ae7f0ff633e6c3ed65f7254b7cbb64d25266709ad5508e487e201b397bc20",
     "workspace_version": "af802a1c75769da8cf3e95b51b6adad5979fd9e3d366babdc7e3ca275afa5c94",

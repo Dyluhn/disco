@@ -84,6 +84,10 @@ async def test_condense_forgets_the_middle_keeps_head_and_recent():
     tomb = await condenser.condense(events, View.of(events), summarizer=summarizer)
     assert isinstance(tomb, CondensationEvent)
     assert summarizer.calls == 1 and tomb.summary == "SUMMARY-OF-OLD-WORK"
+    assert summarizer.last_messages is not None
+    assert len(summarizer.last_messages) == (
+        tomb.forgotten_end_seq - tomb.forgotten_start_seq + 2
+    ), "summarizer input is the user anchor plus only the newly forgotten span"
 
     # the forgotten span is the MIDDLE: it starts after the anchoring head (the 1st
     # LLM-visible event) and ends before the recent tail (the last 2).
@@ -386,7 +390,8 @@ async def test_update_in_place_fires_on_real_re_condensation():
     summary is re-materialized into view.messages by View.of at the forgotten
     span's position → a SECOND condensation hands that prior summary to the
     summarizer, which therefore selects UPDATE-in-place (not CREATE-fresh).
-    This is what the 'full view.messages, not the span slice' design buys."""
+    The bounded input carries the latest cumulative summary plus the new span;
+    it does not need the whole live view."""
     from disco.core.llm.summarizer import (
         _SUMMARIZE_UPDATE_INSTRUCTION,
         _has_prior_anchored_summary,
@@ -426,6 +431,51 @@ async def test_update_in_place_fires_on_real_re_condensation():
     assert _select_summarize_instruction(summarizer.seen[1]) is _SUMMARIZE_UPDATE_INSTRUCTION, (
         "re-condensation must select UPDATE-in-place, not CREATE-fresh"
     )
+
+
+def test_view_renders_only_latest_cumulative_model_summary():
+    from event_fakes import with_seqs
+
+    events = with_seqs(
+        [
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(role="user", content="TASK"),
+            ),
+            MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(role="assistant", content="old work one"),
+            ),
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content="old result one"),
+            ),
+            MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(role="assistant", content="old work two"),
+            ),
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content="old result two"),
+            ),
+            CondensationEvent(
+                forgotten_start_seq=2,
+                forgotten_end_seq=3,
+                summary="OLD CUMULATIVE SUMMARY",
+                reason="tokens",
+            ),
+            CondensationEvent(
+                forgotten_start_seq=4,
+                forgotten_end_seq=5,
+                summary="LATEST CUMULATIVE SUMMARY",
+                reason="tokens",
+            ),
+        ]
+    )
+
+    rendered = "\n".join(message.content for message in View.of(events).messages)
+    assert "LATEST CUMULATIVE SUMMARY" in rendered
+    assert "OLD CUMULATIVE SUMMARY" not in rendered
 
 
 # ---- the task statement survives condensation (Epic-4 seed 460000) ----------

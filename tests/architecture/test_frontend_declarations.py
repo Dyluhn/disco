@@ -382,7 +382,7 @@ class TestFrontendDeclarationAuthorized:
         carries.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 8
+        assert len(baseline["member_transitions"]) == 9
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

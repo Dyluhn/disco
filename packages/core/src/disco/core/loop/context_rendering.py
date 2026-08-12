@@ -13,6 +13,8 @@ output is stable across turns for identical input (KV-cache-friendly prefix).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..context import ContextPack, SourceKind, SourcePriority, VerifierFailureRef
 from ..events import PlanEvent
 
@@ -26,17 +28,31 @@ _DISCO_PATH_TOKENS = (".disco/", ".disco")
 _TODO_PROGRESS_REDIRECT = "Mark progress via update_plan_progress"
 
 
-def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
-    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
-    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
-    execution memory the agent reads/updates (via context_memory) as it works."""
-    lines: list[str] = [f"# {_sanitize_todo_seed_text(plan.summary)}"]
-    context = (plan.context or "").strip()
-    if context:
-        lines += ["", _sanitize_todo_seed_text(context)]
-    lines += ["", "## Steps"]
+def render_plan_as_todo_markdown(
+    plan: PlanEvent,
+    states: Mapping[int, str] | None = None,
+    *,
+    include_heading: bool = True,
+) -> str:
+    """Render a plan checklist, optionally projected from live event progress.
+
+    With no states this produces the unchanged all-pending todo.md seed. The
+    live context pack passes the canonical progress fold so that seed and
+    execution history cannot present two competing answers.
+    """
+    lines: list[str] = []
+    if include_heading:
+        lines.append(f"# {_sanitize_todo_seed_text(plan.summary)}")
+        context = (plan.context or "").strip()
+        if context:
+            lines += ["", _sanitize_todo_seed_text(context)]
+        lines.append("")
+    lines.append("## Steps")
     for i, step in enumerate(plan.steps, start=1):
-        lines.append(f"- [ ] {i}. {_sanitize_todo_seed_text(step.title)}")
+        state = states.get(i) if states is not None else None
+        mark = "x" if state == "done" else " "
+        active = " — ACTIVE" if state == "active" else ""
+        lines.append(f"- [{mark}] {i}. {_sanitize_todo_seed_text(step.title)}{active}")
         detail = (getattr(step, "detail", "") or "").strip()
         if detail:
             lines.append(f"  {_sanitize_todo_seed_text(detail)}")

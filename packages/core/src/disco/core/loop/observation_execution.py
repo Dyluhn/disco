@@ -469,6 +469,9 @@ async def _persist_primary_result(
         await loop._emit(ObservationEvent(tool_result=result, action_id=action.id))
         return
     error = result.error or "tool failed"
+    structured = result.structured or {}
+    failure_class = structured.get("error_class")
+    failure_reason = structured.get("error_reason")
     await loop._emit(
         AgentErrorEvent(
             error=error,
@@ -477,6 +480,8 @@ async def _persist_primary_result(
                 result.content,
                 carries_delivery=bool((result.structured or {}).get("delivered_read")),
             ),
+            failure_class=failure_class if isinstance(failure_class, str) else None,
+            failure_reason=failure_reason if isinstance(failure_reason, str) else None,
             action_id=action.id,
             tool_call_id=action.tool_call.call_id if action.tool_call else None,
             action_profile=result.action_profile,

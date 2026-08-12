@@ -23,7 +23,7 @@ import asyncio
 import hashlib
 from dataclasses import dataclass
 
-from ..events import LLMMessage
+from ..events import Event, LLMMessage
 
 # Same cap as _WS_READ_TIMEOUT_S in view_render.py — the stale check runs
 # under the conversation lock, so a hung sandbox read must not freeze control
@@ -60,6 +60,7 @@ class FileStateTracker:
 
     def __init__(self) -> None:
         self._snaps: dict[str, FileSnap] = {}
+        self._applied_mutations: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Mutation API
@@ -91,6 +92,34 @@ class FileStateTracker:
         byt = content.encode("utf-8", "replace") if isinstance(content, str) else content
         sha = hashlib.sha256(byt).hexdigest()
         self._snaps[path] = FileSnap(last_seen_seq=seq, sha=sha, mtime=mtime)
+
+    def record_mutation_revision(
+        self,
+        path: str,
+        revision: str | None,
+        seq: int,
+    ) -> None:
+        """Apply one authenticated host mutation to the staleness baseline.
+
+        Mutation receipts carry the exact post-write digest even though tool
+        output does not echo the written body.  Apply each receipt once so the
+        agent's own write is not reported as an external edit.  A later
+        snapshot may observe a genuinely external revision; replaying an old
+        receipt must not overwrite that newer baseline.
+        """
+        if not isinstance(path, str) or not path or seq <= self._applied_mutations.get(path, 0):
+            return
+        if revision is not None and (
+            len(revision) != 64
+            or revision != revision.lower()
+            or any(char not in "0123456789abcdef" for char in revision)
+        ):
+            return
+        self._applied_mutations[path] = seq
+        if revision is None:
+            self._snaps.pop(path, None)
+            return
+        self._snaps[path] = FileSnap(last_seen_seq=seq, sha=revision)
 
     # ------------------------------------------------------------------
     # Query API
@@ -143,6 +172,24 @@ class FileStateTracker:
             if disk_sha != snap.sha:
                 stale.append(path)
         return stale
+
+
+def reconcile_mutation_receipts(
+    tracker: FileStateTracker,
+    events: list[Event],
+) -> None:
+    """Advance the tracker from authenticated workspace mutation receipts."""
+    from .progress_reducer import reduce_progress_events
+
+    for mutation in reduce_progress_events(events).mutations:
+        if mutation.resource.namespace != "workspace.file":
+            continue
+        revision = mutation.after.digest if mutation.after is not None else None
+        tracker.record_mutation_revision(
+            mutation.resource.identifier,
+            revision,
+            mutation.result_event_seq,
+        )
 
 
 # ---------------------------------------------------------------------------
