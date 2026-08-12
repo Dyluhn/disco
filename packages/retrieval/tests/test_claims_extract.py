@@ -28,8 +28,10 @@ def test_multiple_citations_on_one_claim() -> None:
 
 
 def test_skips_unknown_passage_ids() -> None:
+    # Historical sealed id retained; unknown ids now preserve the claim for an
+    # explicit unsupported verdict instead of silently discarding it.
     md = "An unsupported assertion [[p9]]."  # p9 not in the map
-    assert extract_section_claims(md, _PASSAGES) == []
+    assert extract_section_claims(md, _PASSAGES) == [("An unsupported assertion", [])]
 
 
 def test_strips_markdown_emphasis_from_claim() -> None:
@@ -40,4 +42,8 @@ def test_strips_markdown_emphasis_from_claim() -> None:
 
 
 def test_no_citations_no_claims() -> None:
-    assert extract_section_claims("Just prose, no citations here.", _PASSAGES) == []
+    # Historical sealed id retained; uncited prose is now judgeable rather
+    # than being treated as though no factual claim existed.
+    assert extract_section_claims("Just prose, no citations here.", _PASSAGES) == [
+        ("Just prose, no citations here", [])
+    ]

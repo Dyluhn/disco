@@ -18,7 +18,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, NamedTuple, Protocol
+from typing import Any, NamedTuple
 
 from disco.core.events import LLMMessage
 from disco.core.llm import (
@@ -30,6 +30,14 @@ from disco.core.llm import (
 from disco.core.think import strip_think_spans
 
 from .engine import extract_discovered_hits
+from .grounding import (
+    _CITE,
+    _drop_weak,
+    _is_gfm_table_divider,
+    _NLILike,
+    _remove_unknown_citation_claims,
+    _verify_claims,
+)
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
@@ -37,65 +45,6 @@ from .ranking import Embedder, QueryRewriter, Reranker
 from .vectorstore import VectorStore
 
 _LOG = logging.getLogger(__name__)
-
-# NLI verdict (3-way) -> the UI's claim band.
-_VERDICT = {"entail": "supported", "neutral": "weak", "contradict": "unsupported"}
-_CITE = re.compile(r"\[\[([\w-]+)\]\]")
-_SENT = re.compile(r"(?<=[.!?])\s+")
-# A citation CLUSTER (one or more [[id]] together) preceded by the prose it cites.
-# The model is told to cite at the END of each sentence, so the marker usually
-# follows the period ("...France. [[id]]") — capture the lead so we re-attach it.
-_CLUSTER = re.compile(r"(.*?)((?:\[\[[\w-]+\]\]\s*)+)", re.DOTALL)
-_MD = re.compile(r"[*`#_>]+")  # emphasis/code/heading marks — noise for NLI
-_MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")  # ![alt](url) — never an NLI premise
-_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")  # [text](url) -> keep just the text
-
-
-def _plain(text: str) -> str:
-    """Strip markdown emphasis so the NLI hypothesis is clean prose."""
-    return _MD.sub("", text).strip()
-
-
-def _clean_premise(text: str) -> str:
-    """Drop markdown image/link artifacts before NLI — they are not prose and the
-    entailment model treats them as confident contradictions (pure noise)."""
-    text = _MD_IMG.sub(" ", text)
-    text = _MD_LINK.sub(r"\1", text)
-    return _MD.sub("", text)
-
-
-_ENTAIL_MIN = 0.5  # support needs a real entailment signal at the sentence level
-
-
-def _best_entail(passage_text: str, claim: str, nli: _NLILike) -> tuple[str, float]:
-    """Entailment of `claim` from a passage, scored at the SENTENCE level: NLI is
-    sentence-pair trained, so a whole retrieved chunk dilutes the signal. The
-    verdict comes from the MOST-RELEVANT sentence (the one that best entails the
-    claim): a passage merely SILENT on a claim is weak (neutral); `unsupported` is
-    reserved for when that on-topic sentence actually refutes it, not for a
-    tangential different-fact sentence (which independent-sentence NLI mislabels
-    as a contradiction). Markdown image/link artifacts are stripped first."""
-    cleaned = _clean_premise(passage_text)
-    sentences = [s.strip() for s in _SENT.split(cleaned) if len(s.strip()) > 15]
-    sentences = sentences[:12] or [cleaned]  # bound NLI calls per claim
-    best_score, best_label = -1.0, "neutral"
-    for sent in sentences:
-        score = nli.score(sent, claim)
-        if score > best_score:
-            best_score, best_label = score, nli.entail(sent, claim)
-    if best_score >= _ENTAIL_MIN:
-        return "entail", best_score
-    if best_label == "contradict":  # the best-matching sentence itself refutes it
-        return "contradict", max(best_score, 0.0)
-    return "neutral", max(best_score, 0.0)
-
-
-class _NLILike(Protocol):
-    """The structural NLI type research needs: 3-way entailment + a score. Both
-    the live SidecarNLIVerifier and the stub satisfy it."""
-
-    def entail(self, premise: str, hypothesis: str) -> str: ...
-    def score(self, premise: str, hypothesis: str) -> float: ...
 
 
 def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
@@ -116,16 +65,6 @@ def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
 
 # Canonical strip lives in disco.core.think — one rule, no per-site regexes.
 _strip_think_spans = strip_think_spans
-
-
-def _is_gfm_table_divider(line: str) -> bool:
-    """A GFM table divider row: ``| --- | :--: | ---: |``-shaped."""
-    line = line.strip()
-    if not line.startswith("|") or not line.endswith("|"):
-        return False
-    # Must contain at least one dash/colon per cell
-    parts = [p.strip() for p in line.split("|")][1:-1]
-    return all(re.match(r"^[:\- ]+$", p) and "-" in p for p in parts)
 
 
 def _parse_table_row(line: str) -> list[str]:
@@ -269,74 +208,6 @@ def _to_blocks(text: str) -> list[dict]:
         i += 1
     flush_prose()
     return blocks or [{"kind": "prose", "id": "b0", "text": text.strip(), "cited_passage_ids": []}]
-
-
-def _verify_claims(text: str, by_id: dict[str, Passage], nli: _NLILike) -> list[dict]:
-    """Each cited sentence → a verified claim (NLI against its cited passage). A
-    claim is the sentence that PRECEDES a citation cluster — the marker may sit
-    after the sentence's period, so we re-attach it to that sentence."""
-    out: list[dict] = []
-    for m in _CLUSTER.finditer(text):
-        lead, cluster = m.group(1), m.group(2)
-        ids = _CITE.findall(cluster)
-        if not ids:
-            continue
-        # the claim is the LAST sentence of the lead (earlier uncited sentences
-        # in the lead belong to their own clusters / are not verifiable claims).
-        sentences = [s for s in _SENT.split(lead) if s.strip()]
-        # take only the last physical line so a heading sitting directly above the
-        # sentence ("### Capital City\nCanberra is…") doesn't bleed into the claim.
-        last = (sentences[-1] if sentences else lead).splitlines()[-1]
-        claim_text = _CITE.sub("", last).strip(" .\n")
-        if not claim_text:
-            continue
-        hypothesis = _plain(claim_text)  # NLI sees clean prose, not markdown
-        best_id, best_score, best_verdict = None, -1.0, "neutral"
-        for pid in ids:
-            passage = by_id.get(pid)
-            if passage is None:
-                continue
-            verdict, score = _best_entail(passage.text, hypothesis, nli)
-            if score > best_score:
-                best_id, best_score, best_verdict = pid, score, verdict
-        out.append(
-            {
-                "claim": {"text": claim_text, "cited_passage_ids": ids},
-                "verdict": _VERDICT.get(best_verdict, "weak"),
-                "best_passage_id": best_id,
-                "entailment_score": max(best_score, 0.0),
-            }
-        )
-    return out
-
-
-def _drop_weak(answer: dict) -> dict:
-    """Re-scope 'drop weak': keep only supported claims and strip the citation
-    markers of passages cited by the dropped (weak/unsupported) claims, so the
-    prose no longer points at sources that didn't hold up. Mirrors the offline
-    fixture's applyScope so live and offline behave identically."""
-    drop_ids = {
-        pid
-        for c in answer["claims"]
-        if c["verdict"] != "supported"
-        for pid in c["claim"]["cited_passage_ids"]
-    }
-    if not drop_ids:
-        return answer
-    marker = re.compile(r"\s*\[\[(?:" + "|".join(re.escape(i) for i in drop_ids) + r")\]\]")
-    blocks = []
-    for b in answer["blocks"]:
-        if b.get("kind") == "prose":
-            kept = [i for i in b.get("cited_passage_ids", []) if i not in drop_ids]
-            blocks.append({**b, "text": marker.sub("", b["text"]), "cited_passage_ids": kept})
-        else:
-            blocks.append(b)
-    return {
-        **answer,
-        "blocks": blocks,
-        "claims": [c for c in answer["claims"] if c["verdict"] == "supported"],
-        "unsupported_count": 0,
-    }
 
 
 async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
@@ -588,9 +459,7 @@ async def _extract_round_passages(
     once with a wider net (more hits) before giving up, since the next
     results are usually readable too. On re-search rounds, previously-
     extracted URLs are skipped so the round fetches fresh sources."""
-    candidate_hits: list[SearchHit] = [
-        h for h in hits if h.url not in exclude_urls
-    ] or list(hits)
+    candidate_hits: list[SearchHit] = [h for h in hits if h.url not in exclude_urls] or list(hits)
     docs = await extract_discovered_hits(extraction, candidate_hits[:extract_cap])
     passages = _passages_from_docs(docs)
     if not passages and len(candidate_hits) > extract_cap:
@@ -660,6 +529,14 @@ async def _run_research_round(
         raise _ResearchAborted(
             "The answer model returned no visible answer after one bounded "
             "repair. Try another model or retry the search."
+        )
+
+    # An invented id has no provenance card and cannot be meaningfully graded.
+    # Remove its complete statement before both rendering and verification.
+    answer_text = _remove_unknown_citation_claims(answer_text, set(by_id))
+    if not answer_text:
+        raise _ResearchAborted(
+            "The answer model cited only unknown sources. Try another model or retry the search."
         )
 
     # structure + verify. The NLI verifier is SYNC (blocking httpx), so run it
@@ -767,7 +644,7 @@ async def stream_research_answer(
                 yield {"type": "error", "message": str(aborted)}
                 return
 
-            if result.supported > 0 or rewriter is None or is_last_round:
+            if result.supported > 0:
                 # Accepted round — emit the buffered tokens, then the final frames.
                 for frame in result.token_frames:
                     yield frame
@@ -777,6 +654,16 @@ async def stream_research_answer(
                     answer = _drop_weak(answer)
                 yield {"type": "final", "answer": answer}
                 yield {"type": "state", "status": "finished"}
+                return
+
+            if rewriter is None or is_last_round:
+                yield {
+                    "type": "error",
+                    "message": (
+                        "The available sources did not support any factual claim in "
+                        "the generated answer. Try a broader query or different sources."
+                    ),
+                }
                 return
 
             # No supported claims + rewriter available + rounds remain → reformulate.

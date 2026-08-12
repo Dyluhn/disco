@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ...behavior import declares
-from ._constants import _FS
+from ._constants import _FS, _MODEL_WRITE_CHUNK_MAX_CHARS
 from ._governed import _governed_guard
 from ._mutation import (
     _gated_write,
@@ -21,7 +21,13 @@ from ._success_view import _post_change_line_span, _updated_region_success_conte
 
 class FileAppendArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to append to.")
-    content: str = Field(description="UTF-8 content to append (created if absent).")
+    content: str = Field(
+        description=(
+            "UTF-8 content to append (created if absent). Keep each call under "
+            "12,000 characters and use additional bounded append calls as needed."
+        ),
+        json_schema_extra={"maxLength": _MODEL_WRITE_CHUNK_MAX_CHARS},
+    )
 
 
 class FileAppendTool:
@@ -34,8 +40,9 @@ class FileAppendTool:
         description=(
             "Append UTF-8 content to a workspace file (creating it if absent). Use "
             "this instead of shell `>>` — raw-shell append corrupts on special "
-            "characters. Large source files are supported; prefer a targeted edit "
-            "when changing an existing interior region."
+            "characters. Large source files are supported through bounded calls; keep "
+            "each content argument under 12,000 characters and append more chunks as "
+            "needed. Prefer a targeted edit when changing an existing interior region."
         ),
         args_model=FileAppendArgs,
         needs=_FS,
@@ -89,6 +96,7 @@ class FileAppendTool:
                 combined,
                 prefix=f"appended {len(append_bytes)} bytes to {args.path}",
                 changed_lines=changed,
+                model_authored_full=old_text is None,
             ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, combined),

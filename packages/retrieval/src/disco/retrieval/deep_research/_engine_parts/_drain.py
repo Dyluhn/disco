@@ -39,6 +39,39 @@ if TYPE_CHECKING:
 
 GatherTask = tuple[SubQuestion, "asyncio.Task[SubQuestionResult]", str, str, GatherLegContext]
 
+_BOUND_PRIORITY = {
+    None: 0,
+    "rounds": 1,
+    "subquestions": 2,
+    "sources": 3,
+    "wall_clock": 4,
+    "stopped": 5,
+}
+
+
+class _WallClockExpired(Exception):
+    """An in-flight gather or synthesis operation crossed the run deadline."""
+
+
+def _seconds_left(run: DeepResearchRun, started: float) -> float:
+    return max(0.0, run._bound.max_wall_clock_s - (time.monotonic() - started))
+
+
+def _dominant_bound(current: str | None, candidate: str | None) -> str | None:
+    """Keep the reason that imposed the strongest terminal bound."""
+    if _BOUND_PRIORITY.get(candidate, 0) > _BOUND_PRIORITY.get(current, 0):
+        return candidate
+    return current
+
+
+async def _cancel_and_drain(gather_tasks: list[GatherTask]) -> None:
+    """Cancel unfinished gather legs and wait until their cleanup has settled."""
+    pending = [task for _, task, _, _, _ in gather_tasks if not task.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
 
 def _check_stop_condition(
     run: DeepResearchRun,
@@ -47,24 +80,20 @@ def _check_stop_condition(
     bounded_by: str | None,
     should_cancel: Callable[[], bool] | None,
 ) -> tuple[bool, str | None]:
-    """Return `(stop, bounded_by)`. Cancels every leg and signals stop when
-    Stop was requested; cancels the still-running legs and signals stop when
-    the wall-clock bound tripped AND legs are still running. When the wall
+    """Return `(stop, bounded_by)`. Signals stop when Stop was requested or
+    when the wall-clock bound tripped AND legs are still running. The caller
+    drains cancellation before returning. When the wall
     clock tripped but every leg already finished, `bounded_by` is still set
     to "wall_clock" (so the report is honest about it) but the loop is NOT
     stopped — matches the original inline check exactly."""
     if should_cancel is not None and should_cancel():
-        for _, t, _, _, _ in gather_tasks:
-            t.cancel()
         return True, "stopped"
     if (time.monotonic() - started) <= run._bound.max_wall_clock_s:
         return False, bounded_by
-    bounded_by = bounded_by or "wall_clock"
+    bounded_by = _dominant_bound(bounded_by, "wall_clock")
     still_running = [t for _, t, _, _, _ in gather_tasks if not t.done()]
     if not still_running:
         return False, bounded_by
-    for t in still_running:
-        t.cancel()
     return True, bounded_by
 
 
@@ -73,15 +102,41 @@ async def _drain_steer_hooks(
     gather_tasks: list[GatherTask],
     pop_steers: PopSteersFn,
     emit: EmitFn,
-) -> None:
+) -> str | None:
     """D3 steer checkpoint: pop any pending steer strings and start a fresh
     gather leg for each, appending it to `gather_tasks` in place so the
     drain loop's index-based while-loop picks it up naturally. No-op
     (OFF-path) when `pop_steers` is None."""
     if pop_steers is None:
-        return
-    steer_budget = max(1, run._bound.max_sources // max(1, len(gather_tasks)))
+        return None
+    bounded_by: str | None = None
     for steer_text in pop_steers():
+        if run._scheduled_subquestions >= run._bound.max_subquestions:
+            bounded_by = _dominant_bound(bounded_by, "subquestions")
+            await emit(
+                "observation",
+                {
+                    "subquestion": steer_text,
+                    "ok": False,
+                    "detail": "mid-run steer not started: sub-question cap reached",
+                },
+            )
+            continue
+        if run._source_budget.remaining <= 0:
+            bounded_by = _dominant_bound(bounded_by, "sources")
+            await emit(
+                "observation",
+                {
+                    "subquestion": steer_text,
+                    "ok": False,
+                    "detail": "mid-run steer not started: source cap reached",
+                },
+            )
+            continue
+        steer_budget = min(
+            run._source_budget.remaining,
+            max(1, run._bound.max_sources // max(1, len(gather_tasks))),
+        )
         new_subq = SubQuestion(title=steer_text)
         await emit(
             "observation",
@@ -92,6 +147,8 @@ async def _drain_steer_hooks(
             },
         )
         gather_tasks.append(run._start_one_steer_task(new_subq, steer_budget, emit=emit))
+        run._scheduled_subquestions += 1
+    return bounded_by
 
 
 async def _drain_injected_sources(
@@ -122,18 +179,21 @@ async def _drain_injected_sources(
 async def _await_leg_result(
     task: asyncio.Task[SubQuestionResult],
     gather_tasks: list[GatherTask],
+    timeout_s: float,
 ) -> SubQuestionResult | None:
     """Await one leg's task. Returns `None` on a clean Stop-triggered
     cancellation (the caller breaks the drain loop); on any OTHER exception,
     cancels every sibling leg before re-raising so a gather failure never
     leaks still-running tasks into the long-lived server loop."""
     try:
-        return await task
+        return await asyncio.wait_for(task, timeout=timeout_s)
+    except TimeoutError as exc:
+        await _cancel_and_drain(gather_tasks)
+        raise _WallClockExpired from exc
     except asyncio.CancelledError:
         return None
     except Exception:
-        for _, t, _, _, _ in gather_tasks:
-            t.cancel()
+        await _cancel_and_drain(gather_tasks)
         raise
 
 
@@ -149,8 +209,10 @@ def _merge_leg_result(
     if injected_passages:
         sub_result.passages.extend(injected_passages)
     results.append(sub_result)
-    if sub_result.bounded_by_rounds and bounded_by is None:
-        bounded_by = "rounds"
+    if sub_result.bounded_by_rounds:
+        bounded_by = _dominant_bound(bounded_by, "rounds")
+    if sub_result.bounded_by_sources:
+        bounded_by = _dominant_bound(bounded_by, "sources")
     return bounded_by
 
 
@@ -164,30 +226,36 @@ async def _synthesize_leg_section(
     gather_tasks: list[GatherTask],
     sections: list[ReportSection],
     emit: EmitFn,
+    timeout_s: float,
 ) -> None:
     """Synthesize this leg's section (a durable checkpoint) and append it to
     `sections` in place. A synthesis failure cancels every sibling leg before
     re-raising — same contract as the original inline try/except."""
     await emit("phase", {"phase": "synthesize", "section": len(sections) + 1})
     try:
-        section = await engine.synthesize_section(
-            sub_result,
-            router=run._router,
-            embedder=run._embedder,
-            vector_store=run._vector_store,
-            namespace=subq_namespace,
-            nli=run._nli,
-            section_id=subq_id,
-            top_k_for_section=run._bound.rerank_top_k,
-            emit=emit,
-            leg_context=leg_context,
-            recency_window=run._recency_window,
+        section = await asyncio.wait_for(
+            engine.synthesize_section(
+                sub_result,
+                router=run._router,
+                embedder=run._embedder,
+                vector_store=run._vector_store,
+                namespace=subq_namespace,
+                nli=run._nli,
+                section_id=subq_id,
+                top_k_for_section=run._bound.rerank_top_k,
+                emit=emit,
+                leg_context=leg_context,
+                recency_window=run._recency_window,
+            ),
+            timeout=timeout_s,
         )
+    except TimeoutError as exc:
+        await _cancel_and_drain(gather_tasks)
+        raise _WallClockExpired from exc
     except Exception:
         # A synthesis failure must not leak the still-running retrieval
         # tasks into the long-lived server loop.
-        for _, t, _, _, _ in gather_tasks:
-            t.cancel()
+        await _cancel_and_drain(gather_tasks)
         raise
     sections.append(section)
     # A checkpoint signal the agent-server persists as incremental progress.
@@ -245,27 +313,46 @@ async def drain_and_synthesize(
             run, gather_tasks, started, bounded_by, should_cancel
         )
         if stop:
+            await _cancel_and_drain(gather_tasks)
             break
 
-        await _drain_steer_hooks(run, gather_tasks, pop_steers, emit)
+        steer_bound = await _drain_steer_hooks(run, gather_tasks, pop_steers, emit)
+        bounded_by = _dominant_bound(bounded_by, steer_bound)
 
-        new_injected = await _drain_injected_sources(run, pop_injected_sources, subq_namespace)
+        try:
+            new_injected = await asyncio.wait_for(
+                _drain_injected_sources(run, pop_injected_sources, subq_namespace),
+                timeout=_seconds_left(run, started),
+            )
+        except TimeoutError:
+            await _cancel_and_drain(gather_tasks)
+            bounded_by = _dominant_bound(bounded_by, "wall_clock")
+            break
         injected_passages.extend(new_injected)
 
-        sub_result = await _await_leg_result(task, gather_tasks)
+        try:
+            sub_result = await _await_leg_result(task, gather_tasks, _seconds_left(run, started))
+        except _WallClockExpired:
+            bounded_by = _dominant_bound(bounded_by, "wall_clock")
+            break
         if sub_result is None:
             break
 
         bounded_by = _merge_leg_result(sub_result, results, injected_passages, bounded_by)
 
-        await _synthesize_leg_section(
-            run,
-            sub_result,
-            subq_id=subq_id,
-            subq_namespace=subq_namespace,
-            leg_context=leg_context,
-            gather_tasks=gather_tasks,
-            sections=sections,
-            emit=emit,
-        )
+        try:
+            await _synthesize_leg_section(
+                run,
+                sub_result,
+                subq_id=subq_id,
+                subq_namespace=subq_namespace,
+                leg_context=leg_context,
+                gather_tasks=gather_tasks,
+                sections=sections,
+                emit=emit,
+                timeout_s=_seconds_left(run, started),
+            )
+        except _WallClockExpired:
+            bounded_by = _dominant_bound(bounded_by, "wall_clock")
+            break
     return results, bounded_by, injected_passages

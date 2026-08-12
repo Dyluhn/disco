@@ -65,9 +65,10 @@ describe("useDeepResearch lazy conversation lifecycle", () => {
   });
 
   it("does not create a conversation on mount", async () => {
-    renderHook(() => useDeepResearch(), { wrapper: wrapper() });
+    const { result } = renderHook(() => useDeepResearch(), { wrapper: wrapper() });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(createDeepResearchConversation).not.toHaveBeenCalled();
+    expect(result.current.selectedSources).toEqual([]);
   });
 
   it("keeps an upload cid and applies the final controls before kickoff", async () => {
