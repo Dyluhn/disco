@@ -66,6 +66,7 @@ async def prepare_plan(
     carried_passages: list[RetrievalPassage] = list(resume_passages or [])
     carried_hits: list[Any] = list(resume_all_hits or [])
     pending = [SubQuestion(title=t) for t in plan_steps if t not in done_titles]
+    run._scheduled_subquestions = len(sections) + len(pending)
     # Graceful low-RAM transparency (#26): the gather concurrency was derived
     # from available RAM. Surface it — and whether it's actually *constraining*
     # parallelism (cap < legs) — so a memory-reduced run is VISIBLE, never a
@@ -130,9 +131,9 @@ def start_gather_tasks(
     guard; `None` ⇒ fully concurrent. All tasks are created up-front so the
     consumer can drain them in order. Returns the ordered task list, each
     entry `(subq, task, subq_id, subq_namespace, leg_context)`."""
-    # The source budget governs the NEW gathering this invocation does; carried
-    # passages were already budgeted in the prior run, so resume gets a fresh
-    # allowance to make progress on its remaining sub-questions.
+    # The source budget governs unique web passages gathered by this execution.
+    # A resumed invocation gets a fresh allowance because reports persist only
+    # their cited subset, not enough information to reconstruct prior discovery.
     remaining = run._bound.max_sources
 
     # RP-04: Pipeline restructure.
@@ -178,6 +179,7 @@ def start_gather_tasks(
                 emit=emit,
                 remaining_source_budget=subq_budget,
                 leg_context=leg_context,
+                source_budget=run._source_budget,
                 recency_window=run._recency_window,
                 corpus_ids=run._corpus_ids,
                 # G1/DR-4 F2: seed each leg with any pre-attached upload
@@ -231,6 +233,7 @@ def start_one_steer_task(
             emit=emit,
             remaining_source_budget=source_budget,
             leg_context=leg_context,
+            source_budget=run._source_budget,
             recency_window=run._recency_window,
             corpus_ids=run._corpus_ids,
             # G1/DR-4 F2: seed steer legs with upload passages by default;

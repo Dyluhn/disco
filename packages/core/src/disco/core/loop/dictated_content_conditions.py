@@ -60,10 +60,40 @@ _FILE_LIKE_LITERAL_RE = re.compile(
 )
 _SHELL_COMMAND_WORDS = frozenset(
     {
-        "ag", "bun", "cat", "cd", "chmod", "chown", "cp", "curl", "deno",
-        "docker", "echo", "git", "grep", "head", "ls", "make", "mkdir",
-        "mv", "node", "npm", "npx", "pnpm", "pytest", "python", "python3",
-        "rm", "ruff", "sed", "sh", "tail", "tox", "uv", "vite", "yarn",
+        "ag",
+        "bun",
+        "cat",
+        "cd",
+        "chmod",
+        "chown",
+        "cp",
+        "curl",
+        "deno",
+        "docker",
+        "echo",
+        "git",
+        "grep",
+        "head",
+        "ls",
+        "make",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "pytest",
+        "python",
+        "python3",
+        "rm",
+        "ruff",
+        "sed",
+        "sh",
+        "tail",
+        "tox",
+        "uv",
+        "vite",
+        "yarn",
     }
 )
 _SHELL_OPERATOR_RE = re.compile(r"(?:^|\s)(?:&&|\|\||[|;<>])(?:\s|$)|`|\$\(")
@@ -112,6 +142,10 @@ _DOCUMENT_ARTIFACT_RE = re.compile(
 _HTML_ARTIFACT_ASSIGNMENT_RE = re.compile(
     r"\b(?:give\s+)?([\w./-]+\.html?)\s+(?:an?|the)\s+"
     r"(?:<h[1-6]>\s*)?(?:heading|title|text|copy|label|content)\b[^.!?;]*$",
+    re.IGNORECASE,
+)
+_HTML_ARTIFACT_PAREN_RE = re.compile(
+    r"\b([\w./-]+\.html?)\s*\([^()]*$",
     re.IGNORECASE,
 )
 _SOURCE_TEXT_CONTEXT_RE = re.compile(
@@ -215,7 +249,9 @@ def _is_serve_metadata_literal(instruction: str, quote_start: int) -> bool:
 
 
 def _is_diagnostic_protocol_metadata_literal(
-    instruction: str, quote_start: int, literal: str,
+    instruction: str,
+    quote_start: int,
+    literal: str,
 ) -> bool:
     if _DIAGNOSTIC_PROTOCOL_LITERAL_RE.match(literal) is None:
         return False
@@ -259,7 +295,14 @@ def _dictated_content_literal_document(text: str, quote_start: int) -> str | Non
     if documents:
         return documents[-1]
     html_assignment = _HTML_ARTIFACT_ASSIGNMENT_RE.search(clause)
-    return html_assignment.group(1) if html_assignment is not None else None
+    if html_assignment is not None:
+        return html_assignment.group(1)
+    # Compact multi-file instructions commonly assign copy as
+    # ``services.html (h1 'Our Services')``.  The open parenthesis is a precise
+    # ownership boundary: without it both sibling headings become requirements
+    # on the selected entry page and the verifier forces needless homepage edits.
+    parenthesized = _HTML_ARTIFACT_PAREN_RE.search(clause)
+    return parenthesized.group(1) if parenthesized is not None else None
 
 
 def _dictated_content_surface(
@@ -387,9 +430,7 @@ def _collect_replacement_counts(
     counts: dict[str, int] = {}
     for candidate in candidates:
         if candidate.replaces_slot and candidate.requirement_slot is not None:
-            counts[candidate.requirement_slot] = (
-                counts.get(candidate.requirement_slot, 0) + 1
-            )
+            counts[candidate.requirement_slot] = counts.get(candidate.requirement_slot, 0) + 1
     return counts
 
 
@@ -460,9 +501,7 @@ def dictated_content_conditions_from_events(
                     continue
                 seen.add(key)
                 out.append(
-                    _build_condition_from_candidate(
-                        candidate, plan, user, out, replacement_counts
-                    )
+                    _build_condition_from_candidate(candidate, plan, user, out, replacement_counts)
                 )
         prev_plan_idx = plan_idx
     return _drop_scoped_edit_superseded_conditions(out, events)

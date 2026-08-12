@@ -17,6 +17,12 @@ from disco.tools import (
     validate_args,
 )
 from disco.tools.builtin import FileReadTool
+from disco.tools.builtin.files import (
+    FileAppendArgs,
+    FileInsertLinesArgs,
+    FileReplaceLinesArgs,
+    FileWriteArgs,
+)
 from disco.tools.registry import ToolRegistry, ToolScope
 from pydantic import BaseModel
 from tool_fakes import FakeSandboxInstance, call
@@ -39,6 +45,21 @@ def test_schema_is_single_source():
     """to_spec().parameters_schema IS args_model.model_json_schema() — no drift."""
     d = FileReadTool().definition
     assert d.to_spec().parameters_schema == d.args_model.model_json_schema()
+
+
+def test_write_tool_schemas_expose_bounded_generation_chunks_without_runtime_rejection():
+    fields = (
+        (FileWriteArgs, "content"),
+        (FileAppendArgs, "content"),
+        (FileInsertLinesArgs, "text"),
+        (FileReplaceLinesArgs, "new_text"),
+    )
+    for args_model, field in fields:
+        assert args_model.model_json_schema()["properties"][field]["maxLength"] == 12_000
+
+    # Advisory generation metadata must not turn a valid completed call into a
+    # local compatibility break; the runtime still accepts and safely commits it.
+    assert len(FileWriteArgs(path="large.txt", content="x" * 12_001).content) == 12_001
 
 
 async def test_unknown_tool_never_executes():

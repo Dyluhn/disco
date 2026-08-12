@@ -38,7 +38,8 @@ export function DeepResearchTopBar({
   // fix-c #4: disable while in-flight so a second click can't double-fire the
   // server export; shared by `disabled` and `aria-disabled` below (was two
   // separately-written copies of the same condition).
-  const pdfDisabled = !exportCaps.pdf || r.exportPending !== null;
+  const exportDisabled = r.exportPending !== null;
+  const pdfDisabled = !exportCaps.pdf || exportDisabled;
   return (
     <>
       {/* Header row: H1 + actions */}
@@ -103,12 +104,18 @@ export function DeepResearchTopBar({
               <button
                 type="button"
                 onClick={() => handleTopBarExport("md")}
+                disabled={exportDisabled}
+                aria-disabled={exportDisabled}
                 data-disco-control="dr.export.topbar.md"
                 data-export-cap="true"
-                className={CTRL_BTN}
+                className={exportDisabled ? PENDING_BTN : CTRL_BTN}
                 title="Download as Markdown"
               >
-                <FileText className="size-3.5" aria-hidden />
+                {r.exportPending === "md" ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <FileText className="size-3.5" aria-hidden />
+                )}
                 MD
               </button>
               <button
@@ -122,7 +129,7 @@ export function DeepResearchTopBar({
                 aria-disabled={pdfDisabled}
                 data-disco-control="dr.export.topbar.pdf"
                 data-export-cap={String(exportCaps.pdf)}
-                className={exportCaps.pdf ? CTRL_BTN : PENDING_BTN}
+                className={pdfDisabled ? PENDING_BTN : CTRL_BTN}
                 title={
                   exportCaps.pdf
                     ? "Download as PDF"

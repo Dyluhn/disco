@@ -18,11 +18,17 @@ contract WITHOUT loosening grounding:
 
 from __future__ import annotations
 
+from disco.core import ReportSection
+from disco.retrieval import InMemoryVectorStore, Passage
 from disco.retrieval.deep_research import synthesis
 from disco.retrieval.deep_research.synthesis import (
+    _COHERENCE_PROMPT,
     _SECTION_PROMPT,
     _SYNTHESIS_TEMPERATURE,
+    _coherence_outline,
     _extract_disputed_notes,
+    _format_passages,
+    _retrieve_for_section,
 )
 
 # ---------------------------------------------------------------------------
@@ -122,3 +128,57 @@ def test_verification_helper_still_imported_unchanged():
     # `_verify_claims` is reused verbatim from streaming; its presence is the
     # contract that grounding is enforced post-generation.
     assert hasattr(synthesis, "_verify_claims")
+
+
+def test_coherence_outline_retains_concrete_names_beyond_old_short_lead():
+    padding = "Background qualification. " * 20
+    outline = _coherence_outline(
+        [
+            ReportSection(
+                id="release",
+                title="Recent releases",
+                markdown=f"{padding}Muse Glimmer shipped this week [[cnbc]].",
+            )
+        ]
+    )
+
+    assert "Muse Glimmer shipped this week" in outline
+    assert "[[cnbc]]" in outline
+    assert "Never claim none occurred" in _COHERENCE_PROMPT
+
+
+def test_section_evidence_keeps_tail_qualifications_and_url():
+    passage = Passage(
+        id="p1",
+        source_url="https://example.com/release",
+        source_title="Release report",
+        text="A" * 2_000 + " The release was limited to a private preview.",
+    )
+    formatted = _format_passages([passage])
+    assert "https://example.com/release" in formatted
+    assert "private preview" in formatted
+    assert "middle omitted" in formatted
+
+
+async def test_empty_vector_result_falls_back_to_gathered_passages():
+    class _Embedder:
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] for _ in texts]
+
+    fallback = [
+        Passage(
+            id="p1",
+            source_url="https://example.com/source",
+            source_title="Source",
+            text="Evidence that must survive an empty vector result.",
+        )
+    ]
+    selected = await _retrieve_for_section(
+        "topic",
+        namespace="empty",
+        embedder=_Embedder(),
+        vector_store=InMemoryVectorStore(),
+        fallback_passages=fallback,
+        top_k=4,
+    )
+    assert selected == fallback

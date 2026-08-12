@@ -104,6 +104,43 @@ async def test_report_passages_present_for_grounding():
     assert len(reports_after[0].passages) == 3
 
 
+def test_followup_context_keeps_later_sources_after_oversized_passage():
+    """One long early passage must not erase later cited sources or report text."""
+    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+
+    report = ReportEvent(
+        source=EventSource.AGENT,
+        query="What shipped this week?",
+        summary="Several releases were reported.",
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Meta's open-weight releases",
+                markdown="Muse Glimmer shipped, while Muse Spark 1.2 was announced.",
+            )
+        ],
+        passages=[
+            {"id": "first", "text": "short source", "source_title": "First"},
+            {"id": "huge", "text": "x" * 20_000, "source_title": "Oversized"},
+            {
+                "id": "cnbc",
+                "text": "CNBC reported the Muse Glimmer release.",
+                "source_title": "CNBC",
+            },
+        ],
+        all_hits=[],
+    )
+
+    prompt = _build_follow_up_prompt(report, report.passages, "What did CNBC report?")
+
+    assert "## Meta's open-weight releases" in prompt
+    assert "Muse Spark 1.2" in prompt
+    assert "[[first]]" in prompt
+    assert "[[huge]]" in prompt
+    assert "[[cnbc]] (CNBC)" in prompt
+    assert "CNBC reported the Muse Glimmer release." in prompt
+
+
 async def test_followup_requires_existing_report():
     """_has_fresh_user_message returns False when there's no report at all."""
     store = SqliteEventStore(":memory:")

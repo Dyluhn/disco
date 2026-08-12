@@ -268,12 +268,22 @@ describe("deriveSourceTiers — three-tier corpus split", () => {
   });
 
   it("splits cited (deduped by URL) / reviewed / discovered", () => {
-    const tiers = deriveSourceTiers(REPORT_EVENT as unknown as ReportEvent);
+    const report = {
+      ...REPORT_EVENT,
+      all_hits: [
+        ...REPORT_EVENT.all_hits,
+        { url: "https://d.example/unattempted" },
+      ],
+    } as unknown as ReportEvent;
+    const tiers = deriveSourceTiers(report);
     // two passages, same URL → ONE cited row
     expect(tiers.cited).toHaveLength(1);
     // b.example was read (status ok) but not cited → reviewed
     expect(tiers.reviewed.map((h) => h.url)).toEqual(["https://b.example/blog"]);
     // c.example failed extraction → discovered
-    expect(tiers.discovered.map((h) => h.url)).toEqual(["https://c.example/dead"]);
+    expect(tiers.discovered.map((h) => h.url)).toEqual([
+      "https://c.example/dead",
+      "https://d.example/unattempted",
+    ]);
   });
 });

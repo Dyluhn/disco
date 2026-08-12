@@ -3,8 +3,8 @@
 Root cause fixed: on a successful mutation the next same-file edit used to see stale
 pre-edit grounding and get refused as STALE_FILE_CONTEXT. Successful mutators now return
 a numbered current-region observation and ground that visible region at the post-edit sha.
-Follow-up edits anchored in the returned region can proceed without an intervening read;
-edits elsewhere still need fresh visible content.
+Text-anchored follow-up edits can also retain complete textual knowledge from a full read or
+model-authored whole file. Genuinely unseen regions and shifted line-number edits still fail closed.
 
 The fresh-read guard only engages for files > 1500 bytes (small files stay fully in context), so
 these fixtures use a >1500-byte file.
@@ -15,6 +15,8 @@ from __future__ import annotations
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
+    FileAppendArgs,
+    FileAppendTool,
     FileEditArgs,
     FileEditTool,
     FileReadArgs,
@@ -135,6 +137,50 @@ async def test_full_file_write_success_observation_grounds_followup_write():
     assert "applied — lines 1-40 now read:" in second.content
     assert "[total lines: 44]" in second.content
     assert b"W2 FOOTER" in sbx._fs["index.html"]
+
+
+@pytest.mark.asyncio
+async def test_model_authored_large_file_stays_fully_grounded_across_distant_edits():
+    """The model knows every byte it wrote; its own edit must not erase that fact."""
+    sbx = _FakeSandbox()
+    ctx = _ctx(sbx)
+    created = await FileWriteTool().run(FileWriteArgs(path="index.html", content=BIG), ctx)
+    assert created.success is True
+
+    header = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Acme Pro</h1>"), ctx
+    )
+    assert header.success is True, header.content
+    footer = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="OLD FOOTER", new="READY FOOTER"), ctx
+    )
+
+    assert footer.success is True, footer.content
+    assert b"Acme Pro" in sbx._fs["index.html"]
+    assert b"READY FOOTER" in sbx._fs["index.html"]
+
+
+@pytest.mark.asyncio
+async def test_chunked_model_authored_file_stays_grounded_across_distant_edits():
+    """Bounded create+append calls still represent complete model-authored bytes."""
+    sbx = _FakeSandbox()
+    ctx = _ctx(sbx)
+    split = len(BIG) // 2
+    first = await FileAppendTool().run(FileAppendArgs(path="index.html", content=BIG[:split]), ctx)
+    second = await FileAppendTool().run(FileAppendArgs(path="index.html", content=BIG[split:]), ctx)
+    assert first.success and second.success
+
+    header = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="Acme Cloud", new="Acme Pro"), ctx
+    )
+    footer = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="OLD FOOTER", new="READY FOOTER"), ctx
+    )
+
+    assert header.success, header.content
+    assert footer.success, footer.content
+    assert b"Acme Pro" in sbx._fs["index.html"]
+    assert b"READY FOOTER" in sbx._fs["index.html"]
 
 
 @pytest.mark.asyncio

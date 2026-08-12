@@ -4,6 +4,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from disco.agent_server.deep_research_provider import DeepResearchProvider
 from disco.agent_server.deep_research_service import DeepResearchService
 from disco.agent_server.lifecycle_command_service import LifecycleCommandService
 from disco.core import ConversationStatus, EventSource, LLMMessage, MessageEvent, ReportEvent
@@ -17,8 +18,10 @@ class _Resp:
 class _Router:
     def __init__(self, text: str) -> None:
         self.text = text
+        self.requests: list[Any] = []
 
     async def complete(self, req: Any) -> _Resp:
+        self.requests.append(req)
         return _Resp(self.text)
 
 
@@ -37,6 +40,15 @@ class _Drivers:
 
     def router(self) -> _Router:
         return self._router
+
+
+class _NLI:
+    def entail(self, premise: str, hypothesis: str) -> str:
+        overlap = set(premise.lower().split()) & set(hypothesis.lower().split())
+        return "entail" if overlap else "neutral"
+
+    def score(self, premise: str, hypothesis: str) -> float:
+        return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
 
 
 class _Harness:
@@ -87,7 +99,16 @@ def _prior_report() -> ReportEvent:
             "<think>private reasoning</think>Use Qwen 3:30B for value [[p1]].",
             "Use Qwen 3:30B for value [[p1]].",
         ),
-        ("<think>private reasoning only", ""),
+        pytest.param(
+            "<think>private reasoning only",
+            "I couldn't produce a source-supported answer to that follow-up from the saved "
+            "report. Its cited sources may not cover the question.",
+            id="<think>private reasoning only-",
+        ),
+        (
+            "Use Qwen 3:30B for value [[p1]]. It is unquestionably the best model.",
+            "Use Qwen 3:30B for value [[p1]].",
+        ),
     ],
 )
 async def test_follow_up_synthesis_strips_think_before_storing(
@@ -103,7 +124,9 @@ async def test_follow_up_synthesis_strips_think_before_storing(
         preflight=MagicMock(),
         spaces=MagicMock(),
         cancellations=MagicMock(),
-        provider=MagicMock(),
+        provider=DeepResearchProvider(
+            MagicMock(), MagicMock(), MagicMock(), injected_providers={"nli": _NLI()}
+        ),
     )
     prior = _prior_report().model_copy(update={"seq": 1})
     user = MessageEvent(
@@ -113,9 +136,36 @@ async def test_follow_up_synthesis_strips_think_before_storing(
 
     await svc._follow_up_deep_research("c1", [prior, user], prior)
 
+    assert harness.drivers._router.requests[0].enable_thinking is False
+
     stored_messages = [
         e
         for e in harness.store.events
         if isinstance(e, MessageEvent) and e.source == EventSource.AGENT
     ]
     assert [e.message.content for e in stored_messages] == [stored_answer]
+
+
+def test_follow_up_history_keeps_prior_turns_but_excludes_current_question() -> None:
+    from disco.agent_server._deep_research_service_parts.followup import _follow_up_history
+
+    prior = _prior_report().model_copy(update={"seq": 1})
+    events = [
+        prior,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="First follow-up"),
+        ).model_copy(update={"seq": 2}),
+        MessageEvent(
+            source=EventSource.AGENT,
+            message=LLMMessage(role="assistant", content="First grounded answer [[p1]]."),
+        ).model_copy(update={"seq": 3}),
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Current follow-up"),
+        ).model_copy(update={"seq": 4}),
+    ]
+    history = _follow_up_history(events, prior)
+    assert "First follow-up" in history
+    assert "First grounded answer" in history
+    assert "Current follow-up" not in history

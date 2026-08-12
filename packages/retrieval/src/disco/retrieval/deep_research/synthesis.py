@@ -40,12 +40,29 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
+from ..grounding import (
+    _retain_claim_verdicts,
+    _verify_claims,
+)
 from ..models import Passage
 from ..ranking import Embedder
-from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
 from ..vectorstore import VectorStore
 from . import _synthesis_parts
+from ._summary import (
+    _COHERENCE_PROMPT as _SUMMARY_COHERENCE_PROMPT,
+)
+from ._summary import (
+    _coherence_outline as _summary_coherence_outline,
+)
+from ._summary import (
+    coherence_pass as _summary_coherence_pass,
+)
+from .evidence import EVIDENCE_SYSTEM_PROMPT as _EVIDENCE_SYSTEM_PROMPT
 from .gather import GatherLegContext, SubQuestionResult
+
+_COHERENCE_PROMPT = _SUMMARY_COHERENCE_PROMPT
+_coherence_outline = _summary_coherence_outline
+coherence_pass = _summary_coherence_pass
 
 
 class _RouterWithCtx(Protocol):
@@ -326,15 +343,14 @@ _SECTION_PROMPT = (
 
 
 def _format_passages(passages: list[Passage]) -> str:
-    """Inline the passages with their ids — the model uses [[id]] in the body
-    to cite them. Truncate each to ~600 chars so a section's prompt fits."""
+    """Inline bounded, provenance-rich evidence without snippet-sized truncation."""
     parts = []
     for p in passages:
         head = (p.source_title or p.source_url)[:100]
         body = p.text.strip()
-        if len(body) > 600:
-            body = body[:600] + " …"
-        parts.append(f"[{p.id}] {head}\n{body}")
+        if len(body) > 1_600:
+            body = f"{body[:1_100].rstrip()}\n… [middle omitted] …\n{body[-500:].lstrip()}"
+        parts.append(f"[{p.id}] {head}\nURL: {p.source_url}\n{body}")
     return "\n\n".join(parts)
 
 
@@ -434,7 +450,8 @@ async def _retrieve_for_section(
         vecs = await embedder.embed([section_query])
         if not vecs:
             return fallback_passages[:top_k]
-        return await vector_store.query(namespace, vecs[0], top_k=top_k)
+        selected = await vector_store.query(namespace, vecs[0], top_k=top_k)
+        return selected or fallback_passages[:top_k]
     except Exception:  # noqa: BLE001 — fall back to the sub-q passages
         return fallback_passages[:top_k]
 
@@ -470,6 +487,7 @@ async def _normalize_section_markup(
                 CompletionRequest(
                     profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                     messages=[
+                        LLMMessage(role="system", content=_EVIDENCE_SYSTEM_PROMPT),
                         LLMMessage(role="user", content=instruction),
                         LLMMessage(role="assistant", content=markdown),
                         LLMMessage(role="user", content=retry_msg),
@@ -572,19 +590,28 @@ async def _generate_section_markdown(
     )
 
 
-async def _score_section_markdown(
-    markdown: str, passages: list[Passage], nli: Any
-) -> tuple[list[dict], _Confidence, int, list[str], list[str]]:
-    """Per-claim NLI verification (reuse the existing verifier — same shape as
-    the standard-answer flow) + confidence/disputed-notes/cited-ids rollup for
-    a finished section body."""
+async def _ground_section_markdown(
+    markdown: str,
+    passages: list[Passage],
+    nli: Any,
+    *,
+    force_low_confidence: bool,
+) -> tuple[str, _Confidence, int, list[str], list[str]]:
+    """Verify, filter, and summarize the grounding state of one section."""
     by_id = {p.id: p for p in passages}
     claims = await asyncio.to_thread(_verify_claims, markdown, by_id, nli)
     confidence, unsupported = _confidence_from_claims(claims)
+    # Unsupported includes invented ids and uncited factual prose. Keep weak,
+    # honestly-cited claims visible under the section confidence label.
+    markdown = (
+        _retain_claim_verdicts(markdown, claims, frozenset({"supported", "weak"}))
+        or "*(No source-supported synthesis could be produced for this section.)*"
+    )
     disputed_notes = _extract_disputed_notes(markdown)
-    # the cited passage ids actually mentioned in the body (regex extract)
     cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})
-    return claims, confidence, unsupported, disputed_notes, cited_ids
+    if force_low_confidence:
+        confidence = "low"
+    return markdown, confidence, unsupported, disputed_notes, cited_ids
 
 
 async def synthesize_section(
@@ -648,7 +675,10 @@ async def synthesize_section(
     # impossible — but threading the per-leg context keeps the leg's cost
     # tracking coherent and makes the leg's identity visible at the router
     # for the entire gather→synth pipeline.
-    leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
+    leg_messages: list[LLMMessage] = [
+        LLMMessage(role="system", content=_EVIDENCE_SYSTEM_PROMPT),
+        LLMMessage(role="user", content=instruction),
+    ]
     used_extractive_fallback = False
     try:
         markdown = await _generate_section_markdown(
@@ -687,11 +717,12 @@ async def synthesize_section(
         if early_return is not None:
             return early_return
 
-    claims, confidence, unsupported, disputed_notes, cited_ids = await _score_section_markdown(
-        markdown, passages, nli
+    markdown, confidence, unsupported, disputed_notes, cited_ids = await _ground_section_markdown(
+        markdown,
+        passages,
+        nli,
+        force_low_confidence=used_extractive_fallback,
     )
-    if used_extractive_fallback:
-        confidence = "low"
 
     return ReportSection(
         id=section_id,
@@ -702,86 +733,3 @@ async def synthesize_section(
         disputed_notes=disputed_notes,
         unsupported_count=unsupported,
     )
-
-
-_COHERENCE_PROMPT = (
-    "You are writing the executive summary of a research report. State the "
-    "FINDINGS — the actual answer to the question — so a reader who reads ONLY "
-    "the summary learns what the report concludes.\n\n"
-    "Question: {query}\n\n"
-    "Sections of the report (with their lead findings):\n{outline}\n\n"
-    "RULES — these are the difference between a summary that informs and one "
-    "that just describes structure:\n\n"
-    "1. LEAD WITH THE ANSWER. The first sentence states the report's bottom-"
-    "line answer to the question. Not 'this report examines X.' Not 'X is a "
-    "transformative technology.' The actual finding: where things stand, what "
-    "the state of play is, what the report concluded.\n\n"
-    "2. NAME THE KEY TENSIONS AND UNCERTAINTIES. If the field is divided, say "
-    "what's contested. If announcements outpace shipping reality, say so. If "
-    "evidence is thin in a particular area, name it. A good executive summary "
-    "tells the reader where to be skeptical.\n\n"
-    "3. NO STRUCTURE DESCRIPTION. The following sentences are BANNED: 'This "
-    "report begins by…', 'It then examines…', 'Finally, it evaluates…', "
-    "'The report is organized as…', 'The first section covers…'. Never tell "
-    "the reader what's coming; tell them what was found.\n\n"
-    "4. MEASURED REGISTER. Cut: 'transformative,' 'revolutionary,' 'poised "
-    "to revolutionize,' 'pivotal,' 'game-changing.' Describe and qualify.\n\n"
-    "5. SYNTHESIZE ACROSS SECTIONS. The summary is not three section "
-    "summaries glued together; it's the overarching story those sections "
-    "tell when read together.\n\n"
-    "FORMAT: 2–4 short paragraphs of markdown. No headers. No new claims "
-    "beyond what the sections established — the summary distills."
-)
-
-
-async def coherence_pass(
-    query: str,
-    sections: list[ReportSection],
-    *,
-    router: LLMRouter,
-    recency_window: str | None = None,
-) -> str:
-    """One small reduce call: take the section titles + a one-line gist of
-    each, produce the executive summary that opens the report. Cheap (no
-    citations to verify — purely framing prose)."""
-    if not sections:
-        return "*(No sections were generated.)*"
-    # Give the coherence pass enough to write findings, not structure: the
-    # first ~2 sentences of each section (the lead findings), the section's
-    # confidence rating (mixed/low means a tension the summary should surface),
-    # and any disputed_notes the section flagged.
-    outline_lines = []
-    for s in sections:
-        lead = ". ".join(s.markdown.strip().split(". ")[:2])[:320] or s.title
-        # strip [[id]] markers — clutter for the summary writer
-        lead = re.sub(r"\[\[[\w-]+\]\]", "", lead).replace("  ", " ").strip()
-        marks = []
-        if s.confidence in ("mixed", "low"):
-            marks.append(f"confidence={s.confidence}")
-        if s.disputed_notes:
-            marks.append(f"flagged disagreement: {s.disputed_notes[0][:100]}")
-        suffix = f"  [{'; '.join(marks)}]" if marks else ""
-        outline_lines.append(f"- **{s.title}** — {lead}{suffix}")
-    outline = "\n".join(outline_lines)
-    # DR-3 E4: date + recency preamble for coherence pass.
-    _coh_preamble = ""
-    if recency_window is not None:
-        _today = datetime.date.today().isoformat()
-        _label = "month" if recency_window == "month" else "week"
-        _coh_preamble = (
-            f"Today's date is {_today}. This research focused on the PAST {_label.upper()}. "
-            f"Reflect that recency bias in the summary.\n\n"
-        )
-    instruction = _coh_preamble + _COHERENCE_PROMPT.format(query=query, outline=outline)
-    try:
-        resp = await router.complete(
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=[LLMMessage(role="user", content=instruction)],
-                temperature=0.0,
-                max_tokens=400,
-            )
-        )
-        return strip_think_spans(resp.text) or f"This report investigates: {query}"
-    except Exception:  # noqa: BLE001 — degrade to a generic frame
-        return f"This report investigates: {query}"

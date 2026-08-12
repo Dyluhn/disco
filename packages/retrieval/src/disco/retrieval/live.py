@@ -22,7 +22,6 @@ import hashlib
 import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
-from urllib.parse import urlparse
 
 import httpx
 from disco.core.host_egress import EgressDenied, validate_untrusted_url
@@ -31,6 +30,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
 from .providers import SearchProvider
+from .url_policy import url_allowed
 
 # W-33: cap how long a remote-encoder connectivity probe waits. The probe only
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
@@ -49,10 +49,6 @@ _PROBE_DEADLINE_S = _PROBE_TIMEOUT_S + 2.0
 _PROBE_HTTP_ERRORS = (httpx.HTTPError, httpx.InvalidURL)
 
 ExtractStatus = Literal["ok", "paywalled", "blocked", "not_found", "error"]
-
-
-def _host(url: str) -> str:
-    return (urlparse(url).hostname or "").lower()
 
 
 # ---- SearXNG: discovery (query -> candidate URLs) ---------------------------
@@ -118,14 +114,12 @@ class SearxngSearchProvider:
         domains_deny: frozenset[str] | None,
         limit: int,
     ) -> list[SearchHit]:
-        deny = {d.lower() for d in (domains_deny or frozenset())}
-        allow = {d.lower() for d in domains_allow} if domains_allow else None
         hits: list[SearchHit] = []
         for i, res in enumerate(results):
             url = res.get("url") or ""
             if not url:
                 continue
-            if not self._domain_ok(_host(url), allow, deny):
+            if not url_allowed(url, domains_allow, domains_deny):
                 continue
             hits.append(
                 SearchHit(
@@ -139,12 +133,6 @@ class SearxngSearchProvider:
             if len(hits) >= limit:
                 break
         return hits
-
-    @staticmethod
-    def _domain_ok(host: str, allow: set[str] | None, deny: set[str]) -> bool:
-        if any(d in host for d in deny):
-            return False
-        return allow is None or any(d in host for d in allow)
 
 
 # ---- Crawl4AI: extraction (URL -> clean content + passages) -----------------

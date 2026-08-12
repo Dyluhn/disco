@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from typing import Any, Literal
 
-from ..events import WORKSPACE_SNAPSHOT_SENTINEL, LLMMessage
+from ..events import WORKSPACE_SNAPSHOT_SENTINEL, LLMMessage, find_elided_arg_markers
 from .provider_ledger import ProviderRequestShape
 from .types import CompletionRequest, ToolSpec
 
@@ -27,6 +27,13 @@ _FINISH: dict[str, FinishReason] = {
     "function_call": "tool_calls",
     "content_filter": "content_filter",
 }
+
+_ELIDED_HISTORY_NOTE = (
+    "[Host transcript — a historical tool-call record had one or more large "
+    "arguments omitted from prompt history. Its paired outcome follows; this entry "
+    "is metadata, not reusable tool input or file content. Read current state only "
+    "if the next task needs it.]"
+)
 
 
 def _map_finish(raw: str | None) -> FinishReason:
@@ -286,22 +293,98 @@ def message_to_wire(
 
     tool_calls = m.tool_calls
     if tool_calls:
-        d["tool_calls"] = [
-            {
-                "id": tc.get("id"),
-                "type": "function",
-                "function": {
-                    "name": sanitize_fn(tc.get("name") or ""),
-                    "arguments": (
-                        tc["arguments"]
-                        if isinstance(tc.get("arguments"), str)
-                        else json.dumps(tc.get("arguments") or {}, sort_keys=True)
-                    ),
-                },
-            }
-            for tc in tool_calls
-        ]
+        wire_calls: list[dict[str, object]] = []
+        for tc in tool_calls:
+            wire_arguments, arguments_elided = _tool_arguments_to_wire(tc.get("arguments"))
+            if arguments_elided:
+                # Never teach the model an invalid historical call by deleting a
+                # required argument (for example successful file_write(path=...)
+                # with no content). build_payload externalizes the paired result as
+                # a host transcript entry instead.
+                continue
+            wire_calls.append(
+                {
+                    "id": tc.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": sanitize_fn(tc.get("name") or ""),
+                        "arguments": wire_arguments,
+                    },
+                }
+            )
+        if wire_calls:
+            d["tool_calls"] = wire_calls
     return d
+
+
+def _tool_arguments_to_wire(raw_arguments: object) -> tuple[str, bool]:
+    """Omit render-only argument fields without perturbing ordinary history."""
+    if isinstance(raw_arguments, str):
+        if not find_elided_arg_markers({"argument": raw_arguments}):
+            return raw_arguments, False
+        try:
+            parsed_arguments = json.loads(raw_arguments)
+        except (TypeError, ValueError):
+            return "{}", True
+        if not isinstance(parsed_arguments, dict):
+            return "{}", True
+        raw_arguments = parsed_arguments
+
+    if not isinstance(raw_arguments, dict):
+        return "{}", False
+
+    arguments = {
+        key: value
+        for key, value in raw_arguments.items()
+        if not find_elided_arg_markers({str(key): value})
+    }
+    return json.dumps(arguments, sort_keys=True), len(arguments) != len(raw_arguments)
+
+
+def _elided_history_call_ids(messages: list[LLMMessage]) -> set[str]:
+    """Return exact historical calls whose provider-visible arguments were reduced."""
+    call_ids: set[str] = set()
+    for message in messages:
+        if message.role != "assistant":
+            continue
+        for tool_call in message.tool_calls or []:
+            _, arguments_elided = _tool_arguments_to_wire(tool_call.get("arguments"))
+            call_id = tool_call.get("id")
+            if arguments_elided and isinstance(call_id, str) and call_id:
+                call_ids.add(call_id)
+    return call_ids
+
+
+def _externalize_elided_tool_results(msgs: list[dict], call_ids: set[str]) -> list[dict]:
+    """Replace paired results for elided calls with ordinary host transcript entries.
+
+    ``message_to_wire`` drops the whole historical call rather than leaving a
+    schema-invalid partial argument object. Its result therefore cannot retain a
+    ``role=tool``/``tool_call_id`` pair. Preserve the useful result as a host-authored
+    user message, with omission metadata outside its body. No placeholder or fake
+    argument value is exposed for the model to copy.
+    """
+    if not call_ids:
+        return msgs
+    externalized: set[str] = set()
+    out: list[dict] = []
+    for message in msgs:
+        call_id = message.get("tool_call_id")
+        if (
+            message.get("role") != "tool"
+            or call_id not in call_ids
+            or call_id in externalized
+        ):
+            out.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            transcript = f"{_ELIDED_HISTORY_NOTE}\n\n{content}"
+        else:
+            transcript = _ELIDED_HISTORY_NOTE
+        out.append({"role": "user", "content": transcript})
+        externalized.add(call_id)
+    return out
 
 
 def _shape_message_for_payload(
@@ -402,7 +485,9 @@ def build_payload(
     ``OpenAIProvider._payload`` so the serialized request bytes stay identical.
     """
     source_messages = [_shape_message_for_payload(m, req.assist, truncate_fn) for m in req.messages]
+    elided_call_ids = _elided_history_call_ids(source_messages)
     msgs = [message_fn(m) for m in source_messages]
+    msgs = _externalize_elided_tool_results(msgs, elided_call_ids)
     msgs = normalize_fn(msgs)
     msgs = _finalize_messages(
         msgs,

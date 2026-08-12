@@ -152,3 +152,22 @@ async def test_awaiting_approval_without_new_message_stays_parked(monkeypatch):
     events = await store.get_events("c1")
     assert len(events) == before, "dispatcher must not emit anything"
     assert "query" not in captured, "decompose must not run"
+
+
+def test_execution_uses_same_revised_query_as_planning():
+    from disco.agent_server._deep_research_service_parts.execute import resolve_query
+
+    events = [
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Latest open-source model releases"),
+        ),
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="Only include the past seven days"),
+        ),
+    ]
+    plan = PlanEvent(summary="fallback", steps=[PlanStep(title="Releases")])
+    query = resolve_query(events, plan)
+    assert query.startswith("Latest open-source model releases")
+    assert "Only include the past seven days" in query

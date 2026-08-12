@@ -25,7 +25,6 @@ import {
   deriveActivity,
   deriveDeliverable,
   deriveLiveSignal,
-  firstUserTask,
   latestAgentMessage,
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
@@ -119,22 +118,14 @@ export function BuildSurface({
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
 
-  // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
-  // sentinel. The H1 must read the PROJECT, never the literal sentinel — and
-  // never the giant raw first prompt (firstUserTask returns the whole first user
-  // message, which on a resumed deck build is a wall of text). Precedence on
-  // resume: stored clean auto-title → a TRUNCATED first task (so even the fallback
-  // is never the wall) → "Resumed project". A fresh run keeps its real task as-is.
-  const recoveredTask = useMemo(() => firstUserTask(b.events), [b.events]);
+  // On resume, wait for the canonical stored title. Replayed events can arrive
+  // before the state request; rendering their raw first message in that gap
+  // briefly exposed hidden build briefs and user prompt markup in the H1.
   const taskLabel = useMemo(() => {
     if (b.task !== "(resumed)") return b.task; // fresh run — unchanged
     if (storedTitle && storedTitle.trim()) return storedTitle.trim();
-    if (recoveredTask) {
-      const trimmed = recoveredTask.trim();
-      return trimmed.length > 80 ? `${trimmed.slice(0, 80).trimEnd()}…` : trimmed;
-    }
     return "Resumed project";
-  }, [b.task, storedTitle, recoveredTask]);
+  }, [b.task, storedTitle]);
 
   // Attention when tabbed away: badge the title + (best-effort) OS-notify when the
   // run finishes or needs the user while the tab is hidden. Use the clean taskLabel

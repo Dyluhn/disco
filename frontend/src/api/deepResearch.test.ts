@@ -8,9 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  serializeReportToMarkdown,
-} from "@/api/deepResearch";
+import { serializeReportToMarkdown } from "@/api/deepResearch";
 import type { ReportEvent } from "@/types/agent";
 import type { exportReport as exportReportFn } from "@/api/deepResearch";
 
@@ -28,7 +26,10 @@ function jsonResponse(body: object, status = 200): Response {
   } as unknown as Response;
 }
 
-function makeFetchStub(status = 200, body: BlobPart = new Blob(["data"], { type: "application/pdf" })) {
+function makeFetchStub(
+  status = 200,
+  body: BlobPart = new Blob(["data"], { type: "application/pdf" }),
+) {
   return vi.fn(async (url: RequestInfo | URL) => {
     if (String(url) === "http://agent:8123/api/auth/session") {
       return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });
@@ -37,14 +38,17 @@ function makeFetchStub(status = 200, body: BlobPart = new Blob(["data"], { type:
       ok: status >= 200 && status < 300,
       status,
       headers: new Headers(),
-      blob: () => Promise.resolve(body instanceof Blob ? body : new Blob([body])),
+      blob: () =>
+        Promise.resolve(body instanceof Blob ? body : new Blob([body])),
       json: () => Promise.resolve({}),
       text: () => Promise.resolve(""),
     } as unknown as Response;
   });
 }
 
-async function importLiveDeepResearch(): Promise<{ exportReport: ExportReport }> {
+async function importLiveDeepResearch(): Promise<{
+  exportReport: ExportReport;
+}> {
   vi.resetModules();
   vi.stubGlobal("__DISCO_ENV", { AGENT_BASE: "http://agent:8123" });
   return import("@/api/deepResearch");
@@ -103,7 +107,9 @@ describe("exportReport", () => {
     await exportReport("conv_abc", "pdf");
 
     const [url, init] = exportCall(stub);
-    expect(url).toBe("http://agent:8123/api/conversations/conv_abc/report/export?fmt=pdf");
+    expect(url).toBe(
+      "http://agent:8123/api/conversations/conv_abc/report/export?fmt=pdf",
+    );
     expect(init.method).toBe("POST");
     expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
@@ -113,13 +119,18 @@ describe("exportReport", () => {
   it("POSTs to agent-server base, not bare /api (pdf, no docx)", async () => {
     const { exportReport } = await importLiveDeepResearch();
     // W-12: docx export was removed; pdf still routes to the agent-server base.
-    const stub = makeFetchStub(200, new Blob(["data"], { type: "application/pdf" }));
+    const stub = makeFetchStub(
+      200,
+      new Blob(["data"], { type: "application/pdf" }),
+    );
     vi.stubGlobal("fetch", stub);
 
     await exportReport("conv_xyz", "pdf");
 
     const [url] = exportCall(stub);
-    expect(url).toBe("http://agent:8123/api/conversations/conv_xyz/report/export?fmt=pdf");
+    expect(url).toBe(
+      "http://agent:8123/api/conversations/conv_xyz/report/export?fmt=pdf",
+    );
     // URL must NOT be a bare relative path
     expect(url).not.toMatch(/^\/api\//);
   });
@@ -135,23 +146,28 @@ describe("exportReport", () => {
         status: 503,
         headers: new Headers(),
         blob: () => Promise.resolve(new Blob()),
-        json: () => Promise.resolve({ detail: { reason: "pandoc unavailable" } }),
+        json: () =>
+          Promise.resolve({ detail: { reason: "pandoc unavailable" } }),
         text: () => Promise.resolve(""),
       } as unknown as Response;
     });
     vi.stubGlobal("fetch", stub);
 
-    await expect(exportReport("conv_fail", "pdf")).rejects.toThrow("Export failed (503): pandoc unavailable");
+    await expect(exportReport("conv_fail", "pdf")).rejects.toThrow(
+      "Export failed (503): pandoc unavailable",
+    );
   });
 
+  // Historical sealed id retained; markdown now deliberately takes the server
+  // path so the canonical generated title is included in the export.
   it("throws when fmt is md (client-side path should be used instead)", async () => {
     const { exportReport } = await importLiveDeepResearch();
-    // md is gated before fetch — no network call should be made
-    const stub = vi.fn();
+    const stub = makeFetchStub(200, new Blob(["# Generated title"]));
     vi.stubGlobal("fetch", stub);
 
-    await expect(exportReport("conv_any", "md")).rejects.toThrow(/exportReportAsMarkdown/);
-    expect(stub).not.toHaveBeenCalled();
+    await expect(exportReport("conv_any", "md")).resolves.toBe(true);
+    const [url] = exportCall(stub);
+    expect(url).toContain("/conversations/conv_any/report/export?fmt=md");
   });
 });
 
@@ -168,7 +184,11 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
 
     await createDeepResearchConversation({ query: "q", iterative: true });
 
-    const [, path, body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    const [, path, body] = send.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
     expect(path).toBe("/conversations");
     expect(body.surface).toBe("deep_research");
     expect(body.iterative).toBe(true);
@@ -180,7 +200,11 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
 
     await createDeepResearchConversation({ query: "q" });
 
-    const [, , body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    const [, , body] = send.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
     expect(body.iterative).toBe(false);
     // and it still carries the depth_tier default — proving we mirror, not replace
     expect(body.depth_tier).toBe("standard_deep");
@@ -190,10 +214,33 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
     const { createDeepResearchConversation, send } =
       await importDeepResearchWithMockedLiveCreate();
 
-    await createDeepResearchConversation({ query: "q", sources: ["arxiv", "ddgs"] });
+    await createDeepResearchConversation({
+      query: "q",
+      sources: ["arxiv", "ddgs"],
+    });
 
-    const [, , body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    const [, , body] = send.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
     expect(body.sources).toEqual(["arxiv", "ddgs"]);
+  });
+
+  it("leaves title unset for the shared auto-titler", async () => {
+    const { createDeepResearchConversation, send } =
+      await importDeepResearchWithMockedLiveCreate();
+
+    await createDeepResearchConversation({
+      query: "What's new in local models this week?",
+    });
+
+    const [, , body] = send.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(body).not.toHaveProperty("title");
   });
 });
 

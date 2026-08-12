@@ -60,10 +60,13 @@ export function latestAgentMessage(events: AgentEvent[]): string | null {
  * uses this to render the actual task instead, mirroring how DR recovers its query
  * (useDeepResearch.ts). Matches on `source` OR `message.role` so it's robust to
  * however the backend tags the human turn. Returns null before any user message
- * exists (the caller falls back to a neutral "Resumed project" label). */
+ * exists (the caller falls back to a neutral "Resumed project" label). An
+ * explicit environment source wins over its transport-level message role. */
 export function firstUserTask(events: AgentEvent[]): string | null {
   for (const e of events) {
-    if (e.kind === "message" && (e.source === "user" || e.message?.role === "user")) {
+    if (e.kind !== "message") continue;
+    const isHuman = e.source === "user" || (e.source == null && e.message?.role === "user");
+    if (isHuman) {
       const { clean, mention } = stripElementMention(e.message?.content ?? "");
       if (clean) return clean;
       if (mention) return `Pointed at <${mention.tag}>`;

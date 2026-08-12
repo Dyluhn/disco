@@ -35,6 +35,8 @@ _READ_CHAR_BUDGET = 7_000
 _PRESSURE_HEAD_BUDGET = 2_000  # head-only slice when the gate fires (well under the snip cap)
 # 14_000 — files that would otherwise span multiple pages
 _PRESSURE_FILE_THRESHOLD = _READ_CHAR_BUDGET * 2
+
+
 # Prescriptive directive: "the file is big; don't read it whole, do this instead."
 # Static so a unit test can assert on it; worded so the weak-model tier picks
 # the cheap, deterministic path (grep → targeted read) over a full dump.
@@ -47,11 +49,7 @@ def _pressure_directive(path: str = "", shown: int = 0, total: int = 0) -> str:
     the measured line counts come from the same slice the reader just built.
     """
     named = f"`{path}` " if path else ""
-    measured = (
-        f" You were shown lines 1-{shown} of {total}."
-        if shown and total
-        else ""
-    )
+    measured = f" You were shown lines 1-{shown} of {total}." if shown and total else ""
     return (
         f"{named}file is large; the full page is suppressed.{measured} Do NOT "
         "re-read this file whole — pick the symbol/class/section you need, then "
@@ -116,3 +114,10 @@ _REFUSAL_READ_FULL_MAX_BYTES = 64 * 1024
 _LINE_REFUSAL_WINDOW_RADIUS = 40
 _UPDATED_REGION_WINDOW_RADIUS = 10
 _FILE_WRITE_SUCCESS_HEAD_LINES = 40
+
+# Provider-visible argument guidance. This is emitted as JSON Schema
+# ``maxLength`` metadata without making Pydantic reject a fully-formed larger
+# call at runtime. Providers have repeatedly truncated oversized tool-call JSON
+# before local validation could run; bounded chunks are already the system
+# contract, and this makes that same contract visible at generation time.
+_MODEL_WRITE_CHUNK_MAX_CHARS = 12_000
