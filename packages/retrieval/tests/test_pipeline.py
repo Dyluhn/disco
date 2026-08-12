@@ -57,7 +57,27 @@ async def test_explicit_failure_is_first_class():
     res = await eng.retrieve(RetrievalRequest(query="content", depth="shallow"))
     paywall = next(d for d in res.extracted if d.url == "http://x/paywall")
     assert paywall.fetched_ok is False and paywall.status == "paywalled"
-    assert any(h.url == "http://x/paywall" for h in res.all_hits)  # still discovered
+    paywall_hit = next(h for h in res.all_hits if h.url == "http://x/paywall")
+    assert paywall_hit.status == "paywalled"  # still discovered, honestly unread
+
+
+async def test_request_bounds_discovery_extraction_and_marks_unattempted_hits():
+    hits = [hit(f"http://x/{index}") for index in range(5)]
+    docs = {f"http://x/{index}": f"body {index}" for index in range(5)}
+    search = FakeSearchProvider(hits)
+    result = await _engine(search, docs=docs).retrieve(
+        RetrievalRequest(
+            query="body",
+            depth="shallow",
+            top_k=4,
+            discover_limit=3,
+            extract_cap=1,
+        )
+    )
+
+    assert len(result.all_hits) == 3
+    assert len(result.extracted) == 1
+    assert [item.status for item in result.all_hits] == ["ok", None, None]
 
 
 # ---- §8.2 the quality pipeline ----------------------------------------------
@@ -69,6 +89,16 @@ def test_rrf_rewards_cross_query_agreement():
     list_b = [hit("http://only_b"), hit("http://both")]
     fused = reciprocal_rank_fusion([list_a, list_b])
     assert fused[0].url == "http://both"
+
+
+def test_rrf_dedupes_tracking_variants_of_the_same_source():
+    fused = reciprocal_rank_fusion(
+        [
+            [hit("https://example.com/story?utm_source=a")],
+            [hit("http://example.com/story#section")],
+        ]
+    )
+    assert len(fused) == 1
 
 
 async def test_depth_controls_issued_queries():

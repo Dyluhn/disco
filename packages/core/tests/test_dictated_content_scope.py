@@ -176,3 +176,29 @@ def test_multifile_requirements_keep_source_surface_and_exact_html_target():
         if claim.kind is VerificationClaimKind.VISIBLE_TEXT and claim.required
     }
     assert about_visible_text == {"About Us"}
+
+
+def test_compact_parenthesized_multifile_requirements_keep_exact_html_target():
+    """Common ``page.html (h1 'copy')`` shorthand carries the same ownership."""
+    prompt = (
+        "Build a 3-page static site — index.html (h1 'Atlas Home'), "
+        "services.html (h1 'Our Services'), contact.html (h1 'Reach Us') — "
+        "sharing a style.css with a '.topnav' navbar."
+    )
+    events = [_user(prompt, 1), _plan(1, 2)]
+
+    conditions = dictated_content_conditions_from_events(events)
+    assert [(condition.literal, condition.document_artifact) for condition in conditions] == [
+        ("Atlas Home", "index.html"),
+        ("Our Services", "services.html"),
+        ("Reach Us", "contact.html"),
+        (".topnav", None),
+    ]
+
+    index_claims = host_verification_claims({}, events, artifact_path="index.html")
+    required_copy = {
+        claim.expected
+        for claim in index_claims
+        if claim.kind is VerificationClaimKind.VISIBLE_TEXT and claim.required
+    }
+    assert required_copy == {"Atlas Home"}

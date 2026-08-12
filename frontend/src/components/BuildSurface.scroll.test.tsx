@@ -6,8 +6,8 @@
  * synthesize gate→gate transitions). jsdom has no layout, so scroll geometry is
  * stubbed on the feed node directly.
  *
- *  - W-01: a resumed build seeds task="(resumed)"; the H1 must render the REAL task
- *          recovered from the first user message (or "Resumed project" if none).
+ *  - W-01: a resumed build seeds task="(resumed)"; until the canonical stored title
+ *          arrives, the H1 must render a neutral label rather than replayed prompt text.
  *  - W-40: the AWAITING_PLAN_APPROVAL gate scrolls the feed to the TOP (the plan
  *          renders there); other gates still scroll to the BOTTOM.
  *  - W-41: a jump-to-latest chevron appears only when scrolled up past the threshold.
@@ -28,7 +28,11 @@ vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
 }));
 vi.mock("@/hooks/useProjects", () => ({
-  useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useDownloadProject: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+    error: null,
+  }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
   useProjectRelease: () => ({ data: undefined }),
@@ -41,7 +45,9 @@ vi.mock("@/api/client", async (orig) => ({
 
 import { BuildSurface } from "@/components/BuildSurface";
 
-function baseBuild(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function baseBuild(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     cid: null,
     status: "RUNNING" as ConversationStatus,
@@ -101,9 +107,14 @@ function userMessage(id: string, content: string): AgentEvent {
 
 function renderSurface(ui: ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const wrap = (node: ReactElement) => <QueryClientProvider client={qc}>{node}</QueryClientProvider>;
+  const wrap = (node: ReactElement) => (
+    <QueryClientProvider client={qc}>{node}</QueryClientProvider>
+  );
   const result = render(wrap(ui));
-  return { ...result, rerenderSurface: (node: ReactElement) => result.rerender(wrap(node)) };
+  return {
+    ...result,
+    rerenderSurface: (node: ReactElement) => result.rerender(wrap(node)),
+  };
 }
 
 function feedEl(): HTMLElement {
@@ -116,8 +127,14 @@ function stubGeometry(
   geom: { scrollHeight: number; clientHeight: number; scrollTop: number },
 ) {
   let top = geom.scrollTop;
-  Object.defineProperty(el, "scrollHeight", { configurable: true, value: geom.scrollHeight });
-  Object.defineProperty(el, "clientHeight", { configurable: true, value: geom.clientHeight });
+  Object.defineProperty(el, "scrollHeight", {
+    configurable: true,
+    value: geom.scrollHeight,
+  });
+  Object.defineProperty(el, "clientHeight", {
+    configurable: true,
+    value: geom.clientHeight,
+  });
   Object.defineProperty(el, "scrollTop", {
     configurable: true,
     get: () => top,
@@ -125,7 +142,8 @@ function stubGeometry(
       top = v;
     },
   });
-  (el as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo = vi.fn();
+  (el as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo =
+    vi.fn();
 }
 
 afterEach(() => {
@@ -134,26 +152,36 @@ afterEach(() => {
 });
 
 describe("W-01: resumed builds recover the real task in the H1", () => {
+  // Keep the sealed historical test id while enforcing the corrected contract:
+  // replayed prompt text is no longer an acceptable title source.
   it("renders the first user message instead of the '(resumed)' sentinel", () => {
     buildState = baseBuild({
       task: "(resumed)",
-      events: [userMessage("u1", "build a habit tracker")],
+      events: [
+        userMessage("u1", "<build_brief>build a habit tracker</build_brief>"),
+      ],
     });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("build a habit tracker");
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading.textContent).toBe("Resumed project");
+    expect(heading.textContent).not.toContain("build_brief");
     expect(screen.queryByText("(resumed)")).not.toBeInTheDocument();
   });
 
   it("falls back to 'Resumed project' when no user message exists yet", () => {
     buildState = baseBuild({ task: "(resumed)", events: [] });
     renderSurface(<BuildSurface resumeCid="cid-1" />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Resumed project");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      "Resumed project",
+    );
   });
 
   it("renders a normal (non-sentinel) task verbatim", () => {
     buildState = baseBuild({ task: "ship the landing page", events: [] });
     renderSurface(<BuildSurface />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("ship the landing page");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+      "ship the landing page",
+    );
   });
 });
 
@@ -163,7 +191,9 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
     const { rerenderSurface } = renderSurface(<BuildSurface />);
     const feed = feedEl();
     stubGeometry(feed, { scrollHeight: 1234, clientHeight: 300, scrollTop: 0 });
-    const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
+    const scrollTo = (
+      feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }
+    ).scrollTo;
 
     buildState = baseBuild({ status: "AWAITING_PLAN_APPROVAL" });
     rerenderSurface(<BuildSurface />);
@@ -176,7 +206,9 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
     const { rerenderSurface } = renderSurface(<BuildSurface />);
     const feed = feedEl();
     stubGeometry(feed, { scrollHeight: 1234, clientHeight: 300, scrollTop: 0 });
-    const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
+    const scrollTo = (
+      feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }
+    ).scrollTo;
 
     buildState = baseBuild({ status: "WAITING_FOR_CONFIRMATION" });
     rerenderSurface(<BuildSurface />);
@@ -189,8 +221,12 @@ describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
   it("renders a 'Download source' button (not 'Export') in the resumed header", () => {
     buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED" });
     renderSurface(<BuildSurface resumeCid="cid-9" />);
-    expect(screen.getByRole("button", { name: "Download source" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Download source" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^export$/i }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -201,20 +237,32 @@ describe("W-41: scroll-to-latest chevron", () => {
     renderSurface(<BuildSurface />);
     const feed = feedEl();
     // Mounted at the bottom → no chevron.
-    stubGeometry(feed, { scrollHeight: 1000, clientHeight: 300, scrollTop: 700 });
+    stubGeometry(feed, {
+      scrollHeight: 1000,
+      clientHeight: 300,
+      scrollTop: 700,
+    });
     fireEvent.scroll(feed);
-    expect(screen.queryByRole("button", { name: /scroll to latest activity/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /scroll to latest activity/i }),
+    ).not.toBeInTheDocument();
 
     // Scroll up well past the 200px threshold → chevron appears.
     feed.scrollTop = 0;
     fireEvent.scroll(feed);
-    const chevron = screen.getByRole("button", { name: /scroll to latest activity/i });
+    const chevron = screen.getByRole("button", {
+      name: /scroll to latest activity/i,
+    });
     expect(chevron).toBeInTheDocument();
-    expect(screen.getByTestId("build-scroll-to-latest-dock")).toContainElement(chevron);
+    expect(screen.getByTestId("build-scroll-to-latest-dock")).toContainElement(
+      chevron,
+    );
     expect(chevron).not.toHaveClass("absolute");
 
     // Clicking jumps to the bottom and dismisses the chevron.
-    const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
+    const scrollTo = (
+      feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }
+    ).scrollTo;
     await user.click(chevron);
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "smooth" });
     expect(
@@ -223,10 +271,7 @@ describe("W-41: scroll-to-latest chevron", () => {
   });
 
   it("uses an immediate scroll when the operator prefers reduced motion", async () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockReturnValue({ matches: true }),
-    );
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     const user = userEvent.setup();
     buildState = baseBuild({ status: "RUNNING" });
     renderSurface(<BuildSurface />);
@@ -234,9 +279,13 @@ describe("W-41: scroll-to-latest chevron", () => {
     stubGeometry(feed, { scrollHeight: 1000, clientHeight: 300, scrollTop: 0 });
     fireEvent.scroll(feed);
 
-    await user.click(screen.getByRole("button", { name: /scroll to latest activity/i }));
+    await user.click(
+      screen.getByRole("button", { name: /scroll to latest activity/i }),
+    );
 
-    const scrollTo = (feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }).scrollTo;
+    const scrollTo = (
+      feed as HTMLElement & { scrollTo: ReturnType<typeof vi.fn> }
+    ).scrollTo;
     expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: "auto" });
   });
 });

@@ -47,42 +47,86 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger(__name__)
 
+_FOLLOW_UP_SOURCE_CHARS = 12_000
+_FOLLOW_UP_REPORT_CHARS = 12_000
+
 
 def _clean_model_text(text: str | None) -> str:
     return strip_think_spans(text or "")
 
 
+def _bounded_context_blocks(blocks: list[tuple[str, str]], max_chars: int) -> str:
+    """Fit every labeled item into one bounded prompt block.
+
+    Text is apportioned across the remaining items, so one oversized early item
+    can never hide the source labels and excerpts that follow it.
+    """
+    if not blocks or max_chars <= 0:
+        return ""
+    separator = "\n---\n"
+    separator_chars = len(separator) * (len(blocks) - 1)
+    label_budget = max(1, (max_chars - separator_chars) // len(blocks) - 1)
+    normalized = [(label.strip()[: min(384, label_budget)], text.strip()) for label, text in blocks]
+    fixed_chars = sum(len(label) + 1 for label, _text in normalized)
+    fixed_chars += separator_chars
+    remaining = max(0, max_chars - fixed_chars)
+    rendered: list[str] = []
+    for index, (label, body) in enumerate(normalized):
+        slots_left = len(normalized) - index
+        body_budget = remaining // slots_left
+        excerpt = body
+        if len(excerpt) > body_budget:
+            marker = "\n[excerpt truncated]"
+            keep = max(0, body_budget - len(marker))
+            excerpt = excerpt[:keep].rstrip() + (marker if body_budget >= len(marker) else "")
+        rendered.append(f"{label}\n{excerpt}".rstrip())
+        remaining -= len(excerpt)
+    return separator.join(rendered)[:max_chars]
+
+
 def _build_grounding_block(passages: list[dict[str, Any]]) -> str:
-    """Build a grounding block from the report's cited passages so the
-    answerer can cite them. Limit to a reasonable context window."""
-    MAX_PASSAGE_CHARS = 12_000
-    passage_blocks: list[str] = []
-    total = 0
-    for p in passages:
-        pid = str(p.get("id", ""))
-        ptext = str(p.get("text", ""))
-        src = str(p.get("source_title", p.get("source_url", "")))
-        block = f"[[{pid}]] ({src})\n{ptext}\n"
-        if total + len(block) > MAX_PASSAGE_CHARS:
-            break
-        passage_blocks.append(block)
-        total += len(block)
-    return "\n---\n".join(passage_blocks)
+    """Build a bounded, fairly apportioned block from every cited passage."""
+    blocks = []
+    for passage in passages:
+        pid = str(passage.get("id", ""))[:128]
+        source = str(passage.get("source_title", passage.get("source_url", "")))[:240]
+        blocks.append((f"[[{pid}]] ({source})", str(passage.get("text", ""))))
+    return _bounded_context_blocks(blocks, _FOLLOW_UP_SOURCE_CHARS)
+
+
+def _build_report_block(report: ReportEvent) -> str:
+    """Keep the report's own sections visible when a follow-up asks about them."""
+    blocks = [(f"## {section.title[:300]}", section.markdown) for section in report.sections]
+    return _bounded_context_blocks(blocks, _FOLLOW_UP_REPORT_CHARS)
 
 
 def _build_follow_up_prompt(
-    prior_report: ReportEvent, passages: list[dict[str, Any]], follow_up_query: str
+    prior_report: ReportEvent,
+    passages: list[dict[str, Any]],
+    follow_up_query: str,
+    *,
+    history: str = "",
 ) -> str:
     grounding = _build_grounding_block(passages)
+    report_sections = _build_report_block(prior_report)
+    history_block = (
+        f"--- EARLIER FOLLOW-UP EXCHANGES ---\n{history}\n--- END EARLIER EXCHANGES ---\n\n"
+        if history
+        else ""
+    )
     return (
         f"You are answering a follow-up question about a research report. "
         f"The original query was: {prior_report.query}\n\n"
         f"The report summary: {prior_report.summary}\n\n"
+        f"Below are the report sections the user is referring to.\n\n"
+        f"--- REPORT SECTIONS ---\n{report_sections}\n"
+        f"--- END REPORT ---\n\n"
         f"Below are the source passages the report was grounded on. "
         f"Use them to answer the follow-up question. Cite sources "
         f"with [[passage_id]] markers.\n\n"
         f"--- SOURCE PASSAGES ---\n{grounding}\n"
         f"--- END SOURCES ---\n\n"
+        f"{history_block}"
         f"Follow-up question: {follow_up_query}"
     )
 
@@ -359,9 +403,7 @@ class DeepResearchService:
             )
             return
 
-        await self._lifecycle_commands.append_status(
-            conversation_id, ConversationStatus.RUNNING
-        )
+        await self._lifecycle_commands.append_status(conversation_id, ConversationStatus.RUNNING)
         ctx = plan_parts.prepare_decompose_context(self, conversation_id)
         # Decompose via QUERY_REWRITER. The decompose call IS the planning
         # step; we emit the result as a PlanEvent directly (no LLM "planning
@@ -465,5 +507,6 @@ class DeepResearchService:
         # The latest report (deep research emits only one; safe for future
         # multi-report conversations).
         report = reports[-1]
-        payload, media_type, ext = _export(report, fmt)  # md, pdf — in-process
+        title = await self._store.get_title(conversation_id)
+        payload, media_type, ext = _export(report, fmt, title=title)
         return payload, media_type, ext

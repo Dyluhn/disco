@@ -25,8 +25,10 @@ from ..common import (
     StatusEvent,
     VerificationClaimStatus,
     _last_verification_authority_seq,
+    _latest_app_deliverable_event,
     _prior_verify_marker_fp,
 )
+from .host_claims import preview_selection_at
 
 # ATTESTATION-BINDING INVARIANT (F58, 2026-08-07m; enforced 2026-08-07r). These
 # two sentences are the agent-facing prose the HALT branches below hand to
@@ -38,12 +40,10 @@ from ..common import (
 # reworded. Extracted verbatim: the composed guidance is byte-identical to what
 # the inline literals produced.
 _HOST_REPEAT_HALT_PREFIX = (
-    "Host verification repeated the same governed failure with no "
-    "productive authority change. "
+    "Host verification repeated the same governed failure with no productive authority change. "
 )
 _TARGET_REPEAT_HALT_PREFIX = (
-    "Target verification repeated the same governed failure with no "
-    "productive authority change. "
+    "Target verification repeated the same governed failure with no productive authority change. "
 )
 
 
@@ -72,9 +72,7 @@ def _verify_marker_fire_count(events: list[Event], fingerprint: str) -> int:
     a repeat loop the state it renders has not changed by construction.
     """
     marker = f"{_VERIFY_MARKER_PREFIX}{fingerprint}"
-    return 1 + sum(
-        1 for ev in events if isinstance(ev, StatusEvent) and ev.detail == marker
-    )
+    return 1 + sum(1 for ev in events if isinstance(ev, StatusEvent) and ev.detail == marker)
 
 
 def _repeat_preamble(repeats: int, cost: str) -> str:
@@ -156,6 +154,25 @@ def _governed_claim_by_status(
     )
 
 
+def _preview_rehandoff_required(
+    events: list[Event], deliverable: HostVerificationDeliverable
+) -> bool:
+    """True only when a real app handoff and current Preview have different identities."""
+    if deliverable.artifact_kind != "app":
+        return False
+    handoff = _latest_app_deliverable_event(events)
+    if handoff is None or type(handoff.seq) is not int:
+        return False
+    max_seq = max((event.seq or 0 for event in events), default=0)
+    handed_off = preview_selection_at(events, through_seq=handoff.seq)
+    current = preview_selection_at(events, through_seq=max_seq)
+    return bool(
+        handed_off is not None
+        and current is not None
+        and handed_off.operational_identity != current.operational_identity
+    )
+
+
 def _governed_non_pass_guidance(
     *,
     typed_result: HostVerificationResult | None,
@@ -164,7 +181,22 @@ def _governed_non_pass_guidance(
     summary: str,
     failed_claim: HostVerificationClaimResult | None,
     unavailable_claim: HostVerificationClaimResult | None,
+    preview_rehandoff_required: bool = False,
 ) -> str:
+    claim_reasons = " ".join(
+        [summary, next_action]
+        + [claim.reason for claim in (failed_claim, unavailable_claim) if claim is not None]
+    ).casefold()
+    if (
+        preview_rehandoff_required
+        or "selected preview generation is absent, changed" in claim_reasons
+    ):
+        return (
+            "the managed Preview generation changed after the last deliverable handoff. "
+            "Keep the current managed preview running; once it is healthy, call `serve` "
+            "again for the same app artifact so the handoff binds the current generation, "
+            "then call `finish` again. Do not restart a healthy preview."
+        )
     if typed_result is None:
         return (
             "no current, complete typed receipt certifies the mandatory "
@@ -213,9 +245,7 @@ async def governed_non_pass_disposition(
     next_action = str(verdict.get("next_action") or "")
     first_failure = gate._verdict_first_failure(verdict)
     failed_claim = _governed_claim_by_status(typed_result, VerificationClaimStatus.FAIL)
-    unavailable_claim = _governed_claim_by_status(
-        typed_result, VerificationClaimStatus.UNAVAILABLE
-    )
+    unavailable_claim = _governed_claim_by_status(typed_result, VerificationClaimStatus.UNAVAILABLE)
     guidance = _governed_non_pass_guidance(
         typed_result=typed_result,
         host_label=host_label,
@@ -223,6 +253,7 @@ async def governed_non_pass_disposition(
         summary=summary,
         failed_claim=failed_claim,
         unavailable_claim=unavailable_claim,
+        preview_rehandoff_required=_preview_rehandoff_required(events, deliverable),
     )
 
     await gate._record_verifier_failure_to_context(

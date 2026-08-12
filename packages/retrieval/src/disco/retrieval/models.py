@@ -20,6 +20,10 @@ class SearchHit(BaseModel):
     snippet: str = ""  # provider snippet — NOT trusted as content (§1.4)
     source_engine: str = ""  # which engine produced it (provenance)
     rank: int = 0  # provider's original rank
+    # ``None`` means discovered but not attempted.  The retrieval engine fills
+    # this after extraction so downstream report surfaces never have to guess
+    # that a bare discovery hit was successfully read.
+    status: Literal["ok", "paywalled", "blocked", "not_found", "error"] | None = None
 
 
 class Passage(BaseModel):
@@ -56,6 +60,10 @@ class RetrievalRequest(BaseModel):
     use_web: bool = True
     depth: Literal["shallow", "standard", "deep"] = "standard"
     top_k: int = 8  # final passages to return
+    # Optional discovery/extraction bounds.  Ordinary Search keeps the engine
+    # defaults; Deep Research supplies the selected tier's explicit limits.
+    discover_limit: int | None = Field(default=None, ge=1)
+    extract_cap: int | None = Field(default=None, ge=1)
     domains_allow: frozenset[str] | None = None
     domains_deny: frozenset[str] | None = None
     provider: str | None = None  # override default SearchProvider

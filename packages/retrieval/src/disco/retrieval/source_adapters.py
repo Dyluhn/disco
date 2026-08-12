@@ -1,13 +1,9 @@
-"""Additional discovery adapters behind the SearchProvider protocol.
-
-arXiv ignores ``time_filter`` because its public Atom API has no simple recency
-parameter matching the search provider contract. Google News maps the supported
-filters onto RSS query ``when:`` operators.
-"""
+"""Additional discovery adapters behind the SearchProvider protocol."""
 
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -20,12 +16,9 @@ from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
 from .models import SearchHit
 from .providers import SearchProvider
+from .url_policy import source_url_key, url_allowed
 
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
-
-
-def _host(url: str) -> str:
-    return (urlparse(url).hostname or "").lower()
 
 
 def _with_params(base: str, params: Mapping[str, object]) -> str:
@@ -55,6 +48,18 @@ def _collapse_ws(value: str | None) -> str:
     return " ".join((value or "").split())
 
 
+def _recency_start(time_filter: str | None) -> datetime.date | None:
+    days = {"week": 7, "month": 31}.get(time_filter or "")
+    return datetime.date.today() - datetime.timedelta(days=days) if days else None
+
+
+def _atom_date(value: str | None) -> datetime.date | None:
+    try:
+        return datetime.datetime.fromisoformat((value or "").replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
 class _HTMLTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -70,15 +75,6 @@ def _strip_html(value: str | None) -> str:
     parser.close()
     text = _collapse_ws(" ".join(parser.parts))
     return re.sub(r"\s+([.,;:!?])", r"\1", text)
-
-
-def _allowed(url: str, allow: frozenset[str] | None, deny: frozenset[str] | None) -> bool:
-    host = _host(url)
-    denied = {d.lower() for d in (deny or frozenset())}
-    allowed = {d.lower() for d in allow} if allow else None
-    if any(d in host for d in denied):
-        return False
-    return allowed is None or any(d in host for d in allowed)
 
 
 def _parse_sites(sites: str) -> tuple[str, ...]:
@@ -122,8 +118,9 @@ class ArxivSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        del time_filter
-        params = {"search_query": f"all:{query}", "start": 0, "max_results": limit}
+        recency_start = _recency_start(time_filter)
+        request_limit = min(limit * 4, 100) if recency_start else limit
+        params = {"search_query": f"all:{query}", "start": 0, "max_results": request_limit}
         try:
             resp = await _fetch_get(
                 _with_params(self._base_url, params),
@@ -138,8 +135,12 @@ class ArxivSearchProvider:
 
         hits: list[SearchHit] = []
         for i, entry in enumerate(root.findall("a:entry", _ATOM_NS)):
+            if recency_start is not None:
+                published = _atom_date(entry.findtext("a:published", namespaces=_ATOM_NS))
+                if published is None or published < recency_start:
+                    continue
             url = _collapse_ws(entry.findtext("a:id", namespaces=_ATOM_NS))
-            if not url or not _allowed(url, domains_allow, domains_deny):
+            if not url or not url_allowed(url, domains_allow, domains_deny):
                 continue
             hits.append(
                 SearchHit(
@@ -210,7 +211,7 @@ class NewsSearchProvider:
             for i, item in enumerate(root.findall("channel/item")):
                 title = _collapse_ws(item.findtext("title"))
                 url = _collapse_ws(item.findtext("link"))
-                if not url or not _allowed(url, domains_allow, domains_deny):
+                if not url or not url_allowed(url, domains_allow, domains_deny):
                     continue
                 hits.append(
                     SearchHit(
@@ -265,8 +266,7 @@ class SemanticScholarSearchProvider:
         domains_deny: frozenset[str] | None = None,
         time_filter: str | None = None,
     ) -> list[SearchHit]:
-        del time_filter
-        papers = await self._fetch_papers(query, limit)
+        papers = await self._fetch_papers(query, limit, time_filter=time_filter)
         hits: list[SearchHit] = []
         for i, paper in enumerate(papers):
             hit = self._paper_to_hit(paper, i, domains_allow, domains_deny)
@@ -277,12 +277,17 @@ class SemanticScholarSearchProvider:
                 break
         return hits
 
-    async def _fetch_papers(self, query: str, limit: int) -> list:
+    async def _fetch_papers(
+        self, query: str, limit: int, *, time_filter: str | None = None
+    ) -> list:
         params = {
             "query": query,
             "limit": limit,
-            "fields": "title,abstract,url,year,externalIds",
+            "fields": "title,abstract,url,year,publicationDate,externalIds",
         }
+        recency_start = _recency_start(time_filter)
+        if recency_start is not None:
+            params["publicationDateOrYear"] = f"{recency_start.isoformat()}:"
         headers = {"x-api-key": self._api_key} if self._api_key else None
         try:
             resp = await _fetch_get(
@@ -311,7 +316,7 @@ class SemanticScholarSearchProvider:
         url = str(paper.get("url") or "")
         if not url and paper_id:
             url = f"https://www.semanticscholar.org/paper/{paper_id}"
-        if not url or not _allowed(url, domains_allow, domains_deny):
+        if not url or not url_allowed(url, domains_allow, domains_deny):
             return None
         title = str(paper.get("title") or url)
         return SearchHit(
@@ -461,10 +466,11 @@ class MultiSearchProvider:
         hit: SearchHit,
     ) -> None:
         labels = _source_labels(hit.source_engine)
-        current = by_url.get(hit.url)
+        key = source_url_key(hit.url)
+        current = by_url.get(key)
         if current is None:
-            by_url[hit.url] = (hit, hit.rank, labels)
-            ordered_urls.append(hit.url)
+            by_url[key] = (hit, hit.rank, labels)
+            ordered_urls.append(key)
             return
         best_hit, best_rank, engines = current
         for label in labels:
@@ -472,7 +478,7 @@ class MultiSearchProvider:
                 engines.append(label)
         if hit.rank < best_rank:
             best_hit, best_rank = hit, hit.rank
-        by_url[hit.url] = (best_hit, best_rank, engines)
+        by_url[key] = (best_hit, best_rank, engines)
 
     @staticmethod
     def _finalize(

@@ -17,6 +17,7 @@ import { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDoneNoti
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import type { ReportExportFmt } from "@/api/deepResearch";
 import type { ScopeId } from "@/shell/mode";
+import { useToast } from "@/components/toastApi";
 
 interface Params {
   r: ReturnType<typeof useDeepResearch>;
@@ -57,6 +58,7 @@ export function useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftCh
   // gated on the REAL server capability — never a clickable button that 500s. MD
   // always works; PDF/DOCX enable wherever the server has the toolchain.
   const exportCaps = useExportCapabilities();
+  const toast = useToast();
   const doneNotify = useDeepResearchDoneNotification({
     cid: r.cid,
     status: r.status,
@@ -69,27 +71,41 @@ export function useDeepResearchSurfaceState({ r, onScopeChange, draft, onDraftCh
   const [topBarPendingFmt, setTopBarPendingFmt] = useState<ReportExportFmt | null>(null);
   const [topBarIncludeOpen, setTopBarIncludeOpen] = useState(false);
 
+  const runTopBarExport = useCallback(
+    async (fmt: ReportExportFmt, seqs?: number[]) => {
+      try {
+        await r.exportReportByFmt(fmt, seqs);
+      } catch (error) {
+        toast.show({
+          title: "Export failed",
+          body: error instanceof Error ? error.message : "The report could not be exported.",
+        });
+      }
+    },
+    [r, toast],
+  );
+
   const handleTopBarExport = useCallback(
     (fmt: ReportExportFmt) => {
       if (r.followUps.length > 0) {
         setTopBarPendingFmt(fmt);
         setTopBarIncludeOpen(true);
       } else {
-        void r.exportReportByFmt(fmt);
+        void runTopBarExport(fmt);
       }
     },
-    [r],
+    [r, runTopBarExport],
   );
 
   const handleTopBarIncludeConfirm = useCallback(
     (seqs: number[]) => {
       setTopBarIncludeOpen(false);
       if (topBarPendingFmt) {
-        void r.exportReportByFmt(topBarPendingFmt, seqs);
+        void runTopBarExport(topBarPendingFmt, seqs);
       }
       setTopBarPendingFmt(null);
     },
-    [topBarPendingFmt, r],
+    [topBarPendingFmt, runTopBarExport],
   );
 
   return {

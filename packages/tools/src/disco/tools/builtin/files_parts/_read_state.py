@@ -76,9 +76,12 @@ def _conv_state(conv_id: str) -> dict[str, Any]:
         # read_since_write: the coarse F1 bit (path has current visible grounding).
         # reads: CD-TOOLS-1 sha-aware per-path read records for the fresh-edit guard —
         #   {canonical_path: {"sha": <full-file sha at read>, "ranges": [(start,end)],
-        #    "full": bool}}. `ranges` are 1-based inclusive line spans the model SAW
+        #    "full": bool, "anchored_full": bool}}. `ranges` are 1-based inclusive
+        #   line spans the model SAW
         #   un-elided (a real file_read page or mutator success view); `full` is True
-        #   when that view covers the whole file.
+        #   when that numbered view covers the whole file. `anchored_full` records
+        #   complete textual knowledge from model-authored bytes across owned
+        #   mutations; it can ground text-anchored edits, never line-number edits.
         # targeted_read_grounded: reads[path] came from model-visible numbered content that can
         # ground targeted edits. Refusal-delivered reads set this without read_since_write;
         # successful mutators set both.
