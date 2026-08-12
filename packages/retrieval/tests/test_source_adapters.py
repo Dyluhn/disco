@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import httpx
 from disco.retrieval.models import SearchHit
 from disco.retrieval.providers import SearchProvider
@@ -95,6 +97,26 @@ async def test_arxiv_malformed_xml_degrades_to_empty():
     assert await provider.search("bad") == []
 
 
+async def test_arxiv_recency_excludes_old_or_undated_results():
+    recent = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
+    old = (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry><id>https://arxiv.org/abs/recent</id><title>Recent</title>
+        <published>{recent}T00:00:00Z</published><summary>Recent work.</summary></entry>
+      <entry><id>https://arxiv.org/abs/old</id><title>Old</title>
+        <published>{old}T00:00:00Z</published><summary>Old work.</summary></entry>
+      <entry><id>https://arxiv.org/abs/undated</id><title>Undated</title>
+        <summary>Unknown date.</summary></entry>
+    </feed>""".encode()
+
+    provider = ArxivSearchProvider(
+        transport=_transport(lambda req: httpx.Response(200, content=xml))
+    )
+    hits = await provider.search("new work", limit=3, time_filter="week")
+    assert [hit.url for hit in hits] == ["https://arxiv.org/abs/recent"]
+
+
 async def test_news_maps_rss_hits_strips_html_and_satisfies_protocol():
     rss = b"""<?xml version="1.0" encoding="UTF-8"?>
     <rss version="2.0">
@@ -166,7 +188,7 @@ async def test_semantic_scholar_maps_json_and_sends_api_key():
         seen_headers.append(req.headers.get("x-api-key"))
         assert req.url.path == "/graph/v1/paper/search"
         assert req.url.params["query"] == "retrieval"
-        assert req.url.params["fields"] == "title,abstract,url,year,externalIds"
+        assert req.url.params["fields"] == ("title,abstract,url,year,publicationDate,externalIds")
         return httpx.Response(
             200,
             json={
@@ -208,6 +230,17 @@ async def test_semantic_scholar_http_error_degrades_to_empty():
     )
 
     assert await provider.search("q") == []
+
+
+async def test_semantic_scholar_threads_strict_recency_filter():
+    expected_start = (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.params["publicationDateOrYear"] == f"{expected_start}:"
+        return httpx.Response(200, json={"data": []})
+
+    provider = SemanticScholarSearchProvider(transport=_transport(handler))
+    assert await provider.search("new research", time_filter="week") == []
 
 
 class FakeMultiProvider:

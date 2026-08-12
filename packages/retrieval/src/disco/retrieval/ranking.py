@@ -17,6 +17,7 @@ from disco.core.llm import CapabilityProfile, CompletionRequest, LLMRouter, Mode
 from disco.core.think import strip_think_spans
 
 from .models import Passage, SearchHit
+from .url_policy import source_url_key
 
 _WORD = re.compile(r"[a-z0-9]+")
 
@@ -61,10 +62,11 @@ def reciprocal_rank_fusion(hit_lists: list[list[SearchHit]], *, k: int = 60) -> 
     first_seen: dict[str, SearchHit] = {}
     for hits in hit_lists:
         for rank, hit in enumerate(hits):
-            scores[hit.url] = scores.get(hit.url, 0.0) + 1.0 / (k + rank)
-            first_seen.setdefault(hit.url, hit)
-    ordered = sorted(first_seen.values(), key=lambda h: scores[h.url], reverse=True)
-    return ordered
+            key = source_url_key(hit.url)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+            first_seen.setdefault(key, hit)
+    ordered = sorted(first_seen.items(), key=lambda item: scores[item[0]], reverse=True)
+    return [hit for _key, hit in ordered]
 
 
 # ---- shipped stub implementations -------------------------------------------
@@ -120,7 +122,17 @@ class RouterQueryRewriter:
             )
         req = CompletionRequest(
             profile=CapabilityProfile(role=ModelRole.QUERY_REWRITER),
-            messages=[LLMMessage(role="user", content=instruction)],
+            messages=[
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "Rewrite search queries without changing their subject, named "
+                        "entities, time window, exclusions, or requested scope. Output "
+                        "only the requested query lines."
+                    ),
+                ),
+                LLMMessage(role="user", content=instruction),
+            ],
             temperature=0.0,
         )
         resp = await self._router.complete(req)

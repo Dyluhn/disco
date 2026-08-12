@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from disco.retrieval.models import SearchHit
 from disco.retrieval.providers import ExtractionProvider, SearchProvider
 from disco.tools.mcp.retrieval_tier import (
     _MCPRetrievalExtractionProvider,
@@ -296,6 +297,85 @@ async def test_search_provider_handles_error_gracefully():
 
 
 @pytest.mark.asyncio
+async def test_mcp_search_enforces_filters_and_threads_supported_recency():
+    captured: dict = {}
+
+    async def call(server, tool, arguments):
+        captured.update(arguments)
+        return {
+            "content": [
+                {
+                    "text": json.dumps(
+                        {
+                            "results": [
+                                {"url": "https://example.com/good", "title": "Good"},
+                                {"url": "https://notexample.com/bad", "title": "Bad"},
+                            ]
+                        }
+                    )
+                }
+            ]
+        }
+
+    provider = _MCPRetrievalSearchProvider(
+        "srv",
+        "search",
+        call,
+        input_fields=frozenset({"query", "limit", "time_range", "include_domains"}),
+    )
+    hits = await provider.search(
+        "new release",
+        limit=4,
+        time_filter="week",
+        domains_allow=frozenset({"example.com"}),
+    )
+
+    assert captured == {
+        "query": "new release",
+        "limit": 4,
+        "time_range": "week",
+        "include_domains": ["example.com"],
+    }
+    assert [hit.url for hit in hits] == ["https://example.com/good"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_without_recency_capability_is_excluded_from_recency_run():
+    called = False
+
+    async def call(server, tool, arguments):
+        nonlocal called
+        called = True
+        return {"content": []}
+
+    provider = _MCPRetrievalSearchProvider("srv", "search", call)
+    assert await provider.search("new release", time_filter="week") == []
+    assert called is False
+
+
+@pytest.mark.asyncio
+async def test_narrow_mcp_failure_does_not_sink_healthy_search_provider():
+    from disco.tools.mcp.retrieval_tier import CompositeSearchProvider
+
+    class _Healthy:
+        name = "healthy"
+
+        async def search(self, query, **kwargs):
+            return [SearchHit(url="https://example.com/good", title="Good")]
+
+    class _NarrowFailing:
+        name = "narrow-failing"
+
+        async def search(self, query, *, limit):
+            raise RuntimeError("provider unavailable")
+
+    composite = CompositeSearchProvider(_Healthy(), [_NarrowFailing()])
+    hits = await composite.search("new release", limit=4)
+
+    assert [hit.url for hit in hits] == ["https://example.com/good"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_error_results_never_become_search_hits_or_citable_content():
     result = {
         "content": [{"type": "text", "text": "unknown source"}],
@@ -313,6 +393,20 @@ async def test_mcp_error_results_never_become_search_hits_or_citable_content():
     assert doc.passages == []
     assert doc.content == ""
     assert doc.error == "unknown source"
+
+
+@pytest.mark.asyncio
+async def test_mcp_extraction_exception_is_an_explicit_failed_document():
+    async def failing_call(server, tool, arguments):
+        raise RuntimeError("fetch unavailable")
+
+    provider = _MCPRetrievalExtractionProvider("srv", "fetch", failing_call)
+    doc = await provider.extract("https://example.com/source")
+    assert doc.fetched_ok is False
+    assert doc.status == "error"
+    assert doc.passages == []
+    assert doc.content == ""
+    assert doc.error == "Extraction failed: fetch unavailable"
 
 
 @pytest.mark.asyncio

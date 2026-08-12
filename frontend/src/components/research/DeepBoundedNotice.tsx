@@ -21,9 +21,9 @@ interface Props {
 
 const BOUND_TEXT: Record<string, { what: string; lever: string }> = {
   sources: {
-    what: "the whole-run source budget",
+    what: "the web-source budget",
     lever:
-      "Each tier caps the total passages accumulated. This run hit the source budget before covering the rest of the plan.",
+      "Each tier caps unique web passages per execution. Further retrieval or refinement stopped when this run reached that cap.",
   },
   wall_clock: {
     what: "the wall-clock budget",

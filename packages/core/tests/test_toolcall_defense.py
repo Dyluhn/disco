@@ -1,5 +1,5 @@
 import pytest
-from disco.core.events import AgentErrorEvent, LLMMessage
+from disco.core.events import AgentErrorEvent, LLMMessage, _snip_args
 from disco.core.llm.openai_provider import OpenAIProvider, _sanitize_tool_name
 from disco.core.llm.types import ToolSpec
 from loop_fakes import ScriptedAgent, action_step, build_loop
@@ -94,6 +94,161 @@ async def test_tool_calls_sanitization_both_ways():
 
     assert len(parsed_calls) == 1
     assert parsed_calls[0].tool_name == "sandbox.shell"  # Mapped back!
+
+
+def test_provider_message_drops_elided_call_without_rewriting_assistant_prose():
+    """A serialized historical call is never retained with required fields missing."""
+    provider = OpenAIProvider("http://localhost")
+    history_msg = LLMMessage(
+        role="assistant",
+        content="Created the page.",
+        tool_calls=[
+            {
+                "id": "call_write",
+                "name": "file_write",
+                "arguments": _snip_args(
+                    {"path": "index.html", "content": "<main>large</main>" * 200}
+                ),
+            }
+        ],
+    )
+
+    serialized = provider._message(history_msg)
+
+    assert "tool_calls" not in serialized
+    assert "DISCO-ELIDED" not in str(serialized)
+    assert serialized["content"] == "Created the page."
+
+
+def test_provider_payload_externalizes_elided_call_and_result_as_host_transcript():
+    """The provider sees neither a placeholder nor a schema-invalid tool-call example."""
+    from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+
+    provider = OpenAIProvider("http://localhost")
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(role="user", content="Build the page."),
+            LLMMessage(
+                role="assistant",
+                content="Created the page.",
+                tool_calls=[
+                    {
+                        "id": "call_write",
+                        "name": "file_write",
+                        "arguments": _snip_args(
+                            {"path": "index.html", "content": "<main>large</main>" * 200}
+                        ),
+                    }
+                ],
+            ),
+            LLMMessage(
+                role="tool",
+                tool_call_id="call_write",
+                content="wrote 3,600 bytes to index.html\n\n```html\n<main>…</main>\n```",
+            ),
+        ],
+    )
+
+    messages = provider._payload(request, "test-model", stream=False)["messages"]
+    assistant = next(message for message in messages if message["role"] == "assistant")
+    transcript = next(
+        message
+        for message in messages
+        if message["role"] == "user" and "Host transcript" in str(message["content"])
+    )
+
+    assert assistant["content"] == "Created the page."
+    assert "tool_calls" not in assistant
+    assert "tool_call_id" not in transcript
+    assert transcript["content"].startswith("[Host transcript —")
+    assert "not reusable tool input or file content" in transcript["content"]
+    assert transcript["content"].index("Host transcript") < transcript["content"].index("```html")
+    assert not any(message["role"] == "tool" for message in messages)
+    assert "DISCO-ELIDED" not in str(messages)
+
+
+def test_provider_payload_preserves_normal_call_beside_externalized_elided_call():
+    """Mixed parallel history keeps valid call/result adjacency and externalizes only elision."""
+    from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+
+    provider = OpenAIProvider("http://localhost")
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(
+                role="assistant",
+                content="Wrote and inspected the page.",
+                tool_calls=[
+                    {
+                        "id": "call_write",
+                        "name": "file_write",
+                        "arguments": _snip_args(
+                            {"path": "index.html", "content": "<main>large</main>" * 200}
+                        ),
+                    },
+                    {
+                        "id": "call_list",
+                        "name": "file_list",
+                        "arguments": {"path": "."},
+                    },
+                ],
+            ),
+            LLMMessage(role="tool", tool_call_id="call_write", content="wrote index.html"),
+            LLMMessage(role="tool", tool_call_id="call_list", content="index.html"),
+        ],
+    )
+
+    messages = provider._payload(request, "test-model", stream=False)["messages"]
+    assistant_index = next(
+        i for i, message in enumerate(messages) if message["role"] == "assistant"
+    )
+    assistant = messages[assistant_index]
+    calls = assistant["tool_calls"]
+
+    assert [call["id"] for call in calls] == ["call_list"]
+    assert calls[0]["function"]["arguments"] == '{"path": "."}'
+    assert messages[assistant_index + 1] == {
+        "role": "tool",
+        "tool_call_id": "call_list",
+        "content": "index.html",
+    }
+    transcript = next(
+        message
+        for message in messages
+        if message["role"] == "user" and "Host transcript" in str(message["content"])
+    )
+    assert "wrote index.html" in transcript["content"]
+    assert "DISCO-ELIDED" not in str(messages)
+
+
+def test_provider_payload_leaves_normal_tool_history_byte_unchanged():
+    from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+
+    provider = OpenAIProvider("http://localhost")
+    request = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(
+                role="assistant",
+                content="Read it.",
+                tool_calls=[
+                    {
+                        "id": "call_read",
+                        "name": "file_read",
+                        "arguments": {"path": "index.html"},
+                    }
+                ],
+            ),
+            LLMMessage(role="tool", tool_call_id="call_read", content="current bytes"),
+        ],
+    )
+
+    messages = provider._payload(request, "test-model", stream=False)["messages"]
+    result = next(message for message in messages if message["role"] == "tool")
+
+    assert result["content"] == "current bytes"
+    assert "Host transcript metadata" not in str(messages)
 
 
 def test_tool_call_xml_leak_defense():

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ...behavior import declares
-from ._constants import _FS
+from ._constants import _FS, _MODEL_WRITE_CHUNK_MAX_CHARS
 from ._fresh_edit_guard import guard_fresh_edit
 from ._governed import _governed_guard
 from ._mutation import _gated_write, _write_artifact_structured
@@ -20,13 +20,19 @@ class FileReplaceLinesArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to edit.")
     start_line: int = Field(description="First line to replace (1-based, inclusive).")
     end_line: int = Field(description="Last line to replace (1-based, inclusive).")
-    new_text: str = Field(description="Replacement text for that line range (can be multi-line).")
+    new_text: str = Field(
+        description=(
+            "Replacement text for that line range (can be multi-line; keep this call "
+            "under 12,000 characters)."
+        ),
+        json_schema_extra={"maxLength": _MODEL_WRITE_CHUNK_MAX_CHARS},
+    )
 
 
 class FileReplaceLinesTool:
     """Surgical, large-file-friendly edit: replace an inclusive 1-based LINE RANGE
     with new text. The model reads the numbered file, picks the range, and writes
-    the replacement — no need to reproduce the old bytes. Works for any model/size."""
+    the replacement without reproducing the old bytes."""
 
     definition = ToolDef(
         name="file_replace_lines",
@@ -35,7 +41,8 @@ class FileReplaceLinesTool:
             "`new_text`. Good for large files where reproducing exact text is hard. "
             "IMPORTANT: your previous edit's observation shows the CURRENT numbering "
             "for that region — use it; re-read only if you edited elsewhere since. "
-            "Use file_insert_lines to insert without replacing."
+            "Keep each new_text argument under 12,000 characters. Use file_insert_lines "
+            "to insert without replacing or to split a larger addition into bounded calls."
         ),
         args_model=FileReplaceLinesArgs,
         needs=_FS,

@@ -6,7 +6,7 @@ Tests the bounded re-search loop added to `stream_research_answer`:
 2. Round-0 yields 0 supported claims, round-1 yields ≥1 → rewrite called once;
    final answer is round-1's; a `reformulating` phase frame was emitted; round-0
    tokens were NOT emitted.
-3. Both rounds yield 0 supported → emits round-1 final (best-effort) and stops;
+3. Both rounds yield 0 supported → emits an honest grounding error and stops;
    rewrite called ≤2 times total (bound honoured, no loop).
 4. max_research_rounds=1 (default) → never reformulates regardless of signal;
    proves the param gates it and protects all existing callers/tests.
@@ -384,9 +384,12 @@ async def test_reformulates_once_when_round0_has_no_supported_claims():
 
 @pytest.mark.asyncio
 async def test_bound_honoured_emits_best_effort_final_when_always_empty():
-    """When both rounds have 0 supported claims the pipeline emits the last
-    round's answer as best-effort and stops.  rewriter.rewrite is called at
-    most once (only one reformulation between round 0 and round 1)."""
+    """When both rounds have 0 supported claims the pipeline refuses to certify
+    either draft and stops after one reformulation.
+
+    The sealed historical id is retained, but unsupported best-effort prose is
+    no longer emitted as a final result.
+    """
     reranker = LexicalReranker()
     nli = _nli_all_unsupported()  # nothing is ever "entail" → supported count always 0
     multi_search = FakeSearchProvider([hit(_SEARCH_URL_R0), hit(_SEARCH_URL_R1)])
@@ -415,15 +418,16 @@ async def test_bound_honoured_emits_best_effort_final_when_always_empty():
         "expected reformulating phase frame"
     )
 
-    # Terminates with a final + state:finished (best-effort)
+    # Terminates honestly; unsupported prose is never emitted as a final answer.
     types = [f["type"] for f in frames]
-    assert types[-1] == "state" and frames[-1]["status"] == "finished"
-    assert types[-2] == "final"
+    assert types[-1] == "error"
+    assert "did not support any factual claim" in frames[-1]["message"]
+    assert "final" not in types
 
-    # The last round's answer (round 1) is what's in final (not round 0)
+    # Neither rejected round's buffered draft is shown.
     token_frames = [f for f in frames if f["type"] == "token"]
     emitted_text = "".join(f["token"] for f in token_frames)
-    assert "blue" in emitted_text, f"Expected round-1 tokens in output, got: {emitted_text!r}"
+    assert "blue" not in emitted_text
     assert "unclear" not in emitted_text, (
         f"Round-0 draft tokens should not appear, got: {emitted_text!r}"
     )
@@ -471,10 +475,10 @@ async def test_default_max_rounds_never_reformulates():
         f.get("type") == "phase" and f.get("phase") == "reformulating" for f in frames
     ), "reformulating frame emitted with max_research_rounds=1"
 
-    # Pipeline still completes normally — final + finished
+    # No unsupported final is certified merely because retries were disabled.
     types = [f["type"] for f in frames]
-    assert types[-1] == "state" and frames[-1]["status"] == "finished"
-    assert types[-2] == "final"
+    assert types[-1] == "error"
+    assert "final" not in types
 
     # Only one generation call (no retry)
     assert len(router.stream_calls) == 1

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from ...anatomy import ToolContext, ToolDef, ToolOutcome
 from ...behavior import declares
 from ._canonical import _canonical
-from ._constants import _BINARY_DELIVERABLE_EXTS, _FS
+from ._constants import _BINARY_DELIVERABLE_EXTS, _FS, _MODEL_WRITE_CHUNK_MAX_CHARS
 from ._elision import _has_elision_marker
 from ._governed import _governed_guard
 from ._mutation import (
@@ -32,7 +32,13 @@ from ._success_view import _updated_region_success_content
 
 class FileWriteArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to write.")
-    content: str = Field(description="Full UTF-8 content to write.")
+    content: str = Field(
+        description=(
+            "Full UTF-8 content to write. Keep this call under 12,000 characters; "
+            "create larger files with bounded file_append chunks."
+        ),
+        json_schema_extra={"maxLength": _MODEL_WRITE_CHUNK_MAX_CHARS},
+    )
     allow_shrink: bool = Field(
         default=False,
         description=(
@@ -162,7 +168,9 @@ class FileWriteTool:
             "copy elision placeholders, and pass allow_shrink=true only when a >50% "
             "shrink is intentional. Writes to host-managed .disco/ artifacts are "
             "refused, and successful writes commit atomically. Large source files "
-            "are supported; use bounded file_read ranges and targeted edit tools "
+            "are supported through bounded calls; keep each content argument under "
+            "12,000 characters, then use bounded file_append chunks. Use bounded file_read "
+            "ranges and targeted edit tools "
             "for later changes instead of reproducing the whole file from memory."
         ),
         args_model=FileWriteArgs,

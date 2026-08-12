@@ -34,8 +34,6 @@ from disco.retrieval.engine import DefaultRetrievalEngine
 from disco.retrieval.models import (
     ExtractedDoc,
     Passage,
-    RetrievalRequest,
-    RetrievalResult,
     SearchHit,
 )
 from disco.retrieval.vectorstore import InMemoryVectorStore
@@ -89,7 +87,7 @@ class _FakeExtraction:
         return ExtractedDoc(
             url=url,
             title=f"doc {idx}",
-            markdown=f"content for {url}",
+            content=f"content for {url}",
             passages=[
                 Passage(
                     id=passage_id,
@@ -100,6 +98,10 @@ class _FakeExtraction:
             ],
         )
 
+    async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+        docs = [await self.extract(url) for url in urls]
+        return [doc for doc in docs if doc is not None]
+
 
 class _FakeReranker:
     name = "fake_reranker"
@@ -109,9 +111,9 @@ class _FakeReranker:
         query: str,
         passages: list[Passage],
         *,
-        request: RetrievalRequest | None = None,
-    ) -> RetrievalResult:
-        return RetrievalResult(passages=passages)
+        top_k: int,
+    ) -> list[Passage]:
+        return passages[:top_k]
 
 
 class _FakeEmbedder:
@@ -354,6 +356,38 @@ async def test_steer_empty_returns_do_not_change_run() -> None:
         p for k, p in captured if k == "observation" and "mid-run steer" in str(p.get("detail", ""))
     ]
     assert steer_obs == []
+
+
+@pytest.mark.asyncio
+async def test_steer_respects_tier_subquestion_cap() -> None:
+    plan_steps = [f"Question {index}" for index in range(6)]
+    steer = "A seventh question"
+    router = _ScriptedRouter(
+        {
+            "query_rewriter": ["SUFFICIENT\nnone"] * 12,
+            "rag_answerer": ["Finding [[p0]]."] * 6 + ["Summary [[p0]]."],
+        }
+    )
+    run = _make_run(router, conversation_id="conv_steer_cap")
+    captured, emit = _collect_events()
+    calls = 0
+
+    def pop_steers() -> list[str]:
+        nonlocal calls
+        calls += 1
+        return [steer] if calls == 1 else []
+
+    result = await run.run(plan_steps, emit=emit, pop_steers=pop_steers)
+
+    assert len(result.sections) == 6
+    assert steer not in {section.title for section in result.sections}
+    rejected = [
+        payload
+        for kind, payload in captured
+        if kind == "observation" and "sub-question cap" in str(payload.get("detail", ""))
+    ]
+    assert len(rejected) == 1
+    assert result.bounded_by == "subquestions"
 
 
 # ---- test 3: inject-source folds passage into carried_passages ---------------
