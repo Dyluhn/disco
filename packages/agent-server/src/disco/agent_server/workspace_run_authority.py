@@ -211,6 +211,15 @@ class _WorkspaceLifecycleAuthority:
     def _require_lifecycle_fence(self, conversation_id: str) -> None:
         self._fences._require_lifecycle_fence(conversation_id)
 
+    async def resolve_current_run_authority(
+        self,
+        conversation_id: str,
+    ) -> tuple[str | None, str | None]:
+        agent_view_id, run_intent_id, _strict = (
+            await self._lifecycle_commands.resolve_current_authority(conversation_id)
+        )
+        return agent_view_id, run_intent_id
+
     async def append_status(
         self,
         conversation_id: str,

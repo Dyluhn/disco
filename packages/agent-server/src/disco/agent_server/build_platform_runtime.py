@@ -28,13 +28,7 @@ from disco.core.build_platform import (
 )
 from disco.core.llm import ToolSpec
 from disco.core.store import EventStore
-from disco.core.verification import (
-    AdmittedVerificationContract,
-    HostVerificationClaim,
-    VerificationCheckContract,
-    VerificationDeliveryContract,
-    VerificationParameter,
-)
+from disco.core.verification import AdmittedVerificationContract, HostVerificationClaim
 
 from .appkit_ejection import AppKitEjectionLedger
 from .build_platform_shadow import (
@@ -44,6 +38,7 @@ from .build_platform_shadow import (
     select_appkit_platform_route,
     select_freeform_platform_route,
 )
+from .build_platform_verification import record_verification_contract
 from .workspace_fence import WorkspaceFenceService
 
 BuildRoute = Literal["legacy", "platform"]
@@ -89,58 +84,6 @@ _LEGACY_ADMISSION = _AdmissionFields(
     verification_claims=(),
     verification_contract=None,
 )
-
-
-def _record_verification_contract(
-    record: BuildPlatformRouteRecord | None,
-) -> AdmittedVerificationContract | None:
-    if record is None:
-        return None
-    composition = record.composition
-    target_plan = composition.target_plan
-    verifier_plan = target_plan.verifier
-    delivery = target_plan.delivery
-    return AdmittedVerificationContract(
-        target_id=target_plan.target.canonical,
-        verifier_id=composition.profile.verifier.canonical,
-        delivery=VerificationDeliveryContract(
-            shape=delivery.shape,
-            mode=delivery.mode,
-            entry_kind=delivery.entry.kind,
-            entry_reference=delivery.entry.reference,
-            entry_parameters=tuple(
-                VerificationParameter(name=parameter.name, value=parameter.value)
-                for parameter in delivery.entry.parameters
-            ),
-        ),
-        preview_modality=target_plan.preview.modality,
-        checks=tuple(
-            VerificationCheckContract(
-                check_id=check.check_id,
-                receipt_kind=check.receipt_kind,
-                issuer_id=(
-                    check.issuer.canonical
-                    if check.issuer is not None
-                    else composition.profile.verifier.canonical
-                ),
-                operation=check.intent.operation,
-                required_execution_modality=check.required_execution_modality,
-                required_artifact_identity_scheme=check.required_artifact_identity_scheme,
-                required=check.required,
-                delegated_issuer_ids=frozenset(
-                    issuer.canonical for issuer in check.delegated_issuers
-                ),
-                accepted_claim_kinds=(
-                    check.accepted_claim_kinds or frozenset(claim.kind for claim in check.claims)
-                ),
-                claims=check.claims,
-            )
-            for check in verifier_plan.checks
-        ),
-        required=verifier_plan.policy.required,
-        unavailable=verifier_plan.policy.unavailable,
-        unverified_finish=verifier_plan.policy.unverified_finish,
-    )
 
 
 def _released_sequence(events: Iterable[Event]) -> int:
@@ -195,6 +138,41 @@ def _validate_existing_admission(
         raise RuntimeError("durable Build admission differs from the reconstructed composition")
 
 
+def _reusable_platform_record(
+    conversation_id: str,
+    state: _RouteState,
+    admission: BuildPlatformAdmissionEvent | None,
+    restored_profile: ComponentId | None,
+    events: list[Event],
+) -> BuildPlatformRouteRecord | None:
+    """Retain only a live composition that proves the complete durable admission."""
+
+    record = state.record
+    intent = latest_workspace_run_intent(events)
+    if (
+        admission is None
+        or admission.route != "platform"
+        or restored_profile is None
+        or record is None
+        or state.selected_route != admission.route
+        or state.selected_profile != restored_profile
+        or intent is None
+        or admission.run_intent_id != intent.id
+    ):
+        return None
+    try:
+        fields = _platform_fields(record, restored_profile, intent, conversation_id)
+        _validate_existing_admission(
+            admission,
+            route="platform",
+            profile=restored_profile,
+            fields=fields,
+        )
+    except (RuntimeError, ValueError):
+        return None
+    return record
+
+
 def _platform_fields(
     record: BuildPlatformRouteRecord,
     profile: ComponentId,
@@ -205,7 +183,7 @@ def _platform_fields(
         raise RuntimeError("Platform route resolved a different Build profile")
     if type(intent.seq) is not int:
         raise RuntimeError("Build route intent has no canonical sequence")
-    contract = _record_verification_contract(record)
+    contract = record_verification_contract(record)
     identity = derive_run_admission_identity(
         CompositionDigest(digest=record.composition_digest),
         RunAdmissionAnchor(
@@ -481,6 +459,13 @@ class BuildPlatformRuntime:
             ),
             None,
         )
+        reusable_record = _reusable_platform_record(
+            conversation_id,
+            state,
+            admission,
+            restored_profile,
+            events,
+        )
         self._ejections.record(
             conversation_id,
             ejected=current_appkit_ejection(events) is not None,
@@ -492,7 +477,7 @@ class BuildPlatformRuntime:
                 pin=admission.route if admission is not None else None,
                 selected_route=admission.route if admission is not None else None,
                 selected_profile=restored_profile,
-                record=None,
+                record=reusable_record,
             ),
         )
 

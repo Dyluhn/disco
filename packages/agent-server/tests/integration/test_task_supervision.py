@@ -24,6 +24,7 @@ from disco.core.events import (
     LLMMessage,
     MessageEvent,
     StatusEvent,
+    WorkspaceMutationEvent,
 )
 from disco.core.llm import DefaultLLMRouter, ModelEntry, ProposedToolCall, RouterConfig
 from disco.tools import ProcessSandboxService
@@ -108,6 +109,39 @@ async def test_uncaught_loop_exception_terminalizes_as_error(monkeypatch):
     assert any(
         isinstance(e, StatusEvent) and e.status == ConversationStatus.ERROR for e in events
     ), "a terminal ERROR StatusEvent must be visible to the UI"
+
+
+async def test_pre_admission_crash_terminalizes_under_the_durable_run_authority():
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store)
+    cid, seq = await _kicked_conversation(store, runtime)
+    intent = await store.append(
+        cid,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    runtime._build_platform.prepare_route_pin = AsyncMock(
+        side_effect=RuntimeError("route preparation crashed")
+    )
+
+    runtime.run_controller.kick(cid, claimed_user_seq=seq)
+    task = runtime.run_registry.task(cid)
+    assert task is not None
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(asyncio.shield(task), timeout=10)
+    await asyncio.sleep(0.2)
+
+    events = await store.get_events(cid)
+    errors = [
+        event
+        for event in events
+        if isinstance(event, StatusEvent) and event.status is ConversationStatus.ERROR
+    ]
+    assert len(errors) == 1
+    assert errors[0].run_intent_id == intent.id
+    assert "route preparation crashed" in (errors[0].detail or "")
 
 
 async def test_cancellation_is_not_reported_as_error(monkeypatch):

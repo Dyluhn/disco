@@ -22,6 +22,11 @@ class KernelSelector(Protocol):
 
 
 class RunWorkspacePort(Protocol):
+    async def resolve_current_run_authority(
+        self,
+        conversation_id: str,
+    ) -> RunAuthority: ...
+
     async def run_after_admission(
         self,
         conversation_id: str,

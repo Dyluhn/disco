@@ -185,6 +185,18 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
     ]
     assert contract.required_claims == admission.verification_claims
 
+    live_record = runtime._build_platform.route_records["durable"]
+    await runtime._build_platform.prepare_route_pin("durable")
+    assert runtime._build_platform.route_records["durable"] is live_record
+    await runtime._build_platform.record_route_locked("durable")
+    assert len(
+        [
+            event
+            for event in await runtime._store.get_events("durable")
+            if isinstance(event, BuildPlatformAdmissionEvent)
+        ]
+    ) == 1
+
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     restarted = ConversationRuntime(runtime._store)
     restarted.settings._set_surface("durable", "agent")
@@ -235,6 +247,39 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
     )
     with pytest.raises(RuntimeError, match="different Build admission"):
         await restarted._build_platform.record_route_locked("durable")
+
+
+@pytest.mark.asyncio
+async def test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission(
+    monkeypatch,
+) -> None:
+    runtime, loop = _compose(monkeypatch, "drifted-reentry", platform=True)
+    await runtime._store.append(
+        "drifted-reentry",
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.message",
+            run_protocol_version=1,
+        ),
+    )
+    await runtime._build_platform.record_route_locked("drifted-reentry")
+    drifted_record = select_freeform_platform_route(
+        tool_specs=(
+            *loop.executor.available_tools(),
+            ToolSpec(name="drift_probe", description="drift", parameters_schema={}),
+        ),
+        delivery_kind="app",
+    )
+    runtime._build_platform._set_selection(
+        "drifted-reentry",
+        route="platform",
+        profile=drifted_record.composition.profile.id,
+        record=drifted_record,
+    )
+
+    await runtime._build_platform.prepare_route_pin("drifted-reentry")
+
+    assert "drifted-reentry" not in runtime._build_platform.route_records
+    assert runtime._build_platform.route_pins["drifted-reentry"] == "platform"
 
 
 @pytest.mark.asyncio
