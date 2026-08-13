@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..dod_evaluator import DoDEvaluator
 from ..events import VerifierVerdictEvent
@@ -82,6 +82,8 @@ def _initialize_core(
     control_fence: ControlFenceFactory,
     quiet: bool,
     strict_appkit_active: Callable[[], bool] | None,
+    declared_delivery_kind: Literal["app", "files"] | None,
+    delivery_contract_resolver: Callable[[str], Awaitable[None]] | None,
 ) -> None:
     # Autonomous mode (issue A): no human is available to answer questions or
     # approve plans (headless / unattended runs). Default False = today's
@@ -96,6 +98,8 @@ def _initialize_core(
     # phase, so a confirmed CUSTOM_BUILD widening restores ordinary predicates
     # without reconstructing the loop. A configured callback fails closed.
     loop._strict_appkit_active_reader = strict_appkit_active
+    loop._declared_delivery_kind = declared_delivery_kind
+    loop._delivery_contract_resolver = delivery_contract_resolver
     loop._finish_alias = finish_alias
     loop._workflow_run, loop._terminal_commit_hook = workflow_run, terminal_commit_hook
     loop._control_fence = control_fence
@@ -336,8 +340,8 @@ def _initialize_extracted_collaborators(loop: AgentLoop) -> None:
 
 
 # fmt: off
-def initialize_agent_loop(loop: AgentLoop, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None) -> None:
-    _initialize_core(loop, conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active)
+def initialize_agent_loop(loop: AgentLoop, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal["app", "files"] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None:
+    _initialize_core(loop, conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active, declared_delivery_kind=declared_delivery_kind, delivery_contract_resolver=delivery_contract_resolver)
     _initialize_legacy_collaborators(loop, veto_feedback)
     _initialize_verification_and_control(loop, dod_evaluator_factory=dod_evaluator_factory, host_verifier=host_verifier, host_verify_timeout_s=host_verify_timeout_s, host_verifier_verdict_hook=host_verifier_verdict_hook, host_verify_authoritative=host_verify_authoritative, verifier_judge=verifier_judge, verifier_judge_timeout_s=verifier_judge_timeout_s, finish_sealability_probe=finish_sealability_probe, finish_seal_timeout_s=finish_seal_timeout_s)
     _initialize_cadence(loop, recitation_cadence=recitation_cadence, reground_cadence=reground_cadence)

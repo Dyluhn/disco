@@ -180,7 +180,11 @@ async def test_host_rebinds_rotated_preview_without_model_serve(monkeypatch) -> 
 def test_host_does_not_rebind_without_a_new_active_preview() -> None:
     action, observation = _preview_pair(1, "a")
     events = with_seqs(
-        [action, observation, DeliverableEvent(title="App", path="index.html")]
+        [
+            action,
+            observation,
+            DeliverableEvent(title="App", path="index.html", artifact_kind="app"),
+        ]
     )
     assert not host_deliverable._preview_generation_changed(
         events, cast(DeliverableEvent, events[-1])

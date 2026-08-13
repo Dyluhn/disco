@@ -12,6 +12,8 @@ from .builtin_profiles import (
     APPKIT_PROMPT_ID,
     APPKIT_RULES,
     APPKIT_VERIFIER_ID,
+    ARTIFACT_TARGET_ID,
+    FREEFORM_ARTIFACT_PROFILE_ID,
     FREEFORM_ENGINE_ID,
     FREEFORM_PROFILE_ID,
     FREEFORM_PROMPT_ID,
@@ -70,25 +72,61 @@ def _policy_values(rules: tuple[PolicyRule, ...]) -> tuple[str, ...]:
 def expected_legacy_snapshot(
     *, appkit: bool, visible_tools: frozenset[str]
 ) -> LegacyAuthoritySnapshot:
+    """Preserve the accepted public snapshot of the historical web target."""
+
+    return expected_legacy_snapshot_for_delivery(
+        appkit=appkit,
+        visible_tools=visible_tools,
+        delivery_kind="app",
+    )
+
+
+def expected_legacy_snapshot_for_delivery(
+    *,
+    appkit: bool,
+    visible_tools: frozenset[str],
+    delivery_kind: Literal["app", "files"],
+) -> LegacyAuthoritySnapshot:
+    """Project the exact legacy authority for a host-derived delivery kind."""
+
+    if appkit and delivery_kind != "app":
+        raise ValueError("AppKit has only an interactive delivery target")
+    artifact = not appkit and delivery_kind == "files"
     source: Literal["freeform", "appkit"] = "appkit" if appkit else "freeform"
     return LegacyAuthoritySnapshot(
         source=source,
-        profile=APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID,
+        profile=(
+            APPKIT_PROFILE_ID
+            if appkit
+            else FREEFORM_ARTIFACT_PROFILE_ID
+            if artifact
+            else FREEFORM_PROFILE_ID
+        ),
         engine=APPKIT_ENGINE_ID if appkit else FREEFORM_ENGINE_ID,
-        target=WEB_TARGET_ID,
+        target=ARTIFACT_TARGET_ID if artifact else WEB_TARGET_ID,
         policy=_policy_values(APPKIT_RULES if appkit else FREEFORM_RULES),
         prompt_modules=((APPKIT_PROMPT_ID if appkit else FREEFORM_PROMPT_ID).canonical,),
         visible_tools=tuple(sorted(visible_tools)),
-        preview=f"{HOST_PREVIEW_ID.canonical}|modality=legacy_host",
+        preview=(
+            f"{HOST_PREVIEW_ID.canonical}|modality=none"
+            if artifact
+            else f"{HOST_PREVIEW_ID.canonical}|modality=legacy_host"
+        ),
         verifier=(
             (
                 f"{APPKIT_VERIFIER_ID.canonical}|check="
                 "host.verify_appkit_strict,host.verify_deliverable"
             )
             if appkit
+            else f"{HOST_VERIFIER_ID.canonical}|check="
+            if artifact
             else f"{HOST_VERIFIER_ID.canonical}|check=host.verify_deliverable"
         ),
-        exporter=f"{LEGACY_EXPORTER_ID.canonical}|package=web.legacy_archive",
+        exporter=(
+            f"{LEGACY_EXPORTER_ID.canonical}|package=artifact.legacy_archive"
+            if artifact
+            else f"{LEGACY_EXPORTER_ID.canonical}|package=web.legacy_archive"
+        ),
     )
 
 

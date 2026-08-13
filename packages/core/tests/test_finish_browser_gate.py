@@ -9,6 +9,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    WorkspaceMutationEvent,
 )
 from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
@@ -150,6 +151,66 @@ def test_is_web_deliverable_preview_start_success():
     act = _preview_action()
     obs = _preview_observation(act.id)
     assert _is_web_deliverable([act, obs]) is True
+
+
+def test_is_web_deliverable_ignores_prior_run_preview_pair():
+    """A prior task's live Preview cannot classify the next task as web."""
+    act = _preview_action()
+    obs = _preview_observation(act.id)
+    events = with_seqs(
+        [
+            act,
+            obs,
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.message",
+                run_protocol_version=1,
+            ),
+            action(tool="file_write", args={"path": "report.py"}),
+        ]
+    )
+    assert _is_web_deliverable(events) is False
+
+
+def test_is_web_deliverable_ignores_prior_run_file_and_port_signals():
+    """The legacy file/port fallback is scoped to the current task too."""
+    port = ObservationEvent(
+        tool_result=ToolResult(
+            call_id="status",
+            tool_name="server_status",
+            success=True,
+            content="  - 8000: OWNED by pid 123 (python) [session: dev]",
+        ),
+        action_id="status-action",
+    )
+    events = with_seqs(
+        [
+            action(tool="file_write", args={"path": "index.html"}),
+            port,
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.message",
+                run_protocol_version=1,
+            ),
+            action(tool="file_write", args={"path": "report.py"}),
+        ]
+    )
+    assert _is_web_deliverable(events) is False
+
+
+def test_is_web_deliverable_accepts_current_run_signals():
+    """Run scoping keeps current Preview/file evidence authoritative."""
+    act = _preview_action()
+    obs = _preview_observation(act.id)
+    events = with_seqs(
+        [
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.message",
+                run_protocol_version=1,
+            ),
+            act,
+            obs,
+        ]
+    )
+    assert _is_web_deliverable(events) is True
 
 
 def test_is_web_deliverable_preview_start_failed_observation():

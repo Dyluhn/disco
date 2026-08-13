@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .engine_contracts import (
     ConversationStatus,
@@ -83,6 +83,8 @@ class _AgentLoopCompatibility:
     _autonomous: bool
     _quiet: bool
     _strict_appkit_active_reader: Callable[[], bool] | None
+    _declared_delivery_kind: Literal["app", "files"] | None
+    _delivery_contract_resolver: Callable[[str], Awaitable[None]] | None
     _finish_alias: str | None
     _workflow_run: WorkflowRun | None
     _terminal_commit_hook: TerminalCommitHook

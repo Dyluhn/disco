@@ -7,7 +7,7 @@ import logging
 import posixpath
 import re
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Literal, Protocol
 
 from disco.core import (
     ActionEvent,
@@ -496,7 +496,9 @@ class BuildContractService:
 
     # ---- delivery shape ------------------------------------------------------
 
-    def expected_delivery_mode(self, conversation_id: str) -> str | None:
+    def expected_delivery_mode(
+        self, conversation_id: str
+    ) -> Literal["app", "files"] | None:
         """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
         contract declares — the agent-server deliverable surface reads this to label /
         validate a handoff (so a deck run can't be handed off as a runnable app).

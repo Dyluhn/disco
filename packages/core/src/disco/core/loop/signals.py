@@ -120,6 +120,19 @@ from .plan_validation import (  # noqa: F401 — re-exported
 if TYPE_CHECKING:
     from ..view import View
 
+
+def current_run_events(events: list[Event]) -> list[Event]:
+    """Return only evidence produced after the latest workspace run intent."""
+
+    intent = latest_workspace_run_intent(events)
+    if intent is None or type(intent.seq) is not int:
+        return events
+    return [
+        event
+        for event in events
+        if type(event.seq) is int and event.seq > intent.seq
+    ]
+
 # _BOOKKEEPING_TOOLS, _NON_PRODUCTIVE_TOOLS, _SYNTHETIC_FINISH_RESET_STATUSES,
 # _event_seq, _successful_action_ids, _is_successful_productive_action,
 # successful_action_ids, and is_successful_productive_action are now defined

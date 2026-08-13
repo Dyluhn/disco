@@ -67,6 +67,22 @@ class AppKitSandboxes(Protocol):
     def sandbox_for(self, conversation_id: str) -> SandboxInstance | None: ...
 
 
+class AppKitEjectionLedger:
+    """Live process cache reconstructed from durable ejection events."""
+
+    def __init__(self) -> None:
+        self._ejected: set[str] = set()
+
+    def is_appkit_ejected(self, conversation_id: str) -> bool:
+        return conversation_id in self._ejected
+
+    def record(self, conversation_id: str, *, ejected: bool) -> None:
+        if ejected:
+            self._ejected.add(conversation_id)
+        else:
+            self._ejected.discard(conversation_id)
+
+
 class AppKitTransitionPort(Protocol):
     """Prepare and durably publish the Build admission transition."""
 
@@ -399,4 +415,4 @@ class AppKitEjectionService:
         return receipt
 
 
-__all__ = ["AppKitEjectionService"]
+__all__ = ["AppKitEjectionLedger", "AppKitEjectionService"]
