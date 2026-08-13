@@ -36,6 +36,8 @@ from .common import (
     _execution_nudge,
     _FinishGateComponent,
     _is_web_deliverable,
+    _latest_app_deliverable_event,
+    _latest_deliverable_event,
     _latest_plan_revision,
     _plan_file_exists_paths,
     _safe_deliverable_file_path,
@@ -72,6 +74,7 @@ from .content_gate_parts.notices import (
 from .content_gate_parts.plan_verifier_failure import (
     _failed_predicate_fingerprints,
 )
+from .verify_gate_parts.host_claims import governed_structured_browser_target
 
 # These bundle-inspection limits and the plan-verifier fingerprint helper now
 # live in `content_gate_parts` (their real owner boundary — see the modules
@@ -95,6 +98,7 @@ if TYPE_CHECKING:
         """The loop capability this module uses: conversation mode, finish verification, the event
         log.
         """
+
 
 _DICTATED_CONTENT_BINARY_SUFFIXES = frozenset(
     {
@@ -201,6 +205,20 @@ def _selected_app_deliverable_present(events: list[Event]) -> bool:
     return any(
         isinstance(event, DeliverableEvent) and event.artifact_kind == "app" for event in events
     )
+
+
+def _dictated_content_target_pending(events: list[Event]) -> bool:
+    """Whether target selection must run before content can be scoped.
+
+    Preview activity and a provisional web admission prove that an app exists,
+    but they do not identify its entry file.  Only a current handoff does.  Let
+    the target-shape gate request that handoff before inspecting content instead
+    of guessing ``index.html`` and steering the agent toward the wrong file.
+    """
+
+    if governed_structured_browser_target(events):
+        return _latest_app_deliverable_event(events) is None
+    return _is_web_deliverable(events) and _latest_deliverable_event(events) is None
 
 
 def _finish_alias(loop: _LoopFacet) -> str | None:
@@ -413,6 +431,9 @@ class _ContentGateService(_FinishGateComponent):
 
         if not unscoped:
             return None
+
+        if _dictated_content_target_pending(events):
+            raise _DictatedContentShortCircuitPass
 
         if not selected_app:
             paths = await self._dictated_content_deliverable_paths(events)
