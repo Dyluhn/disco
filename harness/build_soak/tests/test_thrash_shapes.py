@@ -169,6 +169,7 @@ def test_live_thrash_stop_boundary_recognises_every_shape():
     assert fc.TOOL_ERROR_THRASH in STRICT_LIVE_THRASH_CODES
     assert fc.ACTIONLESS_THRASH in STRICT_LIVE_THRASH_CODES
     assert fc.MODEL_REPAIR_THRASH in STRICT_LIVE_THRASH_CODES
+    assert fc.RUN_INTERRUPTED in STRICT_LIVE_THRASH_CODES
 
 
 def test_thresholds_are_unchanged():

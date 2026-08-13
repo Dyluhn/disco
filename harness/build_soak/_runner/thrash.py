@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Set
 from typing import Any
 
 from .. import failure_codes as fc
@@ -33,6 +34,7 @@ STRICT_LIVE_THRASH_CODES = frozenset(
         fc.TOOL_ERROR_THRASH,
         fc.ACTIONLESS_THRASH,
         fc.MODEL_REPAIR_THRASH,
+        fc.RUN_INTERRUPTED,
     }
 )
 
@@ -98,7 +100,7 @@ def _confirmed_finding(
     sample_count: int,
     run_start: float,
     killed_at: float,
-    thrash_codes: set[str],
+    thrash_codes: Set[str],
 ) -> bool:
     if not isinstance(finding, dict):
         return False

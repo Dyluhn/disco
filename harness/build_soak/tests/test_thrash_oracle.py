@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from harness.build_soak import failure_codes as fc
+from harness.build_soak.classify import classify
 from harness.build_soak.oracles.thrash import ThrashOracle
 from harness.build_soak.tests._eventlog import action, agent_error, msg, observation, status
 
@@ -932,6 +933,91 @@ def test_repeated_hidden_provider_repair_fails_from_inspect_trace() -> None:
     assert result.code == fc.MODEL_REPAIR_THRASH
     assert result.facts["repair_kind"] == "provider_rejected_request"
     assert result.facts["count"] == 2
+
+
+def test_repeated_driver_transport_backoff_invalidates_without_tainting_product() -> None:
+    """A provider stream outage is unavailable evidence, not model behaviour."""
+
+    trace = {
+        "spans": [
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "driver_transient_backoff",
+                "attempt": attempt,
+            }
+            for attempt in (1, 2)
+        ]
+    }
+
+    classification = classify(
+        [msg(1, "user", "build it"), status(2, "FINISHED")],
+        scenario=_scenario(),
+        inspect_trace=trace,
+    )
+
+    assert classification["status"] == fc.INVALID_RUN
+    assert classification["code"] == fc.RUN_INTERRUPTED
+    assert classification["first_broken_link"] == "provider_stream -> repeated_transport_backoff"
+    assert classification["facts"]["count"] == 2
+    assert classification["facts"]["repair_kind"] == "driver_transient_backoff"
+
+
+@pytest.mark.parametrize(
+    "transport_kind",
+    [
+        "driver_transient_backoff",
+        "driver_transient_exhausted",
+        "driver_transient_interrupted",
+    ],
+)
+def test_driver_transport_retry_does_not_consume_model_repair_budget(
+    transport_kind: str,
+) -> None:
+    trace = {
+        "spans": [
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": transport_kind,
+                "attempt": 1,
+            },
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "unknown_tool",
+                "attempt": 1,
+            },
+        ]
+    }
+
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+    assert result.passed
+    assert result.facts["model_repair_count"] == 1
+    assert result.facts["model_repair_counts"] == {"unknown_tool": 1}
+    assert result.facts["provider_transport_repair_count"] == 1
+    assert result.facts["provider_transport_repair_counts"] == {transport_kind: 1}
+
+
+def test_excessive_independent_transport_retries_are_invalid_not_model_thrash() -> None:
+    trace = {
+        "spans": [
+            {
+                "span": "agent.repair",
+                "event": "point",
+                "repair_kind": "driver_transient_backoff",
+                "attempt": 1,
+            }
+            for _ in range(4)
+        ]
+    }
+
+    result = ThrashOracle().check([], scenario=_scenario(), inspect_trace=trace)[0]
+
+    assert result.code == fc.RUN_INTERRUPTED
+    assert result.facts["count"] == 4
+    assert result.facts["first_broken_boundary"] == "provider_transport"
 
 
 def test_excessive_mixed_hidden_repairs_fail() -> None:

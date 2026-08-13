@@ -12,6 +12,7 @@ classification of older frozen dossiers.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from disco.core.receipt_currency import (
@@ -39,6 +40,7 @@ from ._thrash_helpers import approved_plan_predicate_scope
 from .schema import OracleResult, failing, passing, skipping
 
 _ORACLE = "ThrashOracle"
+_PROVIDER_TRANSPORT_REPAIR_PREFIX = "driver_transient_"
 
 
 def _limits(scenario: dict[str, Any] | None) -> dict[str, int] | None:
@@ -73,6 +75,57 @@ def repair_spans(spans: Any) -> list[dict[str, Any]]:
         and span.get("event") == "point"
         and str(span.get("repair_kind") or "")
     ]
+
+
+def _provider_transport_repair_error(
+    repairs: list[dict[str, Any]],
+) -> OracleResult | None:
+    """Classify repeated provider transport loss as unavailable evidence.
+
+    ``driver_transient_*`` spans are emitted only for ``LLMTransientError``
+    handling (timeouts, rate limits, 5xx, and network loss).  They never
+    describe a model response, so they must not consume the model-repair budget
+    or taint the product.  One recovered retry remains observable; a second
+    means the drive was interrupted and needs fresh evidence.
+    """
+
+    if len(repairs) <= 1:
+        return None
+    counts = Counter(str(span["repair_kind"]) for span in repairs)
+    dominant_kind = counts.most_common(1)[0][0]
+    return failing(
+        _ORACLE,
+        fc.RUN_INTERRUPTED,
+        first_broken_link="provider_stream -> repeated_transport_backoff",
+        facts={
+            "first_broken_boundary": "provider_transport",
+            "repair_kind": dominant_kind,
+            "count": len(repairs),
+            "repair_counts": counts,
+            "repairs": repairs,
+        },
+    )
+
+
+def _repair_boundary_result(
+    spans: Any,
+    limits: dict[str, int],
+) -> tuple[OracleResult | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    repairs = repair_spans(spans)
+    transport_repairs = [
+        span
+        for span in repairs
+        if str(span["repair_kind"]).startswith(_PROVIDER_TRANSPORT_REPAIR_PREFIX)
+    ]
+    model_repairs = [
+        span
+        for span in repairs
+        if not str(span["repair_kind"]).startswith(_PROVIDER_TRANSPORT_REPAIR_PREFIX)
+    ]
+    error = _provider_transport_repair_error(transport_repairs)
+    if error is None:
+        error = check_repair_thrash(model_repairs, limits)
+    return error, model_repairs, transport_repairs
 
 
 # `preview_generation_of` is the re-export at the top of this module; its body
@@ -201,8 +254,9 @@ class ThrashOracle:
         if actionless_error is not None:
             return [actionless_error]
 
-        repairs = repair_spans((inspect_trace or {}).get("spans"))
-        repair_error = check_repair_thrash(repairs, limits)
+        repair_error, model_repairs, transport_repairs = _repair_boundary_result(
+            (inspect_trace or {}).get("spans"), limits
+        )
         if repair_error is not None:
             return [repair_error]
 
@@ -221,12 +275,20 @@ class ThrashOracle:
         facts = build_passing_facts(
             events,
             actions,
-            repairs,
+            model_repairs,
             limits,
             streak,
             semantic_count,
             background_count,
             cleanup_credit,
             max_error_group,
+        )
+        facts.update(
+            {
+                "provider_transport_repair_count": len(transport_repairs),
+                "provider_transport_repair_counts": dict(
+                    Counter(str(span["repair_kind"]) for span in transport_repairs)
+                ),
+            }
         )
         return [passing(_ORACLE, facts=facts)]
