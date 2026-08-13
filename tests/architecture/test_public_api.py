@@ -968,18 +968,27 @@ class TestFrontendPublicApi:
         # asserting a false relocation origin. 9 records AgentErrorEvent's
         # exact semantic failure-classification fields. PKG-19 v25 adds the
         # three exact retrieval-contract transitions below. PKG-19 v28 replaces
-        # SecretStore and adds SecretBox; the exact set is itself the count ratchet.
+        # SecretStore and adds SecretBox. PKG-19 v30 adds the four durable
+        # condensation/research contract transitions. The exact set is itself
+        # the count ratchet.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
             "ConfigState",
             "ConfigStore",
-            "SecretBox", "SecretStore",
+            "SecretBox",
+            "SecretStore",
             "BuildPlatformRegistry",
             "ConversationRuntime",
             "FinishGate",
             "AgentErrorEvent",
-            "RetrievalRequest", "SearchHit", "DepthBound",
+            "RetrievalRequest",
+            "SearchHit",
+            "DepthBound",
+            "LLMSummarizingCondenser",
+            "ReportEvent",
+            "Passage",
+            "ReportFromRun",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.
