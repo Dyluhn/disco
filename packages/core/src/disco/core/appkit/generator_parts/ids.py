@@ -119,6 +119,18 @@ def _component_names(app: AppSpec) -> dict[tuple[str, str], str]:
     return mapping
 
 
+def section_component_names(app: AppSpec) -> dict[tuple[str, str], str]:
+    """Return the generated component/content key for every semantic section.
+
+    AppKit deliberately publishes the generated key in ``content.ts`` and the
+    build manifest.  Semantic tools also need to recognize that representation
+    when an agent reads generated output before editing it.  Keep that mapping
+    owned by the generator so collision suffixes and future naming changes can
+    never drift across the read/edit boundary.
+    """
+    return _component_names(app)
+
+
 def _comp_name(names: dict[tuple[str, str], str], page: Page, section: Section) -> str:
     """The unique component name for a section, read from the prebuilt collision-free
     `_component_names` map (built once per `generate`)."""

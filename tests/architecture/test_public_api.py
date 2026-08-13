@@ -966,7 +966,8 @@ class TestFrontendPublicApi:
         # — the same case, on the class the facade was installed onto. 8 after
         # 13-C records FinishGate's explicit typed-service methods without
         # asserting a false relocation origin. 9 records AgentErrorEvent's
-        # exact semantic fields; v31 adds delivery selection and loop collaborators.
+        # exact semantic fields; v31 adds delivery selection and loop collaborators;
+        # v32 adds SectionContent's generated eyebrow slot.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -976,7 +977,7 @@ class TestFrontendPublicApi:
             "BuildPlatformRegistry", "ConversationRuntime", "AgentLoop",
             "FinishGate",
             "AgentErrorEvent",
-            "RetrievalRequest", "SearchHit", "DepthBound",
+            "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent",
             "LLMSummarizingCondenser", "ReportEvent", "Passage", "ReportFromRun",
         }
         for row in baseline["member_transitions"]:

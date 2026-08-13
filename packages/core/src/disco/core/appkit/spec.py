@@ -186,6 +186,7 @@ _MAX_JUSTIFICATIONS = 50
 # through (the file-size cap in IO is the outer backstop; these are the per-field
 # inner ones), and gives `app_update_content` a SPEC-OWNED, validated place to land.
 _MAX_HEADING = 200
+_MAX_EYEBROW = 120
 _MAX_SUBHEADING = 300
 _MAX_BODY = 4000
 _MAX_CTA_LABEL = 120
@@ -257,6 +258,11 @@ class SectionContent(BaseModel):
 
     model_config = _STRICT
 
+    eyebrow: str | None = Field(
+        default=None,
+        max_length=_MAX_EYEBROW,
+        exclude_if=lambda value: value is None,
+    )
     heading: str | None = Field(default=None, max_length=_MAX_HEADING)
     subheading: str | None = Field(default=None, max_length=_MAX_SUBHEADING)
     body: str | None = Field(default=None, max_length=_MAX_BODY)
@@ -271,6 +277,30 @@ class SectionContent(BaseModel):
         max_length=_MAX_SUCCESS_MESSAGE,
         exclude_if=lambda value: value is None,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_generated_slot_names(cls, value: object) -> object:
+        """Accept the public generated names without changing canonical storage.
+
+        Generated ``content.ts`` is a model-visible, product-owned representation,
+        so copying ``ctaLabel`` or ``successMessage`` back into a Section must work.
+        Keep the model fields themselves snake_case so Python constructors and the
+        persisted AppSpec retain their established canonical contract.
+        """
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        for generated, canonical in (
+            ("ctaLabel", "cta_label"),
+            ("successMessage", "success_message"),
+        ):
+            if generated not in normalized:
+                continue
+            if canonical in normalized:
+                raise ValueError(f"content cannot provide both {canonical!r} and {generated!r}")
+            normalized[canonical] = normalized.pop(generated)
+        return normalized
 
     @field_validator("items")
     @classmethod
