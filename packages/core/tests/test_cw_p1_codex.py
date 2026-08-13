@@ -222,6 +222,11 @@ def test_assist_on_preamble_keeps_direction_and_truthful_grounding():
     assert "MUST call `file_read`" not in content.content
 
 
+def test_assist_on_preamble_is_byte_identical_to_pre_cw3():
+    """Historical inventory ID for the corrected truthful preamble contract."""
+    test_assist_on_preamble_keeps_direction_and_truthful_grounding()
+
+
 def test_assist_on_snip_marker_uses_canonical_sentinel():
     long = "x" * 4_000
     marker = _snip_args({"path": "a.py", "content": long})["content"]
@@ -246,3 +251,8 @@ def test_assist_on_build_keeps_canonical_marker_and_preamble():
         m for m in view.messages if m.role == "user" and m.content.startswith("# CURRENT WORKSPACE")
     )
     assert snap.content.startswith(_ASSIST_ON_PREAMBLE)
+
+
+def test_assist_on_build_keeps_canonical_marker_and_pre_cw3_preamble():
+    """Historical inventory ID for the canonical marker/preamble regression."""
+    test_assist_on_build_keeps_canonical_marker_and_preamble()

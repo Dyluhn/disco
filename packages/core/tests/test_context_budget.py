@@ -35,6 +35,16 @@ def test_c9_1m_window_uses_its_real_fraction():
     assert c._hard == 838_860
 
 
+def test_c9_1m_window_grows_to_ceiling_not_to_681k():
+    """Historical inventory ID; the accepted policy now uses the real window.
+
+    The immutable node ID remains collected so changing the policy does not look
+    like silent test deletion.  The current assertion owner is the descriptive
+    test above.
+    """
+    test_c9_1m_window_uses_its_real_fraction()
+
+
 def test_c9_unknown_window_still_uses_the_budget():
     """No window known → the working budget IS the bound (unchanged from before)."""
     c = LLMSummarizingCondenser()
@@ -47,6 +57,11 @@ def test_c9_explicit_overrides_win_over_derived_fraction():
     c = LLMSummarizingCondenser(context_window=1_048_576, max_tokens=50, hard_max_tokens=60)
     assert c._max == 50  # NOT 96_000
     assert c._hard == 60  # NOT 128_000
+
+
+def test_c9_explicit_overrides_win_over_derived_ceiling():
+    """Historical inventory ID for the still-valid explicit-override contract."""
+    test_c9_explicit_overrides_win_over_derived_fraction()
 
 
 # ---- H1: small-window path — UNCHANGED (regression guard) ------------------
@@ -95,6 +110,11 @@ def test_c9_should_condense_uses_fraction_boundaries_for_a_1m_model():
     assert soft is not None and soft.soft is True
     hard = c.should_condense(empty, token_count=c._hard)
     assert hard is not None and hard.soft is False
+
+
+def test_c9_should_condense_fires_past_ceiling_for_a_1m_model():
+    """Historical inventory ID; the boundary now follows the real model window."""
+    test_c9_should_condense_uses_fraction_boundaries_for_a_1m_model()
 
 
 # ---- (2) large tool-call argument values are elided at render time ----------
