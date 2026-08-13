@@ -14,8 +14,8 @@ from ..events import (
     ActionEvent,
     Event,
     current_build_platform_admission,
-    latest_workspace_run_intent,
 )
+from . import signals
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -315,19 +315,6 @@ def preview_command_entry_path(arguments: dict[str, object]) -> str | None:
     )
 
 
-def _current_run_events(events: list[Event]) -> list[Event]:
-    """Exclude Preview evidence that predates the latest workspace run."""
-
-    intent = latest_workspace_run_intent(events)
-    if intent is None or type(intent.seq) is not int:
-        return events
-    return [
-        event
-        for event in events
-        if type(event.seq) is int and event.seq > intent.seq
-    ]
-
-
 def _preview_source_action(
     events: list[Event], source_action_id: str
 ) -> ActionEvent | None:
@@ -344,7 +331,7 @@ def _preview_source_action(
 def current_preview_supports_app(events: list[Event], path: str) -> bool:
     """Use only a current custom runtime whose command selects this artifact."""
 
-    run_events = _current_run_events(events)
+    run_events = signals.current_run_events(events)
     if not run_events:
         return False
     from .finish.verify_gate_parts.host_claims import preview_selection_at

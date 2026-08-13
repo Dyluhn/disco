@@ -558,8 +558,10 @@ class TestMappingStatic:
             # V31 adds 19 static Python ids for artifact-derived delivery,
             # durable admission, current-run Preview ownership, and the exact
             # target/verification boundary. Existing test files own them.
+            # The final V31 integration adds three same-file regressions proving
+            # that finish-time web evidence is scoped to the current run.
             "python_test_file_count": 844,
-            "python_static_test_id_count": 10285,
+            "python_static_test_id_count": 10288,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1211,
         }
@@ -923,7 +925,7 @@ class TestCollectedCounts:
             # TypeScript cases are governed by the separate static/Vitest rows.
             # V31 adds 25 collected package ids for the artifact-derived
             # delivery and admission contracts represented by 19 static ids.
-            "packages": 10705,
+            "packages": 10708,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1041,7 +1043,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12510 == sum(expected.values())
+        assert collected["total"] == 12513 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1057,7 +1059,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12510}
+        assert result == {"collected_total": 12513}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1076,9 +1078,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10285,
+            "python_static_ids": 10288,
             "typescript_static_ids": 1211,
-            "collected_total": 12510,
+            "collected_total": 12513,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

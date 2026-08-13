@@ -419,9 +419,10 @@ def _is_web_deliverable(events: list[Event]) -> bool:
     OR a successful preview_start action/observation pair exists.
     Derived from events to keep the check pure (event-list in, verdict out)."""
 
-    if _preview_start_pair_observed(events):
+    run_events = signals.current_run_events(events)
+    if _preview_start_pair_observed(run_events):
         return True
-    return _index_html_or_port_owned(events)
+    return _index_html_or_port_owned(run_events)
 
 
 def _latest_plan_revision(events: list[Event]) -> int | None:
