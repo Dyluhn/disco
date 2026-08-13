@@ -55,6 +55,24 @@ def test_runtime_records_appkit_shadow_and_keeps_strict_executor(monkeypatch) ->
     assert isinstance(loop.executor, AppKitToolExecutor)
 
 
+def test_runtime_shadows_declared_files_delivery_as_artifact(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_BUILD_PLATFORM_SHADOW", "1")
+    runtime = ConversationRuntime(SqliteEventStore(":memory:"))
+    runtime.settings._set_surface("shadow-files", "agent")
+    runtime.contract.set_build_kind("shadow-files", "deck")
+    with mock.patch.object(runtime, "_sandbox_service_now"):
+        runtime._compose_build_loop(
+            "shadow-files",
+            mock.MagicMock(spec=DefaultLLMRouter),
+            mock.MagicMock(spec=RouterAgent),
+        )
+
+    record = runtime._build_shadows.snapshot()["shadow-files"]
+    assert record.matches
+    target = next(item for item in record.comparisons if item.field == "target")
+    assert target.platform == ("disco.legacy_artifact@1",)
+
+
 def test_shadow_disabled_has_zero_runtime_observation(monkeypatch) -> None:
     monkeypatch.delenv("DISCO_BUILD_PLATFORM_SHADOW", raising=False)
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))

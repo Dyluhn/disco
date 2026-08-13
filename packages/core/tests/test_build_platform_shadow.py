@@ -78,7 +78,10 @@ def test_appkit_observe_only_comparison_preserves_strict_policy() -> None:
 
 def test_shadow_mismatch_is_visible_and_cannot_change_active_route() -> None:
     tools = frozenset({"file_edit"})
-    legacy = expected_legacy_snapshot(appkit=False, visible_tools=tools)
+    legacy = expected_legacy_snapshot(
+        appkit=False,
+        visible_tools=tools,
+    )
     legacy = legacy.model_copy(update={"visible_tools": ("different_tool",)})
     record = compare_observe_only(legacy, _composition(appkit=False, tools=tools))
     assert not record.matches

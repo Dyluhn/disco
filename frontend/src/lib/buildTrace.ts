@@ -113,7 +113,7 @@ export interface ActivityItem {
       editable?: boolean; // has an authored sidecar → template re-render is available
       renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML)
     };
-    // F2: an agent-emitted file (via serve(kind="files")). Downloadable via the
+    // F2: a host-classified file handoff. Downloadable via the
     // declared-artifact route. Rendered as a first-class download card in the feed.
     file?: { filename: string; title?: string };
   };

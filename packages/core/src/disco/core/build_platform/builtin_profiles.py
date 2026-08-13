@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..verification import (
     HostVerificationClaim,
     VerificationClaimKind,
@@ -31,15 +33,20 @@ from .contracts import (
     TrustLevel,
     VerifierCheck,
     VerifierPlan,
+    VerifierPolicy,
 )
 from .registry import BuildPlatformRegistry, ComponentSpec
 from .resolver import BuildComposition, ResolutionInputs, resolve_build_composition
 
 FREEFORM_PROFILE_ID = ComponentId(namespace="disco", name="freeform_web", version="1")
+FREEFORM_ARTIFACT_PROFILE_ID = ComponentId(
+    namespace="disco", name="freeform_artifact", version="1"
+)
 APPKIT_PROFILE_ID = ComponentId(namespace="disco", name="appkit_web", version="1")
 FREEFORM_ENGINE_ID = ComponentId(namespace="disco", name="freeform", version="1")
 APPKIT_ENGINE_ID = ComponentId(namespace="disco", name="appkit", version="1")
 WEB_TARGET_ID = ComponentId(namespace="disco", name="legacy_web", version="1")
+ARTIFACT_TARGET_ID = ComponentId(namespace="disco", name="legacy_artifact", version="1")
 HOST_VERIFIER_ID = ComponentId(namespace="disco", name="host_web_verifier", version="1")
 APPKIT_VERIFIER_ID = ComponentId(namespace="disco", name="appkit_strict_verifier", version="1")
 MODEL_VERIFIER_ID = ComponentId(namespace="model_role", name="verifier", version="1")
@@ -305,6 +312,54 @@ class _LegacyWebTarget:
         )
 
 
+class _LegacyArtifactTarget:
+    """Target for finished workspace artifacts that have no app runtime."""
+
+    @property
+    def id(self) -> ComponentId:
+        return ARTIFACT_TARGET_ID
+
+    def plan(self, request: TargetRequest) -> TargetPlan:
+        entry = EntryDescriptor(kind="deliverable_manifest", reference="active-deliverable")
+        return TargetPlan(
+            target=self.id,
+            intents=(
+                ComponentIntent(
+                    operation="host.detect_delivery",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+                ComponentIntent(
+                    operation="host.bind_revision",
+                    required_capabilities=frozenset({"workspace.read"}),
+                ),
+            ),
+            delivery=DeliveryIntent(
+                shape="artifact.legacy_deliverable",
+                entry=entry,
+                mode="artifact",
+            ),
+            preview=PreviewPlan(modality="none"),
+            verifier=VerifierPlan(
+                checks=(),
+                policy=VerifierPolicy(
+                    required=False,
+                    unavailable="degrade",
+                    unverified_finish="allow_without_verified_label",
+                ),
+            ),
+            package=PackagePlan(
+                package_shape="artifact.legacy_archive",
+                intents=(
+                    ComponentIntent(
+                        operation="host.package_deliverable",
+                        required_capabilities=frozenset({"workspace.read"}),
+                    ),
+                ),
+            ),
+            required_capabilities=frozenset({"workspace.read"}),
+        )
+
+
 class _LegacyExporter:
     @property
     def id(self) -> ComponentId:
@@ -312,7 +367,11 @@ class _LegacyExporter:
 
     def plan(self, request: PackageRequest) -> PackagePlan:
         return PackagePlan(
-            package_shape="web.legacy_archive",
+            package_shape=(
+                "artifact.legacy_archive"
+                if request.delivery.mode == "artifact"
+                else "web.legacy_archive"
+            ),
             intents=(
                 ComponentIntent(
                     operation="host.package_deliverable",
@@ -338,16 +397,22 @@ def _spec(
     )
 
 
-def _profile(*, appkit: bool) -> BuildProfile:
-    profile_id = APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID
+def _profile(*, appkit: bool, artifact: bool = False) -> BuildProfile:
+    profile_id = (
+        APPKIT_PROFILE_ID
+        if appkit
+        else FREEFORM_ARTIFACT_PROFILE_ID
+        if artifact
+        else FREEFORM_PROFILE_ID
+    )
     engine_id = APPKIT_ENGINE_ID if appkit else FREEFORM_ENGINE_ID
     prompt_id = APPKIT_PROMPT_ID if appkit else FREEFORM_PROMPT_ID
     rules = APPKIT_RULES if appkit else FREEFORM_RULES
     return BuildProfile(
         id=profile_id,
-        label="AppKit" if appkit else "Freeform",
+        label="AppKit" if appkit else "Freeform artifact" if artifact else "Freeform",
         engine=engine_id,
-        target=WEB_TARGET_ID,
+        target=ARTIFACT_TARGET_ID if artifact else WEB_TARGET_ID,
         verifier=APPKIT_VERIFIER_ID if appkit else HOST_VERIFIER_ID,
         preview=HOST_PREVIEW_ID,
         exporter=LEGACY_EXPORTER_ID,
@@ -417,6 +482,11 @@ def build_builtin_registry(
         ComponentKind.TARGET,
     )
     registry.components._add_implementation(
+        _spec(ARTIFACT_TARGET_ID, ComponentKind.TARGET, features=frozenset({"artifact"})),
+        _LegacyArtifactTarget(),
+        ComponentKind.TARGET,
+    )
+    registry.components._add_implementation(
         _spec(LEGACY_EXPORTER_ID, ComponentKind.EXPORTER),
         _LegacyExporter(),
         ComponentKind.EXPORTER,
@@ -431,6 +501,7 @@ def build_builtin_registry(
         registry.components._add_spec(component)
     _register_target_bundle(registry)
     registry.profiles._add(_profile(appkit=False))
+    registry.profiles._add(_profile(appkit=False, artifact=True))
     registry.profiles._add(_profile(appkit=True))
     return registry
 
@@ -456,7 +527,33 @@ def resolve_builtin_composition(
     visible_tools: frozenset[str],
     requested_reference_categories: frozenset[str] = frozenset(),
 ) -> BuildComposition:
-    """Resolve one built-in profile from the exact legacy-visible tool surface.
+    """Preserve the original public web-composition contract.
+
+    Runtime delivery selection uses :func:`resolve_builtin_composition_for_delivery`
+    and always supplies the host-derived artifact kind. This wrapper exists only
+    for callers of the accepted public API, whose historical target was web.
+    """
+
+    return resolve_builtin_composition_for_delivery(
+        appkit=appkit,
+        goal=goal,
+        tool_catalog=tool_catalog,
+        visible_tools=visible_tools,
+        requested_reference_categories=requested_reference_categories,
+        delivery_kind="app",
+    )
+
+
+def resolve_builtin_composition_for_delivery(
+    *,
+    appkit: bool,
+    goal: str,
+    tool_catalog: tuple[ToolDescriptor, ...],
+    visible_tools: frozenset[str],
+    requested_reference_categories: frozenset[str] = frozenset(),
+    delivery_kind: Literal["app", "files"],
+) -> BuildComposition:
+    """Resolve a host-classified profile from the exact visible tool surface.
 
     This pure seam is shared by observe-only comparison and the Phase-4 new-run
     admission path.  It cannot execute a tool or mutate runtime state.
@@ -466,7 +563,15 @@ def resolve_builtin_composition(
         freeform_tools=(frozenset() if appkit else visible_tools),
         appkit_tools=(visible_tools if appkit else frozenset()),
     )
-    profile_id = APPKIT_PROFILE_ID if appkit else FREEFORM_PROFILE_ID
+    if appkit and delivery_kind != "app":
+        raise ValueError("AppKit has only an interactive delivery target")
+    profile_id = (
+        APPKIT_PROFILE_ID
+        if appkit
+        else FREEFORM_ARTIFACT_PROFILE_ID
+        if delivery_kind == "files"
+        else FREEFORM_PROFILE_ID
+    )
     profile = registry.profiles.get(profile_id)
     if profile is None or not profile.prompt_modules:
         raise ValueError("built-in profile is incomplete")

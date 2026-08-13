@@ -3,7 +3,10 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
-from disco.agent_server.build_platform_shadow import BuildPlatformRouteError
+from disco.agent_server.build_platform_shadow import (
+    BuildPlatformRouteError,
+    select_freeform_platform_route,
+)
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     BuildPlatformAdmissionEvent,
@@ -11,9 +14,14 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
     WorkspaceMutationEvent,
+    current_build_platform_admission,
 )
-from disco.core.build_platform import APPKIT_PROFILE_ID
-from disco.core.llm import DefaultLLMRouter, OperatingMode
+from disco.core.build_platform import (
+    APPKIT_PROFILE_ID,
+    ARTIFACT_TARGET_ID,
+    FREEFORM_ARTIFACT_PROFILE_ID,
+)
+from disco.core.llm import DefaultLLMRouter, OperatingMode, ToolSpec
 from disco.core.loop import RouterAgent
 from disco.tools import AppKitToolExecutor, DefaultToolExecutor
 
@@ -130,11 +138,12 @@ def test_artifact_and_workflow_profiles_remain_outside_freeform_cutover(monkeypa
     assert runtime._build_platform.route_records == {}
     assert isinstance(loop.executor, DefaultToolExecutor)
     assert loop.mode is OperatingMode.INTERACTIVE
+    assert loop._delivery_contract_resolver is None
 
 
 @pytest.mark.asyncio
 async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monkeypatch) -> None:
-    runtime, _loop = _compose(monkeypatch, "durable", platform=True)
+    runtime, loop = _compose(monkeypatch, "durable", platform=True)
     intent = await runtime._store.append(
         "durable",
         WorkspaceMutationEvent(
@@ -194,6 +203,152 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
         if isinstance(event, BuildPlatformAdmissionEvent)
     ][0]
     assert replayed.verification_contract == contract
+
+    drifted_record = select_freeform_platform_route(
+        tool_specs=(
+            *loop.executor.available_tools(),
+            ToolSpec(name="drift_probe", description="drift", parameters_schema={}),
+        ),
+        delivery_kind="app",
+    )
+    restarted._build_platform._set_selection(
+        "durable",
+        route="platform",
+        profile=drifted_record.composition.profile.id,
+        record=drifted_record,
+    )
+    with pytest.raises(RuntimeError, match="durable Build admission differs"):
+        await restarted._build_platform.record_route_locked("durable")
+    assert not restarted._run_resources.has_executor("durable")
+    assert "durable" not in restarted._build_platform.selected_routes
+    assert "durable" not in restarted._build_platform.route_records
+
+    artifact_record = select_freeform_platform_route(
+        tool_specs=loop.executor.available_tools(),
+        delivery_kind="files",
+    )
+    restarted._build_platform._set_selection(
+        "durable",
+        route="platform",
+        profile=FREEFORM_ARTIFACT_PROFILE_ID,
+        record=artifact_record,
+    )
+    with pytest.raises(RuntimeError, match="different Build admission"):
+        await restarted._build_platform.record_route_locked("durable")
+
+
+@pytest.mark.asyncio
+async def test_delivery_selection_replaces_web_contract_with_artifact_target(monkeypatch) -> None:
+    runtime, loop = _compose(monkeypatch, "script-delivery", platform=True)
+    await runtime._store.append(
+        "script-delivery",
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.message",
+            run_protocol_version=1,
+        ),
+    )
+    await runtime._build_platform.record_route_locked("script-delivery")
+    before = current_build_platform_admission(
+        await runtime._store.get_events("script-delivery")
+    )
+    assert before is not None
+    assert before.verification_contract is not None
+    assert before.verification_contract.target_id == "disco.legacy_web@1"
+
+    resolver = loop._delivery_contract_resolver
+    assert resolver is not None
+    async with runtime.workspace.fence("script-delivery"):
+        await resolver("files")
+
+    events = await runtime._store.get_events("script-delivery")
+    selected = current_build_platform_admission(events)
+    assert selected is not None
+    assert selected.transition == "delivery_selection"
+    assert selected.supersedes_admission_id == before.id
+    assert selected.profile_id == FREEFORM_ARTIFACT_PROFILE_ID.canonical
+    contract = selected.verification_contract
+    assert contract is not None
+    assert contract.target_id == ARTIFACT_TARGET_ID.canonical
+    assert contract.delivery.mode == "artifact"
+    assert contract.preview_modality == "none"
+    assert contract.checks == ()
+    assert contract.required is False
+    assert contract.unverified_finish == "allow_without_verified_label"
+
+    async with runtime.workspace.fence("script-delivery"):
+        await resolver("files")
+    admissions = [
+        event
+        for event in await runtime._store.get_events("script-delivery")
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ]
+    assert len(admissions) == 2
+
+    restarted = ConversationRuntime(runtime._store)
+    restarted.settings._set_surface("script-delivery", "agent")
+    await restarted._build_platform.prepare_route_pin("script-delivery")
+    with mock.patch.object(restarted, "_sandbox_service_now"):
+        restarted._compose_build_loop(
+            "script-delivery",
+            mock.MagicMock(spec=DefaultLLMRouter),
+            mock.MagicMock(spec=RouterAgent),
+        )
+    record = restarted._build_platform.route_records["script-delivery"]
+    assert record.composition.profile.id == FREEFORM_ARTIFACT_PROFILE_ID
+    assert record.composition.target == ARTIFACT_TARGET_ID
+    await restarted._build_platform.record_route_locked("script-delivery")
+
+
+@pytest.mark.asyncio
+async def test_delivery_selection_requires_current_task_process_fence(monkeypatch) -> None:
+    runtime, loop = _compose(monkeypatch, "foreign-fence", platform=True)
+    await runtime._store.append(
+        "foreign-fence",
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.message",
+            run_protocol_version=1,
+        ),
+    )
+    await runtime._build_platform.record_route_locked("foreign-fence")
+
+    async with runtime.workspace.lock("foreign-fence"):
+        with pytest.raises(RuntimeError, match="current-task fence ownership"):
+            await runtime._build_platform.bind_delivery_locked(
+                "foreign-fence",
+                "files",
+                tool_specs=loop.executor.available_tools(),
+            )
+
+
+@pytest.mark.asyncio
+async def test_failed_delivery_reselection_discards_stale_runtime_selection(monkeypatch) -> None:
+    runtime, loop = _compose(monkeypatch, "reselection-failure", platform=True)
+    await runtime._store.append(
+        "reselection-failure",
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.message",
+            run_protocol_version=1,
+        ),
+    )
+    await runtime._build_platform.record_route_locked("reselection-failure")
+
+    with (
+        mock.patch(
+            "disco.agent_server.build_platform_runtime.select_freeform_platform_route",
+            side_effect=BuildPlatformRouteError("delivery parity mismatch"),
+        ),
+        pytest.raises(BuildPlatformRouteError, match="delivery parity mismatch"),
+    ):
+        async with runtime.workspace.fence("reselection-failure"):
+            await runtime._build_platform.bind_delivery_locked(
+                "reselection-failure",
+                "files",
+                tool_specs=loop.executor.available_tools(),
+            )
+
+    assert not runtime._run_resources.has_executor("reselection-failure")
+    assert "reselection-failure" not in runtime._build_platform.selected_routes
+    assert "reselection-failure" not in runtime._build_platform.route_records
 
 
 @pytest.mark.asyncio

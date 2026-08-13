@@ -198,6 +198,119 @@ def _validate_route_identity(event: BuildPlatformAdmissionEvent) -> None:
         raise ValueError("legacy route cannot claim a Platform composition identity")
 
 
+def _validate_delivery_selection(event: BuildPlatformAdmissionEvent) -> None:
+    if (
+        event.route != "platform"
+        or event.profile_id not in {"disco.freeform_web@1", "disco.freeform_artifact@1"}
+        or event.supersedes_admission_id is None
+        or event.verification_contract is None
+    ):
+        raise ValueError(
+            "delivery selection must supersede a Platform Freeform admission "
+            "with an exact target contract"
+        )
+    contract = event.verification_contract
+    web = event.profile_id == "disco.freeform_web@1"
+    identity_matches = _delivery_identity_matches(contract, web=web)
+    policy_matches = _delivery_policy_matches(contract, web=web)
+    if not identity_matches or not policy_matches:
+        raise ValueError("delivery selection contract does not match its exact profile")
+
+
+def _delivery_identity_matches(
+    contract: AdmittedVerificationContract, *, web: bool
+) -> bool:
+    return (
+        contract.target_id == ("disco.legacy_web@1" if web else "disco.legacy_artifact@1")
+        and contract.verifier_id == "disco.host_web_verifier@1"
+        and contract.delivery.mode == ("interactive" if web else "artifact")
+        and contract.delivery.shape
+        == ("web.legacy_deliverable" if web else "artifact.legacy_deliverable")
+        and contract.delivery.entry_kind == "deliverable_manifest"
+        and contract.delivery.entry_reference == "active-deliverable"
+        and not contract.delivery.entry_parameters
+    )
+
+
+def _delivery_policy_matches(
+    contract: AdmittedVerificationContract, *, web: bool
+) -> bool:
+    return _web_delivery_policy_matches(contract) if web else _artifact_delivery_policy_matches(
+        contract
+    )
+
+
+def _artifact_delivery_policy_matches(contract: AdmittedVerificationContract) -> bool:
+    return (
+        contract.checks,
+        contract.required,
+        contract.preview_modality,
+        contract.unavailable,
+        contract.unverified_finish,
+    ) == ((), False, "none", "degrade", "allow_without_verified_label")
+
+
+def _web_delivery_policy_matches(contract: AdmittedVerificationContract) -> bool:
+    if len(contract.checks) != 1:
+        return False
+    check = contract.checks[0]
+    accepted_kinds = frozenset(
+        {
+            "artifact_identity",
+            "http_ready",
+            "rendered_content",
+            "visible_text",
+            "console_clean",
+            "network_clean",
+            "interaction",
+            "route",
+            "contract_semantic",
+            "visual_semantic",
+        }
+    )
+    functional_floor = frozenset(
+        {
+            ("web.artifact_identity", "artifact_identity"),
+            ("web.http_ready", "http_ready"),
+            ("web.rendered_content", "rendered_content"),
+            ("web.console_clean", "console_clean"),
+            ("web.network_clean", "network_clean"),
+        }
+    )
+    actual_claims = frozenset((claim.claim_id, claim.kind.value) for claim in check.claims)
+    descriptor = (
+        contract.required,
+        contract.preview_modality,
+        contract.unavailable,
+        contract.unverified_finish,
+        check.check_id,
+        check.receipt_kind,
+        check.issuer_id,
+        check.operation,
+        check.required_execution_modality,
+        check.required_artifact_identity_scheme,
+        check.delegated_issuer_ids,
+        frozenset(kind.value for kind in check.accepted_claim_kinds),
+        check.required,
+    )
+    expected = (
+        True,
+        "legacy_host",
+        "block",
+        "block",
+        "web_functional",
+        "disco.web_functional@1",
+        "disco.host_web_verifier@1",
+        "host.verify_deliverable",
+        "managed_preview",
+        None,
+        frozenset({"model_role.verifier@1"}),
+        accepted_kinds,
+        True,
+    )
+    return descriptor == expected and functional_floor <= actual_claims
+
+
 def _validate_transition(event: BuildPlatformAdmissionEvent) -> None:
     """Check transition/supersession consistency for a build admission."""
     if event.transition == "appkit_ejection":
@@ -205,6 +318,8 @@ def _validate_transition(event: BuildPlatformAdmissionEvent) -> None:
             raise ValueError(
                 "AppKit ejection must supersede an admission with the Freeform profile"
             )
+    elif event.transition == "delivery_selection":
+        _validate_delivery_selection(event)
     elif event.supersedes_admission_id is not None:
         raise ValueError("an initial Build admission cannot supersede another admission")
 
@@ -229,7 +344,7 @@ class BuildPlatformAdmissionEvent(BaseEvent):
         default=None,
         pattern=r"^run:sha256:[0-9a-f]{64}$",
     )
-    transition: Literal["initial", "appkit_ejection"] = "initial"
+    transition: Literal["initial", "appkit_ejection", "delivery_selection"] = "initial"
     supersedes_admission_id: str | None = Field(default=None, min_length=1, max_length=128)
     # Exact target proof requirements resolved into this composition. Optional
     # for backward-compatible legacy admissions; platform admissions persist it

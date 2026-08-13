@@ -32,7 +32,7 @@ from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.prompts import DriverPrompts
 
 _PLANNING_SHA256 = "43717a2304d16bf40f17b9a9ec7bc44fd0c2924a75a4f5de07d8d130f099b2ec"
-_RESUME_SHA256 = "5f17a5d7ceac1ddb678708b51e50b729cecc68b669eca6c6aa9f9ee4ac37bc84"
+_RESUME_SHA256 = "ba89ea21de811902ad157126330facbf8247dd5b7a0ad89d9b8307a24f0e1277"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -293,7 +293,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 16_611, 15_998, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 16_580, 15_967, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]

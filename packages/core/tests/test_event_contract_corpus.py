@@ -564,6 +564,22 @@ def test_unknown_kind_and_unexpected_known_kind_field_fail_closed() -> None:
         EventAdapter.validate_python(extra)
 
 
+def test_historical_deliverable_without_kind_is_migrated_only_on_read() -> None:
+    deliverable = next(event for event in CORPUS if isinstance(event, DeliverableEvent))
+    raw = event_to_json_dict(deliverable)
+    del raw["artifact_kind"]
+    snapshot = deepcopy(raw)
+
+    migrated = migrate_event(raw)
+
+    assert raw == snapshot
+    assert migrated["artifact_kind"] == "app"
+    assert migrate_event(migrated) == migrated
+    restored = event_from_json_dict(migrated)
+    assert isinstance(restored, DeliverableEvent)
+    assert restored.artifact_kind == "app"
+
+
 def test_frozen_corpus_produces_the_accepted_canonical_fold() -> None:
     expected = {
         "conversation_id": "corpus",

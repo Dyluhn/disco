@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "d3efabd8bc3eefda3a75dcccda266dcd2fadfecf",
+  "source_identity": "041123758d88157444e2484f9563abdbb4e8c99f",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3019,7 +3019,7 @@
             "run_intent_id: str",
             "source: EventSource",
             "supersedes_admission_id: str | None",
-            "transition: Literal['initial', 'appkit_ejection']",
+            "transition: Literal['initial', 'appkit_ejection', 'delivery_selection']",
             "verification_claims: tuple[HostVerificationClaim, ...]",
             "verification_contract: AdmittedVerificationContract | None"
           ]
@@ -6100,6 +6100,7 @@
         "APPKIT_PROFILE_ID",
         "APPKIT_PROMPT_ID",
         "APPKIT_VERIFIER_ID",
+        "ARTIFACT_TARGET_ID",
         "BUILTIN_CAPABILITIES",
         "BuildComposition",
         "BuildPlatformRegistry",
@@ -6132,6 +6133,7 @@
         "EffectiveCapabilityPolicy",
         "EffectivePolicy",
         "EntryDescriptor",
+        "FREEFORM_ARTIFACT_PROFILE_ID",
         "FREEFORM_ENGINE_ID",
         "FREEFORM_LIFECYCLE_OPERATIONS",
         "FREEFORM_PROFILE_ID",
@@ -6215,6 +6217,7 @@
         "APPKIT_PROFILE_ID",
         "APPKIT_PROMPT_ID",
         "APPKIT_VERIFIER_ID",
+        "ARTIFACT_TARGET_ID",
         "BUILTIN_CAPABILITIES",
         "BuildComposition",
         "BuildPlatformRegistry",
@@ -6247,6 +6250,7 @@
         "EffectiveCapabilityPolicy",
         "EffectivePolicy",
         "EntryDescriptor",
+        "FREEFORM_ARTIFACT_PROFILE_ID",
         "FREEFORM_ENGINE_ID",
         "FREEFORM_LIFECYCLE_OPERATIONS",
         "FREEFORM_PROFILE_ID",
@@ -6414,8 +6418,24 @@
           "kind": "from"
         },
         {
+          "public_name": "ARTIFACT_TARGET_ID",
+          "name": "ARTIFACT_TARGET_ID",
+          "module": "builtin_profiles",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
           "public_name": "BUILTIN_CAPABILITIES",
           "name": "BUILTIN_CAPABILITIES",
+          "module": "builtin_profiles",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "FREEFORM_ARTIFACT_PROFILE_ID",
+          "name": "FREEFORM_ARTIFACT_PROFILE_ID",
           "module": "builtin_profiles",
           "level": 1,
           "alias": null,
@@ -7251,6 +7271,10 @@
           "kind": "value",
           "signature": "APPKIT_VERIFIER_ID=ComponentId(namespace='disco', name='appkit_strict_verifier', version='1')"
         },
+        "ARTIFACT_TARGET_ID": {
+          "kind": "value",
+          "signature": "ARTIFACT_TARGET_ID=ComponentId(namespace='disco', name='legacy_artifact', version='1')"
+        },
         "BUILTIN_CAPABILITIES": {
           "kind": "value",
           "signature": "BUILTIN_CAPABILITIES=frozenset({'workspace.read', 'workspace.write', 'process.execute', 'network.egress', 'display.interactive'})"
@@ -7598,6 +7622,10 @@
             "parameters: tuple[Parameter, ...]",
             "reference: str"
           ]
+        },
+        "FREEFORM_ARTIFACT_PROFILE_ID": {
+          "kind": "value",
+          "signature": "FREEFORM_ARTIFACT_PROFILE_ID=ComponentId(namespace='disco', name='freeform_artifact', version='1')"
         },
         "FREEFORM_ENGINE_ID": {
           "kind": "value",
@@ -11522,7 +11550,7 @@
             "async def run(self) -> ConversationState",
             "async def send_message(self, text: str, *, steer: bool=False) -> ConversationState",
             "async def steer(self, text: str) -> ConversationState",
-            "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None) -> None"
+            "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
           ],
           "fields": []
         },
@@ -23639,7 +23667,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ActivityItem",
-          "signature": "export interface ActivityItem { id: string; /** Discriminates the row's visual style. \"action\" is the agent's tool call; * \"user\" is the human's message (steer, send_message, revise instruction); * \"agent_message\" is a prose reply from the agent (ask_user free-form, * finish-message, etc.); \"system_warning\" is a \u26a0-prefixed ENVIRONMENT * message addressed to the human (BP-05's release valve: \"finished WITHOUT * a clean browser verification\") \u2014 gate truths are surfaced, other * environment meta (nudges, reminders) stays hidden; \"system_note\" is a * NEUTRAL environment line the human caused and should see confirmed * (BP-11's upload announcement) \u2014 informational, not an alarm, so it gets * its own kind rather than borrowing system_warning's \u26a0 styling. A * \"rollback_marker\" is the one non-chat audit chip allowed for * workspace_restored events. The feed becomes a unified chat-and-actions log * rather than an action-only ledger. */ kind: | \"action\" | \"user\" | \"agent_message\" | \"system_warning\" | \"system_note\" | \"rollback_marker\"; label: string; // plain language (\"Wrote fizzbuzz.py\" / \"You: skip the cleanup\") /** The agent's natural-language THOUGHT \u2014 its reasoning + plain-English * explanation of what it's doing. NEVER truncated; rendered wrapped. This * is the model talking to the user, and swallowing it was a bug. */ thought?: string; /** The technical detail \u2014 file path, command preview, etc. Single-line OK * to truncate (this is a row label, not content). */ detail?: string; mention?: { tag: string; text: string }; /** Rich expandable content the user can drill into when they want the raw * tool call + observation. Hidden by default to keep the feed scannable. */ expandable?: { tool_name: string; arguments: Record<string, unknown>; output?: string; // observation content (truncated to ~2KB) error?: string; // error message if the action failed plainError?: string; // plain first line for common failure codes screenshot_path?: string; // BP-15: relative .pmx/screenshots/\u2026 path from structured // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact // route (only present for a successful sheet_generate). sheet?: { filename: string; title?: string; sheet_names?: string[] }; // D2: a generated slide deck (Marp HTML / PDF / PPTX), downloadable via // the declared-artifact route. Same shape as the AnswerBlock `slides` // kind minus the `id` \u2014 the activity item already has one. slides?: { filename: string; title?: string; format?: \"html\" | \"pdf\" | \"pptx\"; slide_count?: number; slides?: { title?: string; content?: string }[]; base?: string; // deck base name (no ext) \u2014 for the /deck/export template re-render editable?: boolean; // has an authored sidecar \u2192 template re-render is available renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML) }; // F2: an agent-emitted file (via serve(kind=\"files\")). Downloadable via the // declared-artifact route. Rendered as a first-class download card in the feed. file?: { filename: string; title?: string }; }; status: \"done\" | \"running\" | \"pending\" | \"failed\" | \"pending_send\"; attention: boolean; // confidence gradient: risky/novel steps float up, routine recede risk?: SecurityRisk; /** True when the engine auto-approved a sandboxed op that would have gated * under the base risk policy. Informational-only; never raises attention. */ autoApproved?: boolean; }"
+          "signature": "export interface ActivityItem { id: string; /** Discriminates the row's visual style. \"action\" is the agent's tool call; * \"user\" is the human's message (steer, send_message, revise instruction); * \"agent_message\" is a prose reply from the agent (ask_user free-form, * finish-message, etc.); \"system_warning\" is a \u26a0-prefixed ENVIRONMENT * message addressed to the human (BP-05's release valve: \"finished WITHOUT * a clean browser verification\") \u2014 gate truths are surfaced, other * environment meta (nudges, reminders) stays hidden; \"system_note\" is a * NEUTRAL environment line the human caused and should see confirmed * (BP-11's upload announcement) \u2014 informational, not an alarm, so it gets * its own kind rather than borrowing system_warning's \u26a0 styling. A * \"rollback_marker\" is the one non-chat audit chip allowed for * workspace_restored events. The feed becomes a unified chat-and-actions log * rather than an action-only ledger. */ kind: | \"action\" | \"user\" | \"agent_message\" | \"system_warning\" | \"system_note\" | \"rollback_marker\"; label: string; // plain language (\"Wrote fizzbuzz.py\" / \"You: skip the cleanup\") /** The agent's natural-language THOUGHT \u2014 its reasoning + plain-English * explanation of what it's doing. NEVER truncated; rendered wrapped. This * is the model talking to the user, and swallowing it was a bug. */ thought?: string; /** The technical detail \u2014 file path, command preview, etc. Single-line OK * to truncate (this is a row label, not content). */ detail?: string; mention?: { tag: string; text: string }; /** Rich expandable content the user can drill into when they want the raw * tool call + observation. Hidden by default to keep the feed scannable. */ expandable?: { tool_name: string; arguments: Record<string, unknown>; output?: string; // observation content (truncated to ~2KB) error?: string; // error message if the action failed plainError?: string; // plain first line for common failure codes screenshot_path?: string; // BP-15: relative .pmx/screenshots/\u2026 path from structured // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact // route (only present for a successful sheet_generate). sheet?: { filename: string; title?: string; sheet_names?: string[] }; // D2: a generated slide deck (Marp HTML / PDF / PPTX), downloadable via // the declared-artifact route. Same shape as the AnswerBlock `slides` // kind minus the `id` \u2014 the activity item already has one. slides?: { filename: string; title?: string; format?: \"html\" | \"pdf\" | \"pptx\"; slide_count?: number; slides?: { title?: string; content?: string }[]; base?: string; // deck base name (no ext) \u2014 for the /deck/export template re-render editable?: boolean; // has an authored sidecar \u2192 template re-render is available renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML) }; // F2: a host-classified file handoff. Downloadable via the // declared-artifact route. Rendered as a first-class download card in the feed. file?: { filename: string; title?: string }; }; status: \"done\" | \"running\" | \"pending\" | \"failed\" | \"pending_send\"; attention: boolean; // confidence gradient: risky/novel steps float up, routine recede risk?: SecurityRisk; /** True when the engine auto-approved a sandboxed op that would have gated * under the base risk policy. Informational-only; never raises attention. */ autoApproved?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -29585,10 +29613,84 @@
       "owner_package": "PKG-19-V30-INTEGRATION",
       "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
       "target_sha256": "432ec0713f1e094c06452acdea00cd7185af0466f1534f8a109337845391619a"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace.ts",
+      "public_name": "ActivityItem",
+      "target_sha256": "6904a500f8adeb040c0899d0e3c200df35a1674ba2232d1b1d4dbe0b7481fd9b",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "BuildPlatformAdmissionEvent",
+      "target_sha256": "44aa89ef3b1816011fa01b5508c8bb0e8c33af03e3bd5d90d6a9e475fc167b07",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/build_platform/__init__.py",
+      "public_name": "ARTIFACT_TARGET_ID",
+      "target_sha256": "0de3dee65ad6b31307af44add6ee6cb11523090a75d7b6db43c90f8d9ca2c839",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/build_platform/__init__.py",
+      "public_name": "FREEFORM_ARTIFACT_PROFILE_ID",
+      "target_sha256": "2c0213ce9abdc8cabe560e26d8cb12659ace5fbb395d1d34d0cd831546676a1a",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/__init__.py",
+      "public_name": "AgentLoop",
+      "target_sha256": "30365586d59d2b0e40ed765d1da7ef5aa62b7aa67bac9c7accd3f9df923671eb",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
     }
   ],
   "compatibility_bridges": [],
   "member_transitions": [
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/__init__.py",
+      "public_name": "AgentLoop",
+      "origin": "disco.core.loop.engine.AgentLoop",
+      "removed_members": [
+        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
+      ],
+      "old_signature_sha256": "af36b0cab89e5242217b23ece03dc7fd02266327c6b9ef557c0b1edd10ffec74",
+      "new_signature_sha256": "a0d9565421f7fd3e83ca46c62ca94074dc6edb3dc6e8af5082a40f0a143f8f91",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "accepting_commit": "041123758d88157444e2484f9563abdbb4e8c99f",
+      "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "BuildPlatformAdmissionEvent",
+      "origin": "disco.core.events.BuildPlatformAdmissionEvent",
+      "removed_members": [
+        "transition: Literal['initial', 'appkit_ejection']"
+      ],
+      "added_members": [
+        "transition: Literal['initial', 'appkit_ejection', 'delivery_selection']"
+      ],
+      "old_signature_sha256": "573d827c67d12ef5309b928fd65198a69ffc1e0cf13f2e711d795030fe383c4b",
+      "new_signature_sha256": "2fc820ac59b26d59ca743c29ded216f8b989eefd3088c54989d37574a706a800",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "accepting_commit": "041123758d88157444e2484f9563abdbb4e8c99f",
+      "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
+    },
     {
       "surface": "python",
       "path": "packages/tools/src/disco/tools/__init__.py",
@@ -29940,6 +30042,19 @@
     }
   ],
   "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/buildTrace.ts",
+      "public_name": "ActivityItem",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ActivityItem { id: string; /** Discriminates the row's visual style. \"action\" is the agent's tool call; * \"user\" is the human's message (steer, send_message, revise instruction); * \"agent_message\" is a prose reply from the agent (ask_user free-form, * finish-message, etc.); \"system_warning\" is a \u26a0-prefixed ENVIRONMENT * message addressed to the human (BP-05's release valve: \"finished WITHOUT * a clean browser verification\") \u2014 gate truths are surfaced, other * environment meta (nudges, reminders) stays hidden; \"system_note\" is a * NEUTRAL environment line the human caused and should see confirmed * (BP-11's upload announcement) \u2014 informational, not an alarm, so it gets * its own kind rather than borrowing system_warning's \u26a0 styling. A * \"rollback_marker\" is the one non-chat audit chip allowed for * workspace_restored events. The feed becomes a unified chat-and-actions log * rather than an action-only ledger. */ kind: | \"action\" | \"user\" | \"agent_message\" | \"system_warning\" | \"system_note\" | \"rollback_marker\"; label: string; // plain language (\"Wrote fizzbuzz.py\" / \"You: skip the cleanup\") /** The agent's natural-language THOUGHT \u2014 its reasoning + plain-English * explanation of what it's doing. NEVER truncated; rendered wrapped. This * is the model talking to the user, and swallowing it was a bug. */ thought?: string; /** The technical detail \u2014 file path, command preview, etc. Single-line OK * to truncate (this is a row label, not content). */ detail?: string; mention?: { tag: string; text: string }; /** Rich expandable content the user can drill into when they want the raw * tool call + observation. Hidden by default to keep the feed scannable. */ expandable?: { tool_name: string; arguments: Record<string, unknown>; output?: string; // observation content (truncated to ~2KB) error?: string; // error message if the action failed plainError?: string; // plain first line for common failure codes screenshot_path?: string; // BP-15: relative .pmx/screenshots/\u2026 path from structured // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact // route (only present for a successful sheet_generate). sheet?: { filename: string; title?: string; sheet_names?: string[] }; // D2: a generated slide deck (Marp HTML / PDF / PPTX), downloadable via // the declared-artifact route. Same shape as the AnswerBlock `slides` // kind minus the `id` \u2014 the activity item already has one. slides?: { filename: string; title?: string; format?: \"html\" | \"pdf\" | \"pptx\"; slide_count?: number; slides?: { title?: string; content?: string }[]; base?: string; // deck base name (no ext) \u2014 for the /deck/export template re-render editable?: boolean; // has an authored sidecar \u2192 template re-render is available renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML) }; // F2: an agent-emitted file (via serve(kind=\"files\")). Downloadable via the // declared-artifact route. Rendered as a first-class download card in the feed. file?: { filename: string; title?: string }; }; status: \"done\" | \"running\" | \"pending\" | \"failed\" | \"pending_send\"; attention: boolean; // confidence gradient: risky/novel steps float up, routine recede risk?: SecurityRisk; /** True when the engine auto-approved a sandboxed op that would have gated * under the base risk policy. Informational-only; never raises attention. */ autoApproved?: boolean; }",
+      "new_signature": "export interface ActivityItem { id: string; /** Discriminates the row's visual style. \"action\" is the agent's tool call; * \"user\" is the human's message (steer, send_message, revise instruction); * \"agent_message\" is a prose reply from the agent (ask_user free-form, * finish-message, etc.); \"system_warning\" is a \u26a0-prefixed ENVIRONMENT * message addressed to the human (BP-05's release valve: \"finished WITHOUT * a clean browser verification\") \u2014 gate truths are surfaced, other * environment meta (nudges, reminders) stays hidden; \"system_note\" is a * NEUTRAL environment line the human caused and should see confirmed * (BP-11's upload announcement) \u2014 informational, not an alarm, so it gets * its own kind rather than borrowing system_warning's \u26a0 styling. A * \"rollback_marker\" is the one non-chat audit chip allowed for * workspace_restored events. The feed becomes a unified chat-and-actions log * rather than an action-only ledger. */ kind: | \"action\" | \"user\" | \"agent_message\" | \"system_warning\" | \"system_note\" | \"rollback_marker\"; label: string; // plain language (\"Wrote fizzbuzz.py\" / \"You: skip the cleanup\") /** The agent's natural-language THOUGHT \u2014 its reasoning + plain-English * explanation of what it's doing. NEVER truncated; rendered wrapped. This * is the model talking to the user, and swallowing it was a bug. */ thought?: string; /** The technical detail \u2014 file path, command preview, etc. Single-line OK * to truncate (this is a row label, not content). */ detail?: string; mention?: { tag: string; text: string }; /** Rich expandable content the user can drill into when they want the raw * tool call + observation. Hidden by default to keep the feed scannable. */ expandable?: { tool_name: string; arguments: Record<string, unknown>; output?: string; // observation content (truncated to ~2KB) error?: string; // error message if the action failed plainError?: string; // plain first line for common failure codes screenshot_path?: string; // BP-15: relative .pmx/screenshots/\u2026 path from structured // rp-11: a generated spreadsheet artifact, downloadable via the declared-artifact // route (only present for a successful sheet_generate). sheet?: { filename: string; title?: string; sheet_names?: string[] }; // D2: a generated slide deck (Marp HTML / PDF / PPTX), downloadable via // the declared-artifact route. Same shape as the AnswerBlock `slides` // kind minus the `id` \u2014 the activity item already has one. slides?: { filename: string; title?: string; format?: \"html\" | \"pdf\" | \"pptx\"; slide_count?: number; slides?: { title?: string; content?: string }[]; base?: string; // deck base name (no ext) \u2014 for the /deck/export template re-render editable?: boolean; // has an authored sidecar \u2192 template re-render is available renderer?: string; // R7: backend renderer provenance (c3-brand/pptx-native/libreoffice/marp = real; fallback = degraded HTML) }; // F2: a host-classified file handoff. Downloadable via the // declared-artifact route. Rendered as a first-class download card in the feed. file?: { filename: string; title?: string }; }; status: \"done\" | \"running\" | \"pending\" | \"failed\" | \"pending_send\"; attention: boolean; // confidence gradient: risky/novel steps float up, routine recede risk?: SecurityRisk; /** True when the engine auto-approved a sandboxed op that would have gated * under the base risk policy. Informational-only; never raises attention. */ autoApproved?: boolean; }",
+      "old_target_sha256": "a7cbaf65ea8e972ae70e41a8caf3957e301241c2c49f798dc6f195f928c7996e",
+      "new_target_sha256": "6904a500f8adeb040c0899d0e3c200df35a1674ba2232d1b1d4dbe0b7481fd9b",
+      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
+      "accepting_commit": "041123758d88157444e2484f9563abdbb4e8c99f",
+      "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
+    },
     {
       "surface": "frontend",
       "path": "frontend/src/types/grounded.ts",

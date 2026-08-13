@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING as TYPE_CHECKING
+from typing import TYPE_CHECKING as TYPE_CHECKING, Literal
 
 from .conversation_controls import ConversationControls as _ConversationControls
 # fmt: off
@@ -68,6 +68,8 @@ class AgentLoop:
     _autonomous: bool
     _quiet: bool
     _strict_appkit_active_reader: Callable[[], bool] | None
+    _declared_delivery_kind: Literal["app", "files"] | None
+    _delivery_contract_resolver: Callable[[str], Awaitable[None]] | None
     _finish_alias: str | None
     _workflow_run: WorkflowRun | None
     _terminal_commit_hook: TerminalCommitHook
@@ -216,6 +218,8 @@ class AgentLoop:
         control_fence: ControlFenceFactory = None,
         quiet: bool = False,
         strict_appkit_active: Callable[[], bool] | None = None,
+        declared_delivery_kind: Literal["app", "files"] | None = None,
+        delivery_contract_resolver: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self.conversation_id: str
         self.store: EventStore
@@ -235,7 +239,7 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         # fmt: off
-        _initialize_agent_loop(cast(_AgentLoopCompatibility, self), conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, veto_feedback=veto_feedback, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, recitation_cadence=recitation_cadence, reground_cadence=reground_cadence, dod_evaluator_factory=dod_evaluator_factory, host_verifier=host_verifier, host_verify_timeout_s=host_verify_timeout_s, host_verifier_verdict_hook=host_verifier_verdict_hook, host_verify_authoritative=host_verify_authoritative, verifier_judge=verifier_judge, verifier_judge_timeout_s=verifier_judge_timeout_s, finish_sealability_probe=finish_sealability_probe, finish_seal_timeout_s=finish_seal_timeout_s, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active)
+        _initialize_agent_loop(cast(_AgentLoopCompatibility, self), conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, veto_feedback=veto_feedback, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, recitation_cadence=recitation_cadence, reground_cadence=reground_cadence, dod_evaluator_factory=dod_evaluator_factory, host_verifier=host_verifier, host_verify_timeout_s=host_verify_timeout_s, host_verifier_verdict_hook=host_verifier_verdict_hook, host_verify_authoritative=host_verify_authoritative, verifier_judge=verifier_judge, verifier_judge_timeout_s=verifier_judge_timeout_s, finish_sealability_probe=finish_sealability_probe, finish_seal_timeout_s=finish_seal_timeout_s, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active, declared_delivery_kind=declared_delivery_kind, delivery_contract_resolver=delivery_contract_resolver)
         # fmt: on
 
     _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file", "file_edit")

@@ -71,6 +71,7 @@ _APP_SOURCE = (
     "from http.server import HTTPServer, SimpleHTTPRequestHandler\n"
     "HTTPServer(('', 8000), SimpleHTTPRequestHandler).serve_forever()"
 )
+_HTML_SOURCE = "<!doctype html><html><body><h1>Recovery app</h1></body></html>"
 
 
 def _platform_admission() -> BuildPlatformAdmissionEvent:
@@ -211,8 +212,14 @@ class _RecoveryExecutor(FakeExecutor):
             ]
         )
         self.verify_calls = 0
+        self.sandbox = _RecoverySandbox()
 
     async def execute(self, call):
+        if call.tool_name == "file_write":
+            path = call.arguments.get("path")
+            content = call.arguments.get("content")
+            if isinstance(path, str) and isinstance(content, str):
+                self.sandbox.files[path] = content.encode()
         if call.tool_name == "browser":
             self.calls.append(call)
             return ToolResult(
@@ -257,6 +264,19 @@ class _RecoveryExecutor(FakeExecutor):
                 },
             )
         return await super().execute(call)
+
+
+class _RecoverySandbox:
+    """Minimal byte authority used by artifact-derived handoff classification."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+
+    async def file_exists(self, path: str) -> bool:
+        return path in self.files
+
+    async def read_file(self, path: str) -> bytes:
+        return self.files[path]
 
 
 def _recovery_loop(agent, executor, *, host_verifier=None):
@@ -313,8 +333,8 @@ async def test_contradiction_state_is_deterministically_closed():
 
 @pytest.mark.asyncio
 async def test_recovered_app_handoff_with_host_unavailable_no_preview_must_not_finish():
-    """NEGATIVE CONTROL 1: cancel/recover → raw shell runtime → browser
-    observation → app handoff → host unavailable (no Preview, no typed receipt)
+    """NEGATIVE CONTROL 1: cancel/recover → raw static runtime → browser
+    observation → proven HTML handoff → host unavailable (no Preview, no typed receipt)
     must NOT persist FINISHED. The governed target has mandatory structured-
     browser claims but no canonical Preview selection and no complete typed
     receipt. The host gate must refuse with an actionable recovery route and
@@ -326,11 +346,11 @@ async def test_recovered_app_handoff_with_host_unavailable_no_preview_must_not_f
         [
             action_step(
                 tool="file_write",
-                args={"path": "app.py", "content": _APP_SOURCE},
+                args={"path": "index.html", "content": _HTML_SOURCE},
             ),
             action_step(
                 tool="shell",
-                args={"command": "python3 app.py &"},
+                args={"command": "python3 -m http.server 8000 &"},
             ),
             action_step(
                 tool="browser",
@@ -338,7 +358,7 @@ async def test_recovered_app_handoff_with_host_unavailable_no_preview_must_not_f
             ),
             action_step(
                 tool="serve",
-                args={"title": "Recovery app", "path": "app.py", "kind": "app"},
+                args={"title": "Recovery app", "path": "index.html", "kind": "app"},
             ),
             finish_step("Recovery app is live and verified."),
             finish_step(),
@@ -463,7 +483,7 @@ async def test_current_preview_but_missing_typed_receipt_plus_inline_pass_must_n
                 tool="file_write",
                 args={"path": "app.py", "content": _APP_SOURCE},
             ),
-            action_step(tool="preview_start", args={}),
+            action_step(tool="preview_start", args={"command": "python3 app.py"}),
             action_step(
                 tool="serve",
                 args={"title": "Recovery app", "path": "app.py", "kind": "app"},
@@ -531,11 +551,11 @@ async def test_governed_browser_unavailable_without_receipt_must_not_finish():
         [
             action_step(
                 tool="file_write",
-                args={"path": "app.py", "content": _APP_SOURCE},
+                args={"path": "index.html", "content": _HTML_SOURCE},
             ),
             action_step(
                 tool="serve",
-                args={"title": "Recovery app", "path": "app.py", "kind": "app"},
+                args={"title": "Recovery app", "path": "index.html", "kind": "app"},
             ),
             finish_step("Recovery app is live."),
             finish_step(),
@@ -575,11 +595,11 @@ async def test_governed_target_without_configured_host_verifier_must_not_finish(
         [
             action_step(
                 tool="file_write",
-                args={"path": "app.py", "content": _APP_SOURCE},
+                args={"path": "index.html", "content": _HTML_SOURCE},
             ),
             action_step(
                 tool="serve",
-                args={"title": "Recovery app", "path": "app.py", "kind": "app"},
+                args={"title": "Recovery app", "path": "index.html", "kind": "app"},
             ),
             finish_step("Recovery app is live."),
             finish_step(),
@@ -633,11 +653,11 @@ async def test_governed_current_typed_fail_receipt_must_not_finish():
         [
             action_step(
                 tool="file_write",
-                args={"path": "app.py", "content": _APP_SOURCE},
+                args={"path": "index.html", "content": _HTML_SOURCE},
             ),
             action_step(
                 tool="serve",
-                args={"title": "Recovery app", "path": "app.py", "kind": "app"},
+                args={"title": "Recovery app", "path": "index.html", "kind": "app"},
             ),
             finish_step("Recovery app is live."),
             finish_step(),
@@ -730,11 +750,11 @@ async def test_new_preview_authority_clears_unchanged_failure_marker_and_may_pas
         [
             action_step(
                 tool="file_write",
-                args={"path": "app.py", "content": _APP_SOURCE},
+                args={"path": "index.html", "content": _HTML_SOURCE},
             ),
             action_step(
                 tool="serve",
-                args={"title": "Recovery app", "path": "app.py", "kind": "app"},
+                args={"title": "Recovery app", "path": "index.html", "kind": "app"},
             ),
             finish_step("Recovery app is live."),
             action_step(tool="preview_start", args={}),
@@ -829,7 +849,7 @@ async def test_recovered_app_with_preview_authority_and_passing_host_may_finish(
                 args={"path": "app.py", "content": _APP_SOURCE},
             ),
             finish_step(),
-            action_step(tool="preview_start", args={}),
+            action_step(tool="preview_start", args={"command": "python3 app.py"}),
             action_step(
                 tool="serve",
                 args={"title": "Recovery app", "path": "app.py", "kind": "app"},
