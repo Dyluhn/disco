@@ -69,6 +69,7 @@ from .build_loop_components import (
 from .build_loop_components import (
     workflow_router_enabled as workflow_router_enabled,
 )
+from .build_platform_runtime import BuildPlatformRuntime
 from .driver_context import ResolvedDriverContext
 from .runtime_composition import wire_runtime
 from .runtime_model_probe import (
@@ -228,6 +229,7 @@ class ConversationRuntime:
         workspace: WorkspaceCoordinator
 
         _config_store: ConfigStore
+        _build_platform: BuildPlatformRuntime
         _driver_preflight: DriverPreflight
         _idle_sweeper: LifecycleIdleSweeper
         _loop_factory: BuildLoopFactory

@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "dca160deb7a264711fae711c629076f04fd3dee5",
+  "source_identity": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
   "collected": {
     "counts": {
-      "packages": 10710,
+      "packages": 10712,
       "harness": 1400,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12515,
+    "total": 12517,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -311,6 +311,7 @@
         "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_paused_is_left_alone",
         "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_running_recovers_then_stucks",
         "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_running_transient_recovers_without_stuck",
+        "packages/agent-server/tests/integration/test_task_supervision.py::test_pre_admission_crash_terminalizes_under_the_durable_run_authority",
         "packages/agent-server/tests/integration/test_task_supervision.py::test_stranded_running_swept_to_recovery",
         "packages/agent-server/tests/integration/test_task_supervision.py::test_terminalize_is_idempotent",
         "packages/agent-server/tests/integration/test_task_supervision.py::test_uncaught_loop_exception_terminalizes_as_error",
@@ -1039,6 +1040,7 @@
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_legacy_park_is_pinned_but_terminal_run_releases_rollout_choice",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_admission_is_durable_idempotent_and_restart_pinned",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_resolution_failure_blocks_without_legacy_fallback",
+        "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission",
         "packages/agent-server/tests/test_build_platform_host_probes.py::TestEvidenceIsReal::test_a_missing_tool_reports_absent_not_supported",
         "packages/agent-server/tests/test_build_platform_host_probes.py::TestEvidenceIsReal::test_an_unwritable_root_reports_absent",
         "packages/agent-server/tests/test_build_platform_host_probes.py::TestEvidenceIsReal::test_every_advertised_capability_rests_on_a_present_observation",
@@ -12536,9 +12538,9 @@
     }
   },
   "mapping_static": {
-    "identity": "dca160deb7a264711fae711c629076f04fd3dee5",
+    "identity": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
     "python_test_file_count": 844,
-    "python_static_test_id_count": 10290,
+    "python_static_test_id_count": 10292,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14646,6 +14648,7 @@
       "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_paused_is_left_alone",
       "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_running_recovers_then_stucks",
       "packages/agent-server/tests/integration/test_task_supervision.py::test_clean_return_at_running_transient_recovers_without_stuck",
+      "packages/agent-server/tests/integration/test_task_supervision.py::test_pre_admission_crash_terminalizes_under_the_durable_run_authority",
       "packages/agent-server/tests/integration/test_task_supervision.py::test_stranded_running_swept_to_recovery",
       "packages/agent-server/tests/integration/test_task_supervision.py::test_terminalize_is_idempotent",
       "packages/agent-server/tests/integration/test_task_supervision.py::test_uncaught_loop_exception_terminalizes_as_error",
@@ -15186,6 +15189,7 @@
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_legacy_park_is_pinned_but_terminal_run_releases_rollout_choice",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_admission_is_durable_idempotent_and_restart_pinned",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_resolution_failure_blocks_without_legacy_fallback",
+      "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission",
       "packages/agent-server/tests/test_build_platform_host_probes.py::test_a_missing_tool_reports_absent_not_supported",
       "packages/agent-server/tests/test_build_platform_host_probes.py::test_an_unknown_probe_is_not_run_rather_than_assumed",
       "packages/agent-server/tests/test_build_platform_host_probes.py::test_an_unprobed_platform_is_modelled_explicitly_and_claims_nothing",
@@ -25316,7 +25320,7 @@
       },
       {
         "path": "packages/agent-server/tests/integration/test_task_supervision.py",
-        "line": 43,
+        "line": 44,
         "fixture": "_deploy_lock_dir",
         "scope": "pytest.fixture(autouse=True)"
       },
@@ -30372,6 +30376,32 @@
       "mapping_static_additions": {
         "python_test_files": [],
         "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V33-ROUTE-REENTRY",
+      "root": "packages",
+      "source_identity_before": "dca160deb7a264711fae711c629076f04fd3dee5",
+      "source_identity_after": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10710,
+          "after_count": 10712,
+          "added_ids": [
+            "packages/agent-server/tests/integration/test_task_supervision.py::test_pre_admission_crash_terminalizes_under_the_durable_run_authority",
+            "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/integration/test_task_supervision.py::test_pre_admission_crash_terminalizes_under_the_durable_run_authority",
+          "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission"
+        ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []

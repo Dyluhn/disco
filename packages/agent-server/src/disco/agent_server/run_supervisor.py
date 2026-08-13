@@ -487,6 +487,16 @@ class RunSupervisor:
             raise ValueError("provide exactly one of loop or loop_factory")
 
         async def run() -> ConversationState:
+            current = cast(RunTask | None, asyncio.current_task())
+            if current is not None and self._registry.owns_task(conversation_id, current):
+                agent_view_id, run_intent_id = (
+                    await self._workspace.resolve_current_run_authority(conversation_id)
+                )
+                self._authorities.bind(
+                    current,
+                    agent_view_id=agent_view_id,
+                    run_intent_id=run_intent_id,
+                )
             selected = loop_factory() if loop_factory is not None else loop
             assert selected is not None
             selected_loop = (
@@ -589,7 +599,7 @@ class RunPersistenceSupervisor:
         current = asyncio.current_task()
         task = cast(RunTask | None, current)
         registered = task is not None and self._registry.owns_task(conversation_id, task)
-        run_intent_id = await self._bind_initial_authority(
+        run_intent_id = await self._refresh_authority_after_admission(
             conversation_id,
             task,
             registered=registered,
@@ -619,7 +629,7 @@ class RunPersistenceSupervisor:
         await self._snapshot_ended(conversation_id, surface=surface)
         return state
 
-    async def _bind_initial_authority(
+    async def _refresh_authority_after_admission(
         self,
         conversation_id: str,
         task: RunTask | None,
@@ -627,6 +637,8 @@ class RunPersistenceSupervisor:
         registered: bool,
         surface: str,
     ) -> str | None:
+        """Capture an intent created lazily while the workspace admitted the run."""
+
         if not registered or task is None or not self._policy.is_build_surface(surface):
             return None
         agent_view_id, run_intent_id, _strict = await self._lifecycle.resolve_current_authority(
