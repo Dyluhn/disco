@@ -26,11 +26,22 @@ from _dictated_content_support import (
     _submit_plan,
     _write,
 )
-from disco.core import ConversationStatus, DeliverableEvent, EventSource, StatusEvent
+from disco.core import (
+    ActionEvent,
+    BuildPlatformAdmissionEvent,
+    ConversationStatus,
+    DeliverableEvent,
+    EventSource,
+    ObservationEvent,
+    StatusEvent,
+    ToolCall,
+    ToolResult,
+)
 from disco.core.llm import OperatingMode
 from disco.core.loop.finish import _DICTATED_CONTENT_REFUSAL_CAP, _safe_deliverable_file_path
 from disco.core.loop.finish import content_gates as content_gates_module
 from disco.core.loop.plan_conditions import dictated_content_conditions_from_events
+from disco.core.verification import default_structured_web_claims
 from loop_fakes import ScriptedAgent, action_step, build_loop
 
 
@@ -82,6 +93,98 @@ def test_deliverable_path_jail_accepts_only_the_canonical_workspace_root():
     assert _safe_deliverable_file_path("/workspace/../../etc/passwd") is None
     assert _safe_deliverable_file_path("/workspaces/index.html") is None
     assert _safe_deliverable_file_path("/etc/passwd") is None
+
+
+@pytest.mark.asyncio
+async def test_web_content_waits_for_handoff_instead_of_guessing_index(
+    tmp_path: Path,
+):
+    """A Preview proves runtime shape, not that the entry is ``index.html``."""
+
+    (tmp_path / "server.py").write_text(
+        'PAGE = "<h1>Live Server Up</h1>"\n',
+        encoding="utf-8",
+    )
+    executor = _FSBuildExecutor(tmp_path)
+    loop, store = build_loop(
+        ScriptedAgent(
+            [
+                action_step(
+                    "submit_plan",
+                    {
+                        "summary": "serve one stdlib page",
+                        "steps": [{"title": "write and preview server.py"}],
+                    },
+                )
+            ]
+        ),
+        conversation_id="dictated-preview-entry-pending",
+        executor=executor,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message("Create server.py with the h1 'Live Server Up'.")
+    await loop.run()
+    await loop.approve_plan()
+    await store.append(
+        "dictated-preview-entry-pending",
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.freeform_web@1",
+            run_intent_id="intent-preview-entry",
+            composition_authority="build_platform_core",
+            composition_digest="sha256:" + "a" * 64,
+            run_identity="run:sha256:" + "b" * 64,
+            verification_claims=default_structured_web_claims(),
+        ),
+    )
+    preview = await store.append(
+        "dictated-preview-entry-pending",
+        ActionEvent(
+            thought="start the requested server",
+            tool_call=ToolCall(
+                tool_name="preview_start",
+                arguments={"command": "python3 server.py"},
+            ),
+        ),
+    )
+    assert isinstance(preview, ActionEvent)
+    await store.append(
+        "dictated-preview-entry-pending",
+        ObservationEvent(
+            action_id=preview.id,
+            tool_result=ToolResult(
+                call_id=preview.tool_call.call_id,
+                tool_name="preview_start",
+                success=True,
+                content="preview running",
+            ),
+        ),
+    )
+
+    events = await store.get_events("dictated-preview-entry-pending")
+    assert await loop._finish.dictated_content_gate_passed(events) is True
+    assert "index.html" not in executor.sandbox.read_paths
+    assert not any("quoted user literal is missing" in msg for msg in _env_messages(events))
+
+    await store.append(
+        "dictated-preview-entry-pending",
+        DeliverableEvent(
+            source=EventSource.AGENT,
+            title="server",
+            path="server.py",
+            artifact_kind="app",
+        ),
+    )
+    events = await store.get_events("dictated-preview-entry-pending")
+    assert await loop._finish.dictated_content_gate_passed(events) is True
+    assert "server.py" in executor.sandbox.read_paths
+
+    (tmp_path / "server.py").write_text("# heading removed\n", encoding="utf-8")
+    events = await store.get_events("dictated-preview-entry-pending")
+    assert await loop._finish.dictated_content_gate_passed(events) is False
+    events = await store.get_events("dictated-preview-entry-pending")
+    assert any("Live Server Up" in msg and "`server.py`" in msg for msg in _env_messages(events))
 
 
 @pytest.mark.asyncio

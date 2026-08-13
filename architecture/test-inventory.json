@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
+  "source_identity": "37786c69862390dac8b9946e0bc2a32133049de9",
   "collected": {
     "counts": {
-      "packages": 10712,
+      "packages": 10713,
       "harness": 1400,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12517,
+    "total": 12518,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -4778,6 +4778,7 @@
         "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_miss_and_bundle_error_stays_fail_closed",
         "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_miss_still_uses_sibling_bundle_proof",
         "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_proof_skips_redundant_bundle_listing",
+        "packages/core/tests/test_dictated_content_app_bundle.py::test_web_content_waits_for_handoff_instead_of_guessing_index",
         "packages/core/tests/test_dictated_content_literals.py::test_additive_content_does_not_replace_application_title",
         "packages/core/tests/test_dictated_content_literals.py::test_ambiguous_application_title_history_fails_closed_on_replacement",
         "packages/core/tests/test_dictated_content_literals.py::test_an_unrelated_literal_never_claims_the_title_slot",
@@ -12538,9 +12539,9 @@
     }
   },
   "mapping_static": {
-    "identity": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
+    "identity": "37786c69862390dac8b9946e0bc2a32133049de9",
     "python_test_file_count": 844,
-    "python_static_test_id_count": 10292,
+    "python_static_test_id_count": 10293,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -18339,6 +18340,7 @@
       "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_miss_and_bundle_error_stays_fail_closed",
       "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_miss_still_uses_sibling_bundle_proof",
       "packages/core/tests/test_dictated_content_app_bundle.py::test_selected_app_entry_proof_skips_redundant_bundle_listing",
+      "packages/core/tests/test_dictated_content_app_bundle.py::test_web_content_waits_for_handoff_instead_of_guessing_index",
       "packages/core/tests/test_dictated_content_literals.py::test_additive_content_does_not_replace_application_title",
       "packages/core/tests/test_dictated_content_literals.py::test_ambiguous_application_title_history_fails_closed_on_replacement",
       "packages/core/tests/test_dictated_content_literals.py::test_an_unrelated_literal_never_claims_the_title_slot",
@@ -32667,6 +32669,30 @@
         "python_static_test_ids": [
           "packages/core/tests/test_build_platform_vercel_contract.py::test_deployment_request_has_no_source_or_secret_channel",
           "packages/core/tests/test_build_platform_vercel_contract.py::test_documented_prebuilt_contract_preserves_artifact_and_scopes"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V34-CONTENT-TARGET",
+      "root": "packages",
+      "source_identity_before": "052f8e7c2623890cf24aead080a0ee9c7e41c0e5",
+      "source_identity_after": "37786c69862390dac8b9946e0bc2a32133049de9",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10712,
+          "after_count": 10713,
+          "added_ids": [
+            "packages/core/tests/test_dictated_content_app_bundle.py::test_web_content_waits_for_handoff_instead_of_guessing_index"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_dictated_content_app_bundle.py::test_web_content_waits_for_handoff_instead_of_guessing_index"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
