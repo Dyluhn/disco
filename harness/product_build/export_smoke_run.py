@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """P10b — LIVE export-smoke deliverable capture. Proves the export/download path end-to-end on a
 REAL MiniMax-M3 build: the model builds a single self-contained `export.html` and serves it as a
-downloadable file (serve(kind='files')) → a DeliverableEvent → and the harness fetches the REAL
-bytes from GET /conversations/{cid}/artifacts/{path}. download_bytes is the length of the ACTUAL GET
-(NOT a fixture claim); fail-closed if no deliverable or 0 bytes. Sibling of targeted_edit_run.py.
+downloadable file (host-classified serve handoff) → a DeliverableEvent → and the harness fetches
+the REAL bytes from GET /conversations/{cid}/artifacts/{path}. download_bytes is the length of
+the ACTUAL GET (NOT a fixture claim); fail-closed if no deliverable or 0 bytes. Sibling of
+targeted_edit_run.py.
 """
 
 from __future__ import annotations

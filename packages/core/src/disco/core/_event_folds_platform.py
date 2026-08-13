@@ -281,6 +281,28 @@ def _resolve_appkit_ejection_admission(
     return None
 
 
+def _resolve_delivery_selection_admission(
+    candidate: BuildPlatformAdmissionEvent,
+    superseded: BuildPlatformAdmissionEvent | None,
+) -> BuildPlatformAdmissionEvent | None:
+    """Accept only a host-owned Freeform target replacement in the same run."""
+
+    freeform_profiles = {"disco.freeform_web@1", "disco.freeform_artifact@1"}
+    if (
+        superseded is not None
+        and superseded.id == candidate.supersedes_admission_id
+        and superseded.run_intent_id == candidate.run_intent_id
+        and isinstance(superseded.seq, int)
+        and isinstance(candidate.seq, int)
+        and superseded.seq < candidate.seq
+        and superseded.route == candidate.route == "platform"
+        and superseded.profile_id in freeform_profiles
+        and candidate.profile_id in freeform_profiles
+    ):
+        return candidate
+    return None
+
+
 def _superseded_appkit_admission(
     candidate: BuildPlatformAdmissionEvent,
     prior_for_intent: list[BuildPlatformAdmissionEvent],
@@ -363,10 +385,14 @@ def _latest_valid_platform_admission(
             if not prior_for_intent:
                 latest = candidate
             continue
-        resolved = _resolve_appkit_ejection_admission(
-            materialized,
-            candidate,
-            prior_for_intent,
+        resolved = (
+            _resolve_delivery_selection_admission(candidate, latest)
+            if candidate.transition == "delivery_selection"
+            else _resolve_appkit_ejection_admission(
+                materialized,
+                candidate,
+                prior_for_intent,
+            )
         )
         if resolved is not None:
             latest = resolved

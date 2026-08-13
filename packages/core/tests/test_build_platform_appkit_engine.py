@@ -9,7 +9,9 @@ from disco.core.build_platform import (
     PolicyDecision,
     ToolDescriptor,
     build_builtin_registry,
-    resolve_builtin_composition,
+)
+from disco.core.build_platform.builtin_profiles import (
+    resolve_builtin_composition_for_delivery,
 )
 
 
@@ -30,13 +32,14 @@ def test_appkit_has_a_distinct_strict_engine_and_governed_lifecycle() -> None:
     assert isinstance(freeform_engine, ConstructionEngine)
     assert type(appkit_engine) is not type(freeform_engine)
 
-    composition = resolve_builtin_composition(
+    composition = resolve_builtin_composition_for_delivery(
         appkit=True,
         goal="create a governed application",
         tool_catalog=tuple(
             ToolDescriptor(name=name, description=f"strict {name}") for name in sorted(tools)
         ),
         visible_tools=tools,
+        delivery_kind="app",
     )
 
     assert composition.profile.id == APPKIT_PROFILE_ID
@@ -64,11 +67,12 @@ def test_appkit_has_a_distinct_strict_engine_and_governed_lifecycle() -> None:
 
 
 def test_appkit_engine_describes_governance_without_effect_authority() -> None:
-    composition = resolve_builtin_composition(
+    composition = resolve_builtin_composition_for_delivery(
         appkit=True,
         goal="preserve auth, roles, persistence, and mediated delivery",
         tool_catalog=(ToolDescriptor(name="file_read", description="read"),),
         visible_tools=frozenset({"file_read"}),
+        delivery_kind="app",
     )
     operations = tuple(intent.operation for intent in composition.construction.intents)
     assert "appkit.govern_session_auth" in operations

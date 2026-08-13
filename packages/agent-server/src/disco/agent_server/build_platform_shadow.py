@@ -13,10 +13,12 @@ from disco.core.build_platform import (
     ShadowFieldComparison,
     ToolDescriptor,
     compare_observe_only,
-    expected_legacy_snapshot,
     failed_observe_only,
-    resolve_builtin_composition,
 )
+from disco.core.build_platform.builtin_profiles import (
+    resolve_builtin_composition_for_delivery,
+)
+from disco.core.build_platform.shadow import expected_legacy_snapshot_for_delivery
 from disco.core.env import disco_env
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,7 @@ def observe_legacy_build(
     *,
     appkit_mode: bool,
     tool_specs: Iterable[Any],
+    delivery_kind: Literal["app", "files"],
 ) -> ObserveOnlyShadowRecord:
     """Resolve and compare without returning any value the loop can execute."""
 
@@ -91,16 +94,18 @@ def observe_legacy_build(
     try:
         catalog = _tool_catalog(tool_specs)
         visible_tools = frozenset(tool.name for tool in catalog)
-        composition = resolve_builtin_composition(
+        composition = resolve_builtin_composition_for_delivery(
             appkit=appkit_mode,
             goal="observe existing Build composition",
             tool_catalog=catalog,
             visible_tools=visible_tools,
+            delivery_kind=delivery_kind,
         )
         record = compare_observe_only(
-            expected_legacy_snapshot(
+            expected_legacy_snapshot_for_delivery(
                 appkit=appkit_mode,
                 visible_tools=visible_tools,
+                delivery_kind=delivery_kind,
             ),
             composition,
         )
@@ -130,19 +135,25 @@ def observe_legacy_build(
 def select_freeform_platform_route(
     *,
     tool_specs: Iterable[Any],
+    delivery_kind: Literal["app", "files"],
 ) -> BuildPlatformRouteRecord:
     """Resolve the exact Freeform composition or fail closed before execution."""
 
     catalog = _tool_catalog(tool_specs)
     visible_tools = frozenset(tool.name for tool in catalog)
-    composition = resolve_builtin_composition(
+    composition = resolve_builtin_composition_for_delivery(
         appkit=False,
         goal="admit existing Freeform Build execution",
         tool_catalog=catalog,
         visible_tools=visible_tools,
+        delivery_kind=delivery_kind,
     )
     comparison = compare_observe_only(
-        expected_legacy_snapshot(appkit=False, visible_tools=visible_tools),
+        expected_legacy_snapshot_for_delivery(
+            appkit=False,
+            visible_tools=visible_tools,
+            delivery_kind=delivery_kind,
+        ),
         composition,
     )
     if not comparison.matches:
@@ -171,14 +182,19 @@ def select_appkit_platform_route(
 
     catalog = _tool_catalog(tool_specs)
     visible_tools = frozenset(tool.name for tool in catalog)
-    composition = resolve_builtin_composition(
+    composition = resolve_builtin_composition_for_delivery(
         appkit=True,
         goal="admit existing governed AppKit execution",
         tool_catalog=catalog,
         visible_tools=visible_tools,
+        delivery_kind="app",
     )
     comparison = compare_observe_only(
-        expected_legacy_snapshot(appkit=True, visible_tools=visible_tools),
+        expected_legacy_snapshot_for_delivery(
+            appkit=True,
+            visible_tools=visible_tools,
+            delivery_kind="app",
+        ),
         composition,
     )
     if not comparison.matches:

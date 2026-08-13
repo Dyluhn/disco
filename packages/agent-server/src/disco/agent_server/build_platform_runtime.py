@@ -1,9 +1,4 @@
-"""Runtime admission bridge for Build Platform Core.
-
-The collaborator owns route selection and durable identity bookkeeping. It does
-not execute component intents: the existing executor and workspace services
-remain the only effect authorities.
-"""
+"""Runtime admission and durable identity bridge for Build Platform Core."""
 
 from __future__ import annotations
 
@@ -24,6 +19,7 @@ from disco.core import (
 )
 from disco.core.build_platform import (
     APPKIT_PROFILE_ID,
+    FREEFORM_ARTIFACT_PROFILE_ID,
     FREEFORM_PROFILE_ID,
     ComponentId,
     CompositionDigest,
@@ -40,6 +36,7 @@ from disco.core.verification import (
     VerificationParameter,
 )
 
+from .appkit_ejection import AppKitEjectionLedger
 from .build_platform_shadow import (
     BuildPlatformRouteRecord,
     appkit_platform_route_enabled,
@@ -51,6 +48,8 @@ from .workspace_fence import WorkspaceFenceService
 
 BuildRoute = Literal["legacy", "platform"]
 CompositionAuthority = Literal["legacy", "build_platform_core"]
+_FREEFORM_PROFILES = (FREEFORM_PROFILE_ID, FREEFORM_ARTIFACT_PROFILE_ID)
+_KNOWN_PROFILES = (*_FREEFORM_PROFILES, APPKIT_PROFILE_ID)
 
 
 class BuildSurfaceClassifier(Protocol):
@@ -63,22 +62,6 @@ class BuildRouteRollback(Protocol):
     """Discard a just-composed executor when route resolution fails closed."""
 
     def discard_composed_executor(self, conversation_id: str) -> None: ...
-
-
-class AppKitEjectionLedger:
-    """Live process cache reconstructed from durable ejection events."""
-
-    def __init__(self) -> None:
-        self._ejected: set[str] = set()
-
-    def is_appkit_ejected(self, conversation_id: str) -> bool:
-        return conversation_id in self._ejected
-
-    def record(self, conversation_id: str, *, ejected: bool) -> None:
-        if ejected:
-            self._ejected.add(conversation_id)
-        else:
-            self._ejected.discard(conversation_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,9 +181,18 @@ def _validate_existing_admission(
     *,
     route: BuildRoute,
     profile: ComponentId,
+    fields: _AdmissionFields,
 ) -> None:
     if existing.route != route or existing.profile_id != profile.canonical:
         raise RuntimeError("run intent already has a different Build admission")
+    if (
+        existing.composition_authority != fields.authority
+        or existing.composition_digest != fields.digest
+        or existing.run_identity != fields.run_identity
+        or existing.verification_claims != fields.verification_claims
+        or existing.verification_contract != fields.verification_contract
+    ):
+        raise RuntimeError("durable Build admission differs from the reconstructed composition")
 
 
 def _platform_fields(
@@ -253,6 +245,165 @@ def _transition_fields(
         conversation_id,
     )
     return fields, prepared_record
+
+
+def _restored_delivery_kind(state: _RouteState) -> Literal["app", "files"] | None:
+    if state.pin is None:
+        return None
+    if state.selected_profile == FREEFORM_ARTIFACT_PROFILE_ID:
+        return "files"
+    return "app" if state.selected_profile == FREEFORM_PROFILE_ID else None
+
+
+def _select_freeform_runtime(
+    runtime: BuildPlatformRuntime,
+    conversation_id: str,
+    *,
+    eligible: bool,
+    tool_specs: Iterable[ToolSpec],
+    delivery_kind: Literal["app", "files"] | None,
+) -> None:
+    if not eligible:
+        state = runtime._state(conversation_id)
+        runtime._save(
+            conversation_id,
+            replace(state, selected_route=None, selected_profile=None),
+        )
+        return
+    state = runtime._state(conversation_id)
+    restored_kind = _restored_delivery_kind(state)
+    if delivery_kind is not None and restored_kind is not None and delivery_kind != restored_kind:
+        raise RuntimeError("declared delivery differs from the durable Build admission")
+    # Before an artifact exists, retain the historical web contract as a
+    # fail-closed provisional floor. This is not an artifact classification:
+    # serve derives the real kind and atomically replaces this target before it
+    # emits a deliverable or completion can use that handoff.
+    effective_delivery = delivery_kind or restored_kind or "app"
+    platform = state.pin == "platform" or (
+        state.pin is None and freeform_platform_route_enabled()
+    )
+    route: BuildRoute = "platform" if platform else "legacy"
+    selected_profile = (
+        FREEFORM_ARTIFACT_PROFILE_ID if effective_delivery == "files" else FREEFORM_PROFILE_ID
+    )
+    if not platform:
+        runtime._set_selection(
+            conversation_id,
+            route=route,
+            profile=selected_profile,
+            record=None,
+        )
+        return
+    try:
+        record = select_freeform_platform_route(
+            tool_specs=tool_specs,
+            delivery_kind=effective_delivery,
+        )
+    except Exception:
+        runtime._selection_failed(conversation_id)
+        raise
+    runtime._set_selection(
+        conversation_id,
+        route=route,
+        profile=record.composition.profile.id,
+        record=record,
+    )
+
+
+async def _delivery_selection_authority(
+    runtime: BuildPlatformRuntime,
+    conversation_id: str,
+) -> tuple[WorkspaceMutationEvent, BuildPlatformAdmissionEvent]:
+    if not runtime._workspace.lock(conversation_id).locked():
+        raise RuntimeError("delivery selection requires the workspace fence")
+    if not runtime._workspace.fence_owned_by_current_task(conversation_id):
+        raise RuntimeError("delivery selection requires current-task fence ownership")
+    runtime._workspace.require_process_fence_locked(conversation_id)
+    events = await runtime._store.get_events(conversation_id)
+    intent = latest_workspace_run_intent(events)
+    admission = current_build_platform_admission(events)
+    if (
+        intent is None
+        or type(intent.seq) is not int
+        or admission is None
+        or admission.run_intent_id != intent.id
+    ):
+        raise RuntimeError("delivery selection has no current Build admission")
+    return intent, admission
+
+
+def _admitted_delivery_kind(
+    admission: BuildPlatformAdmissionEvent,
+) -> Literal["app", "files"] | None:
+    contract = admission.verification_contract
+    if contract is None:
+        return None
+    return "app" if contract.delivery.mode == "interactive" else "files"
+
+
+async def _bind_delivery_runtime(
+    runtime: BuildPlatformRuntime,
+    conversation_id: str,
+    delivery_kind: Literal["app", "files"],
+    *,
+    tool_specs: Iterable[ToolSpec],
+) -> BuildPlatformAdmissionEvent | None:
+    intent, admission = await _delivery_selection_authority(runtime, conversation_id)
+    if admission.route == "legacy":
+        return admission
+    if admission.profile_id not in {item.canonical for item in _FREEFORM_PROFILES}:
+        return admission
+    target_profile = (
+        FREEFORM_ARTIFACT_PROFILE_ID if delivery_kind == "files" else FREEFORM_PROFILE_ID
+    )
+    try:
+        record = select_freeform_platform_route(
+            tool_specs=tool_specs,
+            delivery_kind=delivery_kind,
+        )
+    except Exception:
+        runtime._selection_failed(conversation_id)
+        raise
+    fields = _platform_fields(record, target_profile, intent, conversation_id)
+    if (
+        admission.profile_id == target_profile.canonical
+        and _admitted_delivery_kind(admission) == delivery_kind
+    ):
+        _validate_existing_admission(
+            admission,
+            route="platform",
+            profile=target_profile,
+            fields=fields,
+        )
+        runtime._set_selection(
+            conversation_id,
+            route="platform",
+            profile=target_profile,
+            record=record,
+        )
+        return admission
+    replacement = BuildPlatformAdmissionEvent(
+        route="platform",
+        profile_id=target_profile.canonical,
+        run_intent_id=intent.id,
+        composition_authority=fields.authority,
+        composition_digest=fields.digest,
+        run_identity=fields.run_identity,
+        transition="delivery_selection",
+        supersedes_admission_id=admission.id,
+        verification_claims=fields.verification_claims,
+        verification_contract=fields.verification_contract,
+    )
+    stored = await runtime._store.append(conversation_id, replacement)
+    if not isinstance(stored, BuildPlatformAdmissionEvent):
+        raise RuntimeError("event store returned a malformed delivery selection")
+    runtime._set_selection(
+        conversation_id,
+        route="platform",
+        profile=target_profile,
+        record=record,
+    )
+    return stored
 
 
 class BuildPlatformRuntime:
@@ -322,6 +473,14 @@ class BuildPlatformRuntime:
             return
         events = await self._store.get_events(conversation_id)
         admission = current_build_platform_admission(events)
+        restored_profile = next(
+            (
+                profile
+                for profile in _KNOWN_PROFILES
+                if admission is not None and profile.canonical == admission.profile_id
+            ),
+            None,
+        )
         self._ejections.record(
             conversation_id,
             ejected=current_appkit_ejection(events) is not None,
@@ -331,6 +490,9 @@ class BuildPlatformRuntime:
             replace(
                 state,
                 pin=admission.route if admission is not None else None,
+                selected_route=admission.route if admission is not None else None,
+                selected_profile=restored_profile,
+                record=None,
             ),
         )
 
@@ -362,37 +524,14 @@ class BuildPlatformRuntime:
         *,
         eligible: bool,
         tool_specs: Iterable[ToolSpec],
+        delivery_kind: Literal["app", "files"] | None = None,
     ) -> None:
-        if not eligible:
-            state = self._state(conversation_id)
-            self._save(
-                conversation_id,
-                replace(state, selected_route=None, selected_profile=None),
-            )
-            return
-        state = self._state(conversation_id)
-        platform = state.pin == "platform" or (
-            state.pin is None and freeform_platform_route_enabled()
-        )
-        route: BuildRoute = "platform" if platform else "legacy"
-        if not platform:
-            self._set_selection(
-                conversation_id,
-                route=route,
-                profile=FREEFORM_PROFILE_ID,
-                record=None,
-            )
-            return
-        try:
-            record = select_freeform_platform_route(tool_specs=tool_specs)
-        except Exception:
-            self._selection_failed(conversation_id)
-            raise
-        self._set_selection(
+        _select_freeform_runtime(
+            self,
             conversation_id,
-            route=route,
-            profile=FREEFORM_PROFILE_ID,
-            record=record,
+            eligible=eligible,
+            tool_specs=tool_specs,
+            delivery_kind=delivery_kind,
         )
 
     def select_appkit(
@@ -441,6 +580,7 @@ class BuildPlatformRuntime:
         appkit: bool,
         eligible: bool,
         tool_specs: Iterable[ToolSpec],
+        delivery_kind: Literal["app", "files"] | None = None,
     ) -> None:
         if appkit:
             self.select_appkit(
@@ -453,6 +593,7 @@ class BuildPlatformRuntime:
                 conversation_id,
                 eligible=eligible,
                 tool_specs=tool_specs,
+                delivery_kind=delivery_kind,
             )
 
     async def _current_intent(
@@ -502,10 +643,19 @@ class BuildPlatformRuntime:
         events = await self._store.get_events(conversation_id)
         intent, events = await self._current_intent(conversation_id, events)
         existing = _admission_for_intent(events, intent)
-        if existing is not None:
-            _validate_existing_admission(existing, route=route, profile=profile)
-            return
         fields = self._selected_admission_fields(conversation_id, profile, intent)
+        if existing is not None:
+            try:
+                _validate_existing_admission(
+                    existing,
+                    route=route,
+                    profile=profile,
+                    fields=fields,
+                )
+            except Exception:
+                self._selection_failed(conversation_id)
+                raise
+            return
         await self._store.append(
             conversation_id,
             BuildPlatformAdmissionEvent(
@@ -518,6 +668,21 @@ class BuildPlatformRuntime:
                 verification_claims=fields.verification_claims,
                 verification_contract=fields.verification_contract,
             ),
+        )
+
+    async def bind_delivery_locked(
+        self,
+        conversation_id: str,
+        delivery_kind: Literal["app", "files"],
+        *,
+        tool_specs: Iterable[ToolSpec],
+    ) -> BuildPlatformAdmissionEvent | None:
+        """Resolve and durably bind the target selected by host artifact evidence."""
+        return await _bind_delivery_runtime(
+            self,
+            conversation_id,
+            delivery_kind,
+            tool_specs=tool_specs,
         )
 
     async def prepare_appkit_ejection_locked(
@@ -539,7 +704,7 @@ class BuildPlatformRuntime:
             raise RuntimeError("AppKit ejection requires the current AppKit admission")
         if existing.route == "legacy":
             return None
-        record = select_freeform_platform_route(tool_specs=tool_specs)
+        record = select_freeform_platform_route(tool_specs=tool_specs, delivery_kind="app")
         if record.composition.profile.id != FREEFORM_PROFILE_ID:
             raise RuntimeError("ejection resolved a non-Freeform composition")
         if not isinstance(record.composition_digest, str):

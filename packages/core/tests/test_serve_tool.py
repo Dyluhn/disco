@@ -5,6 +5,10 @@ DeliverableEvent the UI renders as Open-the-app / Download-the-files. Non-blocki
 
 from __future__ import annotations
 
+import hashlib
+import json
+from contextlib import asynccontextmanager
+
 import pytest
 from disco.core import (
     ActionEvent,
@@ -12,6 +16,10 @@ from disco.core import (
     ConversationStatus,
     DeliverableEvent,
     MessageEvent,
+    ObservationEvent,
+    ToolCall,
+    ToolResult,
+    WorkspaceMutationEvent,
 )
 from disco.core.events import EventSource
 from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
@@ -55,6 +63,69 @@ def _agent(scripted):
     return RouterAgent(router, conversation_id=CID)
 
 
+class _ArtifactSandbox:
+    def __init__(self, files: dict[str, bytes]) -> None:
+        self._files = files
+
+    async def file_exists(self, path: str) -> bool:
+        prefix = f"{path.rstrip('/')}/"
+        return path in self._files or any(item.startswith(prefix) for item in self._files)
+
+    async def read_file(self, path: str) -> bytes:
+        return self._files[path]
+
+
+def _executor_with_files(files: dict[str, bytes]) -> FakeExecutor:
+    executor = FakeExecutor()
+    executor.sandbox = _ArtifactSandbox(files)
+    return executor
+
+
+def _preview_pair(
+    *, launch_kind: str, command: str = "python3 -m http.server 8080", cwd: str | None = None
+) -> list[ActionEvent | ObservationEvent]:
+    intent = {"launch_kind": launch_kind}
+    identity = {
+        "command": "python3 -m http.server 8080",
+        "exec_dir": ".",
+        "intent": intent,
+        "name": "preview",
+        "port": 8080,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    action = ActionEvent(
+        seq=1,
+        thought="start preview",
+        tool_call=ToolCall(
+            tool_name="preview_start",
+            arguments={"command": command, "cwd": cwd},
+        ),
+    )
+    observation = ObservationEvent(
+        seq=2,
+        action_id=action.id,
+        tool_result=ToolResult(
+            call_id=action.tool_call.call_id,
+            tool_name="preview_start",
+            success=True,
+            content="running",
+            structured={
+                **identity,
+                "status": "running",
+                "url": "http://127.0.0.1:8080/",
+                "projection_id": "pv_" + "a" * 32,
+                "sandbox_instance_id": "sandbox-test",
+                "sandbox_generation": 1,
+                "launch_kind": launch_kind,
+                "intent_digest": digest,
+            },
+        ),
+    )
+    return [action, observation]
+
+
 async def test_serve_emits_a_deliverable_event_and_continues():
     agent = _agent(
         [
@@ -72,7 +143,9 @@ async def test_serve_emits_a_deliverable_event_and_continues():
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
         ]
     )
-    executor = FakeExecutor()
+    executor = _executor_with_files(
+        {"dist/index.html": b"<!doctype html><html><body>ready</body></html>"}
+    )
     loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
 
     await loop.send_message("build a landing page")
@@ -100,7 +173,7 @@ async def test_serve_emits_a_deliverable_event_and_continues():
     assert "call `finish`" in guidance[0].message.content
 
 
-async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
+async def test_serve_derives_files_when_kind_is_omitted_and_rejects_invalid_enum():
     agent = _agent(
         [
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "make"})]},
@@ -128,7 +201,7 @@ async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
     events = await store.get_events(CID)
     delivs = [event for event in events if isinstance(event, DeliverableEvent)]
     assert len(delivs) == 1
-    assert delivs[0].artifact_kind == "app"  # omitted kind uses the documented default
+    assert delivs[0].artifact_kind == "files"
     invalid = [
         event
         for event in _environment_messages(events)
@@ -140,7 +213,59 @@ async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
     assert "`kind` was" in invalid[0].message.content
 
 
-async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
+async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
+    """Retain the accepted ID while proving omission follows HTML evidence.
+
+    The historical name predates host classification. There is no app default:
+    the omitted kind resolves to app here only because the entry is actual HTML.
+    """
+
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "make"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Site", "path": "index.html"},
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Bad", "path": "bad.pdf", "kind": "bogus"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "x"})]},
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files({"index.html": b"<!doctype html><h1>site</h1>"}),
+        policy=NeverConfirm(),
+    )
+
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [(event.artifact_kind, event.path) for event in deliverables] == [
+        ("app", "index.html")
+    ]
+    invalid = [
+        event
+        for event in _environment_messages(events)
+        if "is neither `app` nor `files`" in event.message.content
+    ]
+    assert len(invalid) == 1
+    assert "`kind` was" in invalid[0].message.content
+
+
+async def test_governed_browser_target_uses_html_evidence_not_offered_kind():
     agent = _agent(
         [
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
@@ -163,7 +288,13 @@ async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
         ]
     )
-    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files(
+            {"index.html": b"<!doctype html><html><body>site</body></html>"}
+        ),
+        policy=NeverConfirm(),
+    )
     await loop._emit(_platform_admission(claims=default_structured_web_claims()))
 
     await loop.send_message("build a browser application")
@@ -177,23 +308,66 @@ async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
         for event in _environment_messages(events)
         if event.meta.get("diagnostic") == "serve_target_shape_refused"
     ]
+    assert refusals == []
+
+
+async def test_governed_browser_target_refuses_files_then_accepts_app_handoff():
+    """A fixed browser contract still refuses real files, then accepts HTML."""
+
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Script", "path": "tool.py", "kind": "files"},
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Site", "path": "index.html", "kind": "app"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files(
+            {
+                "tool.py": b"print('tool')\n",
+                "index.html": b"<!doctype html><h1>site</h1>",
+            }
+        ),
+        policy=NeverConfirm(),
+    )
+    await loop._emit(_platform_admission(claims=default_structured_web_claims()))
+
+    await loop.send_message("build a browser application")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [(event.artifact_kind, event.path) for event in deliverables] == [
+        ("app", "index.html")
+    ]
+    refusals = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_target_shape_refused"
+    ]
     assert len(refusals) == 1
-    assert "target-owned delivery contract" in refusals[0].message.content
+    assert 'kind="app"' in refusals[0].message.content
+    assert 'kind="files"' in refusals[0].message.content
 
 
 async def test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat():
-    """F41 (counted wave-1 FAIL, `diag_script_run` seed 7, ACTIONLESS_THRASH).
-
-    The refusal used to say the handoff "does not match" and to use "the
-    requested interactive app or artifact-files shape" — never WHICH one, though
-    the gate had just computed it. An agent whose deliverable is a CLI script
-    could only re-send the same shape, byte-identically, 13 times, until the
-    loop-breaker graded the retries as thrash.
-
-    Two facts are asserted, and BOTH fail on the pre-repair bytes: the first
-    refusal names the admitted kind, and a second refusal is not byte-identical
-    to the first.
-    """
+    """The compatibility path remains finite when a fixed target cannot rebind."""
 
     files_serve = {
         "tool_calls": [
@@ -211,7 +385,11 @@ async def test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat():
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
         ]
     )
-    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files({"primes.py": b"print([2, 3, 5, 7])\n"}),
+        policy=NeverConfirm(),
+    )
     await loop._emit(_platform_admission(claims=default_structured_web_claims()))
 
     await loop.send_message("write primes.py, run it, and confirm the output")
@@ -225,17 +403,212 @@ async def test_shape_refusal_names_the_admitted_kind_and_escalates_on_repeat():
     ]
     assert len(refusals) == 2
     contents = [event.message.content for event in refusals]
-
-    # The fact that makes a corrective move possible: which kind IS admitted.
     assert 'kind="app"' in contents[0]
     assert 'kind="files"' in contents[0]
     assert refusals[0].meta["expected_kind"] == "app"
     assert refusals[0].meta["offered_kind"] == "files"
-
-    # An identical second refusal is what produced the thrash; it must escalate.
     assert contents[1] != contents[0]
     assert "STOP" in contents[1]
     assert refusals[1].meta["shape_refusals"] == 2
+
+
+async def test_script_kind_assertion_cannot_coerce_web_delivery():
+    selected: list[str] = []
+
+    async def resolve(kind: str) -> None:
+        selected.append(kind)
+
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "python3 x"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={
+                            "title": "Primes",
+                            "path": "primes.py",
+                            "kind": "app",
+                        },
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files({"primes.py": b"print([2, 3, 5, 7])\n"}),
+        policy=NeverConfirm(),
+        delivery_contract_resolver=resolve,
+    )
+
+    await loop.send_message("write primes.py, run it, and confirm the output")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    deliverables = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert [(event.artifact_kind, event.path) for event in deliverables] == [
+        ("files", "primes.py")
+    ]
+    assert selected == ["files"]
+    refusals = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_target_shape_refused"
+    ]
+    assert refusals == []
+
+
+async def test_declared_app_refuses_a_non_app_artifact_instead_of_downgrading() -> None:
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Primes", "path": "primes.py"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        executor=_executor_with_files({"primes.py": b"print([2, 3, 5, 7])\n"}),
+        policy=NeverConfirm(),
+        declared_delivery_kind="app",
+    )
+
+    await loop.send_message("build an application")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    assert not any(isinstance(event, DeliverableEvent) for event in events)
+    refusals = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_argument_refused"
+    ]
+    assert len(refusals) == 1
+    assert "neither an HTML entry nor the entry selected" in refusals[0].message.content
+
+
+async def test_serve_classifies_and_binds_inside_one_control_fence() -> None:
+    selected: list[str] = []
+    fence_held = False
+
+    class _FenceAwareSandbox(_ArtifactSandbox):
+        async def read_file(self, path: str) -> bytes:
+            assert fence_held
+            return await super().read_file(path)
+
+    sandbox = _FenceAwareSandbox(
+        {"index.html": b"<!doctype html><html><body>ready</body></html>"}
+    )
+
+    @asynccontextmanager
+    async def fence():
+        nonlocal fence_held
+        fence_held = True
+        try:
+            yield
+        finally:
+            fence_held = False
+
+    async def resolve(kind: str) -> None:
+        assert fence_held
+        selected.append(kind)
+
+    agent = _agent(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "build"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="serve",
+                        arguments={"title": "Site", "path": "index.html"},
+                    )
+                ]
+            },
+            {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "done"})]},
+        ]
+    )
+    executor = FakeExecutor()
+    executor.sandbox = sandbox
+    loop, store = build_loop(
+        agent,
+        executor=executor,
+        policy=NeverConfirm(),
+        control_fence=fence,
+        delivery_contract_resolver=resolve,
+    )
+
+    await loop.send_message("build it")
+    await loop.run()
+
+    deliverable = next(
+        event for event in await store.get_events(CID) if isinstance(event, DeliverableEvent)
+    )
+    assert deliverable.artifact_kind == "app"
+    assert selected == ["app"]
+
+
+async def test_static_http_preview_cannot_promote_python_source_to_app() -> None:
+    from disco.core.loop.turn_control_support import _derived_serve_kind
+
+    agent = _agent([{"text": "unused"}])
+    loop, _ = build_loop(
+        agent,
+        executor=_executor_with_files({"primes.py": b"print([2, 3, 5, 7])\n"}),
+    )
+    assert await _derived_serve_kind(loop, "primes.py", _preview_pair(launch_kind="static")) == (
+        "files"
+    )
+    assert await _derived_serve_kind(loop, "primes.py", _preview_pair(launch_kind="custom")) == (
+        "files"
+    )
+    assert await _derived_serve_kind(
+        loop,
+        "primes.py",
+        _preview_pair(launch_kind="custom", command="python3 primes.py"),
+    ) == (
+        "app"
+    )
+    prior_preview = _preview_pair(launch_kind="custom", command="python3 primes.py")
+    prior_preview.append(
+        WorkspaceMutationEvent(
+            seq=3,
+            operation="agent.run-intent.message",
+            run_protocol_version=1,
+        )
+    )
+    assert await _derived_serve_kind(loop, "primes.py", prior_preview) == "files"
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "expected"),
+    [
+        ("index.html", b"\xef\xbb\xbf<!-- banner --><!doctype html><html></html>", True),
+        ("index.htm", b"<?xml version='1.0'?><!-- banner --><html></html>", True),
+        ("index.html", b"plain text with no document markup", False),
+        ("artifact.txt", b"print('<html>not an app entry</html>')", False),
+    ],
+)
+def test_html_entry_detection_uses_content_and_entry_shape(
+    path: str, content: bytes, expected: bool
+) -> None:
+    from disco.core.loop.turn_control_support import _looks_like_html_entry
+
+    assert _looks_like_html_entry(path, content) is expected
+
+
+def test_serve_schema_does_not_ask_the_model_to_select_delivery_kind() -> None:
+    from disco.core.loop.engine_contracts import _SERVE_SCHEMA
+
+    assert "kind" not in _SERVE_SCHEMA["properties"]
 
 
 async def test_governed_nonbrowser_target_keeps_files_handoff() -> None:

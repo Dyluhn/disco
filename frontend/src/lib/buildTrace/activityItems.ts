@@ -146,7 +146,7 @@ export function activityItemForEnvironmentMessage(e: MessageEvent): ActivityItem
 }
 
 export function activityItemForDeliverable(e: DeliverableEvent): ActivityItem | null {
-  // F2: Agent handed off a file via serve(kind="files"). Render as a
+  // F2: Agent handed off a file that the host classified as files. Render as a
   // download card in the feed so the user can grab it immediately.
   // Only render for "files" kind (not "app" which opens a live URL).
   if (e.artifact_kind !== "files") return null;

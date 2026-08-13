@@ -20,7 +20,7 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from disco.core import (
     SecurityRisk,
@@ -558,6 +558,10 @@ class LoopContractPort(Protocol):
 
     def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None: ...
 
+    def expected_delivery_mode(
+        self, conversation_id: str
+    ) -> Literal["app", "files"] | None: ...
+
 
 class ToolScopeAuditRecorderPort(Protocol):
     def record(self, tool: str, phase: Phase, decision: ScopeDecision) -> None: ...
@@ -601,7 +605,16 @@ class LoopBuildPlatformPort(Protocol):
         appkit: bool,
         eligible: bool,
         tool_specs: Iterable[ToolSpec],
+        delivery_kind: Literal["app", "files"] | None = ...,
     ) -> None: ...
+
+    async def bind_delivery_locked(
+        self,
+        conversation_id: str,
+        delivery_kind: Literal["app", "files"],
+        *,
+        tool_specs: Iterable[ToolSpec],
+    ) -> object: ...
 
 
 @runtime_checkable

@@ -86,7 +86,7 @@ _OBSERVATION_COLLECTORS: dict[str, Any] = {
 
 def _collect_deliverable_event(evt: dict[str, Any], deliverables: list[dict[str, Any]]) -> None:
     """Collect a deliverable event (files or app handoff)."""
-    artifact_kind = str(evt.get("artifact_kind", "app"))
+    artifact_kind = evt.get("artifact_kind")
     path = str(evt.get("path", ""))
     if artifact_kind == "files":
         if path:
