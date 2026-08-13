@@ -24,6 +24,7 @@ from disco.core.appkit import (
     get_recipe,
     load_app_spec_from_bytes,
     resolve_primitive,
+    section_component_names,
 )
 from disco.core.appkit.recipes import RECIPES
 from disco.core.appkit.spec import AppSpec, DesignSpec
@@ -200,11 +201,27 @@ def _build_create_outcome(
     touched = _changed_generated(committed, tree)
     deleted = [path for path in committed.changed_paths if path in stale_paths]
     artifacts = [path for path in committed.changed_paths if path not in stale_paths]
+    generated_names = section_component_names(app)
+    content_targets = [
+        {
+            "page_id": page.id,
+            "section_id": section.id,
+            "generated_key": generated_names[(page.id, section.id)],
+        }
+        for page in app.pages
+        for section in page.sections
+    ]
+    target_summary = ", ".join(
+        f"{target['page_id']}/{target['section_id']} "
+        f"(generated key {target['generated_key']})"
+        for target in content_targets
+    )
     return ToolOutcome(
         success=True,
         content=(
             f"app_create: scaffolded '{app.name}' ({primitive.id}) from recipe "
-            f"'{recipe.id}' — {len(tree)} files + 2 specs."
+            f"'{recipe.id}' — {len(tree)} files + 2 specs. Content targets: "
+            f"{target_summary}."
         ),
         structured={
             "recipe_id": recipe.id,
@@ -214,6 +231,7 @@ def _build_create_outcome(
             "direction_id": direction.id if direction is not None else None,
             "files_written": touched,
             "files_deleted": deleted,
+            "content_targets": content_targets,
             "specs": [
                 path
                 for path in (APPSPEC_RELPATH, DESIGNSPEC_RELPATH)

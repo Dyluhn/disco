@@ -24,6 +24,7 @@ from .generator import (
     ensure_lead_entity,
     generate,
     resolve_lead_entity,
+    section_component_names,
     synthesized_lead_entity,
 )
 from .local_list_primitive import (
@@ -206,6 +207,7 @@ __all__ = [
     "ensure_lead_entity",
     "local_api_roundtrip",
     "generate",
+    "section_component_names",
     "generate_local_list",
     "generate_records",
     "get_primitive",

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "0866b79a29a2987d393a075e8bafc111705d7427",
+  "source_identity": "dca160deb7a264711fae711c629076f04fd3dee5",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -4313,6 +4313,7 @@
         "resolve_primitive",
         "save_app_spec",
         "save_design_spec",
+        "section_component_names",
         "serialize_app_spec",
         "serialize_design_spec",
         "spec_digest",
@@ -4414,6 +4415,7 @@
         "resolve_primitive",
         "save_app_spec",
         "save_design_spec",
+        "section_component_names",
         "serialize_app_spec",
         "serialize_design_spec",
         "spec_digest",
@@ -4476,6 +4478,14 @@
         {
           "public_name": "resolve_lead_entity",
           "name": "resolve_lead_entity",
+          "module": "generator",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "section_component_names",
+          "name": "section_component_names",
           "module": "generator",
           "level": 1,
           "alias": null,
@@ -5525,6 +5535,7 @@
           "fields": [
             "body: str | None",
             "cta_label: str | None",
+            "eyebrow: str | None",
             "heading: str | None",
             "items: tuple[str, ...]",
             "subheading: str | None",
@@ -5743,6 +5754,10 @@
         "save_design_spec": {
           "kind": "function",
           "signature": "def save_design_spec(workspace_root: str | Path, spec: DesignSpec) -> Path"
+        },
+        "section_component_names": {
+          "kind": "function",
+          "signature": "def section_component_names(app: AppSpec) -> dict[tuple[str, str], str]"
         },
         "serialize_app_spec": {
           "kind": "function",
@@ -29653,6 +29668,22 @@
       "target_sha256": "30365586d59d2b0e40ed765d1da7ef5aa62b7aa67bac9c7accd3f9df923671eb",
       "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
       "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "SectionContent",
+      "target_sha256": "bccc3ce1f3185463220e04077c9359e69815330c32eb05c71e1b2e567d38bc5f",
+      "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
+      "reason": "PKG-19 v32 makes AppKit's generated content representation an accepted input while preserving canonical AppSpec storage."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "section_component_names",
+      "target_sha256": "5ed93e70b37faef12af496bbb17013a992e2221b7dbf768b57ccd71eb6a58d59",
+      "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
+      "reason": "PKG-19 v32 makes AppKit's generated content representation an accepted input while preserving canonical AppSpec storage."
     }
   ],
   "compatibility_bridges": [],
@@ -30039,6 +30070,21 @@
       "owner_package": "PKG-13-FACADES",
       "accepting_commit": "dc0532173e8ad820d651a26e7f2feac8df5d0f49",
       "accepting_receipt": "2026-08-03/PKG-13-FACADES/EPIC-13C-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "SectionContent",
+      "origin": "disco.core.appkit.spec.SectionContent",
+      "removed_members": [],
+      "added_members": [
+        "eyebrow: str | None"
+      ],
+      "old_signature_sha256": "c38dfbc59cb32d311660166cf24927e705c1187296153defa14628ec1f58259b",
+      "new_signature_sha256": "ef467f37a44c096d033fe15ba43b06b60a5990384657ad09724091b1d7a83b43",
+      "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
+      "accepting_commit": "dca160deb7a264711fae711c629076f04fd3dee5",
+      "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v32-appkit-representation/BOUNDARY-RECEIPT.md"
     }
   ],
   "frontend_declaration_transitions": [

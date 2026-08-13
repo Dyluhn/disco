@@ -570,19 +570,23 @@ def test_section_variant_id_and_content_round_trip(tmp_path: Path) -> None:
             "kind": "hero",
             "variant_id": "hero.split-media-right",
             "content": {
+                "eyebrow": "New release",
                 "heading": "Welcome",
                 "subheading": "Tagline",
                 "body": "Body copy",
-                "cta_label": "Start",
+                "ctaLabel": "Start",
                 "items": ["a", "b"],
             },
         }
     )
     assert section.variant_id == "hero.split-media-right"
     assert section.content is not None
+    assert section.content.eyebrow == "New release"
     assert section.content.heading == "Welcome"
+    assert section.content.cta_label == "Start"
     assert section.content.items == ("a", "b")  # coerced to a tuple (immutable)
     assert isinstance(section.content, SectionContent)
+    assert section.content.model_dump(mode="json")["cta_label"] == "Start"
 
 
 def test_section_new_fields_default_to_none() -> None:
