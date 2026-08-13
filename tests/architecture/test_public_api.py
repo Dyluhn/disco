@@ -967,28 +967,18 @@ class TestFrontendPublicApi:
         # 13-C records FinishGate's explicit typed-service methods without
         # asserting a false relocation origin. 9 records AgentErrorEvent's
         # exact semantic failure-classification fields. PKG-19 v25 adds the
-        # three exact retrieval-contract transitions below. PKG-19 v28 replaces
-        # SecretStore and adds SecretBox. PKG-19 v30 adds the four durable
-        # condensation/research contract transitions. The exact set is itself
-        # the count ratchet.
+        # Three retrieval transitions precede v28/v30's durable contract changes.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
             "ConfigState",
             "ConfigStore",
-            "SecretBox",
-            "SecretStore",
-            "BuildPlatformRegistry",
-            "ConversationRuntime",
+            "SecretBox", "SecretStore",
+            "BuildPlatformRegistry", "ConversationRuntime",
             "FinishGate",
             "AgentErrorEvent",
-            "RetrievalRequest",
-            "SearchHit",
-            "DepthBound",
-            "LLMSummarizingCondenser",
-            "ReportEvent",
-            "Passage",
-            "ReportFromRun",
+            "RetrievalRequest", "SearchHit", "DepthBound",
+            "LLMSummarizingCondenser", "ReportEvent", "Passage", "ReportFromRun",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.
