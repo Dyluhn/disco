@@ -30,9 +30,11 @@ from disco.core.store.schema import ensure_mcp_approval_tables as _core_ensure_m
 
 @runtime_checkable
 class _ApprovalConn(Protocol):
-    """Minimal duck-typed DB connection — anything with the stdlib sqlite3
-    `execute` + `commit` surface works (sqlite3.Connection, real-conn
-    wrappers, test fakes). Keeps the module free of an import on
+    """Minimal SQLite-compatible connection with function registration.
+
+    Persistent downgrade guards require each writer connection to publish its
+    schema version, so wrappers and test fakes must forward ``create_function``
+    in addition to ``execute`` + ``commit``. Keeps the module free of an import on
     sqlite3 (so the helpers stay trivial to call from places that already
     have a different connection type)."""
 
@@ -40,6 +42,14 @@ class _ApprovalConn(Protocol):
     # 2nd execute() arg is named `parameters`, not `params` — structurally
     # satisfies this Protocol. Every call site below passes params positionally.
     def execute(self, sql: str, params: tuple[Any, ...] = ..., /) -> Any: ...
+    def create_function(
+        self,
+        name: str,
+        narg: int,
+        func: Any,
+        *,
+        deterministic: bool = ...,
+    ) -> None: ...
     def commit(self) -> None: ...
 
 

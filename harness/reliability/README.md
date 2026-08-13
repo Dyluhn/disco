@@ -176,7 +176,7 @@ export DISCO_FRESH_DRIVER_API_KEY='secret-if-required'
 
 Use `--require-promotion` on the tenth machine. Run machines sequentially if the shared path does not provide reliable POSIX file locking.
 
-Each device proves pristine preflight, clone, Compose build/install, first pairing, driver configuration, text/tool/Internet grounding, real Build and Deep Search, project/report export, cold restart, an in-place source upgrade, retained projects/settings, a post-upgrade edge build, and complete container/image/volume uninstall. The candidate upgrade commit must equal the commit recorded by the outer campaign.
+Each device proves pristine preflight, clone, Compose build/install, first pairing, driver configuration, text/tool/Internet grounding, real Build and Deep Search, project/report export, cold restart, an in-place source upgrade, retained projects/settings/secrets, a post-upgrade edge build, full selected-backup destruction/restore, and complete container/image/volume/network uninstall. Restart and upgrade readiness must be at most 15 minutes; restore readiness must be at most 60 minutes. The result binds exact committed-data and project digests, while the schema upgrade comparison excludes only the intentionally changed SQLite file and is paired with the R-DOWNGRADE matrix. The candidate upgrade commit must equal the commit recorded by the outer campaign.
 
 ## Resource tuning
 

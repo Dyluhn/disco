@@ -18,15 +18,18 @@ import os
 import re
 import secrets
 import shutil
+import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ._runner import ApiSession, _configure_driver
+from ._runner import ApiSession
+from ._runner import _configure_driver as _configure_driver
+from ._runner import fresh_device_backup as _backup
 from ._runner.fresh_device_host import (
     FAIL as FAIL,
 )
@@ -39,23 +42,25 @@ from ._runner.fresh_device_host import (
     InfraError,
     ProductError,
     _assert_pristine,
+    _canonical_image_id,
     _detect_engine,
     _machine_fingerprint,
-    _object_lines,
     _safe_device_label,
 )
 from ._runner.fresh_device_host import (
+    _object_lines as _object_lines,
+)
+from ._runner.fresh_device_host import (
     _port_available as _port_available,
+)
+from ._runner.fresh_device_host import (
+    _utc_now as _utc_now,
 )
 from ._runner.fresh_device_journey import (
     FreshDeviceJourneyBindings,
     _record_pass,
     run_device_journey,
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 def _wait_url(url: str, *, timeout: float) -> bytes:
@@ -76,6 +81,26 @@ def _compose_command(engine: Engine, project: str, *args: str) -> list[str]:
     return [*engine.compose, "-p", project, *args]
 
 
+def _compose_image_ids(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    checkout: Path,
+    compose_env: dict[str, str],
+    name: str,
+) -> list[str]:
+    result = runner.run(
+        name,
+        _compose_command(engine, project, "images", "--quiet"),
+        cwd=checkout,
+        env=compose_env,
+        timeout=300,
+    )
+    return sorted(
+        {_canonical_image_id(line) for line in result.stdout.splitlines() if line.strip()}
+    )
+
+
 def _assert_verify_output(output: str, *, grounding: bool) -> None:
     for name in ("config", "completion", "tool-calling"):
         if not re.search(rf"\bPASS\s+{re.escape(name)}\b", output):
@@ -90,11 +115,23 @@ def _assert_verify_output(output: str, *, grounding: bool) -> None:
 def _project_ids(payload: Any) -> list[str]:
     if not isinstance(payload, dict) or not isinstance(payload.get("projects"), list):
         raise ProductError("project list response has the wrong shape")
-    return [
-        str(item.get("id"))
-        for item in payload["projects"]
-        if isinstance(item, dict) and item.get("id") and not item.get("files_missing")
-    ]
+    project_ids: list[str] = []
+    for item in payload["projects"]:
+        if not isinstance(item, dict):
+            raise ProductError("project list contains a malformed entry")
+        if item.get("files_missing"):
+            continue
+        project_id = item.get("id")
+        if (
+            not isinstance(project_id, str)
+            or not project_id
+            or project_id != project_id.strip()
+        ):
+            raise ProductError("project list contains an invalid project identity")
+        project_ids.append(project_id)
+    if len(project_ids) != len(set(project_ids)):
+        raise ProductError("project list contains a duplicate project identity")
+    return sorted(project_ids)
 
 
 def _validate_zip(data: bytes, target: Path) -> list[str]:
@@ -110,6 +147,115 @@ def _validate_zip(data: bytes, target: Path) -> list[str]:
             return names
     except zipfile.BadZipFile as exc:
         raise ProductError(f"project export is not a ZIP: {exc}") from exc
+
+
+_sha256_bytes = _backup._sha256_bytes
+
+
+def _export_project_digests(
+    api: ApiSession,
+    agent: str,
+    project_ids: list[str],
+    out: Path,
+    phase: str,
+) -> dict[str, str]:
+    """Export and bind every persisted project to deterministic evidence."""
+    digests: dict[str, str] = {}
+    for index, project_id in enumerate(sorted(project_ids), start=1):
+        encoded_id = urllib.parse.quote(project_id, safe="")
+        exported = api.bytes(agent, f"/api/projects/{encoded_id}/download")
+        _validate_zip(exported, out / f"project-{index:03d}-{phase}.zip")
+        digests[project_id] = _sha256_bytes(exported)
+    return digests
+
+
+_backup_entry_rows = _backup._backup_entry_rows
+_database_logical_digests = _backup._database_logical_digests
+_manifest_digest = _backup._manifest_digest
+
+
+def _verified_backup_archive(path: Path) -> tuple[dict[str, Any], bytes]:
+    return _backup._verified_backup_archive(path, entry_rows=_backup_entry_rows)
+
+
+def _backup_manifest(path: Path) -> dict[str, Any]:
+    manifest, database_bytes = _verified_backup_archive(path)
+    committed_digest, schema_digest = _database_logical_digests(database_bytes)
+    database = manifest["database"]
+    manifest = dict(manifest)
+    manifest["database"] = {
+        **database,
+        "committed_sha256": committed_digest,
+        "schema_sha256": schema_digest,
+    }
+    return manifest
+
+
+def _assert_duration(name: str, started: float, limit_seconds: float) -> float:
+    duration = time.monotonic() - started
+    if duration > limit_seconds:
+        raise ProductError(f"{name} readiness took {duration:.3f}s; limit is {limit_seconds:.0f}s")
+    return round(duration, 3)
+
+
+def _run_data_lifecycle(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    checkout: Path,
+    compose_env: dict[str, str],
+    name: str,
+    *arguments: str,
+    timeout: float = 1_800,
+) -> None:
+    runner.run(
+        name,
+        [
+            sys.executable,
+            str(checkout / "scripts/self_host_data.py"),
+            "--engine",
+            engine.binary,
+            "--compose-file",
+            str(checkout / "compose.yaml"),
+            "--project-name",
+            project,
+            *arguments,
+        ],
+        cwd=checkout,
+        env=compose_env,
+        timeout=timeout,
+    )
+
+
+def _create_backup(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    checkout: Path,
+    compose_env: dict[str, str],
+    out: Path,
+    name: str,
+) -> tuple[Path, dict[str, Any]]:
+    archive = out / f"{name}.tar.gz"
+    _run_data_lifecycle(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        name,
+        "backup",
+        "--output",
+        str(archive),
+    )
+    if not archive.is_file() or archive.stat().st_size == 0:
+        raise ProductError(f"{name} did not produce a backup archive")
+    manifest = _backup_manifest(archive)
+    (out / f"{name}.manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return archive, manifest
 
 
 def _write_result(path: Path, payload: dict[str, Any]) -> None:
@@ -173,6 +319,7 @@ def _phase_compose_env(
         "DISCO_PUBLIC_UI_URL": f"http://127.0.0.1:{ui_port}",
         "DISCO_SECRET_KEY": secret,
         "DISCO_SANDBOX_SOCKET": engine.sandbox_socket,
+        "DISCO_LOCAL_ENGINE": engine.binary,
         "DISCO_INSPECT": "1",
         "DISCO_LOG_JSON": "1",
     }
@@ -187,7 +334,7 @@ def _phase_install_and_boot(
     ui_port: int,
     app_port: int,
     agent_port: int,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, list[str]]:
     """Build and boot the compose stack; return front/app/agent URLs."""
     runner.run(
         "compose-config-base",
@@ -220,7 +367,17 @@ def _phase_install_and_boot(
     ).stdout
     if "First-run admin pairing" not in boot_logs or str(ui_port) not in boot_logs:
         raise ProductError("boot logs did not print first-run pairing guidance and UI URL")
-    return front, app, agent
+    image_ids = _compose_image_ids(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        "initial-compose-images",
+    )
+    if not image_ids:
+        raise ProductError("installed Compose stack exposed no image identities")
+    return front, app, agent, image_ids
 
 
 def _phase_verify_and_scenarios(
@@ -283,73 +440,64 @@ def _phase_upgrade(
     app: str,
     agent: str,
     api: ApiSession,
-    projects_before: list,
+    projects_before: list[str],
+    project_digests: dict[str, str],
+    known_image_ids: list[str],
     upgrade_commit: str,
     base_commit: str,
     out: Path,
-) -> None:
-    """Stop, upgrade source, rebuild, verify post-upgrade state."""
-    runner.run(
-        "stop-before-upgrade",
-        _compose_command(engine, project, "down", "--remove-orphans"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=600,
+) -> dict[str, Any]:
+    from ._runner.fresh_device_phases import phase_upgrade
+
+    return phase_upgrade(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        front,
+        app,
+        agent,
+        api,
+        projects_before,
+        project_digests,
+        known_image_ids,
+        upgrade_commit,
+        base_commit,
+        out,
     )
-    runner.run(
-        "checkout-upgrade",
-        ["git", "checkout", "--detach", upgrade_commit],
-        cwd=checkout,
-        timeout=300,
+
+
+def _phase_backup_restore(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    checkout: Path,
+    compose_env: dict[str, str],
+    front: str,
+    app: str,
+    agent: str,
+    api: ApiSession,
+    original_project_ids: list[str],
+    original_project_digests: dict[str, str],
+    out: Path,
+) -> dict[str, Any]:
+    from ._runner.fresh_device_phases import phase_backup_restore
+
+    return phase_backup_restore(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        front,
+        app,
+        agent,
+        api,
+        original_project_ids,
+        original_project_digests,
+        out,
     )
-    runner.run(
-        "upgrade-build-up",
-        _compose_command(engine, project, "up", "-d", "--build"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=7_200,
-    )
-    _wait_url(f"{front}/env.js", timeout=600)
-    _wait_url(f"{app}/api/health", timeout=600)
-    _wait_url(f"{agent}/health", timeout=600)
-    api.pair()
-    if _project_ids(api.json("GET", agent, "/api/projects")) != projects_before:
-        raise ProductError("upgrade lost or rewrote persisted projects")
-    if (
-        api.json("GET", app, "/api/models/assignments").get("default_model")
-        != "fresh-device-driver"
-    ):
-        raise ProductError("upgrade lost the configured driver assignment")
-    post_upgrade = runner.run(
-        "post-upgrade-model-verify",
-        _compose_command(engine, project, "exec", "-T", "agent-server", "disco-verify", "--quick"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=1_200,
-    )
-    _assert_verify_output(post_upgrade.stdout, grounding=False)
-    edge = runner.run(
-        "post-upgrade-edge-scenario",
-        _compose_command(
-            engine,
-            project,
-            "exec",
-            "-T",
-            "agent-server",
-            "python",
-            "-m",
-            "disco.agent_server.verify.scenarios_run",
-            "--only",
-            "missing_file_sandbox_error",
-        ),
-        cwd=checkout,
-        env=compose_env,
-        timeout=900,
-    )
-    if "[PASS] missing_file_sandbox_error" not in edge.stdout:
-        raise ProductError("post-upgrade build edge scenario failed")
-    export_after = api.bytes(agent, f"/api/projects/{projects_before[0]}/download")
-    _validate_zip(export_after, out / "project-after-upgrade.zip")
 
 
 def _phase_uninstall(
@@ -359,40 +507,19 @@ def _phase_uninstall(
     checkout: Path,
     compose_env: dict[str, str],
     out: Path,
+    known_image_ids: list[str],
 ) -> None:
-    """Uninstall the stack and verify no remnants remain."""
-    runner.run(
-        "final-compose-logs",
-        _compose_command(engine, project, "logs", "--no-color"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=300,
-        check=False,
-    )
-    runner.run(
-        "uninstall",
-        _compose_command(engine, project, "down", "--volumes", "--remove-orphans", "--rmi", "all"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=1_200,
-    )
-    remaining = _object_lines(
+    from ._runner.fresh_device_phases import phase_uninstall
+
+    phase_uninstall(
         runner,
         engine,
-        "post-uninstall-containers",
-        ["ps", "-aq", "--filter", f"label=com.docker.compose.project={project}"],
+        project,
+        checkout,
+        compose_env,
+        out,
+        known_image_ids,
     )
-    remaining_volumes = _object_lines(
-        runner,
-        engine,
-        "post-uninstall-volumes",
-        ["volume", "ls", "-q", "--filter", f"label=com.docker.compose.project={project}"],
-    )
-    if remaining or remaining_volumes:
-        raise ProductError(f"uninstall left containers={remaining} volumes={remaining_volumes}")
-    shutil.rmtree(checkout)
-    if checkout.exists():
-        raise ProductError("uninstall left the cloned application directory")
 
 
 def _phase_failure_cleanup(
@@ -430,19 +557,9 @@ def _phase_failure_cleanup(
 
 
 def _phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
-    """Pair a fresh session and configure the driver; return the API session."""
-    api = ApiSession(app_base=app, agent_base=agent, origin=front)
-    api.pair()
-    _configure_driver(
-        api,
-        base_url=os.environ["DISCO_FRESH_DRIVER_BASE_URL"].strip(),
-        model=os.environ["DISCO_FRESH_DRIVER_MODEL"].strip(),
-        api_key=os.environ.get("DISCO_FRESH_DRIVER_API_KEY", "").strip(),
-    )
-    assignments = api.json("GET", app, "/api/models/assignments")
-    if assignments.get("default_model") != "fresh-device-driver":
-        raise ProductError("driver assignment did not round-trip through Settings API")
-    return api
+    from ._runner.fresh_device_phases import phase_pair_and_config
+
+    return phase_pair_and_config(app, front, agent)
 
 
 def _phase_build_search_export(
@@ -454,28 +571,12 @@ def _phase_build_search_export(
     out: Path,
     api: ApiSession,
     agent: str,
-) -> list:
-    """Copy dossiers, verify projects, export ZIP; return project ids."""
-    runner.run(
-        "copy-initial-dossiers",
-        _compose_command(
-            engine,
-            project,
-            "cp",
-            "agent-server:/app/test-record/disco-verify",
-            str(out / "initial-dossiers"),
-        ),
-        cwd=checkout,
-        env=compose_env,
-        timeout=300,
+) -> tuple[list[str], dict[str, str]]:
+    from ._runner.fresh_device_phases import phase_build_search_export
+
+    return phase_build_search_export(
+        runner, engine, project, checkout, compose_env, out, api, agent
     )
-    projects_payload = api.json("GET", agent, "/api/projects")
-    projects_before = _project_ids(projects_payload)
-    if not projects_before:
-        raise ProductError("Build scenario produced no persisted project")
-    export_before = api.bytes(agent, f"/api/projects/{projects_before[0]}/download")
-    _validate_zip(export_before, out / "project-before-upgrade.zip")
-    return projects_before
 
 
 def _phase_cold_restart(
@@ -485,23 +586,29 @@ def _phase_cold_restart(
     checkout: Path,
     compose_env: dict[str, str],
     front: str,
+    app: str,
     agent: str,
     api: ApiSession,
-    projects_before: list,
-) -> None:
-    """Restart the stack and verify projects persist."""
-    runner.run(
-        "restart-stack",
-        _compose_command(engine, project, "restart"),
-        cwd=checkout,
-        env=compose_env,
-        timeout=600,
+    projects_before: list[str],
+    project_digests: dict[str, str],
+    out: Path,
+) -> dict[str, Any]:
+    from ._runner.fresh_device_phases import phase_cold_restart
+
+    return phase_cold_restart(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        front,
+        app,
+        agent,
+        api,
+        projects_before,
+        project_digests,
+        out,
     )
-    _wait_url(f"{agent}/health", timeout=600)
-    _wait_url(f"{front}/env.js", timeout=600)
-    api.pair()
-    if _project_ids(api.json("GET", agent, "/api/projects")) != projects_before:
-        raise ProductError("project identity changed across a full stack restart")
 
 
 def _parse_fresh_device_args(argv: list[str] | None) -> argparse.Namespace:
@@ -626,6 +733,7 @@ def main(argv: list[str] | None = None) -> int:
                 build_search_export=_phase_build_search_export,
                 cold_restart=_phase_cold_restart,
                 upgrade=_phase_upgrade,
+                backup_restore=_phase_backup_restore,
                 uninstall=_phase_uninstall,
             ),
             runner=runner,
@@ -642,7 +750,10 @@ def main(argv: list[str] | None = None) -> int:
             checks=checks,
         )
         status = PASS
-        reason = "fresh install, live use, restart, upgrade, export, and uninstall all passed"
+        reason = (
+            "fresh install, live use/export, restart, upgrade, backup/restore, "
+            "and uninstall all passed"
+        )
     except FreshDeviceError as exc:
         status = exc.status
         reason = str(exc)

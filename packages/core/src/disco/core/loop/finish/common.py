@@ -876,6 +876,7 @@ class _FinishGateProto:
             events: list[Event],
             *,
             include_unverifiable: bool = False,
+            allow_pending_app_output: bool = False,
         ) -> HostVerificationDeliverable | None: ...
 
         async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp: ...

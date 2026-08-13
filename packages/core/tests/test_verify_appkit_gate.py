@@ -241,6 +241,31 @@ class AppKitVerifyExecutor(FakeExecutor):
         }
 
 
+class _MaterializingArtifactSandbox:
+    def __init__(self) -> None:
+        self.canonical_entry_exists = False
+
+    async def file_exists(self, path: str) -> bool:
+        return path == "dist/index.html" and self.canonical_entry_exists
+
+
+class _MaterializingAppKitVerifyExecutor(AppKitVerifyExecutor):
+    def __init__(self, verdicts):
+        super().__init__(verdicts)
+        self.sandbox = _MaterializingArtifactSandbox()
+
+    async def execute(self, call):
+        result = await super().execute(call)
+        if (
+            call.tool_name == "verify_appkit_app"
+            and result.success
+            and isinstance(result.structured, dict)
+            and result.structured.get("passed") is True
+        ):
+            self.sandbox.canonical_entry_exists = True
+        return result
+
+
 def _gate_loop(
     agent,
     executor,
@@ -478,6 +503,33 @@ async def test_platform_appkit_strict_pass_materializes_exact_target_handoff() -
     assert verdicts[0].verification_result.execution_identity.modality == "appkit_strict_runtime"
     assert verdicts[0].verification_result.artifact_identity is not None
     assert verdicts[0].verification_result.artifact_identity.entry_reference == "dist/index.html"
+
+
+@pytest.mark.asyncio
+async def test_finish_runs_strict_verifier_before_requiring_its_canonical_output() -> None:
+    """The strict verifier owns the build that first creates ``dist/index.html``."""
+
+    contract = _appkit_contract()
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = _MaterializingAppKitVerifyExecutor(
+        [_appkit_verdict(passed=True, fp="MATERIALIZED")]
+    )
+    loop, store = _gate_loop(agent, execu)
+    await loop._emit(_appkit_admission(contract))
+    await loop.send_message("build me a lead-gen app")
+
+    state = await loop.run()
+    events = await store.get_events("conv")
+
+    assert state.execution_status is ConversationStatus.FINISHED
+    assert execu.appkit_calls == 1
+    assert execu.sandbox.canonical_entry_exists is True
+    assert not any("could not bind its canonical entry" in message for message in _env(events))
 
 
 @pytest.mark.asyncio

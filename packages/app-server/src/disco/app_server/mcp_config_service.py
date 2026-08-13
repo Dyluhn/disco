@@ -23,7 +23,7 @@ from .config.mappers import _mcp_live_status
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
-    # (execute/commit). Type-only import keeps it off the runtime path.
+    # (execute/create_function/commit). Type-only import keeps it off runtime.
     from disco.tools.mcp.migrations import _ApprovalConn
 
 

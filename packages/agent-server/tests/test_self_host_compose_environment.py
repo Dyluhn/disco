@@ -36,6 +36,9 @@ def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
     assert agent["DISCO_APPROVALS"] == "/data/disco-approved-origins.json"
     assert agent_service["security_opt"] == ["label=disable"]
     assert agent["DISCO_LOCAL_ENGINE"] == "${DISCO_LOCAL_ENGINE:-podman}"
+    for name in ("DISCO_SECRET_KEY", "DISCO_SECRET_KEY_ID", "DISCO_SECRET_READ_KEYS"):
+        assert name in app
+        assert name in agent
     for name in ("DISCO_LOG_LEVEL", "DISCO_LOG_JSON"):
         assert name in app
         assert name in agent
@@ -70,6 +73,9 @@ def test_example_and_self_host_doc_name_the_effective_overrides() -> None:
         "DISCO_INSPECT",
         "DISCO_LOG_LEVEL",
         "DISCO_LOG_JSON",
+        "DISCO_SECRET_KEY_ID",
+        "DISCO_SECRET_READ_KEYS",
     ):
         assert name in example
         assert name in docs
+    assert "rotate_secret_store.py" in docs

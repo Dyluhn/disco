@@ -1,5 +1,5 @@
-"""Capture ONE real deep-research agent-loop conversation into a (event-log +
-cassette) fixture pair, so the Phase 3 deterministic replay (`make replay` +
+"""Capture ONE real deep-research plan-gate turn into an (event-log + cassette)
+fixture pair, so the Phase 3 deterministic replay (`make replay` +
 `test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events`)
 has real inputs/outputs to reproduce.
 
@@ -8,9 +8,10 @@ search/extract/LLM, all of which `build_replay_runtime` serves from the cassette
 so the replay is fully deterministic (the `build` surface would also need a
 sandbox-replay seam — see replay_runner.py's SURFACE CAVEAT).
 
-HEAVY (real local model + multi-step gather/synthesize). The interactive harness
-SIGKILLs long model-loading commands, so run this DETACHED or when the model is
-already warm:
+The capture makes the calls a current first turn owns — one QUERY_REWRITER for
+the plan and one or two SUMMARIZER attempts for the conversation title — then
+intentionally stops at the plan-approval gate. Configure the normal stores through `DISCO_CONFIG`,
+`DISCO_SECRETS`, `DISCO_APPROVALS`, and `DISCO_SECRET_KEY` before running it:
 
     PYTHONPATH=. setsid uv run python -m harness._capture_loop_demo   # = make capture-loop
 """
@@ -22,7 +23,7 @@ import json
 from pathlib import Path
 
 from disco.core import LLMMessage, SqliteEventStore
-from disco.core.events import ConversationStatus, EventSource, MessageEvent
+from disco.core.events import ConversationStatus, EventKind, EventSource, MessageEvent
 from disco.core.llm import ConfigStore, SecretStore
 
 from .cassette import Cassette
@@ -35,7 +36,7 @@ _QUERY = "What is the capital of France and roughly its population?"
 
 async def _kick_and_wait(rt, cid: str) -> None:
     rt.run_controller.kick(cid)
-    task = rt._tasks.get(cid)
+    task = rt.run_registry.task(cid)
     if task is not None:
         await task
 
@@ -46,8 +47,9 @@ async def _main() -> None:
     rt = build_recording_runtime(
         cas,
         store,
-        config_store=ConfigStore("/tmp/pmx-live-config.json"),
-        secret_store=SecretStore("/tmp/pmx-live-secrets.json"),
+        config_store=ConfigStore(),
+        secret_store=SecretStore(),
+        model_pick=None,
     )
     store.create_conversation(CID, owner_id="local")
     rt.settings._set_surface(CID, "deep_research")
@@ -56,16 +58,23 @@ async def _main() -> None:
         MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content=_QUERY)),
     )
 
-    # plan-gated: first kick produces the plan, then approve, then it runs.
+    # This fixture owns one deterministic turn: query → plan → approval gate.
+    # Full post-approval captures may contain search/extraction/synthesis rows, but
+    # this small fixture deliberately does not spend that live-service budget.
     await _kick_and_wait(rt, CID)
-    for _ in range(4):
-        state = await store.get_state(CID)
-        if getattr(state, "status", None) != ConversationStatus.AWAITING_PLAN_APPROVAL:
-            break
-        await rt.approve_plan(CID)
-        await _kick_and_wait(rt, CID)
 
     events = await store.get_events(CID)
+    state = await store.get_state(CID)
+    kinds = [event.kind for event in events]
+    if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
+        raise RuntimeError("capture did not reach the plan-approval gate")
+    if kinds != [EventKind.MESSAGE, EventKind.STATUS, EventKind.PLAN, EventKind.STATUS]:
+        raise RuntimeError(f"capture emitted an unexpected event sequence: {kinds!r}")
+    seams = cas.seams()
+    if set(seams) != {"llm.complete"} or seams["llm.complete"] not in {2, 3}:
+        raise RuntimeError(
+            f"capture did not record one planner plus one or two title calls: {seams!r}"
+        )
     _OUT.mkdir(exist_ok=True)
     log_path = _OUT / "loop_demo.events.jsonl"
     with open(log_path, "w") as f:

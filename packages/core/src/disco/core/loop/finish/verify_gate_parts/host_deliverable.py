@@ -233,12 +233,24 @@ def _selected_any_event(
     return app_event
 
 
-async def _resolved_artifact_path(gate: Any, any_event: Any) -> str | None:
+async def _resolved_artifact_path(
+    gate: Any,
+    any_event: Any,
+    *,
+    allow_pending_app_output: bool,
+) -> str | None:
     if any_event is not None and any_event.artifact_kind != "app":
         return _safe_deliverable_file_path(any_event.path)
-    return await host_verify_artifact_path(
+    resolved = await host_verify_artifact_path(
         gate, any_event.path if any_event is not None else "index.html"
     )
+    if resolved is not None or not allow_pending_app_output or any_event is None:
+        return resolved
+    # Strict AppKit's verifier owns the build that first materializes its canonical
+    # output.  Its platform-minted handoff is therefore a declared output here, not
+    # yet evidence that the file exists.  Only that typed verifier path opts in, and
+    # FINISHED still requires the verifier's immutable artifact identity afterward.
+    return _safe_deliverable_file_path(any_event.path)
 
 
 async def host_verify_deliverable(
@@ -247,6 +259,7 @@ async def host_verify_deliverable(
     events: list[Event],
     *,
     include_unverifiable: bool = False,
+    allow_pending_app_output: bool = False,
 ) -> HostVerificationDeliverable | None:
     """REL-1c — reconstruct the web-like deliverable for host shadow verify.
 
@@ -284,7 +297,11 @@ async def host_verify_deliverable(
     )
     if any_event is None and not _is_web_deliverable(events):
         return None
-    path = await _resolved_artifact_path(gate, any_event)
+    path = await _resolved_artifact_path(
+        gate,
+        any_event,
+        allow_pending_app_output=allow_pending_app_output,
+    )
     if path is None:
         return None
     deployment_url = any_event.deployment_url if any_event is not None else ""

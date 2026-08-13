@@ -967,14 +967,14 @@ class TestFrontendPublicApi:
         # 13-C records FinishGate's explicit typed-service methods without
         # asserting a false relocation origin. 9 records AgentErrorEvent's
         # exact semantic failure-classification fields. PKG-19 v25 adds the
-        # three exact retrieval-contract transitions below. The exact set is
-        # itself the count ratchet.
+        # three exact retrieval-contract transitions below. PKG-19 v28 replaces
+        # SecretStore and adds SecretBox; the exact set is itself the count ratchet.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
             "ConfigState",
             "ConfigStore",
-            "SecretStore",
+            "SecretBox", "SecretStore",
             "BuildPlatformRegistry",
             "ConversationRuntime",
             "FinishGate",

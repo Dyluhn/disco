@@ -51,7 +51,7 @@ from disco.core.webhook_host_service import WebhookAppConfigStore
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
-    # (execute/commit). Type-only import keeps it off the runtime path.
+    # (execute/create_function/commit). Type-only import keeps it off runtime.
     from disco.tools.mcp.migrations import _ApprovalConn
 
 from . import origin_approval_wiring as _origin_wiring
