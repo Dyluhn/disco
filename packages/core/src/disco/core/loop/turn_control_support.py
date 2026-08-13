@@ -2,7 +2,6 @@
 
 import ipaddress
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -23,6 +22,7 @@ from ..events import (
 )
 from ..verification import requires_structured_browser_runtime
 from . import signals
+from . import turn_control_delivery as _delivery
 from .boundaries import AgentStep
 from .control import Disp
 from .ordinals import ordinal
@@ -40,6 +40,18 @@ from .turn_control_serve_refusals import (
 
 if TYPE_CHECKING:
     pass
+
+_ServeRequest = _delivery.ServeRequest
+_coerce_serve_entry_path = _delivery.coerce_serve_entry_path
+_declared_delivery_defect = _delivery.declared_delivery_defect
+_derived_serve_kind = _delivery.derived_serve_kind
+_looks_like_html_entry = _delivery.looks_like_html_entry
+_normalize_serve_path = _delivery.normalize_serve_path
+_serve_argument_defect = _delivery.serve_argument_defect
+_serve_path_is_workspace_root = _delivery.serve_path_is_workspace_root
+_serve_path_missing = _delivery.serve_path_missing
+_serve_path_verified_present = _delivery.serve_path_verified_present
+_serve_root_refusal = _delivery.serve_root_refusal
 
 _LOG = logging.getLogger("disco.loop")
 
@@ -413,73 +425,6 @@ def _verifier_no_progress_marker_seq(
     return None
 
 
-async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
-    """CD-TOOLS-5 OUTPUT-TRUTH: True iff the deliverable path is VERIFIABLY absent in the
-    workspace. Fail-OPEN (return False) when there's no sandbox or the existence check errors —
-    serve is the handoff softguard, not a hard gate, and the verify gate is the real proof; an
-    unverifiable check must never block a legitimate handoff."""
-    sbx = getattr(loop.executor, "sandbox", None)
-    if sbx is None:
-        return False
-    try:
-        return not await sbx.file_exists(path)
-    except Exception:  # noqa: BLE001 — unverifiable → don't block the handoff
-        return False
-
-
-def _normalize_serve_path(path: str) -> str:
-    from disco.core.workspace_paths import strip_redundant_workspace_prefix
-
-    return strip_redundant_workspace_prefix(path.strip())
-
-
-def _serve_path_is_workspace_root(path: str) -> bool:
-    return path in {"", ".", "./"}
-
-
-def _serve_root_refusal() -> str:
-    return (
-        "serve refused: serve takes the entry FILE path, not the workspace root. "
-        "For a site pass 'index.html' (or your entry file). If index.html exists "
-        "at the root it will be served from there."
-    )
-
-
-async def _coerce_serve_entry_path(loop, raw_path: str) -> tuple[str, bool, bool]:  # noqa: ANN001
-    """Return (normalized_path, root_like, coerced_to_index)."""
-    path = _normalize_serve_path(raw_path)
-    if not _serve_path_is_workspace_root(path):
-        return path, False, False
-    if await _serve_path_verified_present(loop, "index.html"):
-        _LOG.info(
-            "serve path %r points at the workspace root; auto-coerced to index.html",
-            raw_path,
-        )
-        return "index.html", True, True
-    return path, True, False
-
-
-async def _serve_path_verified_present(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
-    """Fail-CLOSED twin of _serve_path_missing: True only when the sandbox
-    POSITIVELY confirms the path exists. The fresh-session gate's exception
-    for already-built work must not open on an unverifiable check."""
-    sbx = getattr(loop.executor, "sandbox", None)
-    if sbx is None:
-        return False
-    try:
-        return bool(await sbx.file_exists(path))
-    except Exception:  # noqa: BLE001 — unverifiable → no exception granted
-        return False
-
-
-@dataclass(frozen=True)
-class _ServeRequest:
-    title: str
-    path: str
-    kind: str
-    url: str
-
-
 _SERVE_ARGUMENT_DIAGNOSTIC = "serve_argument_refused"
 _SERVE_FRESH_DIAGNOSTIC = "serve_fresh_session_refused"
 
@@ -540,25 +485,34 @@ async def _validate_serve_request(  # noqa: ANN001
         return fresh_refusal
 
     arguments = step.tool_call.arguments or {}
-    if not arguments:
-        return await _refuse_serve_argument(loop, step, events, "no_arguments")
     title = str(arguments.get("title") or "").strip()
     raw_path = str(arguments.get("path") or "").strip()
     path, root_like, coerced_to_index = await _coerce_serve_entry_path(loop, raw_path)
-    kind = str(arguments.get("kind") or "app").strip()
     url = _canonical_deployment_url(str(arguments.get("url") or ""))
-    if not title:
-        return await _refuse_serve_argument(loop, step, events, "title_missing")
-    if not raw_path:
-        return await _refuse_serve_argument(loop, step, events, "path_missing")
-    if kind not in ("app", "files"):
-        return await _refuse_serve_argument(loop, step, events, "kind_invalid", kind)
+    defect = _serve_argument_defect(
+        arguments,
+        title=title,
+        raw_path=raw_path,
+        path=path,
+    )
+    if defect is not None:
+        return await _refuse_serve_argument(loop, step, events, *defect)
     if root_like and not coerced_to_index:
         return await loop._valve.refuse_fresh_session(
             step, _serve_root_refusal(), diagnostic=_SERVE_ARGUMENT_DIAGNOSTIC
         )
-    if not path:
-        return await _refuse_serve_argument(loop, step, events, "path_unresolvable", raw_path)
+    kind = await _derived_serve_kind(loop, path, events)
+    delivery_defect = _declared_delivery_defect(loop, path, kind)
+    if delivery_defect is not None:
+        return await _refuse_serve_argument(loop, step, events, *delivery_defect)
+    offered_kind = arguments.get("kind")
+    if offered_kind is not None and str(offered_kind).strip() != kind:
+        _LOG.info(
+            "serve kind assertion %r did not match host-derived %r for %s",
+            offered_kind,
+            kind,
+            path,
+        )
     return _ServeRequest(title=title, path=path, kind=kind, url=url)
 
 
@@ -610,7 +564,7 @@ def _prior_diagnostic_count(events: list[Event], diagnostic: str) -> int:
     )
 
 
-async def _record_serve_handoff(  # noqa: ANN001
+async def _record_bound_serve_handoff(  # noqa: ANN001
     loop,
     step: AgentStep,
     events: list[Event],
@@ -700,12 +654,40 @@ async def _record_serve_handoff(  # noqa: ANN001
     return Disp.CONTINUE
 
 
-async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # noqa: ANN001
-    """Validate and record one finished-artifact handoff."""
+async def _record_serve_handoff(  # noqa: ANN001
+    loop,
+    step: AgentStep,
+    events: list[Event],
+    request: _ServeRequest,
+) -> Disp:
+    """Bind target selection and record the handoff inside the caller's fence."""
+
+    resolver = getattr(loop, "_delivery_contract_resolver", None)
+    if resolver is None:
+        return await _record_bound_serve_handoff(loop, step, events, request)
+    await resolver(request.kind)
+    current = await loop.store.get_events(loop.conversation_id)
+    return await _record_bound_serve_handoff(loop, step, current, request)
+
+
+async def _handle_serve_locked(loop, step: AgentStep) -> Disp:  # noqa: ANN001
+    """Classify artifact bytes, bind the target, and hand off without a race."""
+
+    events = await loop.store.get_events(loop.conversation_id)
     request = await _validate_serve_request(loop, step, events)
     if isinstance(request, Disp):
         return request
     return await _record_serve_handoff(loop, step, events, request)
+
+
+async def _handle_serve(loop, step: AgentStep, events: list[Event]) -> Disp:  # noqa: ANN001
+    """Validate and record one finished-artifact handoff."""
+    del events  # authoritative evidence is re-read after the workspace fence is held
+    fence = getattr(loop, "_control_fence", None)
+    if fence is None:
+        return await _handle_serve_locked(loop, step)
+    async with fence():
+        return await _handle_serve_locked(loop, step)
 
 
 _BLOCKED_LANDING_META_KEY = "blocked_landing"

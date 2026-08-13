@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "f9bd180649b7b24ef185d69825c7f2d5abe11224",
+  "source_identity": "d3efabd8bc3eefda3a75dcccda266dcd2fadfecf",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -2929,6 +2929,8 @@
             "detail: str | None",
             "effect_receipts: tuple[EffectReceipt, ...]",
             "error: str",
+            "failure_class: str | None",
+            "failure_reason: str | None",
             "kind: Literal[EventKind.AGENT_ERROR]",
             "source: EventSource",
             "tool_call_id: str | None"
@@ -3458,7 +3460,7 @@
           "signature": "class LLMSummarizingCondenser()",
           "members": [
             "async def condense(self, events: list[Event], view: View, *, summarizer: Summarizer, reason: str='tokens', artifact_paths: list[str] | None=None) -> CondensationEvent | None",
-            "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000) -> None",
+            "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None",
             "def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None"
           ],
           "fields": []
@@ -3684,6 +3686,7 @@
             "kind: Literal[EventKind.REPORT]",
             "passages: list[dict[str, Any]]",
             "query: str",
+            "reviewed_passages: list[dict[str, Any]]",
             "sections: list[ReportSection]",
             "source: EventSource",
             "summary: str",
@@ -9779,13 +9782,16 @@
         "SandboxSettings",
         "SearchSettings",
         "SecretBox",
+        "SecretDecryptionError",
         "SecretStore",
+        "SecretStoreFormatError",
         "StaticPromptProvider",
         "StreamChunk",
         "StubNLIVerifier",
         "TokenUsage",
         "ToolSpec",
         "TtsSettings",
+        "UnknownSecretKeyError",
         "default_config",
         "default_connection_for",
         "default_mode_for_role",
@@ -9846,13 +9852,16 @@
         "SandboxSettings",
         "SearchSettings",
         "SecretBox",
+        "SecretDecryptionError",
         "SecretStore",
+        "SecretStoreFormatError",
         "StaticPromptProvider",
         "StreamChunk",
         "StubNLIVerifier",
         "TokenUsage",
         "ToolSpec",
         "TtsSettings",
+        "UnknownSecretKeyError",
         "default_config",
         "default_connection_for",
         "default_mode_for_role",
@@ -10248,8 +10257,32 @@
           "kind": "from"
         },
         {
+          "public_name": "SecretDecryptionError",
+          "name": "SecretDecryptionError",
+          "module": "secrets",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
           "public_name": "SecretStore",
           "name": "SecretStore",
+          "module": "secrets",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "SecretStoreFormatError",
+          "name": "SecretStoreFormatError",
+          "module": "secrets",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "UnknownSecretKeyError",
+          "name": "UnknownSecretKeyError",
           "module": "secrets",
           "level": 1,
           "alias": null,
@@ -10897,31 +10930,45 @@
           "kind": "class",
           "signature": "class SecretBox()",
           "members": [
-            "def __init__(self, app_secret: str | None) -> None",
+            "def __init__(self, app_secret: str | None, *, key_id: str | None=None) -> None",
             "def available(self) -> bool",
             "def decrypt(self, token: str) -> str | None",
             "def encrypt(self, plaintext: str) -> str",
             "def from_env(cls, env: Mapping[str, str] | None=None) -> SecretBox",
             "def is_strong(self) -> bool",
+            "def key_id(self) -> str | None",
             "def signing_secret(self) -> str | None"
           ],
+          "fields": []
+        },
+        "SecretDecryptionError": {
+          "kind": "class",
+          "signature": "class SecretDecryptionError(RuntimeError)",
+          "members": [],
           "fields": []
         },
         "SecretStore": {
           "kind": "class",
           "signature": "class SecretStore()",
           "members": [
-            "def __init__(self, path: str | os.PathLike[str] | None=None, *, box: SecretBox | None=None) -> None",
+            "def __init__(self, path: str | os.PathLike[str] | None=None, *, box: SecretBox | None=None, read_boxes: Sequence[SecretBox] | None=None) -> None",
             "def can_store(self) -> bool",
             "def clear_secret(self, name: str) -> None",
             "def get_secret(self, name: str, *, strong_required: bool=False) -> str | None",
             "def has_secret(self, name: str) -> bool",
             "def locked(self) -> bool",
+            "def rotation(self) -> _SecretRotation",
             "def secret_names(self) -> list[str]",
             "def set_secret(self, name: str, plaintext: str, *, strong_required: bool=False) -> None",
             "def signing_secret(self) -> str | None",
             "def undecryptable_names(self) -> list[str]"
           ],
+          "fields": []
+        },
+        "SecretStoreFormatError": {
+          "kind": "class",
+          "signature": "class SecretStoreFormatError(RuntimeError)",
+          "members": [],
           "fields": []
         },
         "StaticPromptProvider": {
@@ -10990,6 +11037,12 @@
             "voice_a: str",
             "voice_b: str"
           ]
+        },
+        "UnknownSecretKeyError": {
+          "kind": "class",
+          "signature": "class UnknownSecretKeyError(RuntimeError)",
+          "members": [],
+          "fields": []
         },
         "default_config": {
           "kind": "function",
@@ -14319,6 +14372,7 @@
             "char_start: int | None",
             "corpus_id: str | None",
             "id: str",
+            "published_at: date | None",
             "source_title: str",
             "source_url: str",
             "text: str"
@@ -14368,8 +14422,10 @@
           "fields": [
             "corpus_ids: frozenset[str]",
             "depth: Literal['shallow', 'standard', 'deep']",
+            "discover_limit: int | None",
             "domains_allow: frozenset[str] | None",
             "domains_deny: frozenset[str] | None",
+            "extract_cap: int | None",
             "provider: str | None",
             "query: str",
             "recency_window: Literal['month', 'week'] | None",
@@ -14403,9 +14459,11 @@
           "signature": "class SearchHit(BaseModel)",
           "members": [],
           "fields": [
+            "published_at: date | None",
             "rank: int",
             "snippet: str",
             "source_engine: str",
+            "status: Literal['ok', 'paywalled', 'blocked', 'not_found', 'error'] | None",
             "title: str",
             "url: str"
           ]
@@ -14576,7 +14634,8 @@
             "max_sources: int",
             "max_subquestions: int",
             "max_wall_clock_s: int",
-            "rerank_top_k: int"
+            "rerank_top_k: int",
+            "retrieval_depth: Literal['shallow', 'standard', 'deep']"
           ]
         },
         "DepthTier": {
@@ -14589,7 +14648,7 @@
           "kind": "class",
           "signature": "class ReportFromRun()",
           "members": [
-            "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None",
+            "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None",
             "def to_event(self) -> ReportEvent"
           ],
           "fields": []
@@ -22900,7 +22959,7 @@
         {
           "kind": "function",
           "name": "useDeepResearch",
-          "signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [\"ddgs\"], )"
+          "signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [], )"
         }
       ]
     },
@@ -22940,7 +22999,7 @@
         {
           "kind": "function",
           "name": "useDeepResearchExports",
-          "signature": "export function useDeepResearchExports( session: DeepResearchSession | null, stream: DeepResearchStream, )"
+          "signature": "export function useDeepResearchExports( session: DeepResearchSession | null, )"
         }
       ]
     },
@@ -24704,6 +24763,11 @@
         },
         {
           "kind": "function",
+          "name": "sourceUrlKey",
+          "signature": "export function sourceUrlKey(raw: string): string"
+        },
+        {
+          "kind": "function",
           "name": "verdictForPassage",
           "signature": "export function verdictForPassage(answer: GroundedAnswer, passageId: string): Verdict"
         },
@@ -25084,7 +25148,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ReportEvent",
-          "signature": "export interface ReportEvent extends EventBase { kind: \"report\"; query: string; summary: string; sections: ReportSection[]; passages: Array<Record<string, unknown>>; all_hits: Array<Record<string, unknown>>; unsupported_count: number; bounded_by: string | null; depth_tier: string | null; /** Optional per-claim verification verdicts. Absent on base-engine reports * (a section carries only `unsupported_count`, not a per-claim breakdown); * present when a verification overlay / the demo fixture supplies them, and * rendered by the report's claim-verdicts surface when set. */ claims?: VerifiedClaim[]; }"
+          "signature": "export interface ReportEvent extends EventBase { kind: \"report\"; query: string; summary: string; sections: ReportSection[]; passages: Array<Record<string, unknown>>; reviewed_passages?: Array<Record<string, unknown>>; all_hits: Array<Record<string, unknown>>; unsupported_count: number; bounded_by: string | null; depth_tier: string | null; /** Optional per-claim verification verdicts. Absent on base-engine reports * (a section carries only `unsupported_count`, not a per-claim breakdown); * present when a verification overlay / the demo fixture supplies them, and * rendered by the report's claim-verdicts surface when set. */ claims?: VerifiedClaim[]; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25284,7 +25348,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "Passage",
-          "signature": "export interface Passage { id: string; // stable citation id, e.g. \"src3_p7\" source_url: string; source_title: string; text: string; // the corroborating span shown in the hover card char_start?: number | null; char_end?: number | null; corpus_id?: string | null; }"
+          "signature": "export interface Passage { id: string; // stable citation id, e.g. \"src3_p7\" source_url: string; source_title: string; text: string; // the corroborating span shown in the hover card char_start?: number | null; char_end?: number | null; corpus_id?: string | null; published_at?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25299,7 +25363,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "SearchHit",
-          "signature": "export interface SearchHit { url: string; title: string; snippet: string; // provider snippet \u2014 NEVER cited as content (\u00a71.4) source_engine: string; rank: number; /** discovery-set extraction outcome, for explicit-failure rendering (\u00a72.2) */ status?: ExtractStatus; }"
+          "signature": "export interface SearchHit { url: string; title: string; snippet: string; // provider snippet \u2014 NEVER cited as content (\u00a71.4) source_engine: string; rank: number; published_at?: string | null; /** discovery-set extraction outcome, for explicit-failure rendering (\u00a72.2) */ status?: ExtractStatus; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -26214,7 +26278,7 @@
       "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "SecretStore",
-      "target_sha256": "5f20985984bfd973055cacbd33344965697ac487c8a42b9ef9cb5315a49af8fa",
+      "target_sha256": "7e86eab9169a4e1c582143bd31b0bb22e2618407a4968ffb6c85f849f0f1caba",
       "owner_package": "PKG-11-SETTINGS",
       "reason": "Epic 11-B: authority moved off this class onto collaborators exposed as plain __init__ attributes; origin unchanged, members removed (see the paired member_transitions record)"
     },
@@ -28118,7 +28182,7 @@
       "surface": "frontend",
       "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
       "public_name": "useDeepResearchExports",
-      "target_sha256": "11bf18b7e51c86c55f80a65bd9b9924f2a27ffe99d1bf7a16d39fd5b059f0ae3",
+      "target_sha256": "d302c5be343f659581650a0fcb17408ebdaff825b18fcbc151f72e0ff67b21a9",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -29385,6 +29449,142 @@
       "target_sha256": "3fc95ecee6760bccc1e70ca465ac74c51c0cd7976e6de56b17962f365a3e86fc",
       "owner_package": "PKG-13-FACADES",
       "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearch.ts",
+      "public_name": "useDeepResearch",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "065dcc39011f00069fda99437bbfc4c93a347dd788f32eaa36c1ada77d130761"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/sources.ts",
+      "public_name": "sourceUrlKey",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "352ab5fc38d3fcdd73e5e8da76f9995f0c5074270b94d891927901d78ecd0d15"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ReportEvent",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "10b5545bf90329410d5dcc2fde154b7d16dd1765e8cbb652c1110b8466b6005c"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "Passage",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "347addd2d9f17cbef4b81c3b22f4f04bc6df35f719a6136dab91e1422e46e254"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "SearchHit",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "12d39bab863f54175d7c39a4e17921026ab952acee54161eef98e7283b74c416"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "AgentErrorEvent",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "d3f1aa93564d5ed51564f88daf1801a2f60220969ab87860264031958cc44283"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "LLMSummarizingCondenser",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "e528373fac972109d5b280399f6cd6364150ece23e05cc3caa635a40eea2faa8"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "ReportEvent",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "ce3a59f36bf6a6ce36a0f51f5eb6bc5d21a912766f21e56ec25861d5060faddd"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "SecretBox",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "f153bf47748b58d096178034f33540a52f953c1c194165e48a26515296e2acfe"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "SecretDecryptionError",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "3357f46eda903b445a4191271edc08b44bea2ce3e5bba108e4579699d76e64af"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "SecretStoreFormatError",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "d6ca601efaead6e588b7c9c2f02dd9994b3162c1df4b0ed049480b882aec999a"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "UnknownSecretKeyError",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "a8b789a4b5d64e9a829c568618f37788b944dff08e90b2b06847ceb1f14fed15"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "Passage",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "10d20852b1a391577d3610e3b8364cb981bd3d04f38f63a1aaec27cf309fc2c6"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "RetrievalRequest",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "44a53d18ca91dcb87d2513bee7c70433eeb8b30dc933c091d626f1e476a34361"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "SearchHit",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "a12917256d5da22cf1f3ac88159f74083e1045b634c6d583cc7051911a21975f"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "a07a99fa6fc11c256d0e2be1f8bab09a04f44f79491b672eda6001bd5b429f82"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "ReportFromRun",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
+      "target_sha256": "432ec0713f1e094c06452acdea00cd7185af0466f1534f8a109337845391619a"
     }
   ],
   "compatibility_bridges": [],
@@ -29405,6 +29605,169 @@
       "owner_package": "PKG-10-EXECUTOR",
       "accepting_commit": "3501df9bcee672c0d6cb8d7a8cc186cec03719e9",
       "accepting_receipt": "2026-07-31/PKG-10-EPIC/EPIC-10A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "LLMSummarizingCondenser",
+      "origin": "disco.core.view.LLMSummarizingCondenser",
+      "removed_members": [
+        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, *, context_window: int | None=None, soft_frac: float=0.65, hard_frac: float=0.8, max_tokens: int | None=None, hard_max_tokens: int | None=None, keep_head: int=1, keep_recent: int=6, min_forget: int=2, budget_tokens: int=24000, hard_budget_tokens: int=32000, summary_input_chars: int=384000) -> None"
+      ],
+      "old_signature_sha256": "efb0a0471135603f48dfe6d59daa20cb6b59d954ba1b9d2693627845035f1f23",
+      "new_signature_sha256": "9679fa155dc8d1f2900a2e25960ea31ba4f5c9d68d5eb0aea0d97a173687290b",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "ReportFromRun",
+      "origin": "disco.retrieval.deep_research.engine.ReportFromRun",
+      "removed_members": [
+        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None"
+      ],
+      "old_signature_sha256": "d5e6da729cb5d5169954c0e1a1d2eda5704578b96440e9e947e6f283ff93925f",
+      "new_signature_sha256": "292e9c8150c4839676ec17f5766e8367307c827e5d926d62280f0dfca12d4613",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "SecretBox",
+      "origin": "disco.core.llm.secrets.SecretBox",
+      "removed_members": [
+        "def __init__(self, app_secret: str | None) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, app_secret: str | None, *, key_id: str | None=None) -> None",
+        "def key_id(self) -> str | None"
+      ],
+      "old_signature_sha256": "f11b8c0c12355c17706a93549046d10671a91c86898d0f53ab45c1a9cca5d59a",
+      "new_signature_sha256": "28a0e0a0c5b29639a90e19a11ad5ce45c4a465e7316517ed446088ca400aa264",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "SecretStore",
+      "origin": "disco.core.llm.secrets.SecretStore",
+      "removed_members": [
+        "def __init__(self, path: str | os.PathLike[str] | None=None, *, box: SecretBox | None=None) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, path: str | os.PathLike[str] | None=None, *, box: SecretBox | None=None, read_boxes: Sequence[SecretBox] | None=None) -> None",
+        "def rotation(self) -> _SecretRotation"
+      ],
+      "old_signature_sha256": "b7d4bbca529b52a3843c435187ef1578a30604219ca06cbce270f1028cf7c77c",
+      "new_signature_sha256": "85eded0475ba28f11ccfe4967be752a36067e3a3a357c05bddd1d44c632099e2",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "RetrievalRequest",
+      "origin": "disco.retrieval.models.RetrievalRequest",
+      "removed_members": [],
+      "added_members": [
+        "discover_limit: int | None",
+        "extract_cap: int | None"
+      ],
+      "old_signature_sha256": "952bcda6a1ff8ae2ca74cc83410bfcd586bb6e16c03c8cda4791eb94e02b535b",
+      "new_signature_sha256": "101fac26c6f6c462e3577da662147fae86f3313d2aa712e0939b3fc77c21613a",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "AgentErrorEvent",
+      "origin": "disco.core.events.AgentErrorEvent",
+      "removed_members": [],
+      "added_members": [
+        "failure_class: str | None",
+        "failure_reason: str | None"
+      ],
+      "old_signature_sha256": "a7fc8017dcd78f649a74dae673945dd6a5f00cf18af8c7478dafedde7849ba76",
+      "new_signature_sha256": "12f6141485c51932b4c9ff6ff2c1bbbf9d988e32dddc7cb25b7cfbb8b3b7f0ef",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "SearchHit",
+      "origin": "disco.retrieval.models.SearchHit",
+      "removed_members": [],
+      "added_members": [
+        "published_at: date | None",
+        "status: Literal['ok', 'paywalled', 'blocked', 'not_found', 'error'] | None"
+      ],
+      "old_signature_sha256": "b9a94f50ce84f4fbc8e8facd7468665743c57fa65ad6d9258b29e1af24fab3f4",
+      "new_signature_sha256": "7d0ebf2c144582901c07af09e4ffd5e8e5aa41659d3ab45c401116d246e0794b",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/__init__.py",
+      "public_name": "Passage",
+      "origin": "disco.retrieval.models.Passage",
+      "removed_members": [],
+      "added_members": [
+        "published_at: date | None"
+      ],
+      "old_signature_sha256": "95a118cb36cb0c3fed12e10804b5f6c97ee3f4536d328122a9e0454ed5f18e3a",
+      "new_signature_sha256": "24ed7187282897d7028536dcaebff60cf996f9d82aeec5257b6bcce8cae7c6e1",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "origin": "disco.retrieval.deep_research.depth.DepthBound",
+      "removed_members": [],
+      "added_members": [
+        "retrieval_depth: Literal['shallow', 'standard', 'deep']"
+      ],
+      "old_signature_sha256": "7abbb7a9d91f8d5b50e4682a4417e8bf987a348414e8fc74a6afaffe8abd9872",
+      "new_signature_sha256": "06bbbd3e63418beae2b0269f3502da45d8d26fdf25261b133918d15fa4278dfc",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "ReportEvent",
+      "origin": "disco.core.events.ReportEvent",
+      "removed_members": [],
+      "added_members": [
+        "reviewed_passages: list[dict[str, Any]]"
+      ],
+      "old_signature_sha256": "57c88198f2e18062840f86cb7132f2d8359c3b51395c93c2266dce95e647f956",
+      "new_signature_sha256": "5c1521902f0a5eb5e872ccfc26af304d60f66fd74a00c9b883af77f9fa704b64",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -29518,24 +29881,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/llm/__init__.py",
-      "public_name": "SecretStore",
-      "origin": "disco.core.llm.secrets.SecretStore",
-      "removed_members": [
-        "def clear_openrouter_key(self) -> None",
-        "def get_openrouter_key(self) -> str | None",
-        "def has_openrouter_key(self) -> bool",
-        "def set_openrouter_key(self, plaintext: str) -> None"
-      ],
-      "added_members": [],
-      "old_signature_sha256": "ac4054a6381c0f7c14a60bee939a1582c55e8a858bd822825bf0372057ec4a72",
-      "new_signature_sha256": "b7d4bbca529b52a3843c435187ef1578a30604219ca06cbce270f1028cf7c77c",
-      "owner_package": "PKG-11-SETTINGS",
-      "accepting_commit": "a0e4b9b356e650b8b8beb531f3579df4f490f8a0",
-      "accepting_receipt": "2026-08-01/PKG-11-EPIC/EPIC-11B-ACCEPTANCE-RECEIPT.md"
-    },
-    {
-      "surface": "python",
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
       "public_name": "ConversationRuntime",
       "origin": "disco.agent_server.runtime.ConversationRuntime",
@@ -29595,6 +29940,71 @@
     }
   ],
   "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "Passage",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface Passage { id: string; // stable citation id, e.g. \"src3_p7\" source_url: string; source_title: string; text: string; // the corroborating span shown in the hover card char_start?: number | null; char_end?: number | null; corpus_id?: string | null; }",
+      "new_signature": "export interface Passage { id: string; // stable citation id, e.g. \"src3_p7\" source_url: string; source_title: string; text: string; // the corroborating span shown in the hover card char_start?: number | null; char_end?: number | null; corpus_id?: string | null; published_at?: string | null; }",
+      "old_target_sha256": "39727354e1a8dce74285b0f35626387a964aa3b439e1f79315e23b1fc07c7384",
+      "new_target_sha256": "347addd2d9f17cbef4b81c3b22f4f04bc6df35f719a6136dab91e1422e46e254",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "ReportEvent",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ReportEvent extends EventBase { kind: \"report\"; query: string; summary: string; sections: ReportSection[]; passages: Array<Record<string, unknown>>; all_hits: Array<Record<string, unknown>>; unsupported_count: number; bounded_by: string | null; depth_tier: string | null; /** Optional per-claim verification verdicts. Absent on base-engine reports * (a section carries only `unsupported_count`, not a per-claim breakdown); * present when a verification overlay / the demo fixture supplies them, and * rendered by the report's claim-verdicts surface when set. */ claims?: VerifiedClaim[]; }",
+      "new_signature": "export interface ReportEvent extends EventBase { kind: \"report\"; query: string; summary: string; sections: ReportSection[]; passages: Array<Record<string, unknown>>; reviewed_passages?: Array<Record<string, unknown>>; all_hits: Array<Record<string, unknown>>; unsupported_count: number; bounded_by: string | null; depth_tier: string | null; /** Optional per-claim verification verdicts. Absent on base-engine reports * (a section carries only `unsupported_count`, not a per-claim breakdown); * present when a verification overlay / the demo fixture supplies them, and * rendered by the report's claim-verdicts surface when set. */ claims?: VerifiedClaim[]; }",
+      "old_target_sha256": "8eb7985a3fe222b1ccd844a2f21c2d3f01f014d187a52e7ef507566f8f2a3483",
+      "new_target_sha256": "10b5545bf90329410d5dcc2fde154b7d16dd1765e8cbb652c1110b8466b6005c",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "SearchHit",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface SearchHit { url: string; title: string; snippet: string; // provider snippet \u2014 NEVER cited as content (\u00a71.4) source_engine: string; rank: number; /** discovery-set extraction outcome, for explicit-failure rendering (\u00a72.2) */ status?: ExtractStatus; }",
+      "new_signature": "export interface SearchHit { url: string; title: string; snippet: string; // provider snippet \u2014 NEVER cited as content (\u00a71.4) source_engine: string; rank: number; published_at?: string | null; /** discovery-set extraction outcome, for explicit-failure rendering (\u00a72.2) */ status?: ExtractStatus; }",
+      "old_target_sha256": "12d61acf7947823f9424cedff22e3632a3c04c6beea9d69038a24befc60ab2c6",
+      "new_target_sha256": "12d39bab863f54175d7c39a4e17921026ab952acee54161eef98e7283b74c416",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearch.ts",
+      "public_name": "useDeepResearch",
+      "declaration_kind": "function",
+      "old_signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [\"ddgs\"], )",
+      "new_signature": "export function useDeepResearch( resumeCid?: string | null, initialLeaderId?: string | null, initialSources: string[] = [], )",
+      "old_target_sha256": "5e24a464c4f289416b65f9c19b32d40586ef02a70148309820df6fa7dd11117b",
+      "new_target_sha256": "065dcc39011f00069fda99437bbfc4c93a347dd788f32eaa36c1ada77d130761",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchExports.ts",
+      "public_name": "useDeepResearchExports",
+      "declaration_kind": "function",
+      "old_signature": "export function useDeepResearchExports( session: DeepResearchSession | null, stream: DeepResearchStream, )",
+      "new_signature": "export function useDeepResearchExports( session: DeepResearchSession | null, )",
+      "old_target_sha256": "11bf18b7e51c86c55f80a65bd9b9924f2a27ffe99d1bf7a16d39fd5b059f0ae3",
+      "new_target_sha256": "d302c5be343f659581650a0fcb17408ebdaff825b18fcbc151f72e0ff67b21a9",
+      "owner_package": "PKG-19-V30-INTEGRATION",
+      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
     {
       "surface": "frontend",
       "path": "frontend/src/lib/harness/productEvidence.ts",

@@ -18,6 +18,7 @@ from disco.core import (
     ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
     ToolResult,
     VerifierShadowEvent,
     VerifierVerdictEvent,
@@ -37,7 +38,9 @@ from disco.core.loop.finish.verify_gate_parts.host_claims import (
 )
 from disco.core.loop.finish.verify_gates import _bounded_model_verifier_cause
 from disco.core.verification import (
+    AdmittedVerificationContract,
     VerificationClaimKind,
+    VerificationDeliveryContract,
     VerificationRequestedClaim,
     VerificationRequirementsDirective,
     default_structured_web_claims,
@@ -246,6 +249,80 @@ async def test_host_pass_finishes_verified_and_skips_inline_verify() -> None:
     assert final.message.content == "Verified cleanly by the host browser."
     assert final.meta.get("host_owned_terminal_warning") is not True
     assert agent.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_artifact_contract_ignores_stray_web_preview_evidence() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="SHOULD_NOT_RUN"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="SHOULD_NOT_RUN"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "primes.py", "content": "print([2, 3, 5, 7])"},
+            ),
+            action_step(
+                tool="serve",
+                args={"title": "Primes", "path": "primes.py", "kind": "files"},
+            ),
+            finish_step("Script complete."),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+    contract = AdmittedVerificationContract(
+        target_id="disco.legacy_artifact@1",
+        verifier_id="disco.host_web_verifier@1",
+        delivery=VerificationDeliveryContract(
+            shape="artifact.legacy_deliverable",
+            mode="artifact",
+            entry_kind="deliverable_manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="none",
+        checks=(),
+        required=False,
+        unavailable="degrade",
+        unverified_finish="allow_without_verified_label",
+    )
+
+    await loop.send_message("write and run a Python script")
+    await loop._emit(
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.freeform_artifact@1",
+            run_intent_id="intent-files",
+            composition_authority="build_platform_core",
+            composition_digest="sha256:" + "c" * 64,
+            run_identity="run:sha256:" + "d" * 64,
+            verification_contract=contract,
+        )
+    )
+    preview = await loop._emit(
+        ActionEvent(
+            thought="old preview residue",
+            tool_call=ToolCall(tool_name="preview_start", arguments={"serve_dir": "."}),
+        )
+    )
+    await loop._emit(
+        ObservationEvent(
+            action_id=preview.id,
+            tool_result=ToolResult(
+                call_id=preview.tool_call.call_id,
+                tool_name="preview_start",
+                success=True,
+                content="running",
+            ),
+        )
+    )
+
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    assert execu.verify_calls == 0
+    assert not any(
+        isinstance(event, VerifierVerdictEvent) for event in await store.get_events("conv")
+    )
 
 
 @pytest.mark.asyncio
@@ -933,6 +1010,16 @@ async def test_governed_missing_or_files_handoff_must_be_replaced_by_app(
             self._tools.append(
                 ToolSpec(name="preview_start", description="preview", parameters_schema={})
             )
+
+            class _HTMLSandbox:
+                async def file_exists(self, path: str) -> bool:
+                    return path == "index.html"
+
+                async def read_file(self, path: str) -> bytes:
+                    assert path == "index.html"
+                    return b"<!doctype html><html><body><h1>hello</h1></body></html>"
+
+            self.sandbox = _HTMLSandbox()
 
         async def execute(self, call):
             if call.tool_name != "preview_start":
