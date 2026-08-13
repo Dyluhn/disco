@@ -10,9 +10,9 @@ free (the deterministic variant). With a LIVE model instead, it's a behavioural
 regression check on a real past task (score with the Phase 2 evals).
 
 This module is the machinery + the pure diff/normalization (unit-tested on real
-event objects). The full deterministic replay needs a captured (event-log +
-cassette) pair — `_capture_loop_demo.py` produces one; the heavy capture is the
-same env-blocked step as the Phase 2 `--replay` e2e.
+event objects). The checked-in deterministic fixture captures one real plan-gate
+turn. Longer recordings replay beyond approval when their event log proves the
+plan was approved and their cassette contains all downstream calls.
 
 SURFACE CAVEAT: `build_replay_runtime` serves the LLM + search + extraction from
 the cassette, but NOT the sandbox. So a `build`-surface conversation (file writes
@@ -131,7 +131,15 @@ async def replay_conversation(
     approval AND the recording shows it proceeded past a plan (bounded, so a buggy
     loop can't approve forever)."""
     inputs, recorded_outputs = split_io(recorded)
-    had_plan = any(e.kind == EventKind.PLAN for e in recorded_outputs)
+    # A recording that stops at AWAITING_PLAN_APPROVAL must stop there again. Only
+    # inject the external approval when the recorded log proves it occurred; using
+    # the mere presence of a PlanEvent would silently expand a plan-only fixture.
+    had_approved_plan = any(
+        e.kind == EventKind.STATUS
+        and getattr(e, "status", None) == ConversationStatus.RUNNING
+        and getattr(e, "detail", None) == "plan_approved"
+        for e in recorded_outputs
+    )
 
     # ONE runtime: per-conversation surface lives on the instance, so set_surface and
     # kick MUST be the same object (a throwaway would kick with the default surface).
@@ -153,9 +161,9 @@ async def replay_conversation(
 
     await _kick_and_wait()
     approvals = 0
-    while had_plan and approvals < max_approvals:
+    while had_approved_plan and approvals < max_approvals:
         state = await store.get_state(cid)
-        if getattr(state, "status", None) != ConversationStatus.AWAITING_PLAN_APPROVAL:
+        if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
             break
         await runtime.approve_plan(cid)
         approvals += 1

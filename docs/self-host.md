@@ -75,6 +75,50 @@ agent, and frontend services. Use `--engine docker` when Docker Compose owns the
 installation, and `--project-name NAME` if the original Compose project was not
 the default `disco`.
 
+## Rotate the encrypted Settings key
+
+`DISCO_SECRET_KEY_ID` gives the active encryption key a non-secret identity.
+`DISCO_SECRET_READ_KEYS` is a JSON object containing at most four prior key IDs
+and their key material. Both server services receive the same bounded keyring;
+never commit populated values or paste them into logs.
+
+Take a backup first. Then stop the stack, put the new key and ID in `.env`, and
+put the old key under its old ID in `DISCO_SECRET_READ_KEYS`. Existing unnamed
+keys remain readable when you assign their material a name. Run the migration
+through the image so it operates on the shared `/data/secrets.json` volume:
+
+```bash
+.venv/bin/python scripts/self_host_data.py backup \
+  --output "$HOME/disco-before-key-rotation-$(date +%Y%m%d).tar.gz"
+podman compose down
+# Edit .env: DISCO_SECRET_KEY, DISCO_SECRET_KEY_ID, DISCO_SECRET_READ_KEYS
+podman compose run --rm --no-deps app-server \
+  python /app/scripts/rotate_secret_store.py --path /data/secrets.json migrate
+podman compose run --rm --no-deps app-server \
+  python /app/scripts/rotate_secret_store.py --path /data/secrets.json verify
+podman compose up -d
+podman compose exec agent-server disco-verify --quick
+```
+
+Migration is one atomic file replacement and retains encrypted rollback records
+in that same file. If the process is interrupted, rerun `migrate` or use the
+equivalent `resume` action; both verify an already-written pending migration and
+continue safely. Once both services and stored provider keys work, finalize the
+window, remove `DISCO_SECRET_READ_KEYS` from `.env`, and recreate both servers so
+the retired material leaves their environments:
+
+```bash
+podman compose exec app-server \
+  python /app/scripts/rotate_secret_store.py --path /data/secrets.json finalize
+podman compose up -d --force-recreate app-server agent-server
+```
+
+Before finalization, rollback is available. Stop the stack, restore the old key
+as `DISCO_SECRET_KEY`/`DISCO_SECRET_KEY_ID`, place the new key in the bounded read
+map, then run the script's `rollback` action and restart. A missing named key,
+malformed state, failed ciphertext authentication, or incomplete rollback window
+fails loudly; the command never prints key material, ciphertext, or secret names.
+
 ## Upgrade and uninstall
 
 Upgrade is backup-first, then rebuilds with fresh base images and starts the

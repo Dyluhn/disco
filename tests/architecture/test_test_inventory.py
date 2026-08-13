@@ -540,8 +540,13 @@ class TestMappingStatic:
             # tool-call defense file; file counts remain unchanged.
             # V27 adds two driver-catalogue route-identity regressions in the
             # existing pricing test file; file counts remain unchanged.
-            "python_test_file_count": 842,
-            "python_static_test_id_count": 10180,
+            # V28 adds 51 static Python ids across the SecretStore rotation,
+            # downgrade-writer, fresh-device evidence and strict-AppKit completion
+            # contracts, including the archive trust boundary, extracted parent
+            # seam, and finish-without-prebuilt-dist regression. The two new Core
+            # test modules advance the Python test-file count by two.
+            "python_test_file_count": 844,
+            "python_static_test_id_count": 10231,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1205,
         }
@@ -898,7 +903,10 @@ class TestCollectedCounts:
             # remain unchanged.
             # V26 adds the same one provider-history package id.
             # V27 adds the same two provider/model route-identity package ids.
-            "packages": 10568,
+            # V28 adds 81 collected package ids for SecretStore rotation,
+            # downgrade safety, Compose propagation, adjacent status wiring, and
+            # the strict verifier's ownership of first materializing dist/.
+            "packages": 10649,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -956,7 +964,11 @@ class TestCollectedCounts:
             # Subject/evaluator accounting adds ten collected harness ids.
             # The fail-closed ledger-kind correction adds two harness ids.
             # The host-verifier progress correction adds three harness ids.
-            "harness": 1359,
+            # V28 adds 34 collected harness ids for the ten-phase adjudicator,
+            # complete per-project continuity, archive integrity, extracted
+            # parent seam and uninstall. The archive shape parametrization owns
+            # the collected/static delta.
+            "harness": 1393,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1010,7 +1022,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12332 == sum(expected.values())
+        assert collected["total"] == 12447 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1026,7 +1038,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12332}
+        assert result == {"collected_total": 12447}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1045,9 +1057,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10180,
+            "python_static_ids": 10231,
             "typescript_static_ids": 1205,
-            "collected_total": 12332,
+            "collected_total": 12447,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

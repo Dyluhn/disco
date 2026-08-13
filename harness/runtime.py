@@ -87,14 +87,22 @@ def build_recording_runtime(
         from disco.tools.sandbox.process import ProcessSandboxService
 
         sandbox = RecordingSandboxService(ProcessSandboxService(), cassette)
-    rt = ConversationRuntime(
+    live_rt = ConversationRuntime(
         store,
         config_store=config_store,
         secret_store=secret_store,
         research_providers=providers,
         sandbox_service=sandbox,
     )
-    # wrap the per-request router so its completions are recorded
-    base_router = rt._router_now(pick=model_pick)
-    rt._injected_router = RecordingRouter(base_router, cassette)
-    return rt
+    # Compose the recording router through the runtime's canonical injection seam.
+    # Assigning the retired `ConversationRuntime._injected_router` attribute no
+    # longer reaches DriverRuntime and silently produced an empty cassette.
+    base_router = live_rt._router_now(pick=model_pick)
+    return ConversationRuntime(
+        store,
+        config_store=config_store,
+        secret_store=secret_store,
+        router=RecordingRouter(base_router, cassette),
+        research_providers=providers,
+        sandbox_service=sandbox,
+    )

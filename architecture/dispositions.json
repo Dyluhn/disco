@@ -164,7 +164,7 @@
   {
     "id": "DM-019",
     "disposition": "DISTRIBUTED_CONCERN",
-    "state": "active",
+    "state": "resolved",
     "original_type": "DISTRIBUTED_CONCERN",
     "owner_package": "PKG-11-SETTINGS",
     "location": "packages/core/src/disco/core/llm/secrets.py:SecretStore:219-338",

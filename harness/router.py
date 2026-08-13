@@ -1,10 +1,12 @@
 """Record/replay for the LLM seam — the router's `complete` + `stream_complete`.
 
-Keyed on the SEMANTIC request (role + message history + tool names + temperature),
-excluding the per-call `request_id` so the same logical call replays the same
-response. Recording wraps the real `DefaultLLMRouter`; replay needs no real router
-(no network/LLM) — it only exposes `complete`/`stream_complete` from the cassette,
-which is the entire surface the agent + research pipeline call.
+Keyed on the complete provider-neutral semantic request, excluding only the
+per-call correlation fields (`request_id` and opaque transport metadata), so the
+same logical call replays the same response while different budgets, tool schemas,
+prefills, response formats, or reasoning controls cannot collide. Recording wraps
+the real `DefaultLLMRouter`; replay needs no real router (no network/LLM) — it only
+exposes `complete`/`stream_complete` from the cassette, which is the entire surface
+the agent + research pipeline call.
 """
 
 from __future__ import annotations
@@ -15,12 +17,13 @@ from disco.core.llm.types import CompletionResponse, StreamChunk
 
 
 def _req_payload(req) -> dict:
-    return {
-        "role": str(getattr(req.profile, "role", "")),
-        "messages": [{"role": m.role, "content": m.content} for m in req.messages],
-        "tools": sorted(t.name for t in (req.tools or [])),
-        "temperature": req.temperature,
-    }
+    payload = req.model_dump(mode="json", exclude={"request_id", "metadata"})
+    # `requirements` is a frozenset in the contract. Its order is not semantic,
+    # so canonicalize the JSON list before hashing it.
+    profile = payload.get("profile")
+    if isinstance(profile, dict) and isinstance(profile.get("requirements"), list):
+        profile["requirements"] = sorted(profile["requirements"])
+    return payload
 
 
 class RecordingRouter:

@@ -227,7 +227,15 @@ async def prepare_appkit_typed_authority(
     if handoff_result is None:
         return None
     current, events = handoff_result
-    base = await gate._host_verify_deliverable(step, events, include_unverifiable=True)
+    base = await gate._host_verify_deliverable(
+        step,
+        events,
+        include_unverifiable=True,
+        # The trusted strict verifier is the owner that first builds dist/.  Permit
+        # its exact platform-declared entry through preflight; its typed PASS must
+        # still return a matching immutable identity before any finish can succeed.
+        allow_pending_app_output=True,
+    )
     if base is None:
         return None
     bound = _appkit_bound_deliverable(

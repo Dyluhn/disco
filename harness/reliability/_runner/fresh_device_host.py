@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,11 +54,37 @@ def _port_available(port: int) -> bool:
     return True
 
 
+def _host_resources() -> dict[str, int]:
+    available_kib = 0
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                available_kib = int(line.split()[1])
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    disk = shutil.disk_usage(Path.home())
+    return {
+        "cpu_count": os.cpu_count() or 1,
+        "memory_available_bytes": available_kib * 1024,
+        "disk_free_bytes": disk.free,
+    }
+
+
 def _safe_device_label(value: str) -> str:
     import re
 
     normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
     return normalized[:32] or "device"
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _canonical_image_id(value: str) -> str:
+    """Normalize Compose and engine inventory forms to one removable image ID."""
+    return f"sha256:{value.strip().removeprefix('sha256:')}"
 
 
 @dataclass(frozen=True)
@@ -220,6 +247,7 @@ def _assert_pristine(
         "images": len(images),
         "volumes": len(volumes),
         "checked_ports": list(ports),
+        **_host_resources(),
     }
 
 

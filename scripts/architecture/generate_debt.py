@@ -75,7 +75,7 @@ except ImportError:
 # against `owner_package` was proven mechanically before the sets were wired;
 # see `debt_resolved_epic11.py`. Reconciliation at the 11-A seal:
 # 104 python tree violations + 62 TypeScript rows = 166.
-# Epic 12-D registers the last 21 rows: all 12 PKG-12-FE-SETTINGS and all 9
+# Epic 12-D registers the last 21 executable rows: all 12 PKG-12-FE-SETTINGS and all 9
 # PKG-12-FE-SHELL, proven set-equal to `owner_package` mechanically before the
 # sets were wired (see `debt_resolved_epic12.py`). Reconciliation at the 12-D
 # seal: 0 python tree violations + 0 TypeScript violations = 0.
@@ -86,9 +86,11 @@ except ImportError:
 # `check_arch_budget` still asserts tree violations == active rows, which is
 # now 0 == 0 on BOTH the python and TypeScript sides. The ratchet has no slack
 # left, so any newly-introduced violation anywhere in the tree fails the gate
-# immediately rather than hiding under an allowance.
+# immediately rather than hiding under an allowance. PKG-19-CERT-SIGNOFF also
+# resolves observation DM-019 after implementing and proving its fixed
+# secret-rotation policy; executable debt remains 0 and observations fall 12 -> 11.
 EXPECTED_ACTIVE_DEBT_ROWS = 0
-EXPECTED_OBSERVATIONS = 12
+EXPECTED_OBSERVATIONS = 11
 
 # The source identity the disposition rows were sealed against.
 SOURCE_IDENTITY = "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc"

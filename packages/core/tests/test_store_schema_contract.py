@@ -219,7 +219,19 @@ def _create_crash_legacy_fixture(db: Path) -> str:
     return before
 
 
-@pytest.mark.parametrize("crash_step", MIGRATION_STEP_NAMES)
+def _stable_migration_step_id(step: str) -> str:
+    # The inventory treats collected node IDs as durable identities. The schema
+    # version written at this logical edge advances, but the edge itself does not;
+    # retain its original inventory ID instead of manufacturing a delete/add pair
+    # every time DATABASE_SCHEMA_VERSION changes.
+    return "version:1" if step.startswith("version:") else step
+
+
+@pytest.mark.parametrize(
+    "crash_step",
+    MIGRATION_STEP_NAMES,
+    ids=_stable_migration_step_id,
+)
 def test_injected_crash_at_every_migration_edge_rolls_back_and_retry_succeeds(
     tmp_path: Path, crash_step: str
 ) -> None:
@@ -546,4 +558,46 @@ def test_tools_ensure_mcp_approval_tables_functional(tmp_path: Path) -> None:
     ).fetchone()
     assert row[0] == "test_srv"
     assert row[1] == "abc123"
+    conn.close()
+
+
+def test_mcp_table_delegate_rolls_back_partial_schema_on_malformed_guard(tmp_path: Path) -> None:
+    db = tmp_path / "mcp_partial.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(mcp_approval_ddl()[0])
+    conn.execute(
+        "CREATE TRIGGER schema_writer_guard_mcp_approvals_insert "
+        "BEFORE INSERT ON mcp_approvals BEGIN SELECT 1; END"
+    )
+    conn.commit()
+
+    with pytest.raises(DatabaseSchemaError, match="malformed writer guards"):
+        ensure_mcp_approval_tables(conn)
+
+    objects = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'trigger')"
+        ).fetchall()
+    }
+    assert "mcp_approvals" in objects
+    assert "schema_writer_guard_mcp_approvals_insert" in objects
+    assert "mcp_approval_pending" not in objects
+    assert "mcp_config_approvals" not in objects
+    conn.close()
+
+
+def test_validate_schema_registers_current_writer_on_fresh_connection(tmp_path: Path) -> None:
+    db = tmp_path / "validated-writer.db"
+    SqliteEventStore(db).close()
+    conn = sqlite3.connect(str(db))
+
+    validate_schema(conn)
+    conn.execute(
+        "INSERT INTO mcp_approvals (server, description_hash, approved_at, approved_by) "
+        "VALUES ('validated', 'hash', '2026-08-12', 'operator')"
+    )
+    conn.commit()
+
+    assert conn.execute("SELECT server FROM mcp_approvals").fetchone() == ("validated",)
     conn.close()

@@ -21,16 +21,44 @@ import json
 import logging
 import os
 import secrets as _py_secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
+
+from ._secret_store_format import (
+    MAX_OLD_READ_KEYS as _MAX_OLD_READ_KEYS,
+)
+from ._secret_store_format import (
+    SecretDecryptionError,
+    SecretStoreFormatError,
+    UnknownSecretKeyError,
+)
+from ._secret_store_format import (
+    build_v2_document as _build_v2_document,
+)
+from ._secret_store_format import (
+    derived_key_id as _derived_key_id,
+)
+from ._secret_store_format import (
+    is_derived_key_id as _is_derived_key_id,
+)
+from ._secret_store_format import (
+    read_secret_document as _read_secret_document,
+)
+from ._secret_store_format import (
+    validate_key_id as _validate_key_id,
+)
+from ._secret_store_rotation import SecretRotation as _SecretRotation
 
 _LOG = logging.getLogger("disco.secrets")
 
 _ENV_SECRET = "DISCO_SECRET_KEY"
 # honored so ciphertext encrypted under the old key still decrypts
 _ENV_SECRET_LEGACY = "PMX_SECRET_KEY"
+_ENV_SECRET_KEY_ID = "DISCO_SECRET_KEY_ID"
+_ENV_SECRET_READ_KEYS = "DISCO_SECRET_READ_KEYS"
 _ENV_PATH = "DISCO_SECRETS"
 _ENV_PATH_LEGACY = "PMX_SECRETS"
 _APP_SECRET_FILENAME = "secret-key"
@@ -171,11 +199,16 @@ class SecretBox:
     """Symmetric encryption from an app secret. Fernet = AES-128-CBC + HMAC. With no
     app secret the box is unavailable: it can neither encrypt nor decrypt."""
 
-    def __init__(self, app_secret: str | None) -> None:
+    def __init__(self, app_secret: str | None, *, key_id: str | None = None) -> None:
         if app_secret:
             _warn_if_weak_secret(app_secret)
+        if key_id is not None:
+            _validate_key_id(key_id)
+            if app_secret and _is_derived_key_id(key_id) and key_id != _derived_key_id(app_secret):
+                raise ValueError("derived secret key IDs are reserved for their key material")
         self._app_secret = app_secret
         self._fernet = _fernet_from(app_secret) if app_secret else None
+        self._key_id = key_id or (_derived_key_id(app_secret) if app_secret else None)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> SecretBox:
@@ -185,7 +218,10 @@ class SecretBox:
         secret = e.get(_ENV_SECRET)
         if secret is None:
             secret = e.get(_ENV_SECRET_LEGACY)
-        return cls(secret)
+        # Compose represents an optional unset value as the empty string. Keep
+        # that equivalent to an omitted ID so ordinary first boot uses the
+        # derived compatibility ID; nonempty malformed IDs still fail loudly.
+        return cls(secret, key_id=e.get(_ENV_SECRET_KEY_ID) or None)
 
     @property
     def available(self) -> bool:
@@ -194,6 +230,11 @@ class SecretBox:
     @property
     def is_strong(self) -> bool:
         return bool(self._app_secret and not _looks_weak(self._app_secret))
+
+    @property
+    def key_id(self) -> str | None:
+        """Non-secret identifier persisted beside ciphertext written by this box."""
+        return self._key_id
 
     @property
     def signing_secret(self) -> str | None:
@@ -216,23 +257,114 @@ class SecretBox:
             return None
 
 
+def _old_read_boxes_from_env(env: Mapping[str, str]) -> tuple[SecretBox, ...]:
+    raw = env.get(_ENV_SECRET_READ_KEYS)
+    if raw is None or not raw.strip():
+        return ()
+    try:
+        values = json.loads(raw)
+    except ValueError as exc:
+        raise SecretStoreFormatError(
+            f"{_ENV_SECRET_READ_KEYS} must be a JSON object of key IDs to key material"
+        ) from exc
+    if not isinstance(values, dict):
+        raise SecretStoreFormatError(
+            f"{_ENV_SECRET_READ_KEYS} must be a JSON object of key IDs to key material"
+        )
+    if len(values) > _MAX_OLD_READ_KEYS:
+        raise SecretStoreFormatError(
+            f"{_ENV_SECRET_READ_KEYS} exceeds the {_MAX_OLD_READ_KEYS}-key rollback window"
+        )
+    boxes: list[SecretBox] = []
+    for key_id, secret in values.items():
+        if not isinstance(key_id, str) or not isinstance(secret, str) or not secret:
+            raise SecretStoreFormatError(
+                f"{_ENV_SECRET_READ_KEYS} entries must map string key IDs to non-empty strings"
+            )
+        boxes.append(SecretBox(secret, key_id=key_id))
+    return tuple(boxes)
+
+
+def _store_path(path: str | os.PathLike[str] | None) -> Path:
+    env_path = os.environ.get(_ENV_PATH)
+    if env_path is None:
+        env_path = os.environ.get(_ENV_PATH_LEGACY)
+    if path:
+        return Path(path)
+    return Path(env_path) if env_path else _default_secrets_path()
+
+
+def _configured_boxes(
+    box: SecretBox | None, read_boxes: Sequence[SecretBox] | None
+) -> tuple[SecretBox, tuple[SecretBox, ...]]:
+    if box is None:
+        active = SecretBox.from_env()
+        old = _old_read_boxes_from_env(os.environ) if read_boxes is None else tuple(read_boxes)
+    else:
+        active = box
+        old = () if read_boxes is None else tuple(read_boxes)
+    if len(old) > _MAX_OLD_READ_KEYS:
+        raise ValueError(f"at most {_MAX_OLD_READ_KEYS} old secret read keys are allowed")
+    return active, old
+
+
+def _read_keyring(active: SecretBox, old: Sequence[SecretBox]) -> dict[str, SecretBox]:
+    keyring: dict[str, SecretBox] = {}
+    for candidate in (active, *old):
+        if not candidate.available:
+            if candidate is active:
+                continue
+            raise ValueError("old secret read keys must contain key material")
+        key_id = candidate.key_id
+        if key_id is None:
+            raise ValueError("available secret boxes must have a key ID")
+        if key_id in keyring:
+            raise ValueError(f"duplicate secret key ID {key_id!r}")
+        keyring[key_id] = candidate
+    _add_compatibility_aliases(keyring, (active, *old))
+    return keyring
+
+
+def _add_compatibility_aliases(keyring: dict[str, SecretBox], boxes: Sequence[SecretBox]) -> None:
+    # Naming an existing deployment's key must not strand records written
+    # before key IDs were configurable. The deterministic ID remains a read-only
+    # alias for the same material; all new writes use the explicit active ID.
+    for candidate in boxes:
+        signing_secret = candidate.signing_secret
+        if not signing_secret:
+            continue
+        compatibility_id = _derived_key_id(signing_secret)
+        existing = keyring.get(compatibility_id)
+        if existing is not None and existing.signing_secret != signing_secret:
+            raise ValueError(f"ambiguous secret key ID {compatibility_id!r}")
+        keyring.setdefault(compatibility_id, candidate)
+
+
 class SecretStore:
-    """Persists named secrets encrypted at rest. Today: the OpenRouter API key."""
+    """Persist named secrets with one write key and a bounded rotation keyring.
+
+    Existing ``{name: ciphertext}`` files remain readable. New writes use the
+    active box and the version-2 record envelope. During a key rotation callers
+    supply at most four old read boxes, re-encrypt atomically, verify, and then
+    explicitly finalize the rollback window.
+    """
 
     def __init__(
         self,
         path: str | os.PathLike[str] | None = None,
         *,
         box: SecretBox | None = None,
+        read_boxes: Sequence[SecretBox] | None = None,
     ) -> None:
-        env_path = os.environ.get(_ENV_PATH)
-        if env_path is None:
-            env_path = os.environ.get(_ENV_PATH_LEGACY)
-        if path:
-            self._path = Path(path)
-        else:
-            self._path = Path(env_path) if env_path else _default_secrets_path()
-        self._box = box or SecretBox.from_env()
+        self._path = _store_path(path)
+        self._box, old_boxes = _configured_boxes(box, read_boxes)
+        self._read_boxes = _read_keyring(self._box, old_boxes)
+        self._rotation = _SecretRotation(self)
+
+    @property
+    def rotation(self) -> _SecretRotation:
+        """The bounded migration workflow for this store."""
+        return self._rotation
 
     @property
     def can_store(self) -> bool:
@@ -241,15 +373,15 @@ class SecretStore:
 
     @property
     def locked(self) -> bool:
-        """An encrypted secret exists but can't be decrypted (no/wrong app secret)."""
-        return bool(self._raw().get("openrouter")) and not self._box.available
+        """At least one stored or rollback record is not decryptable now."""
+        return bool(self.undecryptable_names())
 
     @property
     def signing_secret(self) -> str | None:
         return self._box.signing_secret
 
     # -- generic named secrets (any provider key, encrypted at rest) ----------
-    # The store holds {name: ciphertext}. For provider keys the `name` is the
+    # The legacy store held {name: ciphertext}. For provider keys the `name` is the
     # `api_key_env` var name (e.g. "OPENAI_API_KEY", "DISCO_SEARCH_API_KEY"), so
     # the agent-server can overlay the decrypted value into that env var at
     # build time — exactly the OpenRouter mechanism, generalized. "openrouter"
@@ -272,53 +404,229 @@ class SecretStore:
         )
 
     def has_secret(self, name: str) -> bool:
-        return bool(self._raw().get(name))
+        return bool(self._document()["records"].get(name))
 
     def get_secret(self, name: str, *, strong_required: bool = False) -> str | None:
         if strong_required:
             self._require_strong(name)
-        token = self._raw().get(name)
-        return self._box.decrypt(token) if isinstance(token, str) else None
+        document = self._document()
+        self._require_rollback_window(document)
+        record = document["records"].get(name)
+        if record is None:
+            return None
+        _, plaintext = self._decrypt_record(record, legacy_failure_is_none=True)
+        return plaintext
 
     def set_secret(self, name: str, plaintext: str, *, strong_required: bool = False) -> None:
         if strong_required:
             self._require_strong(name)
         if not self._box.available:
             raise RuntimeError(f"{_ENV_SECRET} is not set — cannot store an encrypted key")
-        data = self._raw()
-        data[name] = self._box.encrypt(plaintext)
-        self._write(data)
+        key_id = self._active_key_id()
+        document = self._document()
+        self._require_rollback_window(document)
+        records = self._versioned_records(document["records"])
+        records[name] = {"key_id": key_id, "ciphertext": self._box.encrypt(plaintext)}
+        rotation = document["rotation"]
+        if rotation is not None:
+            # Rollback changes the writer key, not application data history.
+            # Shadow every write under the recorded rollback writer so a later
+            # rollback cannot silently discard a secret added or replaced while
+            # the verification window was open.
+            if rotation["to_key_id"] != key_id:
+                raise UnknownSecretKeyError(
+                    f"pending rotation requires active key {rotation['to_key_id']!r}"
+                )
+            rotation = dict(rotation)
+            rollback_records = dict(rotation["rollback_records"])
+            rollback_key_id = rotation["from_active_key_id"]
+            rollback_box = self._read_boxes[rollback_key_id]
+            rollback_records[name] = {
+                "key_id": rollback_key_id,
+                "ciphertext": rollback_box.encrypt(plaintext),
+            }
+            rotation["rollback_records"] = rollback_records
+            rotation["from_key_ids"] = sorted(
+                {
+                    record["key_id"]
+                    for record in rollback_records.values()
+                    if record["key_id"] != rotation["to_key_id"]
+                }
+            )
+        self._write(self._v2_document(records, rotation=rotation))
 
     def clear_secret(self, name: str) -> None:
-        data = self._raw()
-        data.pop(name, None)
-        self._write(data)
+        document = self._document()
+        records = dict(document["records"])
+        records.pop(name, None)
+        if document["legacy"]:
+            self._write(records)
+            return
+        rotation = document["rotation"]
+        if rotation is not None:
+            # A clear during the rollback window must remove both copies.  Leaving
+            # the retained ciphertext behind would let rollback resurrect a key
+            # the operator deliberately deleted.
+            rotation = dict(rotation)
+            rollback_records = dict(rotation["rollback_records"])
+            rollback_records.pop(name, None)
+            rotation["rollback_records"] = rollback_records
+            rotation["from_key_ids"] = sorted(
+                {
+                    record["key_id"]
+                    for record in rollback_records.values()
+                    if record["key_id"] != rotation["to_key_id"]
+                }
+            )
+            if not rollback_records:
+                # Nothing remains to restore. Close the rollback window rather
+                # than retaining an empty state that still requires a retired key.
+                rotation = None
+        # Clearing ciphertext requires no key material.  Preserve the validated
+        # on-disk writer identity so a locked deployment can delete and re-enter
+        # a secret instead of being trapped by the unavailable active key.
+        self._write(
+            self._v2_document(
+                records,
+                rotation=rotation,
+                active_key_id=document["active_key_id"],
+            )
+        )
 
     def secret_names(self) -> list[str]:
         """The names of all stored secrets (the ones with ciphertext present)."""
-        return [k for k, v in self._raw().items() if v]
+        return [name for name, record in self._document()["records"].items() if record]
 
     def undecryptable_names(self) -> list[str]:
         """Stored names whose ciphertext can't currently be decrypted — a wrong
         or missing app secret (then ALL stored names), or an individually
         corrupted token. These are the keys the operator must restore the app
         secret for, or clear and re-enter."""
-        raw = self._raw()
-        bad = []
-        for name, token in raw.items():
-            if isinstance(token, str) and token and self._box.decrypt(token) is None:
-                bad.append(name)
-        return bad
+        document = self._document()
+        bad: set[str] = set()
+        for name, record in document["records"].items():
+            try:
+                _, plaintext = self._decrypt_record(record, legacy_failure_is_none=True)
+            except (SecretStoreFormatError, UnknownSecretKeyError, SecretDecryptionError):
+                bad.add(name)
+            else:
+                if plaintext is None:
+                    bad.add(name)
+        rotation = document["rotation"]
+        if rotation is not None:
+            for name, record in rotation["rollback_records"].items():
+                try:
+                    self._decrypt_record(record, legacy_failure_is_none=False)
+                except (SecretStoreFormatError, UnknownSecretKeyError, SecretDecryptionError):
+                    bad.add(name)
+            if rotation["from_active_key_id"] not in self._read_boxes:
+                bad.update(rotation["rollback_records"])
+        return sorted(bad)
 
     # -- internals ------------------------------------------------------------
 
-    def _raw(self) -> dict:
-        try:
-            return json.loads(self._path.read_text())
-        except (FileNotFoundError, ValueError, OSError):
-            return {}
+    def _active_key_id(self) -> str:
+        key_id = self._box.key_id
+        if key_id is None:
+            raise RuntimeError(f"{_ENV_SECRET} is not set — no active secret key ID")
+        return key_id
 
-    def _write(self, data: dict) -> None:
+    def _document(self) -> dict[str, Any]:
+        return _read_secret_document(self._path)
+
+    def _versioned_records(self, records: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+        versioned: dict[str, dict[str, str]] = {}
+        for name, record in records.items():
+            if record is None or record == "":
+                continue
+            if isinstance(record, dict):
+                # Ordinary writes may not silently carry an unreadable explicit
+                # key forward into a mixed-key document.  The operator can still
+                # clear that ciphertext without material, then re-enter it.
+                self._decrypt_record(record, legacy_failure_is_none=False)
+                versioned[name] = dict(record)
+                continue
+            key_id, plaintext = self._decrypt_record(record, legacy_failure_is_none=False)
+            if plaintext is None:
+                raise SecretDecryptionError(f"legacy secret record {name!r} is not decryptable")
+            versioned[name] = {"key_id": key_id, "ciphertext": record}
+        return versioned
+
+    def _decrypt_record(
+        self, record: Any, *, legacy_failure_is_none: bool
+    ) -> tuple[str, str | None]:
+        if isinstance(record, str):
+            for key_id, box in self._read_boxes.items():
+                plaintext = box.decrypt(record)
+                if plaintext is not None:
+                    return key_id, plaintext
+            if legacy_failure_is_none:
+                return "legacy-unknown", None
+            raise SecretDecryptionError("legacy secret ciphertext is not decryptable")
+        if not isinstance(record, dict):
+            raise SecretStoreFormatError("encrypted secret record has an invalid shape")
+        key_id = record.get("key_id")
+        ciphertext = record.get("ciphertext")
+        if not isinstance(key_id, str) or not isinstance(ciphertext, str):
+            raise SecretStoreFormatError("encrypted secret record has invalid key metadata")
+        box = self._read_boxes.get(key_id)
+        if box is None:
+            # Preserve the pre-rotation status/read contract for deployments that
+            # never named their single app key: callers see ``locked`` + ``None``.
+            # Explicit versioned IDs, and every rotation operation (strict mode),
+            # fail loudly instead of silently accepting a missing key.
+            if legacy_failure_is_none and _is_derived_key_id(key_id):
+                return key_id, None
+            raise UnknownSecretKeyError(f"secret record requires unknown key ID {key_id!r}")
+        plaintext = box.decrypt(ciphertext)
+        if plaintext is None:
+            raise SecretDecryptionError(
+                f"secret ciphertext failed authentication for key ID {key_id!r}"
+            )
+        return key_id, plaintext
+
+    def _require_rollback_window(self, document: Mapping[str, Any]) -> None:
+        rotation = document["rotation"]
+        if rotation is None:
+            return
+        from_active_key_id = rotation["from_active_key_id"]
+        if from_active_key_id not in self._read_boxes:
+            raise UnknownSecretKeyError(
+                f"pending rotation requires rollback active key {from_active_key_id!r}"
+            )
+        for record in rotation["rollback_records"].values():
+            self._decrypt_record(record, legacy_failure_is_none=False)
+
+    def _verify_primary_active(self, document: Mapping[str, Any], active_key_id: str) -> None:
+        active_box = self._read_boxes.get(active_key_id)
+        if active_box is None:
+            raise UnknownSecretKeyError(f"active secret key {active_key_id!r} is unavailable")
+        for name, record in document["records"].items():
+            if not isinstance(record, dict) or record.get("key_id") != active_key_id:
+                raise SecretStoreFormatError(
+                    f"secret record {name!r} was not migrated to the active key"
+                )
+            ciphertext = record.get("ciphertext")
+            if not isinstance(ciphertext, str) or active_box.decrypt(ciphertext) is None:
+                raise SecretDecryptionError(
+                    f"secret record {name!r} failed post-migration verification"
+                )
+
+    def _v2_document(
+        self,
+        records: Mapping[str, Any],
+        *,
+        rotation: Mapping[str, Any] | None,
+        active_key_id: str | None = None,
+    ) -> dict[str, Any]:
+        writer_key_id = self._active_key_id() if active_key_id is None else active_key_id
+        return _build_v2_document(
+            records,
+            rotation=rotation,
+            active_key_id=writer_key_id,
+        )
+
+    def _write(self, data: Mapping[str, Any]) -> None:
         # The secrets file holds credential ciphertext — lock it to the owner
         # (0600), and the parent dir to 0700, so another local user can't even
         # copy the ciphertext. Defense-in-depth: decrypting still needs the app
@@ -329,10 +637,21 @@ class SecretStore:
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         # Create the temp file 0600 from the start (don't briefly expose 0644):
         # open with O_CREAT|O_WRONLY|O_TRUNC at mode 0o600, then write.
+        payload = (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
         fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, json.dumps(data, indent=2).encode())
-        finally:
-            os.close(fd)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(tmp, 0o600)  # explicit: umask can mask bits off the O_CREAT mode
-        tmp.replace(self._path)  # atomic on POSIX; the 0600 mode rides along
+        self._replace(tmp)  # atomic on POSIX; the 0600 mode rides along
+        with contextlib.suppress(OSError):
+            parent_fd = os.open(self._path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+
+    def _replace(self, tmp: Path) -> None:
+        """Single injection seam for crash-before-commit rotation tests."""
+        tmp.replace(self._path)

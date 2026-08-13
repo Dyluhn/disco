@@ -78,3 +78,20 @@ def test_openrouter_key_status_locked_when_ciphertext_undecryptable(tmp_path):
     status = b.openrouter.openrouter_key_status()
     assert status.configured  # ciphertext IS present
     assert status.locked  # ...but undecryptable -> UI prompts re-entry
+
+
+def test_openrouter_key_status_is_locked_for_missing_named_rotation_key(tmp_path):
+    path = tmp_path / "secrets.json"
+    SecretStore(path, box=SecretBox("original-secret", key_id="original-key")).set_secret(
+        "openrouter", "sk-or-unit-test-key"
+    )
+    state = ConfigState(
+        store=ConfigStore(tmp_path / "config.json"),
+        secrets=SecretStore(path, box=SecretBox("replacement-secret", key_id="replacement-key")),
+        skills=SkillStore(tmp_path / "skills"),
+    )
+
+    status = state.openrouter.openrouter_key_status()
+
+    assert status.configured
+    assert status.locked
