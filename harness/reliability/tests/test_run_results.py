@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import sys
@@ -28,7 +29,7 @@ from harness.reliability.run import (
     _stream_sanitized_suite_log,
     _suite_subprocess_environment,
 )
-from harness.reliability.state import FAIL, INVALID, PASS
+from harness.reliability.state import FAIL, INFRA, INVALID, PASS
 
 
 class _ImmediatePool:
@@ -1095,34 +1096,159 @@ def test_structured_all_pass_counts_declared_units(tmp_path: Path) -> None:
     assert _pytest_result(path, exit_code=0, units=7)[:2] == (PASS, 7)
 
 
+def _valid_fresh_device_report() -> dict:
+    fingerprint = "0123456789abcdef01234567"
+    project_digests = {"project-a": "a" * 64, "project-b": "b" * 64}
+    return {
+        "status": PASS,
+        "device_fingerprint": fingerprint,
+        "device_label": "operator-label",
+        "checks": [
+            {
+                "id": "pristine-device",
+                "status": PASS,
+                "detail": "pristine",
+                "evidence": {
+                    "device_label": "operator-label",
+                    "fingerprint": fingerprint,
+                    "engine": "podman",
+                    "containers": 0,
+                    "images": 0,
+                    "volumes": 0,
+                    "checked_ports": [8088, 8800, 8000],
+                    "cpu_count": 8,
+                    "memory_available_bytes": 8_000_000_000,
+                    "disk_free_bytes": 20_000_000_000,
+                },
+            },
+            {
+                "id": "clean-clone",
+                "status": PASS,
+                "detail": "cloned",
+                "evidence": {"base_commit": "base", "upgrade_commit": "upgrade"},
+            },
+            {
+                "id": "install-and-boot",
+                "status": PASS,
+                "detail": "installed",
+                "evidence": {"ui": "http://127.0.0.1:8088", "image_ids": ["sha256:base"]},
+            },
+            {
+                "id": "first-pair-and-config",
+                "status": PASS,
+                "detail": "paired",
+                "evidence": {},
+            },
+            {
+                "id": "model-and-internet",
+                "status": PASS,
+                "detail": "verified",
+                "evidence": {},
+            },
+            {
+                "id": "build-search-export",
+                "status": PASS,
+                "detail": "exported",
+                "evidence": {"project_count": 2, "project_digests": dict(project_digests)},
+            },
+            {
+                "id": "cold-restart",
+                "status": PASS,
+                "detail": "restarted",
+                "evidence": {
+                    "readiness_seconds": 30.0,
+                    "data_digest": "c" * 64,
+                    "project_digests": dict(project_digests),
+                },
+            },
+            {
+                "id": "upgrade-in-place",
+                "status": PASS,
+                "detail": "upgraded",
+                "evidence": {
+                    "readiness_seconds": 120.0,
+                    "stable_data_digest": "d" * 64,
+                    "project_digests": dict(project_digests),
+                    "base_commit": "base",
+                    "upgrade_commit": "upgrade",
+                    "image_ids": ["sha256:base", "sha256:upgrade"],
+                },
+            },
+            {
+                "id": "backup-restore",
+                "status": PASS,
+                "detail": "restored",
+                "evidence": {
+                    "readiness_seconds": 180.0,
+                    "backup_digest": "e" * 64,
+                    "project_digests": dict(project_digests),
+                    "project_count": 2,
+                },
+            },
+            {
+                "id": "uninstall",
+                "status": PASS,
+                "detail": "removed",
+                "evidence": {},
+            },
+        ],
+    }
+
+
 def test_fresh_device_pass_requires_hardware_fingerprint(tmp_path: Path) -> None:
     path = tmp_path / "fresh-device-result.json"
-    path.write_text(
-        json.dumps(
-            {
-                "status": PASS,
-                "device_label": "operator-can-change-this",
-                "checks": [{"id": "install", "status": PASS}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    report = _valid_fresh_device_report()
+    report.pop("device_fingerprint")
+    path.write_text(json.dumps(report), encoding="utf-8")
     assert _fresh_device_result(path, exit_code=0, units=1)[:2] == (INVALID, 0)
+    assert _fresh_device_fingerprint(path) is None
+
+    path.write_text("[]", encoding="utf-8")
+    assert _fresh_device_result(path, exit_code=0, units=1)[:2] == (INFRA, 0)
     assert _fresh_device_fingerprint(path) is None
 
 
 def test_fresh_device_uses_harness_fingerprint_not_label(tmp_path: Path) -> None:
     path = tmp_path / "fresh-device-result.json"
-    path.write_text(
-        json.dumps(
-            {
-                "status": PASS,
-                "device_fingerprint": "0123456789abcdef01234567",
-                "device_label": "same-machine-renamed",
-                "checks": [{"id": "install", "status": PASS}],
-            }
-        ),
-        encoding="utf-8",
-    )
+    report = _valid_fresh_device_report()
+    report["device_label"] = "same-machine-renamed"
+    path.write_text(json.dumps(report), encoding="utf-8")
     assert _fresh_device_result(path, exit_code=0, units=1)[:2] == (PASS, 1)
     assert _fresh_device_fingerprint(path) == "0123456789abcdef01234567"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing-phase",
+        "wrong-order",
+        "malformed-check",
+        "extra-evidence",
+        "bad-digest",
+        "changed-project",
+        "excessive-readiness",
+    ],
+)
+def test_fresh_device_refuses_incomplete_or_malformed_phase_evidence(
+    mutation: str, tmp_path: Path
+) -> None:
+    report = copy.deepcopy(_valid_fresh_device_report())
+    checks = report["checks"]
+    if mutation == "missing-phase":
+        checks.pop()
+    elif mutation == "wrong-order":
+        checks[0], checks[1] = checks[1], checks[0]
+    elif mutation == "malformed-check":
+        checks[0] = "not-an-object"
+    elif mutation == "extra-evidence":
+        checks[3]["evidence"]["invented"] = True
+    elif mutation == "bad-digest":
+        checks[6]["evidence"]["data_digest"] = "not-a-digest"
+    elif mutation == "changed-project":
+        checks[8]["evidence"]["project_digests"]["project-b"] = "f" * 64
+    else:
+        checks[7]["evidence"]["readiness_seconds"] = 901
+    path = tmp_path / f"fresh-device-{mutation}.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert _fresh_device_result(path, exit_code=0, units=1)[:2] == (INVALID, 0)

@@ -41,6 +41,19 @@ def test_key_is_stable_and_excludes_request_id():
     assert cassette_key("llm.complete", _req_payload(req("a"))) == cassette_key(
         "llm.complete", _req_payload(req("b"))
     )
+    base = req("a")
+    base_key = cassette_key("llm.complete", _req_payload(base))
+    semantic_variants = (
+        base.model_copy(update={"max_tokens": 24}),
+        base.model_copy(update={"assistant_prefill": "continue"}),
+        base.model_copy(update={"response_format": "json"}),
+        base.model_copy(update={"assist": True}),
+        base.model_copy(update={"enable_thinking": False}),
+        base.model_copy(update={"attempt": 2}),
+        base.model_copy(update={"provider_prefs": {"sort": "throughput"}}),
+        base.model_copy(update={"stream": True}),
+    )
+    assert all(cassette_key("llm.complete", _req_payload(v)) != base_key for v in semantic_variants)
 
 
 def test_record_lookup_and_miss():

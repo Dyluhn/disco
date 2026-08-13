@@ -9,7 +9,6 @@ from __future__ import annotations
 from disco.core.llm import SecretStore
 from disco.core.llm.secret_refs import (
     clear_openrouter_key,
-    get_openrouter_key,
     has_openrouter_key,
     set_openrouter_key,
 )
@@ -31,7 +30,7 @@ class ConfigOpenRouterKey:
         # Compute the DISPLAY status here from a real decrypt attempt so the UI shows
         # "re-enter the key" instead of a false green over an unusable key.
         present = has_openrouter_key(self._secrets)
-        usable = present and bool(get_openrouter_key(self._secrets))
+        usable = present and "openrouter" not in self._secrets.undecryptable_names()
         return OpenRouterKeyStatus(
             configured=present,
             locked=present and not usable,

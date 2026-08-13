@@ -78,14 +78,42 @@ def _llm_input(arguments: dict[str, Any]) -> dict[str, Any]:
             norm_msgs.append(
                 {
                     "role": str(m.get("role", "")),
-                    "content": str(m.get("content", "")),
+                    "content": m.get("content", ""),
+                    "tool_calls": m.get("tool_calls"),
+                    "tool_call_id": m.get("tool_call_id"),
+                    "images": m.get("images"),
                 }
             )
+    raw_profile = arguments.get("profile")
+    if isinstance(raw_profile, dict):
+        raw_role = str(raw_profile.get("role", ""))
+        difficulty = str(raw_profile.get("difficulty", "routine"))
+        requirements = sorted(_as_list(raw_profile.get("requirements")))
+        mode = raw_profile.get("mode")
+    else:
+        raw_role = str(arguments.get("role", ""))
+        difficulty = str(arguments.get("difficulty", "routine"))
+        requirements = sorted(_as_list(arguments.get("requirements")))
+        mode = arguments.get("mode")
+    role = raw_role.rsplit(".", 1)[-1].lower()
     return {
-        "role": str(arguments.get("role", "")),
+        "profile": {
+            "role": role,
+            "difficulty": difficulty.rsplit(".", 1)[-1].lower(),
+            "requirements": requirements,
+            "mode": mode,
+        },
         "messages": norm_msgs,
-        "tools": sorted(_as_list(arguments.get("tools"))),
+        "tools": _as_list(arguments.get("tools")),
+        "assistant_prefill": arguments.get("assistant_prefill"),
         "temperature": arguments.get("temperature", 0.0),
+        "max_tokens": arguments.get("max_tokens"),
+        "response_format": arguments.get("response_format", "text"),
+        "assist": bool(arguments.get("assist", False)),
+        "enable_thinking": arguments.get("enable_thinking"),
+        "attempt": int(arguments.get("attempt", 1) or 1),
+        "provider_prefs": arguments.get("provider_prefs"),
+        "stream": bool(arguments.get("stream", False)),
     }
 
 

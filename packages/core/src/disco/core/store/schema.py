@@ -10,7 +10,10 @@ proof (DM-014).
 Contract:
 
 * Missing schema metadata means legacy version 0. ``apply_schema`` applies
-  0->1 in an explicit SQLite transaction and writes the version row last.
+  0->2 in an explicit SQLite transaction and writes the version row last.
+* Version 2 adds connection-bound writer guards. A version-1/legacy reader can
+  still read additive tables, but a writer that has not registered the current
+  schema version is rejected by SQLite before changing a protected table.
 * Missing columns are determined with ``PRAGMA table_info``; no catch-all
   ``except sqlite3.OperationalError: pass`` remains.
 * On any exception during migration the complete transaction rolls back so a
@@ -27,7 +30,9 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
-DATABASE_SCHEMA_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
+_PREVIOUS_DATABASE_SCHEMA_VERSION = 1
+_WRITER_VERSION_FUNCTION = "disco_schema_writer_version"
 
 _SCHEMA_VERSION_TABLE_SQL = (
     "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value INTEGER NOT NULL)"
@@ -228,6 +233,11 @@ _NAMED_DDL = (
     ("mcp_config_approvals", _MCP_CONFIG_APPROVALS_DDL),
     ("dod_specs", _DOD_SPECS_DDL),
 )
+_WRITER_GUARD_TABLES = (
+    "schema_meta",
+    *(name for name, _ddl in _NAMED_DDL if not name.startswith("idx_")),
+)
+_WRITER_GUARD_OPERATIONS = ("INSERT", "UPDATE", "DELETE")
 
 # The three MCP CREATE statements, exposed for the Tools compatibility
 # delegate so bare connections and store-created schemas are identical.
@@ -387,6 +397,11 @@ MIGRATION_STEP_NAMES = (
     "repair:preview_leases",
     "repair:share_titles",
     "repair:share_surfaces",
+    *(
+        f"guard:{table}:{operation.lower()}"
+        for table in _WRITER_GUARD_TABLES
+        for operation in _WRITER_GUARD_OPERATIONS
+    ),
     "before:version",
     f"version:{DATABASE_SCHEMA_VERSION}",
 )
@@ -439,6 +454,80 @@ def _create_all_tables(conn: sqlite3.Connection, after_step: MigrationStepHook |
         _emit_step(after_step, f"ddl:{name}")
 
 
+def _register_writer_version(conn: sqlite3.Connection) -> None:
+    """Identify this connection to the persistent downgrade-write guards."""
+    conn.create_function(
+        _WRITER_VERSION_FUNCTION,
+        0,
+        lambda: DATABASE_SCHEMA_VERSION,
+        deterministic=True,
+    )
+
+
+def _writer_guard_sql(table: str, operation: str) -> str:
+    trigger = f"schema_writer_guard_{table}_{operation.lower()}"
+    return f"""
+CREATE TRIGGER IF NOT EXISTS {trigger}
+BEFORE {operation} ON {table}
+WHEN {_WRITER_VERSION_FUNCTION}() IS NOT {DATABASE_SCHEMA_VERSION}
+BEGIN
+    SELECT RAISE(ABORT, 'unsupported database schema writer');
+END;
+"""
+
+
+def _normalized_sql(sql: str) -> str:
+    normalized = " ".join(sql.rstrip().removesuffix(";").split()).casefold()
+    # sqlite_master preserves the trigger body but drops the idempotent creation
+    # modifier. It is execution policy, not part of the stored trigger semantics.
+    return normalized.replace("create trigger if not exists ", "create trigger ", 1)
+
+
+def _create_writer_guards(
+    conn: sqlite3.Connection,
+    after_step: MigrationStepHook | None,
+    *,
+    tables: tuple[str, ...] = _WRITER_GUARD_TABLES,
+) -> None:
+    for table in tables:
+        for operation in _WRITER_GUARD_OPERATIONS:
+            conn.execute(_writer_guard_sql(table, operation))
+            _emit_step(after_step, f"guard:{table}:{operation.lower()}")
+    _validate_writer_guards(conn, tables=tables)
+
+
+def _validate_writer_guards(
+    conn: sqlite3.Connection,
+    *,
+    tables: tuple[str, ...] = _WRITER_GUARD_TABLES,
+) -> None:
+    triggers = {
+        str(row[0]): str(row[1] or "")
+        for row in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
+        ).fetchall()
+    }
+    expected_triggers = {
+        f"schema_writer_guard_{table}_{operation.lower()}": _writer_guard_sql(table, operation)
+        for table in tables
+        for operation in _WRITER_GUARD_OPERATIONS
+    }
+    missing_triggers = sorted(set(expected_triggers) - set(triggers))
+    if missing_triggers:
+        raise DatabaseSchemaError(
+            "database is missing required writer guards: " + ", ".join(missing_triggers)
+        )
+    malformed_triggers = sorted(
+        name
+        for name, expected_sql in expected_triggers.items()
+        if _normalized_sql(triggers[name]) != _normalized_sql(expected_sql)
+    )
+    if malformed_triggers:
+        raise DatabaseSchemaError(
+            "database has malformed writer guards: " + ", ".join(malformed_triggers)
+        )
+
+
 def _write_version_row(conn: sqlite3.Connection, version: int) -> None:
     """Write the schema version row last (after all DDL and data repairs)."""
     conn.execute(
@@ -448,78 +537,7 @@ def _write_version_row(conn: sqlite3.Connection, version: int) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
-def apply_schema(
-    conn: sqlite3.Connection,
-    *,
-    after_step: MigrationStepHook | None = None,
-) -> int:
-    """Apply the schema to ``conn`` and return the active schema version.
-
-    Missing schema metadata means legacy version 0. The 0->1 migration runs
-    in an explicit SQLite transaction and writes the version row last. On
-    any exception the complete migration rolls back so a reopen retries from
-    version 0.
-
-    ``after_step`` is a deterministic crash-test seam. It receives every name
-    in ``MIGRATION_STEP_NAMES`` after that edge executes. Raising from any edge
-    rolls the complete migration back.
-    """
-    version = _read_version(conn)
-    if version not in {0, DATABASE_SCHEMA_VERSION}:
-        raise DatabaseSchemaError(
-            f"database schema version {version} is unsupported; "
-            f"this binary requires {DATABASE_SCHEMA_VERSION}"
-        )
-    if version == DATABASE_SCHEMA_VERSION:
-        # Already at the current version; validate without writes.
-        validate_schema(conn)
-        return version
-
-    # version == 0 (legacy) — apply 0 -> 1 in one explicit transaction.
-    # We use explicit BEGIN/COMMIT/ROLLBACK (not the `with conn:` context
-    # manager) because Python's sqlite3 context manager does not reliably
-    # roll back DDL statements in all journal modes. Explicit transaction
-    # control ensures the complete migration (DDL + data + version row) is
-    # atomic: on any exception the entire migration rolls back so a reopen
-    # retries from version 0.
-    if conn.in_transaction:
-        raise DatabaseSchemaError("schema migration requires an idle connection")
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        _create_all_tables(conn, after_step)
-        _apply_legacy_column_migrations(conn, after_step)
-        _apply_data_repairs(conn, after_step)
-        _emit_step(after_step, "before:version")
-        _write_version_row(conn, DATABASE_SCHEMA_VERSION)
-        _emit_step(after_step, f"version:{DATABASE_SCHEMA_VERSION}")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    return DATABASE_SCHEMA_VERSION
-
-
-def validate_schema(conn: sqlite3.Connection) -> None:
-    """Validate required tables/columns on a version-1 database without writes.
-
-    Malformed metadata or a version greater than 1 raises ``DatabaseSchemaError``
-    before any schema/data writes.
-    """
-    version = _read_version(conn)
-    if version == 0:
-        # No schema_meta table at all — this is a legacy/fresh DB that has
-        # not been migrated. The caller should run apply_schema.
-        raise DatabaseSchemaError("database has no schema metadata; apply_schema must run first")
-    if version != DATABASE_SCHEMA_VERSION:
-        raise DatabaseSchemaError(
-            f"database schema version {version} is unsupported; "
-            f"this binary requires {DATABASE_SCHEMA_VERSION}"
-        )
+def _validate_schema_shape(conn: sqlite3.Connection, *, require_guards: bool) -> None:
     for table, required_columns in _REQUIRED_TABLES.items():
         if not _table_exists(conn, table):
             raise DatabaseSchemaError(f"required table '{table}' is missing")
@@ -547,6 +565,90 @@ def validate_schema(conn: sqlite3.Connection) -> None:
                 f"index '{index}' shape is incompatible "
                 f"(expected={expected_shape}, actual={actual_shape})"
             )
+    if require_guards:
+        _validate_writer_guards(conn)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def apply_schema(
+    conn: sqlite3.Connection,
+    *,
+    after_step: MigrationStepHook | None = None,
+) -> int:
+    """Apply the schema to ``conn`` and return the active schema version.
+
+    Missing schema metadata means legacy version 0. The 0->2 migration runs
+    in an explicit SQLite transaction and writes the version row last. On
+    any exception the complete migration rolls back so a reopen retries from
+    version 0.
+
+    ``after_step`` is a deterministic crash-test seam. It receives every name
+    in ``MIGRATION_STEP_NAMES`` after that edge executes. Raising from any edge
+    rolls the complete migration back.
+    """
+    _register_writer_version(conn)
+    version = _read_version(conn)
+    if version not in {0, _PREVIOUS_DATABASE_SCHEMA_VERSION, DATABASE_SCHEMA_VERSION}:
+        raise DatabaseSchemaError(
+            f"database schema version {version} is unsupported; "
+            f"this binary requires {DATABASE_SCHEMA_VERSION}"
+        )
+    if version == DATABASE_SCHEMA_VERSION:
+        # Already at the current version; validate without writes.
+        validate_schema(conn)
+        return version
+
+    # Version 0 builds the current shape; version 1 adds only the persistent
+    # connection-version guards. Both transitions are one SQLite transaction.
+    # We use explicit BEGIN/COMMIT/ROLLBACK (not the `with conn:` context
+    # manager) because Python's sqlite3 context manager does not reliably
+    # roll back DDL statements in all journal modes. Explicit transaction
+    # control ensures the complete migration (DDL + data + version row) is
+    # atomic: on any exception the entire migration rolls back so a reopen
+    # retries from version 0.
+    if conn.in_transaction:
+        raise DatabaseSchemaError("schema migration requires an idle connection")
+    if version == _PREVIOUS_DATABASE_SCHEMA_VERSION:
+        _validate_schema_shape(conn, require_guards=False)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if version == 0:
+            _create_all_tables(conn, after_step)
+            _apply_legacy_column_migrations(conn, after_step)
+            _apply_data_repairs(conn, after_step)
+        _create_writer_guards(conn, after_step)
+        _emit_step(after_step, "before:version")
+        _write_version_row(conn, DATABASE_SCHEMA_VERSION)
+        _emit_step(after_step, f"version:{DATABASE_SCHEMA_VERSION}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return DATABASE_SCHEMA_VERSION
+
+
+def validate_schema(conn: sqlite3.Connection) -> None:
+    """Validate required tables/columns/guards on a current database without writes.
+
+    Malformed metadata or a non-current version raises ``DatabaseSchemaError``
+    before any schema/data writes.
+    """
+    _register_writer_version(conn)
+    version = _read_version(conn)
+    if version == 0:
+        # No schema_meta table at all — this is a legacy/fresh DB that has
+        # not been migrated. The caller should run apply_schema.
+        raise DatabaseSchemaError("database has no schema metadata; apply_schema must run first")
+    if version != DATABASE_SCHEMA_VERSION:
+        raise DatabaseSchemaError(
+            f"database schema version {version} is unsupported; "
+            f"this binary requires {DATABASE_SCHEMA_VERSION}"
+        )
+    _validate_schema_shape(conn, require_guards=True)
 
 
 def ensure_mcp_approval_tables(conn: Any) -> None:
@@ -556,8 +658,22 @@ def ensure_mcp_approval_tables(conn: Any) -> None:
     Tools compatibility delegate calls this; bare connections and
     store-created schemas produce identical PRAGMA shapes.
     """
-    for ddl in _MCP_DDL:
-        conn.execute(ddl)
+    _register_writer_version(conn)
+    savepoint = "disco_mcp_schema"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    try:
+        for ddl in _MCP_DDL:
+            conn.execute(ddl)
+        _create_writer_guards(
+            conn,
+            None,
+            tables=("mcp_approvals", "mcp_approval_pending", "mcp_config_approvals"),
+        )
+    except Exception:
+        conn.execute(f"ROLLBACK TO {savepoint}")
+        conn.execute(f"RELEASE {savepoint}")
+        raise
+    conn.execute(f"RELEASE {savepoint}")
     conn.commit()
 
 

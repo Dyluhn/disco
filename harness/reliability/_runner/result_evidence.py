@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -287,6 +288,271 @@ def _build_soak_pass_identities(
     return trial_ids, frozenset(conversation_ids), ""
 
 
+_FRESH_DEVICE_PHASES = (
+    "pristine-device",
+    "clean-clone",
+    "install-and-boot",
+    "first-pair-and-config",
+    "model-and-internet",
+    "build-search-export",
+    "cold-restart",
+    "upgrade-in-place",
+    "backup-restore",
+    "uninstall",
+)
+
+_FRESH_DEVICE_EVIDENCE_KEYS = {
+    "pristine-device": {
+        "device_label",
+        "fingerprint",
+        "engine",
+        "containers",
+        "images",
+        "volumes",
+        "checked_ports",
+        "cpu_count",
+        "memory_available_bytes",
+        "disk_free_bytes",
+    },
+    "clean-clone": {"base_commit", "upgrade_commit"},
+    "install-and-boot": {"ui", "image_ids"},
+    "first-pair-and-config": set(),
+    "model-and-internet": set(),
+    "build-search-export": {"project_count", "project_digests"},
+    "cold-restart": {"readiness_seconds", "data_digest", "project_digests"},
+    "upgrade-in-place": {
+        "readiness_seconds",
+        "stable_data_digest",
+        "project_digests",
+        "base_commit",
+        "upgrade_commit",
+        "image_ids",
+    },
+    "backup-restore": {
+        "readiness_seconds",
+        "backup_digest",
+        "project_digests",
+        "project_count",
+    },
+    "uninstall": set(),
+}
+
+
+def _fresh_nonnegative_int(value: Any, *, minimum: int = 0) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+def _fresh_duration(value: Any, *, maximum: float) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and 0 <= value <= maximum
+    )
+
+
+def _fresh_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _fresh_string_list(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(
+            isinstance(item, str) and bool(item) and item == item.strip() for item in value
+        )
+        and value == sorted(set(value))
+    )
+
+
+def _fresh_project_digests(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and bool(value)
+        and all(
+            isinstance(project_id, str)
+            and bool(project_id)
+            and project_id == project_id.strip()
+            and _fresh_sha256(digest)
+            for project_id, digest in value.items()
+        )
+        and list(value) == sorted(value)
+    )
+
+
+def _fresh_check_map(checks: Any) -> tuple[dict[str, dict[str, Any]] | None, str]:
+    if not isinstance(checks, list) or len(checks) != len(_FRESH_DEVICE_PHASES):
+        return None, "fresh-device evidence does not contain the exact ten checks"
+    if any(not isinstance(check, dict) for check in checks):
+        return None, "fresh-device evidence contains a malformed check"
+    if tuple(check.get("id") for check in checks) != _FRESH_DEVICE_PHASES:
+        return None, "fresh-device checks are missing, duplicated, or out of order"
+
+    evidence_by_phase: dict[str, dict[str, Any]] = {}
+    for phase, check in zip(_FRESH_DEVICE_PHASES, checks, strict=True):
+        if set(check) != {"id", "status", "detail", "evidence"}:
+            return None, f"fresh-device {phase} check has an invalid shape"
+        detail = check.get("detail")
+        evidence = check.get("evidence")
+        if check.get("status") != PASS or not isinstance(detail, str) or not detail.strip():
+            return None, f"fresh-device {phase} check has invalid evidence"
+        if not isinstance(evidence, dict) or set(evidence) != _FRESH_DEVICE_EVIDENCE_KEYS[phase]:
+            return None, f"fresh-device {phase} check has invalid evidence"
+        evidence_by_phase[phase] = evidence
+    return evidence_by_phase, ""
+
+
+def _fresh_nonempty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_pristine(evidence: dict[str, Any], fingerprint: str) -> bool:
+    ports = evidence["checked_ports"]
+    if not isinstance(ports, list) or len(ports) != 3:
+        return False
+    host_counts = all(
+        _fresh_nonnegative_int(evidence[field]) for field in ("containers", "images", "volumes")
+    )
+    resources = all(
+        _fresh_nonnegative_int(evidence[field], minimum=1)
+        for field in ("cpu_count", "memory_available_bytes", "disk_free_bytes")
+    )
+    valid_ports = all(_fresh_nonnegative_int(port, minimum=1) and port <= 65_535 for port in ports)
+    if not valid_ports:
+        return False
+    return all(
+        (
+            evidence["fingerprint"] == fingerprint,
+            _fresh_nonempty_string(evidence["device_label"]),
+            _fresh_nonempty_string(evidence["engine"]),
+            host_counts,
+            resources,
+            valid_ports,
+            len(set(ports)) == 3,
+        )
+    )
+
+
+def _valid_clone(evidence: dict[str, Any]) -> bool:
+    base_commit = evidence["base_commit"]
+    upgrade_commit = evidence["upgrade_commit"]
+    return all(
+        (
+            _fresh_nonempty_string(base_commit),
+            _fresh_nonempty_string(upgrade_commit),
+            base_commit != upgrade_commit,
+        )
+    )
+
+
+def _valid_install(evidence: dict[str, Any]) -> bool:
+    ui = evidence["ui"]
+    return (
+        isinstance(ui, str)
+        and ui.startswith(("http://", "https://"))
+        and _fresh_string_list(evidence["image_ids"])
+    )
+
+
+def _valid_build(evidence: dict[str, Any]) -> bool:
+    projects = evidence["project_digests"]
+    if not _fresh_project_digests(projects):
+        return False
+    count = evidence["project_count"]
+    return _fresh_nonnegative_int(count, minimum=1) and count == len(projects)
+
+
+def _valid_restart(evidence: dict[str, Any], projects: Any) -> bool:
+    return all(
+        (
+            _fresh_duration(evidence["readiness_seconds"], maximum=900),
+            _fresh_sha256(evidence["data_digest"]),
+            evidence["project_digests"] == projects,
+        )
+    )
+
+
+def _valid_upgrade(
+    evidence: dict[str, Any],
+    *,
+    projects: Any,
+    base_commit: Any,
+    upgrade_commit: Any,
+    install_images: Any,
+) -> bool:
+    image_ids = evidence["image_ids"]
+    if not _fresh_string_list(image_ids) or not isinstance(install_images, list):
+        return False
+    return all(
+        (
+            _fresh_duration(evidence["readiness_seconds"], maximum=900),
+            _fresh_sha256(evidence["stable_data_digest"]),
+            evidence["project_digests"] == projects,
+            evidence["base_commit"] == base_commit,
+            evidence["upgrade_commit"] == upgrade_commit,
+            set(install_images).issubset(image_ids),
+        )
+    )
+
+
+def _valid_restore(evidence: dict[str, Any], projects: Any) -> bool:
+    if not isinstance(projects, dict):
+        return False
+    count = evidence["project_count"]
+    return all(
+        (
+            _fresh_duration(evidence["readiness_seconds"], maximum=3_600),
+            _fresh_sha256(evidence["backup_digest"]),
+            evidence["project_digests"] == projects,
+            _fresh_nonnegative_int(count, minimum=1),
+            count == len(projects),
+        )
+    )
+
+
+def _fresh_device_checks_reason(checks: Any, fingerprint: str) -> str:
+    evidence_by_phase, reason = _fresh_check_map(checks)
+    if evidence_by_phase is None:
+        return reason
+
+    pristine = evidence_by_phase["pristine-device"]
+    if not _valid_pristine(pristine, fingerprint):
+        return "fresh-device pristine host evidence is invalid"
+
+    clone = evidence_by_phase["clean-clone"]
+    if not _valid_clone(clone):
+        return "fresh-device clone identities are invalid"
+
+    install = evidence_by_phase["install-and-boot"]
+    if not _valid_install(install):
+        return "fresh-device install evidence is invalid"
+
+    build = evidence_by_phase["build-search-export"]
+    baseline_projects = build["project_digests"]
+    if not _valid_build(build):
+        return "fresh-device build/export evidence is invalid"
+
+    restart = evidence_by_phase["cold-restart"]
+    if not _valid_restart(restart, baseline_projects):
+        return "fresh-device restart evidence is invalid"
+
+    upgrade = evidence_by_phase["upgrade-in-place"]
+    if not _valid_upgrade(
+        upgrade,
+        projects=baseline_projects,
+        base_commit=clone["base_commit"],
+        upgrade_commit=clone["upgrade_commit"],
+        install_images=install["image_ids"],
+    ):
+        return "fresh-device upgrade evidence is invalid"
+
+    restore = evidence_by_phase["backup-restore"]
+    if not _valid_restore(restore, baseline_projects):
+        return "fresh-device restore evidence is invalid"
+    return ""
+
+
 def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str, int, str]:
     if not path.is_file():
         return INFRA, 0, "fresh-device harness produced no result evidence"
@@ -294,6 +560,8 @@ def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str
         report = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         return INFRA, 0, f"fresh-device result is unreadable: {exc}"
+    if not isinstance(report, dict):
+        return INFRA, 0, "fresh-device result is not an object"
     status = report.get("status")
     if status == FAIL:
         return FAIL, 0, str(report.get("reason") or "fresh-device product check failed")
@@ -302,9 +570,10 @@ def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str
     fingerprint = report.get("device_fingerprint")
     if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{24}", fingerprint) is None:
         return INVALID, 0, "fresh-device evidence has no valid machine fingerprint"
-    checks = report.get("checks") or []
-    if not checks or any(check.get("status") != PASS for check in checks):
-        return INVALID, 0, "fresh-device evidence has missing or non-passing checks"
+    checks = report.get("checks")
+    invalid_reason = _fresh_device_checks_reason(checks, fingerprint)
+    if invalid_reason:
+        return INVALID, 0, invalid_reason
     return PASS, units, f"{len(checks)} fresh-device checks passed"
 
 
@@ -314,6 +583,8 @@ def _fresh_device_fingerprint(path: Path) -> str | None:
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(report, dict):
         return None
     fingerprint = report.get("device_fingerprint")
     if isinstance(fingerprint, str) and re.fullmatch(r"[0-9a-f]{24}", fingerprint):

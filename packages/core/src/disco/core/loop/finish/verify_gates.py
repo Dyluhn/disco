@@ -268,6 +268,7 @@ class _HostVerifyBaseService(_FinishGateComponent):
         events: list[Event],
         *,
         include_unverifiable: bool = False,
+        allow_pending_app_output: bool = False,
     ) -> HostVerificationDeliverable | None:
         """REL-1c — reconstruct the web-like deliverable for host shadow verify.
 
@@ -279,7 +280,11 @@ class _HostVerifyBaseService(_FinishGateComponent):
         directory path itself.
         """
         return await host_verify_deliverable(
-            self, step, events, include_unverifiable=include_unverifiable
+            self,
+            step,
+            events,
+            include_unverifiable=include_unverifiable,
+            allow_pending_app_output=allow_pending_app_output,
         )
 
     async def _with_host_verification_profile(
