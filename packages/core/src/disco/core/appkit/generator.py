@@ -119,6 +119,7 @@ from .generator_parts.ids import (
 from .generator_parts.ids import (
     _ts as _ts,
 )
+from .generator_parts.ids import section_component_names as section_component_names
 from .generator_parts.lead_entity import (
     ensure_lead_entity,
     resolve_lead_entity,

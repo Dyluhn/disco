@@ -32,7 +32,8 @@ class AppAddSectionArgs(BaseModel):
     page_id: str = Field(description="The page to insert the section into.")
     section: SkipValidation[Section] = Field(
         description="The Section JSON to insert "
-        "(id, kind, optional variant_id/content/content_ref)."
+        "(id, kind, optional variant_id/content/content_ref). Generated content "
+        "slot names ctaLabel and successMessage are accepted."
     )
     after_section_id: str | None = Field(
         default=None,

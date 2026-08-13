@@ -268,7 +268,11 @@ async def test_app_add_section_touches_only_affected_files():
                 "id": "extra",
                 "kind": "cta",
                 "variant_id": "cta.banner-inline",
-                "content": {"heading": "Ready?", "cta_label": "Start now"},
+                "content": {
+                    "eyebrow": "Next step",
+                    "heading": "Ready?",
+                    "ctaLabel": "Start now",
+                },
             },
         ),
         _ctx(sbx),
@@ -286,6 +290,12 @@ async def test_app_add_section_touches_only_affected_files():
     assert "src/styles.css" not in touched
     assert "worker/index.ts" not in touched
     assert "schema.sql" not in touched
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH])
+    added = next(section for section in spec["pages"][0]["sections"] if section["id"] == "extra")
+    assert added["content"]["cta_label"] == "Start now"
+    generated = sbx._fs["src/generated/content.ts"].decode()
+    assert '"eyebrow": "Next step"' in generated
+    assert '"ctaLabel": "Start now"' in generated
 
 
 async def test_app_add_section_exact_retry_after_lost_appspec_ack_reports_complete():
@@ -379,7 +389,9 @@ def test_app_update_content_advertises_typed_items_array_schema():
 
     assert update_schema["additionalProperties"] is False
     assert _schema_allows_string_array(update_schema["properties"]["items"])
-    assert "success_message" in update_schema["properties"]
+    assert {"eyebrow", "ctaLabel", "successMessage"} <= set(update_schema["properties"])
+    assert "cta_label" not in update_schema["properties"]
+    assert "success_message" not in update_schema["properties"]
     assert schema["properties"]["app_name"]["anyOf"][0]["maxLength"] == 200
 
 
@@ -409,6 +421,68 @@ async def test_app_update_content_touches_only_content_and_spec():
     )
     # the new copy is in content.ts
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
+
+
+async def test_app_update_content_accepts_the_generated_content_representation():
+    """Counted v30 seed 101653 copied the key and slot it had just read.
+
+    Generated identifiers and camelCase slots are product-owned representations,
+    so the semantic update boundary must normalize them instead of scheduling a
+    guaranteed validation/retry failure.
+    """
+    sbx = FakeSandboxInstance()
+    created = await AppCreateTool().run(
+        AppCreateArgs(
+            recipe_id="editorial-ledger",
+            primitive_id="local_list",
+            brief="Field Notes",
+        ),
+        _ctx(sbx),
+    )
+    assert created.success, created.content
+    assert created.structured["content_targets"] == [
+        {
+            "page_id": "home",
+            "section_id": "local_list",
+            "generated_key": "HomeLocalListSection",
+        }
+    ]
+
+    args = AppUpdateContentArgs.model_validate(
+        {
+            "app_name": "Field Notes",
+            "page_id": "home",
+            "section_id": "HomeLocalListSection",
+            "updates": {
+                "ctaLabel": "Add note",
+                "heading": "Field Notes",
+                "items": [],
+                "subheading": (
+                    "Jot down a thought, keep it saved in this browser, and delete it "
+                    "when you are done."
+                ),
+            },
+        }
+    )
+    assert args.updates is not None
+    assert args.updates.model_dump(mode="json", exclude_unset=True) == {
+        "heading": "Field Notes",
+        "subheading": (
+            "Jot down a thought, keep it saved in this browser, and delete it when you "
+            "are done."
+        ),
+        "cta_label": "Add note",
+        "items": [],
+    }
+
+    outcome = await AppUpdateContentTool().run(args, _ctx(sbx))
+
+    assert outcome.success, outcome.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH])
+    section = spec["pages"][0]["sections"][0]
+    assert section["id"] == "local_list"
+    assert section["content"]["cta_label"] == "Add note"
+    assert "ctaLabel\": \"Add note" in sbx._fs["src/generated/content.ts"].decode()
 
 
 async def test_app_update_content_changes_authoritative_identity_without_section_selector():
@@ -631,7 +705,7 @@ async def test_app_update_content_refuses_empty_updates():
     assert out.error == "app_update_content_refused"
     assert (
         out.content == "no updates provided — set app_name and/or at least one of "
-        "heading/subheading/body/cta_label/items/success_message"
+        "eyebrow/heading/subheading/body/ctaLabel/items/successMessage"
     )
 
 

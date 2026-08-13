@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from disco.core import SecurityRisk
-from disco.core.appkit import APPSPEC_RELPATH, generate
+from disco.core.appkit import APPSPEC_RELPATH, generate, section_component_names
 from disco.core.appkit.spec import AppSpec, SectionContent
 from disco.core.effects import EffectCapability
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -30,14 +30,18 @@ _FS = frozenset({Capability.FILESYSTEM})
 
 
 class ContentUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Generated content is TypeScript and therefore publishes camelCase slots.
+    # Advertise that representation at the tool boundary while preserving the
+    # established snake_case inputs and one canonical snake_case AppSpec.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    eyebrow: str | None = None
     heading: str | None = None
     subheading: str | None = None
     body: str | None = None
-    cta_label: str | None = None
+    cta_label: str | None = Field(default=None, alias="ctaLabel")
     items: list[str] | None = None
-    success_message: str | None = None
+    success_message: str | None = Field(default=None, alias="successMessage")
 
     @model_validator(mode="before")
     @classmethod
@@ -108,13 +112,18 @@ class AppUpdateContentArgs(BaseModel):
     )
     section_id: str | None = Field(
         default=None,
-        description="The section whose content to patch. Required with section updates.",
+        description=(
+            "The section whose content to patch. Accepts its canonical AppSpec id or "
+            "the exact generated component/content key shown in src/generated/content.ts. "
+            "Required with section updates."
+        ),
     )
     updates: ContentUpdate | None = Field(
         default=None,
-        description="Optional content slots to set/merge: heading, subheading, body, "
-        "cta_label, items (a list of strings), success_message. Unknown keys are "
-        "rejected. page_id and section_id are required when this is present.",
+        description="Optional content slots to set/merge: eyebrow, heading, subheading, "
+        "body, ctaLabel, items (a list of strings), successMessage. The established "
+        "snake_case spellings remain accepted. Unknown keys are rejected. page_id "
+        "and section_id are required when this is present.",
     )
 
     @model_validator(mode="after")
@@ -147,18 +156,40 @@ def _apply_identity_update(
     return True, renamed_slots
 
 
-def _find_section(data: dict[str, Any], page_id: str, section_id: str) -> dict[str, Any]:
+def _find_section(
+    data: dict[str, Any], app: AppSpec, page_id: str, section_id: str
+) -> dict[str, Any]:
     page = next((p for p in data["pages"] if p["id"] == page_id), None)
     if page is None:
         raise _AppKitError(f"no page with id {page_id!r}")
     sec = next((s for s in page["sections"] if s["id"] == section_id), None)
-    if sec is None:
-        raise _AppKitError(f"no section {section_id!r} on page {page_id!r}")
-    return sec
+    if sec is not None:
+        return sec
+
+    names = section_component_names(app)
+    canonical_id = next(
+        (
+            canonical
+            for (canonical_page, canonical), generated in names.items()
+            if canonical_page == page_id and generated == section_id
+        ),
+        None,
+    )
+    if canonical_id is not None:
+        return next(s for s in page["sections"] if s["id"] == canonical_id)
+
+    accepted = [
+        f"{section['id']} (generated: {names[(page_id, section['id'])]})"
+        for section in page["sections"]
+    ]
+    raise _AppKitError(
+        f"no section {section_id!r} on page {page_id!r}; accepted selectors: "
+        + ", ".join(accepted)
+    )
 
 
 def _apply_section_update(
-    data: dict[str, Any], args: AppUpdateContentArgs, identity_changed: bool
+    data: dict[str, Any], app: AppSpec, args: AppUpdateContentArgs, identity_changed: bool
 ) -> tuple[bool, dict[str, Any] | None]:
     """Merge a section content patch into `data` in place. Returns
     (section_changed, existing_content) — existing_content is None when no
@@ -167,12 +198,12 @@ def _apply_section_update(
         return False, None
     assert args.page_id is not None
     assert args.section_id is not None
-    sec = _find_section(data, args.page_id, args.section_id)
+    sec = _find_section(data, app, args.page_id, args.section_id)
     updates = args.updates.model_dump(mode="json", exclude_unset=True)
     if not updates and not identity_changed:
         raise _AppKitError(
             "no updates provided — set app_name and/or at least one of "
-            "heading/subheading/body/cta_label/items/success_message"
+            "eyebrow/heading/subheading/body/ctaLabel/items/successMessage"
         )
     raw_existing = sec.get("content")
     existing = (
@@ -263,8 +294,8 @@ class AppUpdateContentTool:
         name="app_update_content",
         description=(
             "Update the current app's authoritative display identity (`app_name`) and/or "
-            "patch one section's content (heading/subheading/body/cta_label/items/"
-            "success_message). Section updates require page_id + section_id + updates. "
+            "patch one section's content (eyebrow/heading/subheading/body/ctaLabel/"
+            "items/successMessage). Section updates require page_id + section_id + updates. "
             "Every change is validated in AppSpec, then .disco/appspec.json is re-saved "
             "and only touched generated files are regenerated. Identity and content live "
             "in the spec, never in hand-edited generated files."
@@ -284,7 +315,7 @@ class AppUpdateContentTool:
 
             data = app.model_dump(mode="json")
             identity_changed, renamed_slots = _apply_identity_update(data, app, args)
-            section_changed, existing = _apply_section_update(data, args, identity_changed)
+            section_changed, existing = _apply_section_update(data, app, args, identity_changed)
             _refuse_content_noop(app, identity_changed, section_changed, existing)
             try:
                 new_app = AppSpec.model_validate(data)

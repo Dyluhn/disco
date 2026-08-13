@@ -24,7 +24,7 @@ from disco.tools.builtin.files import (
     FileWriteArgs,
 )
 from disco.tools.registry import ToolRegistry, ToolScope
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from tool_fakes import FakeSandboxInstance, call
 
 _STANDARD = ModelExecutionPolicy.standard()
@@ -121,6 +121,34 @@ async def test_invalid_arguments_message_deterministic_for_stuck_detector():
     a = await ex.execute(call("shell", cmd="ls"))
     b = await ex.execute(call("shell", cmd="ls"))
     assert a.content == b.content
+
+
+async def test_nested_unknown_argument_names_its_full_path():
+    """A nested extra must not collapse to a generic whole-call error."""
+    from disco.tools.builtin.app_kit import AppUpdateContentTool
+    from disco.tools.executor_parts.validation_message import describe_validation_failure
+
+    arguments = {
+        "page_id": "home",
+        "section_id": "hero",
+        "updates": {"definitelyUnknown": "value"},
+    }
+    try:
+        AppUpdateContentTool.definition.args_model.model_validate(arguments)
+    except ValidationError as exc:
+        errors = [{k: v for k, v in error.items() if k != "input"} for error in exc.errors()]
+    else:
+        raise AssertionError("nested unknown argument was accepted")
+
+    message = describe_validation_failure(
+        "app_update_content",
+        AppUpdateContentTool.definition.args_model,
+        arguments,
+        errors,
+    )
+
+    assert "unexpected argument 'updates.definitelyUnknown'" in message
+    assert "arguments did not match the tool's schema" not in message
 
 
 async def test_truncated_file_write_arguments_fail_closed_with_bounded_recovery():
