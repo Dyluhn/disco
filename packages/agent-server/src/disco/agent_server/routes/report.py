@@ -189,9 +189,10 @@ async def _resolve_export_payload(
     # W-10: prefer the real generated conversation title for the cover/title
     # page. Export is a permanent rendering boundary, so join the same title
     # lifecycle the UI uses instead of racing its detached startup task.
-    title: str | None = None
-    with contextlib.suppress(Exception):
-        title = await runtime.titles.ensure(conversation_id)
+    title = await store.get_title(conversation_id)
+    if not title:
+        with contextlib.suppress(Exception):
+            title = await runtime.titles.ensure(conversation_id)
 
     follow_ups = _gather_follow_up_pairs(events, report, follow_up_seqs)
     try:
