@@ -22,7 +22,7 @@ import httpx
 from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted_url
 
 from .models import ExtractedDoc, Passage, SearchHit
-from .url_policy import url_allowed
+from .url_policy import parse_source_date, url_allowed
 
 _LOG = logging.getLogger("disco.retrieval.providers")
 
@@ -117,6 +117,7 @@ class DdgsSearchProvider:
                     snippet=r.get("body", "") or r.get("snippet", ""),
                     source_engine="ddgs",
                     rank=i,
+                    published_at=parse_source_date(r.get("date")),
                 )
             )
         return hits
@@ -207,6 +208,7 @@ class TavilySearchProvider:
                 snippet=h.get("content", ""),
                 source_engine="tavily",
                 rank=i,
+                published_at=parse_source_date(h.get("published_date")),
             )
             for i, h in enumerate(data.get("results", []))
             if h.get("url") and url_allowed(h.get("url", ""), domains_allow, domains_deny)
@@ -273,6 +275,7 @@ class BraveSearchProvider:
                     snippet=h.get("description", "") or h.get("snippet", ""),
                     source_engine="brave",
                     rank=i,
+                    published_at=parse_source_date(h.get("page_age")),
                 )
             )
             if len(hits) >= limit:

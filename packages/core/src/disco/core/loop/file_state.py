@@ -214,8 +214,8 @@ def file_state_notice(stale: list[str]) -> LLMMessage | None:
     if not stale:
         return None
     lines = [
-        f"{_STALE_NOTICE_SENTINEL} since you last read them",
-        "The following files were modified externally (not by your tool calls).",
+        f"{_STALE_NOTICE_SENTINEL} since the last grounded workspace state",
+        "The following files no longer match the content last grounded for this run.",
         "Use `file_read` on each before editing to avoid overwriting the newer version:",
     ]
     lines.extend(f"  - {p}" for p in stale)

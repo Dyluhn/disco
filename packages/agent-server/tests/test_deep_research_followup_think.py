@@ -169,3 +169,66 @@ def test_follow_up_history_keeps_prior_turns_but_excludes_current_question() -> 
     assert "First follow-up" in history
     assert "First grounded answer" in history
     assert "Current follow-up" not in history
+
+
+@pytest.mark.asyncio
+async def test_follow_up_uses_reviewed_passage_and_preserves_provenance() -> None:
+    from disco.agent_server._deep_research_service_parts.followup import _saved_passage_model
+
+    harness = _Harness("Muse Glimmer was released as open source [[reviewed]].")
+    svc = DeepResearchService(
+        store=harness.store,
+        lifecycle_commands=harness.lifecycle_commands,  # type: ignore[arg-type]
+        drivers=harness.drivers,  # type: ignore[arg-type]
+        settings=MagicMock(),
+        preflight=MagicMock(),
+        spaces=MagicMock(),
+        cancellations=MagicMock(),
+        provider=DeepResearchProvider(
+            MagicMock(), MagicMock(), MagicMock(), injected_providers={"nli": _NLI()}
+        ),
+    )
+    prior = ReportEvent(
+        source=EventSource.AGENT,
+        query="What open-source models shipped?",
+        summary="A release was found.",
+        sections=[],
+        passages=[],
+        reviewed_passages=[
+            {
+                "id": "reviewed",
+                "source_title": "",
+                "source_url": "https://example.com/release",
+                "text": "Muse Glimmer was released as open source.",
+                "char_start": 14,
+                "char_end": 58,
+                "corpus_id": "release-corpus",
+                "published_at": "2026-08-11",
+            }
+        ],
+        all_hits=[],
+    ).model_copy(update={"seq": 1})
+    user = MessageEvent(
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="Which model was released?"),
+    ).model_copy(update={"seq": 2})
+
+    await svc._follow_up_deep_research("c-reviewed", [prior, user], prior)
+
+    request_text = harness.drivers._router.requests[0].messages[-1].content
+    assert "[[reviewed]] (https://example.com/release)" in request_text
+    assert "Muse Glimmer was released" in request_text
+    restored = _saved_passage_model(prior.reviewed_passages[0])
+    assert (restored.char_start, restored.char_end, restored.corpus_id) == (
+        14,
+        58,
+        "release-corpus",
+    )
+    assert restored.published_at is not None
+    assert restored.published_at.isoformat() == "2026-08-11"
+    stored = [
+        event.message.content
+        for event in harness.store.events
+        if isinstance(event, MessageEvent) and event.source == EventSource.AGENT
+    ]
+    assert stored == ["Muse Glimmer was released as open source [[reviewed]]."]

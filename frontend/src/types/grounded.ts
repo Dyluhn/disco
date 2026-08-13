@@ -14,6 +14,7 @@ export interface SearchHit {
   snippet: string; // provider snippet — NEVER cited as content (§1.4)
   source_engine: string;
   rank: number;
+  published_at?: string | null;
   /** discovery-set extraction outcome, for explicit-failure rendering (§2.2) */
   status?: ExtractStatus;
 }
@@ -26,6 +27,7 @@ export interface Passage {
   char_start?: number | null;
   char_end?: number | null;
   corpus_id?: string | null;
+  published_at?: string | null;
 }
 
 export interface Claim {

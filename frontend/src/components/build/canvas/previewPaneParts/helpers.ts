@@ -91,12 +91,7 @@ export function refreshTarget(path: string, nonce: number): string {
  */
 
 export function previewActiveStatus(status: ConversationStatus): boolean {
-  return (
-    status === "RUNNING" ||
-    status === "WAITING_FOR_CONFIRMATION" ||
-    status === "FINISHED" ||
-    status === "STUCK"
-  );
+  return status === "RUNNING" || status === "WAITING_FOR_CONFIRMATION";
 }
 
 export function previewWebSignal(

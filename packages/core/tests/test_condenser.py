@@ -21,6 +21,7 @@ from disco.core import (
     SqliteEventStore,
     ToolCall,
     ToolResult,
+    VerifierVerdictEvent,
     View,
 )
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
@@ -117,6 +118,92 @@ async def test_empty_summary_is_not_emitted():
     events = await _seed(store, n_pairs=6, body="detail " * 10)
     condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=2, min_forget=2)
     assert await condenser.condense(events, View.of(events), summarizer=_Summarizer("   ")) is None
+
+
+async def test_summary_input_preserves_event_provenance_and_host_verdict() -> None:
+    from event_fakes import with_seqs
+
+    first = ActionEvent(
+        thought="claimed success",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "true"}),
+    )
+    first_result = ObservationEvent(
+        action_id=first.id,
+        tool_result=ToolResult(
+            call_id=first.tool_call.call_id,
+            tool_name="shell",
+            success=True,
+            content="ok",
+        ),
+    )
+    second = ActionEvent(
+        thought="continue",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "echo next"}),
+    )
+    second_result = ObservationEvent(
+        action_id=second.id,
+        tool_result=ToolResult(
+            call_id=second.tool_call.call_id,
+            tool_name="shell",
+            success=True,
+            content="next",
+        ),
+    )
+    tail = ActionEvent(
+        thought="tail",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "echo tail"}),
+    )
+    events = with_seqs(
+        [
+            MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="TASK")),
+            first,
+            first_result,
+            VerifierVerdictEvent(
+                artifact_path="index.html",
+                verified=True,
+                verdict="passed",
+                detail="host checked it",
+            ),
+            second,
+            second_result,
+            tail,
+            ObservationEvent(
+                action_id=tail.id,
+                tool_result=ToolResult(
+                    call_id=tail.tool_call.call_id,
+                    tool_name="shell",
+                    success=True,
+                    content="tail",
+                ),
+            ),
+        ]
+    )
+    summarizer = _Summarizer()
+    condenser = LLMSummarizingCondenser(keep_head=1, keep_recent=1, min_forget=2)
+    tomb = await condenser.condense(events, View.of(events), summarizer=summarizer)
+    assert isinstance(tomb, CondensationEvent)
+    rendered = "\n".join(message.content for message in summarizer.last_messages or [])
+    assert "kind=action source=agent" in rendered
+    assert "kind=observation source=environment" in rendered
+    assert "kind=verifier_verdict source=system" in rendered
+    assert "HOST VERIFICATION PASS" in rendered
+
+
+async def test_summary_input_bound_is_independent_and_keeps_tool_pair() -> None:
+    events = await _seed_pairs(4)
+    summarizer = _Summarizer()
+    condenser = LLMSummarizingCondenser(
+        keep_head=1,
+        keep_recent=1,
+        min_forget=2,
+        summary_input_chars=1,
+    )
+    tomb = await condenser.condense(events, View.of(events), summarizer=summarizer)
+    assert isinstance(tomb, CondensationEvent)
+    assert tomb.forgotten_start_seq == events[1].seq
+    assert tomb.forgotten_end_seq == events[2].seq
+    assert summarizer.last_messages is not None
+    assert len(summarizer.last_messages) == 3  # user anchor + one complete tool pair
 
 
 # ---- the loop condenses instead of overflowing ------------------------------

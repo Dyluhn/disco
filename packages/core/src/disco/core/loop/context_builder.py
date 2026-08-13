@@ -95,13 +95,20 @@ def build_context_pack(
 
     resolved = resolved_ranges_from_events(events)
     extra_refs = tuple(r.summary_ref for r in resolved if r.summary_ref is not None)
+    retained_refs = []
+    seen_ref_paths: set[str] = set()
+    for ref in (*led.retained_refs, *extra_refs):
+        if ref.rel_path in seen_ref_paths:
+            continue
+        seen_ref_paths.add(ref.rel_path)
+        retained_refs.append(ref)
 
     merged = led.model_copy(
         update={
             "active_goal": goal,
             "current_version": version,
             "resolved_ranges": resolved,
-            "retained_refs": (*led.retained_refs, *extra_refs),
+            "retained_refs": tuple(retained_refs),
             "latest_verifier_failures": (
                 failures if failures is not None else led.latest_verifier_failures
             ),

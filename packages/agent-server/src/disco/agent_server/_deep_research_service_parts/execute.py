@@ -231,7 +231,10 @@ def rebuild_resume_state(
     if resume_from is None:
         return None, None, None
     resume_sections = list(resume_from.sections)
-    resume_passages = [Passage.model_validate(p) for p in resume_from.passages]
+    resume_passages = [
+        Passage.model_validate(p)
+        for p in [*resume_from.passages, *resume_from.reviewed_passages]
+    ]
     resume_all_hits = [SearchHit.model_validate(h) for h in resume_from.all_hits]
     return resume_sections, resume_passages, resume_all_hits
 

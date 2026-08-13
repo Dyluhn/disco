@@ -286,4 +286,58 @@ describe("deriveSourceTiers — three-tier corpus split", () => {
       "https://d.example/unattempted",
     ]);
   });
+
+  it("uses canonical source identity across tracking and fragment variants", () => {
+    const report = {
+      ...REPORT_EVENT,
+      passages: [
+        {
+          id: "p-canonical",
+          source_url: "https://example.com/release?utm_source=feed#details",
+        },
+      ],
+      all_hits: [
+        { url: "http://example.com/release/", status: "ok" },
+        { url: "https://other.example/story?utm_campaign=x", status: "ok" },
+        { url: "http://other.example/story#top", status: "ok" },
+      ],
+    } as unknown as ReportEvent;
+
+    const tiers = deriveSourceTiers(report);
+
+    expect(tiers.cited).toHaveLength(1);
+    expect(tiers.reviewed.map((hit) => hit.url)).toEqual([
+      "https://other.example/story?utm_campaign=x",
+    ]);
+    expect(tiers.discovered).toEqual([]);
+  });
+
+  it("keeps durable reviewed passages that have no discovery hit", () => {
+    const report = {
+      ...REPORT_EVENT,
+      reviewed_passages: [
+        {
+          id: "upload-only",
+          source_url: "file://uploads/model-card.pdf",
+          source_title: "Uploaded model card",
+        },
+        {
+          id: "duplicate-hit",
+          source_url: "https://b.example/blog#reviewed",
+          source_title: "Reviewed blog",
+        },
+      ],
+    } as unknown as ReportEvent;
+
+    const tiers = deriveSourceTiers(report);
+
+    expect(tiers.reviewed.map((source) => source.url)).toEqual([
+      "file://uploads/model-card.pdf",
+      "https://b.example/blog#reviewed",
+    ]);
+    expect(tiers.reviewed.map((source) => source.title)).toEqual([
+      "Uploaded model card",
+      "Reviewed blog",
+    ]);
+  });
 });

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from functools import partial
 from typing import Any, cast
 
 from ._view_condensation import _is_cumulative_model_summary
@@ -36,6 +37,21 @@ _SCREENSHOT_TOOLS = frozenset({"browser", "verify_web_app"})
 
 _MASK_KEEP_RECENT = 8
 _MASK_MIN_CHARS = 600
+
+
+def _host_probe_message(content: str) -> LLMMessage:
+    """Render host-owned finish probing without forging an agent tool call."""
+
+    return LLMMessage(
+        role="user",
+        content=(
+            '<host-transcript kind="finish-advisory-probe">\n'
+            f"{content}\n"
+            "This is host activity, not an action taken by you, and it is diagnostic "
+            "evidence rather than completion authority.\n"
+            "</host-transcript>"
+        ),
+    )
 
 
 def repair_tool_call_adjacency(messages: list[LLMMessage]) -> list[LLMMessage]:
@@ -489,6 +505,67 @@ def _setup_view_projection(
     return (forgotten, summary_at_start, pinned, prompt_read_by_observation_seq, *maps)
 
 
+def _host_probe_non_observation_message(
+    event: LLMConvertible, probe_ids: set[str]
+) -> LLMMessage | None:
+    if isinstance(event, ActionEvent) and event.meta.get("verify_probe") is True:
+        return _host_probe_message("The host started its one-shot advisory finish probe.")
+    if isinstance(event, AgentErrorEvent) and event.tool_call_id in probe_ids:
+        detail = event.to_llm_message().content
+        return _host_probe_message(
+            "The host's one-shot advisory finish probe could not run or did not pass.\n"
+            f"Captured result:\n{detail}"
+        )
+    return None
+
+
+def _append_projected_event(
+    event: LLMConvertible,
+    msgs: list[LLMMessage],
+    visible: list[int],
+    *,
+    recent_obs_seqs: set[int],
+    pinned: set[int],
+    prompt_read_by_observation_seq: dict[int, Any],
+    latest_screenshot_seq: int | None,
+    host_probe_call_ids: set[str],
+) -> None:
+    if isinstance(event, ObservationEvent):
+        msg, seq, vary = _render_observation_message(
+            event,
+            recent_obs_seqs=recent_obs_seqs,
+            pinned=pinned,
+            prompt_read_by_observation_seq=prompt_read_by_observation_seq,
+            latest_screenshot_seq=latest_screenshot_seq,
+        )
+        if event.tool_result.call_id in host_probe_call_ids:
+            state = "passed" if event.tool_result.success else "did not pass"
+            msg = _host_probe_message(
+                f"The host's one-shot advisory finish probe {state}.\n"
+                f"Captured output:\n{msg.content}"
+            )
+            vary = False
+        msgs.append(msg)
+        if seq is not None:
+            if vary:
+                msgs[-1] = _apply_tail_variation(msgs[-1], event)
+            visible.append(seq)
+        return
+    host_message = _host_probe_non_observation_message(event, host_probe_call_ids)
+    if host_message is not None:
+        msgs.append(host_message)
+        seq = getattr(event, "seq", None)
+        if isinstance(seq, int):
+            visible.append(seq)
+        return
+    msg = event.to_llm_message()
+    msgs.append(msg)
+    seq = getattr(event, "seq", None)
+    if isinstance(seq, int):
+        msgs[-1] = _apply_tail_variation(msgs[-1], cast(Event, event))
+        visible.append(seq)
+
+
 def build_view_messages(events: list[Event]) -> tuple[list[LLMMessage], list[int], int, int]:
     """Build the LLM-visible messages from the event log.
 
@@ -551,28 +628,20 @@ def build_view_messages(events: list[Event]) -> tuple[list[LLMMessage], list[int
         if isinstance(e, ObservationEvent) and e.seq is not None and is_visible(e)
     ]
     recent_obs_seqs = set(visible_obs[-_MASK_KEEP_RECENT:])
+    host_probe_call_ids = {
+        event.tool_call.call_id
+        for event in events
+        if isinstance(event, ActionEvent) and event.meta.get("verify_probe") is True
+    }
 
-    def append_event_message(e: LLMConvertible, msgs: list[LLMMessage], visible: list[int]) -> None:
-        if isinstance(e, ObservationEvent):
-            msg, seq, vary = _render_observation_message(
-                e,
-                recent_obs_seqs=recent_obs_seqs,
-                pinned=pinned,
-                prompt_read_by_observation_seq=prompt_read_by_observation_seq,
-                latest_screenshot_seq=latest_screenshot_seq,
-            )
-            msgs.append(msg)
-            if seq is not None:
-                if vary:
-                    msgs[-1] = _apply_tail_variation(msgs[-1], e)
-                visible.append(seq)
-            return
-        msg = e.to_llm_message()
-        msgs.append(msg)
-        seq = getattr(e, "seq", None)
-        if seq is not None:
-            msgs[-1] = _apply_tail_variation(msgs[-1], cast(Event, e))
-            visible.append(seq)
+    append_event_message = partial(
+        _append_projected_event,
+        recent_obs_seqs=recent_obs_seqs,
+        pinned=pinned,
+        prompt_read_by_observation_seq=prompt_read_by_observation_seq,
+        latest_screenshot_seq=latest_screenshot_seq,
+        host_probe_call_ids=host_probe_call_ids,
+    )
 
     msgs, visible = _walk_events_for_messages(
         events,

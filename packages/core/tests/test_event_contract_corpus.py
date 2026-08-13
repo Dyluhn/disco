@@ -142,6 +142,7 @@ _PAYLOAD_KEYS = {
         "summary",
         "sections",
         "passages",
+        "reviewed_passages",
         "all_hits",
         "unsupported_count",
         "bounded_by",
@@ -244,7 +245,7 @@ _EXPECTED_DIGESTS = {
     "build_platform_admission": "3d4e18a539a3cb2154bc2201e8f6b89e44c56e5c80d78cd247928e9955390429",
     "appkit_ejection": "0649776978b87095aff671e39377068ee60d757e5ed527d9cacdc96b4d29cd74",
     "plan": "a46005ac3cf3e54c4c6ff0840cd49d58b3ccd0d224f9bbd3d609663bf6f2c7ad",
-    "report": "54319a71a3e37614c238de7977a66d056601ea0fc7d0d9031e918e783fcd2197",
+    "report": "b4e44ff217c78f840a963dbb695ce7c2e158ecac1d06bca3a4e4944d102bfdea",
     "alternatives": "7717421de89409f5011c551da33cb6cc3a4b47428847d5626a8ab44716c0cb26",
     "knowledge": "5e817149942f8fcc99d9b0b54cc11a984cef31f9f3bd5a969f2dbb17fd603a1a",
     "runtime_constraint": "5001da3952633fa21d53bc1f4f6d40ec8908e40b516eea0b224180c26f3bfd55",
@@ -367,6 +368,7 @@ def make_event_corpus() -> tuple[BaseEvent, ...]:
                 )
             ],
             passages=[{"id": "passage-1", "text": "fixture"}],
+            reviewed_passages=[{"id": "passage-2", "text": "reviewed fixture"}],
             all_hits=[{"url": "https://example.invalid/fixture"}],
         ),
         AlternativesEvent(

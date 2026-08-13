@@ -118,6 +118,10 @@ class ReportEvent(BaseEvent, LLMConvertible):
     # Plain dict[str, Any] to keep `core` free of any `retrieval` import — the
     # producer (deep_research engine) populates with Passage.model_dump().
     passages: list[dict[str, Any]] = Field(default_factory=list)
+    # Read and retained but not cited. Kept separate so `passages` remains the
+    # citation/UI contract while follow-up synthesis can use the full reviewed
+    # evidence corpus. Optional-by-default for historical report events.
+    reviewed_passages: list[dict[str, Any]] = Field(default_factory=list)
     # The full discovery set (URL, title, snippet, status). All_hits for the
     # All-Searched / Cited tabs at report scale. Same plain-dict reason.
     all_hits: list[dict[str, Any]] = Field(default_factory=list)

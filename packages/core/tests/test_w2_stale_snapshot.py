@@ -45,7 +45,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from disco.core import ActionEvent, LLMMessage, ObservationEvent, ToolCall, ToolResult
+from disco.core import (
+    ActionEvent,
+    LLMMessage,
+    ObservationEvent,
+    ToolCall,
+    ToolResult,
+    WorkspaceMutationEvent,
+    agent_view_consistent_events,
+)
 from disco.core.effects import (
     ActionProfile,
     EffectCapability,
@@ -58,6 +66,7 @@ from disco.core.loop.file_state import (
     _STALE_NOTICE_SENTINEL,
     FileStateTracker,
     file_state_notice,
+    reconcile_mutation_receipts,
 )
 from disco.core.loop.view_render import (
     _WS_PER_FILE_CHARS,
@@ -163,6 +172,8 @@ def test_file_state_notice_nonempty_returns_message():
     assert _STALE_NOTICE_SENTINEL in msg.content
     assert "src/foo.py" in msg.content
     assert "src/bar.ts" in msg.content
+    assert "modified externally" not in msg.content
+    assert "not by your tool calls" not in msg.content
 
 
 def test_file_state_notice_single_path():
@@ -534,6 +545,82 @@ async def test_authenticated_write_receipt_is_not_reported_as_external():
     # the old receipt must not manufacture another warning.
     builder._file_tracker.record_agent_io(path, external, seq=0)
     _, stale = await builder._compute_stale_paths(events)
+    assert stale == []
+
+
+@pytest.mark.asyncio
+async def test_superseded_view_receipt_updates_workspace_without_exposing_transcript():
+    path = "app.js"
+    old = b"old bytes"
+    written = b"late authenticated write"
+    intent = WorkspaceMutationEvent(
+        operation="agent.run-intent.user-turn",
+        run_protocol_version=1,
+        id="intent_workspace_receipt",
+    )
+    first_write = _write_event(path, old.decode(), call_id="visible-write").model_copy(
+        update={"agent_view_id": "view-1"}
+    )
+    late_write = _write_event(path, written.decode(), call_id="late-write").model_copy(
+        update={"agent_view_id": "view-1"}
+    )
+    resource = ResourceKey(namespace="workspace.file", identifier=path)
+    late_result = ObservationEvent(
+        tool_result=ToolResult(
+            call_id=late_write.tool_call.call_id,
+            tool_name=late_write.tool_call.tool_name,
+            success=True,
+            content="write complete",
+            action_profile=ActionProfile(
+                capabilities=frozenset({EffectCapability.WORKSPACE_MUTATE})
+            ),
+            effect_receipts=(
+                MutationReceipt(
+                    resource=resource,
+                    after=ResourceRevision(
+                        resource=resource,
+                        digest=hashlib.sha256(written).hexdigest(),
+                    ),
+                    after_size_bytes=len(written),
+                ),
+            ),
+        ),
+        action_id=late_write.id,
+        agent_view_id="view-1",
+    )
+    raw_events = with_seqs(
+        [
+            intent,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id="view-1",
+                run_protocol_version=1,
+            ),
+            first_write,
+            WorkspaceMutationEvent(
+                operation="agent.view-admitted",
+                run_intent_id=intent.id,
+                agent_view_id="view-2",
+                run_protocol_version=1,
+            ),
+            late_write,
+            late_result,
+        ]
+    )
+    visible = list(agent_view_consistent_events(raw_events))
+    visible_ids = {event.id for event in visible}
+    assert late_write.id not in visible_ids
+    assert late_result.id not in visible_ids
+
+    sandbox = _FakeSandbox({path: written})
+    builder = ViewBuilder(SimpleNamespace(executor=SimpleNamespace(sandbox=sandbox)))
+    builder._file_tracker.record_agent_io(path, old, seq=0)
+    _, stale = await builder._compute_stale_paths(visible)
+    assert stale == [path]
+
+    reconcile_mutation_receipts(builder._file_tracker, raw_events)
+    _, stale = await builder._compute_stale_paths(visible)
     assert stale == []
 
 

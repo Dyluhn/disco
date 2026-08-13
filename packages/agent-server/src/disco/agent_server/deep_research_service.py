@@ -74,14 +74,26 @@ def _bounded_context_blocks(blocks: list[tuple[str, str]], max_chars: int) -> st
     for index, (label, body) in enumerate(normalized):
         slots_left = len(normalized) - index
         body_budget = remaining // slots_left
-        excerpt = body
-        if len(excerpt) > body_budget:
-            marker = "\n[excerpt truncated]"
-            keep = max(0, body_budget - len(marker))
-            excerpt = excerpt[:keep].rstrip() + (marker if body_budget >= len(marker) else "")
+        excerpt = _bounded_excerpt(body, body_budget)
         rendered.append(f"{label}\n{excerpt}".rstrip())
         remaining -= len(excerpt)
     return separator.join(rendered)[:max_chars]
+
+
+def _bounded_excerpt(body: str, budget: int) -> str:
+    """Keep both ends of long evidence so late qualifications survive."""
+
+    if budget <= 0:
+        return ""
+    if len(body) <= budget:
+        return body
+    marker = "\n[excerpt middle omitted]\n"
+    if budget <= len(marker):
+        return body[:budget]
+    available = budget - len(marker)
+    head = available * 2 // 3
+    tail = available - head
+    return f"{body[:head].rstrip()}{marker}{body[-tail:].lstrip()}"
 
 
 def _build_grounding_block(passages: list[dict[str, Any]]) -> str:
@@ -89,7 +101,7 @@ def _build_grounding_block(passages: list[dict[str, Any]]) -> str:
     blocks = []
     for passage in passages:
         pid = str(passage.get("id", ""))[:128]
-        source = str(passage.get("source_title", passage.get("source_url", "")))[:240]
+        source = str(passage.get("source_title") or passage.get("source_url") or "")[:240]
         blocks.append((f"[[{pid}]] ({source})", str(passage.get("text", ""))))
     return _bounded_context_blocks(blocks, _FOLLOW_UP_SOURCE_CHARS)
 

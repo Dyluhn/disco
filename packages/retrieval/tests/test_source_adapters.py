@@ -25,6 +25,7 @@ async def test_arxiv_maps_atom_hits_and_satisfies_protocol():
         <id>https://arxiv.org/abs/2401.00001</id>
         <title>  First
           Paper  </title>
+        <published>2024-01-02T00:00:00Z</published>
         <summary> First abstract. </summary>
       </entry>
       <entry>
@@ -52,6 +53,7 @@ async def test_arxiv_maps_atom_hits_and_satisfies_protocol():
     assert hits[0].snippet == "First abstract."
     assert hits[0].source_engine == "arxiv"
     assert hits[0].rank == 0
+    assert hits[0].published_at == datetime.date(2024, 1, 2)
 
 
 async def test_arxiv_follows_redirects_before_parsing_atom_hits():
@@ -124,6 +126,7 @@ async def test_news_maps_rss_hits_strips_html_and_satisfies_protocol():
         <item>
           <title> First Headline </title>
           <link>https://news.google.com/rss/articles/abc</link>
+          <pubDate>Tue, 11 Aug 2026 12:00:00 GMT</pubDate>
           <description><![CDATA[
             <a href="https://publisher.example/a">Publisher</a>
             <p>Lead <b>HTML</b> text.</p>
@@ -157,6 +160,7 @@ async def test_news_maps_rss_hits_strips_html_and_satisfies_protocol():
     assert hits[0].snippet == "Publisher Lead HTML text."
     assert hits[0].source_engine == "news"
     assert hits[0].rank == 0
+    assert hits[0].published_at == datetime.date(2026, 8, 11)
     assert hits[1].snippet == "Second & plain snippet."
 
 
@@ -198,6 +202,7 @@ async def test_semantic_scholar_maps_json_and_sends_api_key():
                         "abstract": "An abstract.",
                         "url": "https://www.semanticscholar.org/paper/abc",
                         "paperId": "abc",
+                        "publicationDate": "2025-06-07",
                     },
                     {
                         "title": "Fallback URL",
@@ -221,6 +226,7 @@ async def test_semantic_scholar_maps_json_and_sends_api_key():
     assert hits[0].title == "Dense Retrieval"
     assert hits[0].snippet == "An abstract."
     assert hits[0].source_engine == "semantic_scholar"
+    assert hits[0].published_at == datetime.date(2025, 6, 7)
     assert hits[1].snippet == ""
 
 

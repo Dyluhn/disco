@@ -30,6 +30,7 @@
  */
 
 import type { ActivityItem } from "@/lib/buildTrace";
+import { sourceUrlKey } from "@/lib/sources";
 import { computeLiveTrace } from "./deepResearchTraceParts/liveTrace";
 import { computePlanProgress } from "./deepResearchTraceParts/planProgress";
 import { computeStats } from "./deepResearchTraceParts/stats";
@@ -191,10 +192,63 @@ export interface SourceTiers {
   discovered: Array<Record<string, unknown>>;
 }
 
+function citedSources(report: ReportEvent): Map<string, Record<string, unknown>> {
+  const byUrl = new Map<string, Record<string, unknown>>();
+  for (const passage of report.passages) {
+    const url = String(passage.source_url ?? "");
+    if (!url) continue;
+    const key = sourceUrlKey(url);
+    if (!byUrl.has(key)) byUrl.set(key, passage);
+  }
+  return byUrl;
+}
+
+function durableReviewedSources(
+  report: ReportEvent,
+  citedUrls: Set<string>,
+  seen: Set<string>,
+): Array<Record<string, unknown>> {
+  const reviewed: Array<Record<string, unknown>> = [];
+  for (const passage of report.reviewed_passages ?? []) {
+    const url = String(passage.source_url ?? "");
+    if (!url) continue;
+    const key = sourceUrlKey(url);
+    if (citedUrls.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    reviewed.push({
+      ...passage,
+      url,
+      title: String(passage.source_title ?? ""),
+      status: "ok",
+    });
+  }
+  return reviewed;
+}
+
+function splitDiscoveryHits(
+  report: ReportEvent,
+  citedUrls: Set<string>,
+  seen: Set<string>,
+): Pick<SourceTiers, "reviewed" | "discovered"> {
+  const reviewed: Array<Record<string, unknown>> = [];
+  const discovered: Array<Record<string, unknown>> = [];
+  for (const hit of report.all_hits) {
+    const url = String(hit.url ?? "");
+    if (!url) continue;
+    const key = sourceUrlKey(url);
+    if (citedUrls.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    const status = String(hit.status ?? "unread");
+    if (status === "ok") reviewed.push(hit);
+    else discovered.push(hit);
+  }
+  return { reviewed, discovered };
+}
+
 /** Split the engine's corpus into three Perplexity-style tiers. Cited rows
- *  come from `report.passages`; reviewed = all_hits intersected with passage
- *  URLs (read AND turned into a passage but not cited); discovered = all_hits
- *  minus reviewed/cited (found but not extracted into a passage). */
+ *  come from `report.passages`; reviewed rows come first from the durable
+ *  `reviewed_passages` corpus and then successful discovery hits; discovered
+ *  rows are the remaining hits that were found but not read. */
 export function deriveSourceTiers(report: ReportEvent | null): SourceTiers {
   if (!report) return { cited: [], reviewed: [], discovered: [] };
   // Dedup the cited tier BY URL — a single page can produce many passages, but
@@ -205,25 +259,15 @@ export function deriveSourceTiers(report: ReportEvent | null): SourceTiers {
   // (lib/sources.ts) assigns to the inline chips. Row [i+1] must equal the chip
   // number of every passage from that source; change one, change both (the
   // alignment test in sources.test.ts pins this).
-  const citedByUrl = new Map<string, Record<string, unknown>>();
-  for (const p of report.passages) {
-    const url = String((p as Record<string, unknown>).source_url ?? "");
-    if (!url) continue;
-    if (!citedByUrl.has(url)) citedByUrl.set(url, p as Record<string, unknown>);
-  }
+  const citedByUrl = citedSources(report);
   const cited = Array.from(citedByUrl.values());
   const citedUrls = new Set(citedByUrl.keys());
-  const reviewed: Array<Record<string, unknown>> = [];
-  const discovered: Array<Record<string, unknown>> = [];
-  for (const hit of report.all_hits) {
-    const url = String((hit as Record<string, unknown>).url ?? "");
-    if (!url) continue;
-    if (citedUrls.has(url)) continue; // cited already covered
-    // a hit with status="ok" is at least "reviewed" (we fetched + extracted it
-    // even if no passage was cited). status != "ok" → discovered (failed).
-    const status = String((hit as Record<string, unknown>).status ?? "unread");
-    if (status === "ok") reviewed.push(hit);
-    else discovered.push(hit);
-  }
-  return { cited, reviewed, discovered };
+  const seenHits = new Set<string>();
+  const reviewed = durableReviewedSources(report, citedUrls, seenHits);
+  const hits = splitDiscoveryHits(report, citedUrls, seenHits);
+  return {
+    cited,
+    reviewed: [...reviewed, ...hits.reviewed],
+    discovered: hits.discovered,
+  };
 }

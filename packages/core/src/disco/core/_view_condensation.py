@@ -28,6 +28,7 @@ from .events import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    VerifierVerdictEvent,
 )
 
 if TYPE_CHECKING:
@@ -185,15 +186,7 @@ def _is_cumulative_model_summary(event: CondensationEvent) -> bool:
     return event.reason == "tokens" and not event.summary.startswith("[microcompacted:")
 
 
-def _summary_input_messages(events: list[Event], span: list[Event]) -> list[LLMMessage]:
-    """Build the bounded delta given to the summarizer.
-
-    Keep the first user task as an anchor, the latest prior cumulative summary,
-    and only the newly forgotten span.  Recent live history, workspace snapshots,
-    and older superseded summaries are intentionally excluded.
-    """
-    start_seq = span[0].seq or 0
-    messages: list[LLMMessage] = []
+def _summary_anchor(events: list[Event], start_seq: int) -> LLMMessage | None:
     anchor = next(
         (
             event
@@ -204,20 +197,136 @@ def _summary_input_messages(events: list[Event], span: list[Event]) -> list[LLMM
         ),
         None,
     )
-    if anchor is not None:
-        messages.append(anchor.to_llm_message())
-    prior = [
-        event
+    return _summary_event_message(anchor) if anchor is not None else None
+
+
+def _prior_summary_message(events: list[Event], start_seq: int) -> LLMMessage | None:
+    latest = max(
+        (
+            event
+            for event in events
+            if isinstance(event, CondensationEvent)
+            and _is_cumulative_model_summary(event)
+            and event.forgotten_end_seq < start_seq
+        ),
+        key=lambda event: event.seq or 0,
+        default=None,
+    )
+    if latest is None:
+        return None
+    return LLMMessage(
+        role=latest.summary_role,
+        content=f"[prior-summary through seq={latest.forgotten_end_seq}]\n{latest.summary}",
+    )
+
+
+def _summary_probe_call_ids(events: list[Event]) -> set[str]:
+    return {
+        event.tool_call.call_id
         for event in events
-        if isinstance(event, CondensationEvent)
-        and _is_cumulative_model_summary(event)
-        and event.forgotten_end_seq < start_seq
-    ]
-    if prior:
-        latest = max(prior, key=lambda event: event.seq or 0)
-        messages.append(LLMMessage(role=latest.summary_role, content=latest.summary))
-    messages.extend(event.to_llm_message() for event in span if isinstance(event, LLMConvertible))
+        if isinstance(event, ActionEvent) and event.meta.get("verify_probe") is True
+    }
+
+
+def _summary_span_messages(
+    events: list[Event], start_seq: int, end_seq: int
+) -> list[LLMMessage]:
+    probe_ids = _summary_probe_call_ids(events)
+    messages: list[LLMMessage] = []
+    for event in events:
+        seq = event.seq
+        if seq is None or not start_seq <= seq <= end_seq:
+            continue
+        message = _summary_event_message(event, host_probe_call_ids=probe_ids)
+        if message is not None:
+            messages.append(message)
     return messages
+
+
+def _summary_input_messages(events: list[Event], span: list[Event]) -> list[LLMMessage]:
+    """Build the anchored, provenance-bearing delta given to the summarizer."""
+
+    start_seq = span[0].seq or 0
+    end_seq = span[-1].seq or start_seq
+    messages = [
+        message
+        for message in (
+            _summary_anchor(events, start_seq),
+            _prior_summary_message(events, start_seq),
+        )
+        if message is not None
+    ]
+    messages.extend(_summary_span_messages(events, start_seq, end_seq))
+    return messages
+
+
+def _summary_event_prefix(event: Event) -> str:
+    kind = getattr(event.kind, "value", str(event.kind))
+    source = getattr(event.source, "value", str(event.source))
+    return f"[seq={event.seq or 0} kind={kind} source={source}]"
+
+
+def _host_probe_summary_message(
+    event: Event, prefix: str, probe_ids: set[str]
+) -> LLMMessage | None:
+    if isinstance(event, ActionEvent) and event.meta.get("verify_probe") is True:
+        detail = "advisory finish probe started."
+    elif isinstance(event, ObservationEvent) and event.tool_result.call_id in probe_ids:
+        state = "PASS" if event.tool_result.success else "FAIL"
+        detail = f"advisory finish probe {state}."
+    elif isinstance(event, AgentErrorEvent) and event.tool_call_id in probe_ids:
+        detail = "advisory finish probe did not run or failed."
+    else:
+        return None
+    return LLMMessage(role="user", content=f"{prefix}\nHOST ACTIVITY: {detail}")
+
+
+def _verifier_summary_message(event: Event, prefix: str) -> LLMMessage | None:
+    if not isinstance(event, VerifierVerdictEvent):
+        return None
+    state = "PASS" if event.verified else "FAIL"
+    detail = (event.detail or "").strip()[:500]
+    suffix = f"; detail={detail}" if detail else ""
+    return LLMMessage(
+        role="user",
+        content=(
+            f"{prefix}\nHOST VERIFICATION {state}; artifact={event.artifact_path!r}; "
+            f"verdict={event.verdict!r}; typed_result="
+            f"{'present' if event.verification_result is not None else 'absent'}{suffix}"
+        ),
+    )
+
+
+def _summary_event_message(
+    event: Event, *, host_probe_call_ids: set[str] | None = None
+) -> LLMMessage | None:
+    """Render bounded event provenance for chronological, authority-aware summaries."""
+
+    prefix = _summary_event_prefix(event)
+    probe_ids = host_probe_call_ids or set()
+    host_message = _host_probe_summary_message(event, prefix, probe_ids)
+    if host_message is not None:
+        return host_message
+    if isinstance(event, LLMConvertible):
+        message = event.to_llm_message()
+        return message.model_copy(update={"content": f"{prefix}\n{message.content}"})
+    return _verifier_summary_message(event, prefix)
+
+
+def _bounded_summary_span(span: list[Event], *, max_chars: int, min_events: int) -> list[Event]:
+    """Bound one summarizer request at event boundaries without splitting a tool pair."""
+
+    selected: list[Event] = []
+    used = 0
+    for event in span:
+        message = event.to_llm_message() if isinstance(event, LLMConvertible) else None
+        size = len(message.content) + len(str(message.tool_calls or ())) if message else 0
+        pair_open = bool(selected and isinstance(selected[-1], ActionEvent))
+        if selected and used + size > max_chars and len(selected) >= min_events and not pair_open:
+            break
+        selected.append(event)
+        used += size
+    return selected
 
 
 async def _summarize_with_repair(
@@ -260,18 +369,11 @@ class LLMSummarizingCondenser:
         min_forget: int = 2,
         budget_tokens: int = 24_000,
         hard_budget_tokens: int = 32_000,
+        summary_input_chars: int = 384_000,
     ) -> None:
-        soft_ceiling = budget_tokens * 4
-        hard_ceiling = hard_budget_tokens * 4
         if context_window is not None:
-            window_soft = int(context_window * soft_frac)
-            window_hard = int(context_window * hard_frac)
-            derived_soft = (
-                window_soft if window_soft <= budget_tokens else min(window_soft, soft_ceiling)
-            )
-            derived_hard = (
-                window_hard if window_hard <= hard_budget_tokens else min(window_hard, hard_ceiling)
-            )
+            derived_soft = int(context_window * soft_frac)
+            derived_hard = int(context_window * hard_frac)
         else:
             derived_soft, derived_hard = budget_tokens, hard_budget_tokens
         self._max = max_tokens if max_tokens is not None else derived_soft
@@ -279,6 +381,7 @@ class LLMSummarizingCondenser:
         self._keep_head = keep_head
         self._keep_recent = keep_recent
         self._min_forget = min_forget
+        self._summary_input_chars = max(1, summary_input_chars)
 
     def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
         if token_count is None:
@@ -316,6 +419,11 @@ class LLMSummarizingCondenser:
         span = _compute_condense_span(live, self._keep_head, self._keep_recent, self._min_forget)
         if span is None:
             return None
+        span = _bounded_summary_span(
+            span,
+            max_chars=self._summary_input_chars,
+            min_events=self._min_forget,
+        )
 
         start_seq, end_seq = span[0].seq, span[-1].seq
         if start_seq is None or end_seq is None:

@@ -26,9 +26,47 @@ from disco.core import (
 from disco.core.llm import CapabilityProfile, CompletionRequest, ModelRole
 from disco.retrieval.grounding import _retain_supported_claims, _verify_claims
 from disco.retrieval.models import Passage
+from disco.retrieval.url_policy import parse_source_date
 
 if TYPE_CHECKING:
     from ..deep_research_service import DeepResearchService
+
+
+def _report_grounding_passages(report: ReportEvent) -> list[dict]:
+    """Return the cited + reviewed corpus once per passage id, cited first."""
+
+    passages: list[dict] = []
+    seen: set[str] = set()
+    for passage in [*report.passages, *report.reviewed_passages]:
+        passage_id = str(passage.get("id", ""))
+        if not passage_id or not passage.get("text") or passage_id in seen:
+            continue
+        seen.add(passage_id)
+        passages.append(passage)
+    return passages
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _saved_passage_model(passage: dict) -> Passage:
+    """Restore every durable provenance field with legacy-safe defaults."""
+
+    return Passage(
+        id=str(passage.get("id", "")),
+        source_url=str(passage.get("source_url", "")),
+        source_title=str(passage.get("source_title", "")),
+        text=str(passage.get("text", "")),
+        char_start=_optional_int(passage.get("char_start")),
+        char_end=_optional_int(passage.get("char_end")),
+        corpus_id=(
+            str(passage["corpus_id"])
+            if isinstance(passage.get("corpus_id"), str)
+            else None
+        ),
+        published_at=parse_source_date(passage.get("published_at")),
+    )
 
 
 def find_follow_up_query(events: list[Event], prior_report: ReportEvent) -> str | None:
@@ -106,12 +144,7 @@ async def run_follow_up_completion(
     cleaned = _clean_model_text(answer.text)
     if passages:
         passage_models = [
-            Passage(
-                id=str(passage.get("id", "")),
-                source_url=str(passage.get("source_url", "")),
-                source_title=str(passage.get("source_title", "")),
-                text=str(passage.get("text", "")),
-            )
+            _saved_passage_model(passage)
             for passage in passages
             if passage.get("id") and passage.get("text")
         ]
@@ -187,8 +220,9 @@ async def run_follow_up(
         conversation_id, ConversationStatus.RUNNING, detail="follow_up"
     )
 
-    # Reuse the prior report's passages as the grounding corpus.
-    passages = prior_report.passages or []
+    # Reuse the complete saved evidence corpus. `passages` remains cited-only
+    # for UI numbering; reviewed passages are a separate durable grounding set.
+    passages = _report_grounding_passages(prior_report)
     if not passages:
         # No source corpus means there is no honest grounded-answer path.
         await service._store.append(

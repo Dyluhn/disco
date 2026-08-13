@@ -551,10 +551,14 @@ class TestMappingStatic:
             # V30 adds three static harness ids for the provider-transport versus
             # model-repair boundary. One is parametrized across the three
             # transient driver outcomes, yielding five collected ids in total.
+            # The V30 integration fold-in adds 25 static Python ids and six
+            # TypeScript ids across interaction provenance, bounded debugging,
+            # Preview continuity, AppKit completion, and Deep Research
+            # grounding/source/export behavior. Existing test files own them.
             "python_test_file_count": 844,
-            "python_static_test_id_count": 10235,
+            "python_static_test_id_count": 10260,
             "typescript_test_file_count": 239,
-            "typescript_static_test_id_count": 1205,
+            "typescript_static_test_id_count": 1211,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -912,7 +916,9 @@ class TestCollectedCounts:
             # V28 adds 81 collected package ids for SecretStore rotation,
             # downgrade safety, Compose propagation, adjacent status wiring, and
             # the strict verifier's ownership of first materializing dist/.
-            "packages": 10649,
+            # The V30 integration fold-in adds 25 collected package ids; its
+            # TypeScript cases are governed by the separate static/Vitest rows.
+            "packages": 10674,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1030,7 +1036,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12454 == sum(expected.values())
+        assert collected["total"] == 12479 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1046,7 +1052,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12454}
+        assert result == {"collected_total": 12479}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1065,9 +1071,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10235,
-            "typescript_static_ids": 1205,
-            "collected_total": 12454,
+            "python_static_ids": 10260,
+            "typescript_static_ids": 1211,
+            "collected_total": 12479,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

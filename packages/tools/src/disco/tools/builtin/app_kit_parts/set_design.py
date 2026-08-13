@@ -4,8 +4,8 @@ design/CSS files.
 
 ``AppSetDesignTool.run`` is decomposed into: new-design resolution (recipe P0
 or raw-spec P1, aligned to the committed direction), the optional
-recipe-driven section-variant reassignment, the semantic no-op refusal, and
-response assembly.
+recipe-driven section-variant reassignment, idempotent satisfied-state handling,
+and response assembly.
 """
 
 from __future__ import annotations
@@ -93,12 +93,42 @@ def _apply_variant_policy(
     return AppSpec.model_validate(data), True
 
 
-def _refuse_design_noop(app_changed: bool, design: DesignSpec, prior_design: DesignSpec) -> None:
+def _satisfied_design_outcome(
+    app_changed: bool,
+    design: DesignSpec,
+    prior_design: DesignSpec,
+    recipe: SiteRecipe | None,
+) -> ToolOutcome | None:
+    """Return a success receipt when the requested design is already current.
+
+    ``app_create`` applies its recipe's design as part of the initial atomic
+    generation.  Repeating that exact semantic request is therefore a satisfied
+    post-condition, not a failed mutation.  It deliberately carries no effect
+    receipts: downstream progress accounting can see that no workspace bytes
+    changed while the model receives one unambiguous success signal.
+    """
+
     if app_changed or design != prior_design:
-        return
-    raise _AppKitError(
-        "no-op: this exact design is already persisted; the requested design "
-        "change is COMPLETE. Move on to verify/finish or choose a different design."
+        return None
+    return _already_applied_outcome(recipe)
+
+
+def _already_applied_outcome(recipe: SiteRecipe | None) -> ToolOutcome:
+    """Return the byte-stable success shape for an already-satisfied request."""
+
+    label = f"recipe '{recipe.id}'" if recipe is not None else "the requested DesignSpec"
+    return ToolOutcome(
+        success=True,
+        content=(
+            f"app_set_design: {label} is already applied; the design requirement "
+            "is satisfied and no files changed."
+        ),
+        structured={
+            "files_written": [],
+            "specs": [],
+            "changed": False,
+            "already_applied": True,
+        },
     )
 
 
@@ -149,7 +179,11 @@ class AppSetDesignTool:
             prior_design = await _load_design_spec(ctx)
             recipe, design, direction = await _resolve_new_design(ctx, args)
             app, app_changed = _apply_variant_policy(app, args, recipe)
-            _refuse_design_noop(app_changed, design, prior_design)
+            satisfied = _satisfied_design_outcome(
+                app_changed, design, prior_design, recipe
+            )
+            if satisfied is not None:
+                return satisfied
 
             tree = generate(app, design)
             await _lint_gate(tree, design, ctx, direction=direction)
@@ -163,9 +197,7 @@ class AppSetDesignTool:
             if isinstance(committed, ToolOutcome):
                 return committed
             if not committed.changed_paths:
-                raise _AppKitError(
-                    "no-op: this design produced no byte change; move on to verify/finish."
-                )
+                return _already_applied_outcome(recipe)
             return _build_set_design_outcome(recipe, committed, tree)
         except _AppKitError as exc:
             return ToolOutcome(success=False, content=str(exc), error="app_set_design_refused")

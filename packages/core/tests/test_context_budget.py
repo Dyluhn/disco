@@ -1,10 +1,9 @@
 """H — context/cost bloat fixes.
 
 (1) [C9] the condensation trigger honors the LIVE context window — a 128k model
-    condenses at 83k (its 65% point), NOT the old fixed ~24k. A 1M model still
-    caps at a sane ceiling (4× working budget = 96k/128k) so it doesn't bloat
-    to 681k and re-send 60k+ per action. Small windows (< ~37k) and unknown
-    windows keep their previous behavior (H1 small-window + budget-only paths).
+    condenses at 83k and a 1M model at 681k (their 65% points), rather than at a
+    fixed working-budget ceiling. Unknown windows retain the budget-only path.
+    The summarizer input has its own independent bound.
 
 (2) large tool-call argument values (file bodies) are elided at render time so
     they're not re-sent every turn."""
@@ -14,7 +13,7 @@ from __future__ import annotations
 from disco.core.events import ActionEvent, ToolCall
 from disco.core.view import LLMSummarizingCondenser, View
 
-# ---- C9: live context window, with a sane ceiling ---------------------------
+# ---- C9: live context window -------------------------------------------------
 
 
 def test_c9_128k_window_scales_soft_above_old_24k_cap():
@@ -29,13 +28,11 @@ def test_c9_128k_window_scales_soft_above_old_24k_cap():
     assert c._hard > 32_000
 
 
-def test_c9_1m_window_grows_to_ceiling_not_to_681k():
-    """DeepSeek-class 1M window: 0.65× = 681k — must NOT be allowed (re-sending
-    60k+ per action), but the cap is now a sane 4× working budget = 96k soft /
-    128k hard, NOT the old 24k/32k budget pin."""
+def test_c9_1m_window_uses_its_real_fraction():
+    """A known 1M window is not silently reduced to a 96k/128k pseudo-window."""
     c = LLMSummarizingCondenser(context_window=1_048_576)
-    assert c._max == 96_000  # ceiling, NOT 681_574, NOT 24_000
-    assert c._hard == 128_000  # ceiling, NOT 838_860, NOT 32_000
+    assert c._max == 681_574
+    assert c._hard == 838_860
 
 
 def test_c9_unknown_window_still_uses_the_budget():
@@ -44,7 +41,7 @@ def test_c9_unknown_window_still_uses_the_budget():
     assert c._max == 24_000 and c._hard == 32_000
 
 
-def test_c9_explicit_overrides_win_over_derived_ceiling():
+def test_c9_explicit_overrides_win_over_derived_fraction():
     """Explicit max_tokens / hard_max_tokens are authoritative (tests rely on this).
     Even on a 1M-window model, the user-supplied value wins."""
     c = LLMSummarizingCondenser(context_window=1_048_576, max_tokens=50, hard_max_tokens=60)
@@ -87,19 +84,16 @@ def test_c9_should_condense_fires_past_83k_for_a_128k_model():
     assert hard is not None and hard.soft is False
 
 
-def test_c9_should_condense_fires_past_ceiling_for_a_1m_model():
-    """A 1M model caps at 96k soft / 128k hard — the old behavior (fires at 24k)
-    would have fired way too early; the new behavior waits for the ceiling."""
+def test_c9_should_condense_uses_fraction_boundaries_for_a_1m_model():
+    """A 1M model waits for its actual soft and hard context fractions."""
     c = LLMSummarizingCondenser(context_window=1_048_576)
     empty = View(messages=[], visible_seqs=[], total_events=0, forgotten_count=0)
-    # Under soft ceiling: don't condense.
-    assert c.should_condense(empty, token_count=50_000) is None
-    assert c.should_condense(empty, token_count=95_000) is None
-    # Over soft ceiling: maintain the bound.
-    soft = c.should_condense(empty, token_count=100_000)
+    assert c.should_condense(empty, token_count=100_000) is None
+    assert c.should_condense(empty, token_count=500_000) is None
+    assert c.should_condense(empty, token_count=c._max - 1) is None
+    soft = c.should_condense(empty, token_count=c._max)
     assert soft is not None and soft.soft is True
-    # Over hard ceiling: must condense now.
-    hard = c.should_condense(empty, token_count=130_000)
+    hard = c.should_condense(empty, token_count=c._hard)
     assert hard is not None and hard.soft is False
 
 

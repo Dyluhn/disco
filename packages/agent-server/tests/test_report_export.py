@@ -672,3 +672,46 @@ def test_endpoint_md_export_no_title_falls_back_to_query(
     r = client_with_runtime.post(f"/api/conversations/{cid}/report/export?fmt=md")
     assert r.status_code == 200, r.text
     assert r.content == CAPTURED_MARKDOWN.encode("utf-8")
+
+
+@pytest.mark.anyio
+async def test_export_waits_for_canonical_generated_title(store: SqliteEventStore) -> None:
+    from types import SimpleNamespace
+
+    from disco.agent_server.routes.report import _resolve_export_payload
+    from disco.agent_server.title_service import TitleService
+    from disco.core import LLMMessage, MessageEvent
+
+    class _Response:
+        text = "Weekly Open Source Releases"
+
+    class _Router:
+        async def complete(self, request):  # noqa: ANN001
+            return _Response()
+
+    cid = "report-title-race"
+    store.create_conversation(cid)
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(
+                role="user", content="What open-source models were released this week?"
+            ),
+        ),
+    )
+    await store.append(cid, _make_sample_report())
+    titles = TitleService(store, lambda *args, **kwargs: _Router())
+    runtime = SimpleNamespace(titles=titles)
+
+    payload, _media_type, _extension = await _resolve_export_payload(
+        store,
+        runtime,  # type: ignore[arg-type]
+        cid,
+        "md",
+        [],
+    )
+
+    assert payload.decode("utf-8").splitlines()[0] == (
+        "# Deep Research: Weekly Open Source Releases"
+    )

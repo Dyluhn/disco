@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -405,6 +406,9 @@ class SqliteEventStore(_ClosableSqliteStore):
         self._write_lock = asyncio.Lock()
         self._preview_redemptions = PreviewRedemptionStore(self._conn)
         self._local_preview_leases = LocalPreviewLeaseStore(self._conn)
+        # Reclaim capacity even when a database sits idle after leases expire.
+        # Browser-origin authority rows intentionally survive as reset fences.
+        self._local_preview_leases.purge_expired(now=int(time.time()))
         # conversation_id -> set of live subscriber queues.
         self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
             defaultdict(set)

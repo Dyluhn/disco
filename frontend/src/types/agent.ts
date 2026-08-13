@@ -186,15 +186,15 @@ export interface ReportSection {
  * `bounded_by` field is the load-bearing honesty surface: when set, it names
  * which depth cap stopped the run (sources / rounds / wall_clock / subquestions).
  * `passages` and `all_hits` carry the cited subset + full discovery set for the
- * source panel; the existing types/grounded.ts shapes (Passage / SearchHit)
- * are the row contract — we keep `unknown` here to avoid the import cycle
- * (the UI casts at render time). */
+ * source panel; existing Passage/SearchHit shapes are the row contract, kept
+ * `unknown` here to avoid the import cycle (the UI casts at render time). */
 export interface ReportEvent extends EventBase {
   kind: "report";
   query: string;
   summary: string;
   sections: ReportSection[];
   passages: Array<Record<string, unknown>>;
+  reviewed_passages?: Array<Record<string, unknown>>;
   all_hits: Array<Record<string, unknown>>;
   unsupported_count: number;
   bounded_by: string | null;

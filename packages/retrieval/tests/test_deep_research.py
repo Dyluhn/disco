@@ -457,6 +457,11 @@ async def test_full_run_produces_multi_section_report() -> None:
     assert ev.query == "the state of X"
     assert len(ev.sections) == 3
     assert ev.passages  # cited subset is populated
+    assert result.reviewed_passages  # reviewed evidence is retained separately
+    assert ev.reviewed_passages == [p.model_dump() for p in result.reviewed_passages]
+    assert {p["id"] for p in ev.passages}.isdisjoint(
+        {p["id"] for p in ev.reviewed_passages}
+    )
     # progress callback fired the right shape (phases + searches + synthesize)
     phases = [p for k, p in captured if k == "phase"]
     assert any(p.get("phase") == "gather" for p in phases)

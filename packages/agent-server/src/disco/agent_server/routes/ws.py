@@ -277,23 +277,30 @@ async def _require_ws_session(websocket: WebSocket):
     return session
 
 
-async def _require_conversation_ws_session(
-    websocket: WebSocket, store: SqliteEventStore, conversation_id: str
-):
-    session = await _require_ws_session(websocket)
-    if session is None:
-        return None
+async def _conversation_ws_allowed(
+    store: SqliteEventStore, conversation_id: str, session: Any
+) -> bool:
+    """Authorize a conversation socket without leaking existence to the client."""
+
     try:
         validate_canonical_conversation_id(conversation_id)
     except HTTPException:
-        await websocket.close(code=1008, reason="conversation forbidden")
-        return None
+        return False
     if session.session_id == "test-session":
-        return session
-    if not await store.conversation_owned_by(conversation_id, session.owner_id):
-        await websocket.close(code=1008, reason="conversation forbidden")
-        return None
-    return session
+        return True
+    return await store.conversation_owned_by(conversation_id, session.owner_id)
+
+
+async def _close_forbidden_conversation_ws(websocket: WebSocket) -> None:
+    """Send one typed policy result after auth, then stop reconnect churn."""
+
+    await _send_json_redacted(
+        websocket,
+        WSServerFrame(
+            type="error", error={"detail": "conversation_forbidden"}
+        ).model_dump(mode="json"),
+    )
+    await websocket.close(code=1008, reason="conversation forbidden")
 
 
 async def _reject_forbidden_research_conversation(
@@ -606,9 +613,13 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
         # non-path scalar parameters as query parameters here.
         last_seq: int = 0,
     ) -> None:
-        if await _require_conversation_ws_session(websocket, store, conversation_id) is None:
+        session = await _require_ws_session(websocket)
+        if session is None:
             return
         await websocket.accept()
+        if not await _conversation_ws_allowed(store, conversation_id, session):
+            await _close_forbidden_conversation_ws(websocket)
+            return
         if runtime is not None:
             runtime.connections.on_connect(conversation_id)
         await _run_conversation_ws(store, runtime, websocket, conversation_id, last_seq)

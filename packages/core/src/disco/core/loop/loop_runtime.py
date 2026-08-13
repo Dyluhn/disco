@@ -34,6 +34,7 @@ from .engine_contracts import (
     signals,
     view_render,
 )
+from .file_state import reconcile_mutation_receipts
 
 if TYPE_CHECKING:
     from .boundaries import StreamHook
@@ -204,6 +205,11 @@ class LoopRuntime:
             )
             _ACTIVE_AGENT_VIEW_ID.set(view_id)
             await self._loop._prepare_executor(events)
+            # Workspace effects and model-visible transcript have different
+            # projection rules.  A superseded model response stays hidden, but
+            # any authenticated mutation it already completed remains a real
+            # disk effect and must advance the snapshot baseline.
+            reconcile_mutation_receipts(self._loop._view._file_tracker, events)
             consistent_events = cast("list[Event]", agent_view_consistent_events(events))
             view, consistent_events = await self._loop._view.build_with_horizon(consistent_events)
             await self._loop._assert_current_agent_view()

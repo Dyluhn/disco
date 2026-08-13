@@ -77,6 +77,7 @@ class ReportFromRun:
         summary: str,
         sections: list[ReportSection],
         cited_passages: list[RetrievalPassage],
+        reviewed_passages: list[RetrievalPassage],
         all_hits: list[Any],
         unsupported_count: int,
         bounded_by: str | None,
@@ -86,6 +87,7 @@ class ReportFromRun:
         self.summary = summary
         self.sections = sections
         self.cited_passages = cited_passages
+        self.reviewed_passages = reviewed_passages
         self.all_hits = all_hits
         self.unsupported_count = unsupported_count
         self.bounded_by = bounded_by
@@ -100,6 +102,7 @@ class ReportFromRun:
             summary=self.summary,
             sections=self.sections,
             passages=[p.model_dump() for p in self.cited_passages],
+            reviewed_passages=[p.model_dump() for p in self.reviewed_passages],
             all_hits=[h.model_dump() for h in self.all_hits],
             unsupported_count=self.unsupported_count,
             bounded_by=self.bounded_by,
@@ -481,14 +484,15 @@ class DeepResearchRun:
         then build the ReportFromRun. Carried (resumed) passages/hits come first
         so a resumed run's citations resolve against the sources its earlier
         sections actually used."""
-        all_passages, all_hits, unsupported_total = collect_report_data(
+        cited_passages, reviewed_passages, all_hits, unsupported_total = collect_report_data(
             sections, results, carried_passages, carried_hits
         )
         return ReportFromRun(
             query=self._query,
             summary=summary,
             sections=sections,
-            cited_passages=all_passages,
+            cited_passages=cited_passages,
+            reviewed_passages=reviewed_passages,
             all_hits=all_hits,
             unsupported_count=unsupported_total,
             bounded_by=bounded_by,

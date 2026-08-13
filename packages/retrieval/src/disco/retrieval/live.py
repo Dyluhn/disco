@@ -30,7 +30,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
 from .providers import SearchProvider
-from .url_policy import url_allowed
+from .url_policy import parse_source_date, url_allowed
 
 # W-33: cap how long a remote-encoder connectivity probe waits. The probe only
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
@@ -128,6 +128,9 @@ class SearxngSearchProvider:
                     snippet=res.get("content") or "",
                     source_engine=res.get("engine") or "searxng",
                     rank=i,
+                    published_at=parse_source_date(
+                        res.get("publishedDate") or res.get("published_date")
+                    ),
                 )
             )
             if len(hits) >= limit:

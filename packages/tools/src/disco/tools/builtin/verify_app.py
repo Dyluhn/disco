@@ -135,13 +135,10 @@ class VerifyWebAppTool:
     definition = ToolDef(
         name="verify_web_app",
         description=(
-            "Optionally debug the running web app with a STRUCTURED pass/fail verdict "
-            "(not a raw page dump). Checks: server reachable, HTTP 2xx/3xx, no console "
-            "errors, no critical network failures, and a meaningful (non-blank) render. "
-            "Returns verdict (pass/fail/degraded), the failing console/network details, "
-            "a screenshot path, a stable failure_fingerprint, and the exact next_action "
-            "to fix. This is limited runtime/render evidence, not semantic completeness or "
-            "completion authority. One use spends one of the TWO debug calls shared with "
+            "Optionally debug the running web app with one structured report instead of "
+            "repeated raw browser inspection. The result states exactly what was checked, "
+            "what was not checked, any actionable failure evidence, and the next debugging "
+            "move. One use spends one of the TWO debug calls shared with "
             "verify_appkit_app and design_lint for the current artifact bytes; only a real "
             "successful artifact mutation resets that allowance. Auto-detects the preview "
             "port if no url is given."
@@ -257,7 +254,13 @@ class VerifyWebAppTool:
             content=(
                 "VERIFY_WEB_APP: UNVERIFIABLE (server reachable)\n"
                 f"url: {url}  http_status: {http_status}\n"
-                f"summary: {unverifiable['summary']}"
+                f"summary: {unverifiable['summary']}\n"
+                "checked: server reachability and HTTP status\n"
+                "visual_evidence: NOT CHECKED — the browser probe was unavailable and no "
+                "screenshot pixels were supplied to the agent\n"
+                "not_checked: rendered DOM, console/network diagnostics, task requirements, "
+                "semantic/behavioral completeness, plan completion, and end-to-end user "
+                "correctness"
                 + (
                     f"\nnext_action: {unverifiable['next_action']}"
                     if unverifiable["next_action"]
@@ -272,7 +275,13 @@ class VerifyWebAppTool:
         return fail_outcome(
             (
                 f"verify_web_app render probe failed after HTTP {http_status}: "
-                f"{detail}\n{_verify_web_app_failure_recipe(http_status)}"
+                f"{detail}\n"
+                "checked: server reachability and HTTP status\n"
+                "visual_evidence: NOT CHECKED — the render probe failed and no screenshot "
+                "pixels were supplied to the agent\n"
+                "not_checked: rendered DOM, console/network diagnostics, task requirements, "
+                "semantic/behavioral completeness, plan completion, and end-to-end user "
+                f"correctness\n{_verify_web_app_failure_recipe(http_status)}"
             ),
             structured={
                 "verdict": "unverifiable",

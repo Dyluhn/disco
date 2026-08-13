@@ -197,26 +197,34 @@ export function useBuildStream(
   const [state, dispatch] = useReducer(reducer, initial);
   const handle = useRef<AgentHandle | null>(null);
   const makeId = options?.idFactory ?? defaultOptimisticIdFactory;
+  const sessionCid = session?.cid ?? null;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   useEffect(() => {
-    if (!session) return;
+    if (!sessionCid) return;
+    const current = sessionRef.current;
+    if (current === null) return;
     dispatch({ type: "reset" });
-    const h = subscribeConversation(session.cid, (frame) => dispatch({ type: "frame", frame }));
+    const h = subscribeConversation(sessionCid, (frame) => dispatch({ type: "frame", frame }));
     handle.current = h;
     // View ≠ start: only a fresh submit kicks the loop. Opening an existing build
     // (resume / History) is a safe read — subscribe + replay only.
-    if (session.kick)
+    if (current.kick)
       h.send({
         type: "send_message",
-        content: session.task,
+        content: current.task,
         // CONTRACT-ACTIVATE: presence of build_brief asks the server to classify
         // the request and declare the build contract for this run (codex found
         // the shipped UI never sent it, so activation only fired for API callers).
         build_brief: {},
-        ...(session.context ? { context: session.context } : {}),
+        ...(current.context ? { context: current.context } : {}),
       });
-    return () => h.cancel();
-  }, [session]);
+    return () => {
+      h.cancel();
+      if (handle.current === h) handle.current = null;
+    };
+  }, [sessionCid]);
 
   const confirm = useCallback(() => handle.current?.send({ type: "confirm" }), []);
   const reject = useCallback(() => handle.current?.send({ type: "reject" }), []);

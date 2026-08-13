@@ -511,6 +511,9 @@ async def gate_host_verify(
     )
     if deliverable is None:
         return Disp.FALLTHROUGH
+    # Deliverable reconstruction may append a host-owned Preview rebind. All
+    # later disposition/authority checks must observe that same durable event.
+    events = await gate._loop._events()
     valid_preverified, skip_check_ids, preverified_claim_ids = _gate_host_verify_preverified_state(
         preverified
     )

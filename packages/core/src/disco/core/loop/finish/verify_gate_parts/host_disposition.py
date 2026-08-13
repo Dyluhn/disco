@@ -192,10 +192,10 @@ def _governed_non_pass_guidance(
         or "selected preview generation is absent, changed" in claim_reasons
     ):
         return (
-            "the managed Preview generation changed after the last deliverable handoff. "
-            "Keep the current managed preview running; once it is healthy, call `serve` "
-            "again for the same app artifact so the handoff binds the current generation, "
-            "then call `finish` again. Do not restart a healthy preview."
+            "the managed Preview generation changed while completion was being bound or "
+            "verified. Keep the current managed preview running and call `finish` once "
+            "more; the host will bind and verify that generation itself. No preview or "
+            "handoff change is needed."
         )
     if typed_result is None:
         return (

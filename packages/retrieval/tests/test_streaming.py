@@ -6,8 +6,17 @@ Drops non-supported claims and strips their citation markers from the prose, so 
 
 from __future__ import annotations
 
-from disco.retrieval.models import Passage
-from disco.retrieval.streaming import _drop_weak, _verify_claims
+import datetime
+import json
+
+from disco.retrieval.models import ExtractedDoc, Passage, SearchHit
+from disco.retrieval.streaming import (
+    _build_final_answer,
+    _drop_weak,
+    _extract_round_passages,
+    _RoundResult,
+    _verify_claims,
+)
 
 
 def _answer() -> dict:
@@ -74,3 +83,67 @@ def test_verifier_rejects_uncited_prose_and_unknown_source_ids():
         "unsupported",
         "unsupported",
     ]
+
+
+async def test_streaming_extraction_uses_canonical_source_identity() -> None:
+    class _Extraction:
+        async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+            return [
+                ExtractedDoc(
+                    url="https://example.com/release",
+                    title="Release",
+                    content="release evidence",
+                    passages=[
+                        Passage(
+                            id="p-release",
+                            source_url="https://example.com/release",
+                            source_title="Release",
+                            text="release evidence",
+                        )
+                    ],
+                    status="ok",
+                )
+            ]
+
+    hit = SearchHit(
+        url="http://example.com/release/?utm_source=feed#details",
+        title="Release",
+        published_at=datetime.date(2026, 8, 11),
+    )
+    _docs, _passages, all_hits, round_keys = await _extract_round_passages(
+        _Extraction(),  # type: ignore[arg-type]
+        [hit],
+        frozenset(),
+        extract_cap=1,
+        discover_limit=1,
+    )
+
+    assert all_hits[0]["status"] == "ok"
+    assert all_hits[0]["published_at"] == "2026-08-11"
+    json.dumps(all_hits)
+    assert round_keys == frozenset({"example.com/release"})
+
+
+def test_dated_final_answer_is_json_serializable() -> None:
+    passage = Passage(
+        id="dated",
+        source_url="https://example.com/release",
+        source_title="Release",
+        text="The model was released.",
+        published_at=datetime.date(2026, 8, 11),
+    )
+    result = _RoundResult(
+        blocks=[],
+        claims=[],
+        top=[passage],
+        all_hits=[],
+        supported=0,
+        this_round_urls=frozenset(),
+        token_frames=[],
+        answer_text="",
+    )
+
+    answer = _build_final_answer("What shipped?", result, [])
+
+    assert answer["passages"][0]["published_at"] == "2026-08-11"
+    json.dumps(answer)

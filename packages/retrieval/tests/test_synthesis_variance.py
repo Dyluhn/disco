@@ -18,7 +18,11 @@ contract WITHOUT loosening grounding:
 
 from __future__ import annotations
 
+import datetime
+
+import pytest
 from disco.core import ReportSection
+from disco.core.llm import CompletionResponse, TokenUsage
 from disco.retrieval import InMemoryVectorStore, Passage
 from disco.retrieval.deep_research import synthesis
 from disco.retrieval.deep_research.synthesis import (
@@ -29,6 +33,7 @@ from disco.retrieval.deep_research.synthesis import (
     _extract_disputed_notes,
     _format_passages,
     _retrieve_for_section,
+    coherence_pass,
 )
 
 # ---------------------------------------------------------------------------
@@ -182,3 +187,210 @@ async def test_empty_vector_result_falls_back_to_gathered_passages():
         top_k=4,
     )
     assert selected == fallback
+
+
+class _SummaryRouter:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.requests = []
+
+    async def complete(self, request):  # noqa: ANN001
+        self.requests.append(request)
+        return CompletionResponse(
+            text=self.text,
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason="stop",
+            model_used="summary-test",
+            request_id=request.request_id,
+        )
+
+
+class _ReleaseNLI:
+    @staticmethod
+    def _negative(text: str) -> bool:
+        lowered = text.lower()
+        return "no significant" in lowered or "not released" in lowered
+
+    def entail(self, premise: str, hypothesis: str) -> str:
+        if "release" in premise.lower() and "release" in hypothesis.lower():
+            return (
+                "contradict"
+                if self._negative(premise) != self._negative(hypothesis)
+                else "entail"
+            )
+        overlap = set(premise.lower().split()) & set(hypothesis.lower().split())
+        return "entail" if overlap else "neutral"
+
+    def score(self, premise: str, hypothesis: str) -> float:
+        return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
+
+
+@pytest.mark.asyncio
+async def test_coherence_rejects_grounded_claim_that_contradicts_another_section():
+    passages = [
+        Passage(
+            id="released",
+            source_url="https://example.com/new",
+            source_title="Current release",
+            text="Muse Glimmer was released as open source this week.",
+            published_at=datetime.date(2026, 8, 11),
+        ),
+        Passage(
+            id="negative",
+            source_url="https://example.com/old",
+            source_title="Earlier survey",
+            text="No significant open-source models were released this week.",
+            published_at=datetime.date(2026, 8, 8),
+        ),
+    ]
+    sections = [
+        ReportSection(
+            id="new",
+            title="New release",
+            markdown="Muse Glimmer was released as open source this week [[released]].",
+        ),
+        ReportSection(
+            id="old",
+            title="Earlier survey",
+            markdown="No significant open-source models were released this week [[negative]].",
+        ),
+    ]
+    router = _SummaryRouter(
+        "No significant open-source models were released this week [[negative]]."
+    )
+
+    summary = await coherence_pass(
+        "What open-source models were released this week?",
+        sections,
+        router=router,  # type: ignore[arg-type]
+        passages=passages,
+        nli=_ReleaseNLI(),
+        recency_window="week",
+    )
+
+    assert "Muse Glimmer was released" in summary
+    assert "[[released]]" in summary
+    assert "No significant" not in summary
+    prompt = router.requests[0].messages[-1].content
+    assert "Grounding-supported cited findings" in prompt
+    assert "published=2026-08-11" in prompt
+
+
+@pytest.mark.asyncio
+async def test_coherence_allows_newer_supported_state_to_supersede_old_state():
+    passages = [
+        Passage(
+            id="old",
+            source_url="https://example.com/old",
+            source_title="Old status",
+            text="Muse Glimmer was not released.",
+            published_at=datetime.date(2026, 8, 1),
+        ),
+        Passage(
+            id="new",
+            source_url="https://example.com/new",
+            source_title="New status",
+            text="Muse Glimmer was released.",
+            published_at=datetime.date(2026, 8, 11),
+        ),
+    ]
+    sections = [
+        ReportSection(
+            id="old-section",
+            title="Earlier status",
+            markdown="Muse Glimmer was not released [[old]].",
+        )
+    ]
+    router = _SummaryRouter("Muse Glimmer was released [[new]].")
+
+    summary = await coherence_pass(
+        "Was Muse Glimmer released?",
+        sections,
+        router=router,  # type: ignore[arg-type]
+        passages=passages,
+        nli=_ReleaseNLI(),
+    )
+
+    assert summary == "Muse Glimmer was released [[new]]."
+
+
+@pytest.mark.asyncio
+async def test_coherence_fallback_retains_dated_history_without_recency_scope():
+    passages = [
+        Passage(
+            id="old",
+            source_url="https://example.com/old",
+            source_title="Old status",
+            text="Muse Glimmer was not released.",
+            published_at=datetime.date(2026, 8, 1),
+        ),
+        Passage(
+            id="new",
+            source_url="https://example.com/new",
+            source_title="New status",
+            text="Muse Glimmer was released.",
+            published_at=datetime.date(2026, 8, 11),
+        ),
+    ]
+    sections = [
+        ReportSection(
+            id="old-section",
+            title="Earlier status",
+            markdown="Muse Glimmer was not released [[old]].",
+        ),
+        ReportSection(
+            id="new-section",
+            title="Current status",
+            markdown="Muse Glimmer was released [[new]].",
+        ),
+    ]
+
+    summary = await coherence_pass(
+        "How did the release status change?",
+        sections,
+        router=_SummaryRouter(""),  # type: ignore[arg-type]
+        passages=passages,
+        nli=_ReleaseNLI(),
+    )
+
+    assert summary.startswith("Sources disagree on some current-state findings.")
+    assert "Muse Glimmer was not released" in summary
+    assert "[[old]]" in summary
+    assert "Muse Glimmer was released" in summary
+    assert "[[new]]" in summary
+
+
+def test_fallback_conflict_checks_are_bounded_without_dropping_unchecked_findings():
+    from disco.retrieval.deep_research._summary import (
+        _MAX_FALLBACK_CONFLICT_CHECKS,
+        _fallback_findings,
+        _SupportedFinding,
+    )
+
+    class _CountingNLI(_ReleaseNLI):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def entail(self, premise: str, hypothesis: str) -> str:
+            self.calls += 1
+            return super().entail(premise, hypothesis)
+
+    findings = [
+        _SupportedFinding(
+            text=(
+                "Muse Glimmer was not released"
+                if index % 2
+                else "Muse Glimmer was released"
+            ),
+            cited_ids=(f"p{index}",),
+            section_index=index % 12,
+            published_at=datetime.date(2026, 1, 1) + datetime.timedelta(days=index),
+        )
+        for index in range(500)
+    ]
+    nli = _CountingNLI()
+
+    summary = _fallback_findings(findings, nli, "week")
+
+    assert nli.calls <= _MAX_FALLBACK_CONFLICT_CHECKS * 2
+    assert "[[p499]]" in summary

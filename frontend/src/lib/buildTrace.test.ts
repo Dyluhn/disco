@@ -118,6 +118,19 @@ describe("derivePlan — legacy no-steps placeholder is dropped", () => {
 });
 
 describe("deriveActivity — autoApproved derivation (DC-03)", () => {
+  it("labels host finish probes without presenting host prose as model thought", () => {
+    const items = deriveActivity(
+      [actionEvent("host-probe", "shell", { verify_probe: true })],
+      null,
+      "RUNNING",
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("system_note");
+    expect(items[0].label).toBe("Host ran an advisory finish check");
+    expect(items[0].thought).toBeUndefined();
+    expect(items[0].expandable?.tool_name).toBe("shell");
+  });
+
   it("sets autoApproved=true when meta.auto_approved === 'sandboxed'", () => {
     const events: AgentEvent[] = [
       actionEvent("act-1", "shell", { auto_approved: "sandboxed" }),

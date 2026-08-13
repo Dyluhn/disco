@@ -6,6 +6,7 @@ generation → UI citation (principle 6). Field names/types are normative.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,6 +21,7 @@ class SearchHit(BaseModel):
     snippet: str = ""  # provider snippet — NOT trusted as content (§1.4)
     source_engine: str = ""  # which engine produced it (provenance)
     rank: int = 0  # provider's original rank
+    published_at: date | None = None  # source publication date when provider supplies it
     # ``None`` means discovered but not attempted.  The retrieval engine fills
     # this after extraction so downstream report surfaces never have to guess
     # that a bare discovery hit was successfully read.
@@ -38,6 +40,7 @@ class Passage(BaseModel):
     char_start: int | None = None  # location within the source (for the UI)
     char_end: int | None = None
     corpus_id: str | None = None  # set when from a Space corpus, not the live web
+    published_at: date | None = None  # inherited from discovery/source metadata
 
 
 class ExtractedDoc(BaseModel):

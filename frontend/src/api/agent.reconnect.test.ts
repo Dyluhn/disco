@@ -145,6 +145,52 @@ describe("subscribeLive — reconnect with backoff", () => {
     h.cancel();
   });
 
+  it("keeps a terminal conversation quiescent until an explicit follow-up", async () => {
+    const h = subscribeLive("conv_finished", () => {});
+    await Promise.resolve();
+    const first = MockWS.instances[0];
+    first.open();
+    first.message({
+      type: "state",
+      state: { execution_status: "FINISHED", last_seq: 12 },
+    });
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(first.closeCalls).toBe(0);
+    first.close();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(MockWS.instances).toHaveLength(1);
+
+    h.send({ type: "send_message", content: "one follow-up" });
+    await Promise.resolve();
+    expect(MockWS.instances).toHaveLength(2);
+    MockWS.instances[1].open();
+    expect(MockWS.instances[1].sent).toEqual([
+      JSON.stringify({ type: "send_message", content: "one follow-up" }),
+    ]);
+    h.cancel();
+  });
+
+  it("does not reconnect after a typed conversation policy close", async () => {
+    const frames: { type: string }[] = [];
+    const h = subscribeLive("conv_forbidden", (frame) =>
+      frames.push(frame as { type: string }),
+    );
+    await Promise.resolve();
+    const socket = MockWS.instances[0];
+    socket.open();
+    socket.message({ type: "error", error: { detail: "conversation_forbidden" } });
+    socket.close();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWS.instances).toHaveLength(1);
+    expect(frames).toContainEqual({
+      type: "error",
+      error: { detail: "conversation_forbidden" },
+    });
+    h.cancel();
+  });
+
   it("resets the backoff attempt counter when the document becomes visible", async () => {
     let visibility: DocumentVisibilityState = "hidden";
     Object.defineProperty(document, "visibilityState", {

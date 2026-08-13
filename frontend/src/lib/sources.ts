@@ -1,5 +1,36 @@
 import type { ExtractStatus, GroundedAnswer, Passage, Verdict } from "@/types/grounded";
 
+const TRACKING_QUERY_KEYS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
+
+/** Conservative source identity shared by citation numbering and source tiers.
+ * Original URLs remain untouched for display and navigation. */
+export function sourceUrlKey(raw: string): string {
+  const value = raw.trim();
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase().replace(/\.+$/, "");
+    if (!host) return value;
+    const authority =
+      parsed.port && parsed.port !== "80" && parsed.port !== "443"
+        ? `${host}:${parsed.port}`
+        : host;
+    const path = parsed.pathname.replace(/\/+$/, "") || "/";
+    const query = Array.from(parsed.searchParams.entries())
+      .filter(
+        ([key]) =>
+          !key.toLowerCase().startsWith("utm_") &&
+          !TRACKING_QUERY_KEYS.has(key.toLowerCase()),
+      )
+      .sort(([keyA, valueA], [keyB, valueB]) =>
+        keyA === keyB ? valueA.localeCompare(valueB) : keyA.localeCompare(keyB),
+      );
+    const suffix = query.length ? `?${new URLSearchParams(query).toString()}` : "";
+    return `${authority}${path}${suffix}`;
+  } catch {
+    return value;
+  }
+}
+
 /** Human-readable domain (no scheme, no www, no path) for source cards. */
 export function cleanDomain(url: string): string {
   try {
@@ -29,7 +60,7 @@ export function citationNumbers(answer: GroundedAnswer): Map<string, number> {
   const bySource = new Map<string, number>();
   const m = new Map<string, number>();
   for (const p of answer.passages) {
-    const key = p.source_url || `#${p.id}`;
+    const key = p.source_url ? sourceUrlKey(p.source_url) : `#${p.id}`;
     let n = bySource.get(key);
     if (n === undefined) {
       n = bySource.size + 1;

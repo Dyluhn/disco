@@ -38,6 +38,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
     StatusEvent,  # noqa: F401 — compatibility facade binding
+    VerifierVerdictEvent,
 )
 from ..selection_edit import is_scoped_edit_directive  # noqa: F401
 from ..view import effective_plan_progress
@@ -95,6 +96,94 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("disco.loop")
 _PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})
+
+
+def _context_tool_summary(action: ActionEvent) -> str:
+    name = action.tool_call.tool_name
+    args = action.tool_call.arguments or {}
+    for key in ("path", "rel_path", "file"):
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            return f"{name} {value[:120]}"
+    command = args.get("command")
+    if isinstance(command, str) and command:
+        try:
+            head = shlex.join(shlex.split(command)[:3])
+        except ValueError:
+            head = command
+        return f"{name} {head[:120]}"
+    return name
+
+
+def _context_evidence_line(event: Event) -> str | None:
+    if isinstance(event, ActionEvent) and event.tool_call.tool_name not in _PROGRESS_TOOLS:
+        return f"- seq {event.seq} OBSERVED action: {_context_tool_summary(event)}"
+    if isinstance(event, ObservationEvent):
+        state = "success" if event.tool_result.success else "failure"
+        return f"- seq {event.seq} OBSERVED result: {event.tool_result.tool_name} {state}"
+    if isinstance(event, VerifierVerdictEvent):
+        state = "PASS" if event.verified else "FAIL"
+        return (
+            f"- seq {event.seq} HOST VERIFICATION {state}: "
+            f"{event.artifact_path or 'artifact'}"
+        )
+    return None
+
+
+def _context_ranged_events(
+    events: list[Event], start_seq: int, end_seq: int
+) -> list[Event]:
+    return [
+        event
+        for event in events
+        if event.seq is not None and start_seq <= event.seq <= end_seq
+    ]
+
+
+def _context_chronology(ranged: list[Event]) -> list[str]:
+    lines = [line for event in ranged if (line := _context_evidence_line(event))]
+    return lines or ["- No non-progress tool or host-verifier evidence in this range."]
+
+
+def _context_verification(ranged: list[Event]) -> str:
+    verdicts = [event for event in ranged if isinstance(event, VerifierVerdictEvent)]
+    if not verdicts:
+        return "HOST VERIFICATION: none; these step states remain agent claims, not verified facts."
+    return "HOST VERIFICATION: " + ", ".join(
+        "PASS" if event.verified else "FAIL" for event in verdicts
+    )
+
+
+def _context_step_summary(
+    events: list[Event],
+    latest_plan: PlanEvent,
+    indices: list[int],
+    start_seq: int,
+    end_seq: int,
+) -> str:
+    ranged = _context_ranged_events(events, start_seq, end_seq)
+    actions = [
+        event
+        for event in ranged
+        if isinstance(event, ActionEvent)
+        and event.tool_call.tool_name not in _PROGRESS_TOOLS
+    ]
+    chronology = _context_chronology(ranged)
+    verification = _context_verification(ranged)
+    claims = "; ".join(
+        f"{idx} '{latest_plan.steps[idx - 1].title}'" for idx in indices
+    )
+    last_desc = _context_tool_summary(actions[-1]) if actions else "none"
+    plural = "" if len(actions) == 1 else "s"
+    return "\n".join(
+        [
+            f"CLAIMED done: plan step{'' if len(indices) == 1 else 's'} {claims}.",
+            f"OBSERVED: {len(actions)} tool call{plural}; last: {last_desc}.",
+            f"Chronology (seq {start_seq}-{end_seq}):",
+            *chronology,
+            verification,
+        ]
+    )
 
 
 def _latest_plan_from_events(events: list[Event]) -> PlanEvent | None:
@@ -224,32 +313,47 @@ class PlanStepConditions:
         action = stored
         store = ArtifactMemoryStore(sbx)
         failures = unresolved_failure_seqs(events)
+        grouped: dict[tuple[int, int], list[int]] = {}
         for idx in newly_done:
-            await self._emit_one_context_step_mark(
-                events, latest_plan, idx, action, store, failures
+            if idx < 1 or idx > len(latest_plan.steps):
+                continue
+            event_range = self._context_step_done_range(events, latest_plan, idx, action)
+            if event_range is None:
+                continue
+            start_seq, end_seq = event_range
+            if any(start_seq <= seq <= end_seq for seq in failures):
+                continue
+            grouped.setdefault(event_range, []).append(idx)
+        for (start_seq, end_seq), indices in sorted(grouped.items()):
+            await self._emit_context_step_group(
+                events, latest_plan, indices, start_seq, end_seq, store
             )
 
-    async def _emit_one_context_step_mark(
+    async def _emit_context_step_group(
         self,
         events: list[Event],
         latest_plan: PlanEvent,
-        idx: int,
-        action: ActionEvent,
+        indices: list[int],
+        start_seq: int,
+        end_seq: int,
         store: ArtifactMemoryStore,
-        failures: frozenset[int],
     ) -> None:
-        if idx < 1 or idx > len(latest_plan.steps):
+        ordered = sorted(set(indices))
+        index_key = "-".join(str(idx) for idx in ordered)
+        noun = "step" if len(ordered) == 1 else "steps"
+        range_id = (
+            f"cxr_plan_{noun}_{latest_plan.revision}_{index_key}_{start_seq}_{end_seq}"
+        )
+        if any(
+            isinstance(e, ContextResolvedEvent)
+            and e.reason == "plan_step_done"
+            and e.range_id == range_id
+            for e in events
+        ):
             return
-        event_range = self._context_step_done_range(events, latest_plan, idx, action)
-        if event_range is None:
-            return
-        start_seq, end_seq = event_range
-        if any(start_seq <= seq <= end_seq for seq in failures):
-            return
-        range_id = f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
-        if any(isinstance(e, ContextResolvedEvent) and e.range_id == range_id for e in events):
-            return
-        summary = self._context_step_summary(events, latest_plan, idx, start_seq, end_seq)
+        summary = _context_step_summary(
+            events, latest_plan, ordered, start_seq, end_seq
+        )
         try:
             ref = await store.write_summary(range_id, summary)
         except Exception:  # noqa: BLE001 - context marks are best-effort
@@ -259,7 +363,12 @@ class PlanStepConditions:
                 exc_info=True,
             )
             return
-        step_predicate = latest_plan.steps[idx - 1].done_condition
+        fingerprints: dict[str, str | None] = {}
+        for idx in ordered:
+            predicate = latest_plan.steps[idx - 1].done_condition
+            fingerprints[str(idx)] = (
+                predicate_fingerprint(predicate) if predicate is not None else None
+            )
         mark = context_mark_resolved(
             start_seq, end_seq, reason="plan_step_done", range_id=range_id,
         ).model_copy(
@@ -268,11 +377,11 @@ class PlanStepConditions:
                 "summary_ref_path": ref.rel_path,
                 "meta": {
                     "plan_revision": latest_plan.revision,
-                    "step_index": idx,
+                    "step_indices": ordered,
+                    "predicate_fingerprints": fingerprints,
+                    "step_index": ordered[0] if len(ordered) == 1 else None,
                     "predicate_fingerprint": (
-                        predicate_fingerprint(step_predicate)
-                        if step_predicate is not None
-                        else None
+                        fingerprints[str(ordered[0])] if len(ordered) == 1 else None
                     ),
                 },
             }
@@ -382,46 +491,6 @@ class PlanStepConditions:
             if 1 <= idx <= total_steps:
                 updates.append((idx, str(raw_state)))
         return updates
-
-    def _context_step_summary(
-        self,
-        events: list[Event],
-        latest_plan: PlanEvent,
-        idx: int,
-        start_seq: int,
-        end_seq: int,
-    ) -> str:
-        actions = [
-            e
-            for e in events
-            if isinstance(e, ActionEvent)
-            and e.seq is not None
-            and start_seq <= e.seq <= end_seq
-            and e.tool_call.tool_name not in _PROGRESS_TOOLS
-        ]
-        last = actions[-1] if actions else None
-        last_desc = self._tool_summary(last) if last is not None else "none"
-        n = len(actions)
-        plural = "" if n == 1 else "s"
-        title = latest_plan.steps[idx - 1].title
-        return f"Step '{title}' completed; {n} tool call{plural}, last: {last_desc}."
-
-    @staticmethod
-    def _tool_summary(action: ActionEvent) -> str:
-        name = action.tool_call.tool_name
-        args = action.tool_call.arguments or {}
-        for key in ("path", "rel_path", "file"):
-            value = args.get(key)
-            if isinstance(value, str) and value:
-                return f"{name} {value[:120]}"
-        command = args.get("command")
-        if isinstance(command, str) and command:
-            try:
-                head = shlex.join(shlex.split(command)[:3])
-            except ValueError:
-                head = command
-            return f"{name} {head[:120]}"
-        return name
 
     async def evaluate_plan_step_predicate(self, predicate: DoDPredicate) -> tuple[bool, str]:
         """Lightweight inline evaluation of a single DoDPredicate for the

@@ -281,6 +281,16 @@ class LocalPreviewLeaseStore:
                 storage_authority_id=self._storage_authority(listener_port),
             )
 
+    def purge_expired(self, *, now: int) -> int:
+        """Drop idle expired capacity rows while retaining origin reset fences."""
+
+        with self._lock, self._connection:
+            deleted = self._connection.execute(
+                "DELETE FROM local_preview_leases WHERE expires_at < ?",
+                (int(now),),
+            )
+            return max(0, deleted.rowcount)
+
     def release(self, *, conversation_id: str, owner_id: str) -> bool:
         """Release one explicitly torn-down conversation's listener origin.
 

@@ -6,11 +6,11 @@ elided arg is a write/edit BODY (an attempted or new value), NOT the file's
 current content. Elided args now render as one canonical DISCO-ELIDED sentinel;
 historical markers are still retargeted to that sentinel.
 
-P1-c (assist-ON strict byte-identity): CW-3 reworded assist-ON-visible prose
+P1-c (assist-ON stable placement): CW-3 reworded assist-ON-visible prose
 (preamble / pointer / arg marker) for the location-independent PREFIX placement —
 but assist-ON keeps the block in the TAIL, where the ORIGINAL pre-CW-3 directional
-wording was correct. The wording is now gated so assist-ON renders the pre-CW-3
-bytes; the location-independent wording applies ONLY to assist-OFF.
+wording was correct. The directional placement remains gated to assist-ON;
+current-read guidance is shared and truthful in both tiers.
 """
 
 from __future__ import annotations
@@ -28,19 +28,22 @@ from disco.core.loop.context_budget import derive_context_caps
 from disco.core.loop.view_render import ViewBuilder, workspace_snapshot_message
 from disco.core.view import NoOpCondenser, View
 
-# The EXACT pre-CW-3 workspace preamble (assist-ON / tail-placed block). Byte-identity
-# of the assist-ON render to these bytes is the P1-c proof.
-_PRE_CW3_PREAMBLE = (
+# The canonical assist-ON workspace preamble (tail-placed block). Exact matching
+# keeps its directional placement and grounding contract stable.
+_ASSIST_ON_PREAMBLE = (
     "# CURRENT WORKSPACE — your files on disk RIGHT NOW (authoritative).\n"
-    "Below is the live, exact content of the files you are working on, "
-    "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
+    "Below is live disk content for the files you are working on, re-read this "
+    "turn. A body shown without a truncation or omission notice is complete and "
+    "exact; other files are not fully present. It OVERRIDES any earlier or elided copy of "
     "these files shown above; trust THIS over your memory.\n"
     "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
     "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
     "the line numbers shown below). For a full rewrite, use `file_write` with "
-    "the FULL new content — but you MUST call `file_read` on this file first "
-    "if you have written to it before, or the write will be refused. Keep "
-    "every existing function, constant, and docstring you are not deliberately "
+    "the FULL new content. A complete, untruncated file body shown here already "
+    "counts as a current read. If a body is truncated, omitted, or modified "
+    "afterward by a tool that does not return its complete current content, call "
+    "`file_read` before a full rewrite. Keep every existing function, constant, "
+    "and docstring you are not deliberately "
     "removing — do not drop code you did not mean to delete.\n"
     "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
     "acknowledge the snapshot in your reply (no 'I can see the files', "
@@ -200,9 +203,9 @@ def test_assist_off_build_marks_every_elided_arg_nondangling():
 # ---------------------------------------------------------------------------
 
 
-def test_assist_on_preamble_is_byte_identical_to_pre_cw3():
+def test_assist_on_preamble_keeps_direction_and_truthful_grounding():
     # pin_full=False is the assist-ON path. The rendered block preamble must be the
-    # EXACT pre-CW-3 bytes (directional wording, correct for the tail-placed block).
+    # canonical directional bytes, correct for the tail-placed block.
     content = asyncio.run(
         workspace_snapshot_message(
             _FakeSandbox({"app.js": b"const x = 1;\n"}),
@@ -211,11 +214,12 @@ def test_assist_on_preamble_is_byte_identical_to_pre_cw3():
         )
     )
     assert content is not None
-    assert content.content.startswith(_PRE_CW3_PREAMBLE)
+    assert content.content.startswith(_ASSIST_ON_PREAMBLE)
     # And NONE of the CW-3 location-independent phrasing leaked into assist-ON.
     assert "in this prompt" not in content.content
     assert "OVERRIDES any other copy" not in content.content
-    assert "in this block" not in content.content
+    assert "counts as a current read" in content.content
+    assert "MUST call `file_read`" not in content.content
 
 
 def test_assist_on_snip_marker_uses_canonical_sentinel():
@@ -228,9 +232,9 @@ def test_assist_on_snip_marker_uses_canonical_sentinel():
     assert find_elided_arg_markers({"content": marker}) == ["content"]
 
 
-def test_assist_on_build_keeps_canonical_marker_and_pre_cw3_preamble():
+def test_assist_on_build_keeps_canonical_marker_and_preamble():
     # Full assist-ON ViewBuilder build: the marker is the canonical sentinel and
-    # the snapshot preamble is still the pre-CW-3 text.
+    # the snapshot preamble retains its canonical tail-placement text.
     sbx = _FakeSandbox({"app.js": b"const x = 1;\n"})
     builder = ViewBuilder(_FakeLoop(assist=True, sandbox=sbx))
     long = "w" * (_ARG_SNIP_CHARS + 1)
@@ -241,4 +245,4 @@ def test_assist_on_build_keeps_canonical_marker_and_pre_cw3_preamble():
     snap = next(
         m for m in view.messages if m.role == "user" and m.content.startswith("# CURRENT WORKSPACE")
     )
-    assert snap.content.startswith(_PRE_CW3_PREAMBLE)
+    assert snap.content.startswith(_ASSIST_ON_PREAMBLE)

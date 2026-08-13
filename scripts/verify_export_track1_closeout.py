@@ -130,6 +130,10 @@ def _pytest_env() -> dict[str, str]:
     prepended to ``PYTHONPATH`` so ``-p closeout_pytest_report`` imports by bare module name
     inside the ``python -m pytest`` subprocess (whose sys.path carries cwd, not scripts/)."""
     env = dict(os.environ)
+    # The lane's checked-in pytest configuration owns its warning policy. An
+    # outer diagnostic run must not turn third-party startup warnings into a
+    # pre-collection crash in the isolated child.
+    env.pop("PYTHONWARNINGS", None)
     scripts = str(_SCRIPTS_DIR)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = scripts + (os.pathsep + existing if existing else "")

@@ -137,8 +137,34 @@ def test_followup_context_keeps_later_sources_after_oversized_passage():
     assert "Muse Spark 1.2" in prompt
     assert "[[first]]" in prompt
     assert "[[huge]]" in prompt
+    assert "[excerpt middle omitted]" in prompt
     assert "[[cnbc]] (CNBC)" in prompt
     assert "CNBC reported the Muse Glimmer release." in prompt
+
+
+def test_followup_context_preserves_head_and_tail_of_long_evidence():
+    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+
+    passage = {
+        "id": "timeline",
+        "source_url": "https://example.com/timeline",
+        "source_title": "Timeline",
+        "text": "EARLY FACT " + ("middle " * 3_000) + "LATE QUALIFICATION",
+    }
+    report = ReportEvent(
+        source=EventSource.AGENT,
+        query="What changed?",
+        summary="A change occurred.",
+        sections=[],
+        passages=[passage],
+        all_hits=[],
+    )
+
+    prompt = _build_follow_up_prompt(report, [passage], "What was qualified?")
+
+    assert "EARLY FACT" in prompt
+    assert "LATE QUALIFICATION" in prompt
+    assert "[excerpt middle omitted]" in prompt
 
 
 async def test_followup_requires_existing_report():

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import datetime
+
 from disco.retrieval import (
     DefaultRetrievalEngine,
     LexicalReranker,
     RetrievalRequest,
     reciprocal_rank_fusion,
 )
+from disco.retrieval.models import ExtractedDoc, Passage
 from research_fakes import FakeExtractionProvider, FakeRewriter, FakeSearchProvider, hit
 
 
@@ -78,6 +81,54 @@ async def test_request_bounds_discovery_extraction_and_marks_unattempted_hits():
     assert len(result.all_hits) == 3
     assert len(result.extracted) == 1
     assert [item.status for item in result.all_hits] == ["ok", None, None]
+
+
+async def test_extraction_status_uses_canonical_source_identity():
+    class _CanonicalizingExtraction:
+        async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
+            return [
+                ExtractedDoc(
+                    url="https://example.com/release",
+                    title="Release",
+                    content="released",
+                    passages=[
+                        Passage(
+                            id="release",
+                            source_url="https://example.com/release",
+                            source_title="Release",
+                            text="released",
+                        )
+                    ],
+                    status="ok",
+                )
+            ]
+
+    search = FakeSearchProvider(
+        [hit("https://example.com/release/?utm_source=newsletter#details")]
+    )
+    engine = DefaultRetrievalEngine(
+        search,
+        _CanonicalizingExtraction(),  # type: ignore[arg-type]
+        LexicalReranker(),
+    )
+
+    result = await engine.retrieve(RetrievalRequest(query="release", depth="shallow"))
+
+    assert result.all_hits[0].status == "ok"
+
+
+async def test_discovery_date_reaches_citable_passage() -> None:
+    dated = datetime.date(2026, 8, 11)
+    search = FakeSearchProvider(
+        [hit("https://example.com/release").model_copy(update={"published_at": dated})]
+    )
+
+    result = await _engine(
+        search,
+        docs={"https://example.com/release": "A model was released."},
+    ).retrieve(RetrievalRequest(query="release", depth="shallow"))
+
+    assert result.passages[0].published_at == dated
 
 
 # ---- §8.2 the quality pipeline ----------------------------------------------

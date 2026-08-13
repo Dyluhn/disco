@@ -40,6 +40,7 @@ _PROMPT_PREFIX = (
 
 _MAX_TITLE_CHARS = 60
 _MAX_TASK_CHARS = 800  # cap the prompt input — first messages can be very long
+_TITLE_ENSURE_TIMEOUT_S = 15.0
 _QUOTE_CHARS = "\"'`“”‘’"  # straight + smart quotes + backtick
 
 # A leading "…title:" / "…name:" preamble (≤40 chars before the colon so it can't fire
@@ -127,15 +128,43 @@ class TitleService:
     def __init__(self, store: Any, router_now: Callable[..., Any]) -> None:
         self._store = store
         self._router_now = router_now
-        self._inflight: set[str] = set()
+        self._inflight: dict[str, asyncio.Task[None]] = {}
 
     def schedule(self, conversation_id: str) -> None:
         """Kick off auto-titling (no-op if one is already in flight this process).
         Detached — never awaited by the caller, so it can't delay the build."""
-        if conversation_id in self._inflight:
+        task = self._inflight.get(conversation_id)
+        if task is not None and not task.done():
             return
-        self._inflight.add(conversation_id)
-        asyncio.create_task(self._run_guarded(conversation_id))
+        task = asyncio.create_task(self._run_guarded(conversation_id))
+        self._inflight[conversation_id] = task
+
+    async def ensure(self, conversation_id: str) -> str | None:
+        """Wait for this conversation's canonical title, generating it once.
+
+        Normal UI startup remains fire-and-forget through :meth:`schedule`.
+        Consumers that permanently render the title (notably report export)
+        use this join point so they cannot race the same title lifecycle.
+        """
+
+        existing = await self._store.get_title(conversation_id)
+        if existing:
+            return existing
+        task = self._inflight.get(conversation_id)
+        if task is None or task.done():
+            task = asyncio.create_task(self._run_guarded(conversation_id))
+            self._inflight[conversation_id] = task
+        try:
+            async with asyncio.timeout(_TITLE_ENSURE_TIMEOUT_S):
+                await asyncio.shield(task)
+        except TimeoutError:
+            # Export must not inherit an indefinitely stalled model call.  The
+            # detached canonical-title task stays alive for History/UI, while
+            # this caller receives the same deterministic fallback immediately.
+            events = await self._store.get_events(conversation_id)
+            fallback = fallback_title(first_user_text(events) or "")
+            return fallback or None
+        return await self._store.get_title(conversation_id)
 
     async def _run_guarded(self, cid: str) -> None:
         try:
@@ -145,7 +174,9 @@ class TitleService:
         finally:
             # Clear in-flight LAST. If the first message wasn't present yet, a later
             # kick retries (the title is still unset).
-            self._inflight.discard(cid)
+            task = asyncio.current_task()
+            if self._inflight.get(cid) is task:
+                self._inflight.pop(cid, None)
 
     async def _run(self, cid: str) -> None:
         if await self._store.get_title(cid):

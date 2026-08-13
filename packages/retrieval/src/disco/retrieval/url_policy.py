@@ -7,9 +7,31 @@ matches that host and its subdomains, but never ``notexample.com`` or
 
 from __future__ import annotations
 
+import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 _TRACKING_QUERY_KEYS = frozenset({"fbclid", "gclid", "mc_cid", "mc_eid"})
+
+
+def parse_source_date(value: object) -> datetime.date | None:
+    """Parse exact provider dates without guessing from arbitrary prose."""
+
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    try:
+        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+    except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(raw).date()
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def normalize_domain(value: str) -> str:

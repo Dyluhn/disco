@@ -21,6 +21,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    View,
     WorkspaceMutationEvent,
 )
 from disco.core.llm import DefaultLLMRouter, ProposedToolCall
@@ -70,6 +71,50 @@ async def test_verify_passes_then_run_finishes_and_check_is_in_the_trace():
     assert len(verify_actions) == 1
     assert "Verifying completion" in verify_actions[0].thought
     assert any(isinstance(e, ObservationEvent) for e in events)
+    # Durable audit bytes retain the host's synthetic action/result pair, but the
+    # next model view must not forge that host work as an assistant tool call.
+    rendered = View.of(events).messages
+    assert not any(
+        call.get("name") == "shell"
+        for message in rendered
+        for call in (message.tool_calls or [])
+    )
+    host_entries = [
+        message
+        for message in rendered
+        if 'kind="finish-advisory-probe"' in message.content
+    ]
+    assert len(host_entries) == 2
+    assert all(message.role == "user" for message in host_entries)
+    assert "host activity, not an action taken by you" in host_entries[-1].content
+
+
+def test_ordinary_agent_shell_pair_keeps_assistant_tool_history():
+    call = ToolCall(tool_name="shell", arguments={"command": "echo hi"}, call_id="agent-call")
+    action = ActionEvent(thought="I will inspect the output.", tool_call=call)
+    observation = ObservationEvent(
+        action_id=action.id,
+        tool_result=ToolResult(
+            call_id=call.call_id,
+            tool_name="shell",
+            success=True,
+            content="hi",
+        ),
+    )
+
+    messages = View.of([action, observation]).messages
+
+    assert [message.role for message in messages] == ["assistant", "tool"]
+    assert messages[0].content == "I will inspect the output."
+    assert messages[0].tool_calls == [
+        {
+            "id": "agent-call",
+            "name": "shell",
+            "arguments": {"command": "echo hi"},
+        }
+    ]
+    assert messages[1].tool_call_id == "agent-call"
+    assert messages[1].content == "hi"
 
 
 async def test_finish_probe_executes_the_persisted_view_stamped_action():

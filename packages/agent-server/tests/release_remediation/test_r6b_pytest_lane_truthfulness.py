@@ -73,6 +73,14 @@ def test_all_selected_passed_is_green() -> None:
     assert summary["selected_count"] == 2 and summary["passed_count"] == 2
 
 
+def test_governed_pytest_env_does_not_inherit_outer_warning_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYTHONWARNINGS", "error")
+
+    assert "PYTHONWARNINGS" not in verify._pytest_env()
+
+
 @pytest.mark.parametrize(
     ("category", "needle"),
     [

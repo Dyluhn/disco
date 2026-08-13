@@ -19,7 +19,7 @@ import hashlib
 import json
 
 import pytest
-from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH, DesignSpec
+from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH, DesignSpec, get_recipe
 from disco.core.design import DIRECTION_BY_ID, render_design_direction
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.app_kit import (
@@ -673,15 +673,52 @@ async def test_app_update_content_refuses_semantic_noop_with_ground_truth():
     assert "Same headline" in repeat.content
 
 
-async def test_app_set_design_refuses_identical_design_noop():
+async def test_app_set_design_treats_identical_recipe_as_satisfied():
     sbx = FakeSandboxInstance()
     assert (await _create(sbx, recipe="editorial-ledger")).success
+    before = dict(sbx._fs)
     repeat = await AppSetDesignTool().run(
         AppSetDesignArgs(recipe_id="editorial-ledger"),
         _ctx(sbx),
     )
-    assert not repeat.success
-    assert "no-op" in repeat.content
+    assert repeat.success
+    assert "already applied" in repeat.content
+    assert repeat.structured == {
+        "files_written": [],
+        "specs": [],
+        "changed": False,
+        "already_applied": True,
+    }
+    assert repeat.effect_receipts == ()
+    assert sbx._fs == before
+
+
+async def test_app_set_design_treats_exact_workspace_match_as_satisfied(monkeypatch):
+    from disco.tools.builtin.app_kit_parts import set_design
+
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx, recipe="atelier-commerce")).success
+    before = dict(sbx._fs)
+    stale_recipe = get_recipe("editorial-ledger")
+    assert stale_recipe is not None
+
+    async def _stale_design(_ctx):
+        return stale_recipe.to_design_spec()
+
+    # The semantic pre-read is stale, but the real deterministic batch compares
+    # the complete requested tree with current workspace bytes and finds an exact
+    # match.  This exercises the lost-observation path without faking its oracle.
+    monkeypatch.setattr(set_design, "_load_design_spec", _stale_design)
+    outcome = await AppSetDesignTool().run(
+        AppSetDesignArgs(recipe_id="atelier-commerce"),
+        _ctx(sbx),
+    )
+
+    assert outcome.success
+    assert outcome.structured["already_applied"] is True
+    assert outcome.artifacts == []
+    assert outcome.effect_receipts == ()
+    assert sbx._fs == before
 
 
 def test_app_update_content_rejects_unknown_slot():

@@ -187,10 +187,11 @@ async def _resolve_export_payload(
         raise HTTPException(status_code=404, detail={"ok": False, "reason": "no_report"})
 
     # W-10: prefer the real generated conversation title for the cover/title
-    # page; the serializers fall back to report.query when it's None/empty.
+    # page. Export is a permanent rendering boundary, so join the same title
+    # lifecycle the UI uses instead of racing its detached startup task.
     title: str | None = None
     with contextlib.suppress(Exception):
-        title = await store.get_title(conversation_id)
+        title = await runtime.titles.ensure(conversation_id)
 
     follow_ups = _gather_follow_up_pairs(events, report, follow_up_seqs)
     try:

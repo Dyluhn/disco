@@ -50,6 +50,22 @@ def test_resolved_summary_refs_folded_into_recoverable() -> None:
     assert any(r.kind is ArtifactMemoryKind.SUMMARY for r in pack.recoverable_refs)
 
 
+def test_duplicate_legacy_summary_refs_are_collapsed_by_path() -> None:
+    events = [
+        _plan("g"),
+        context_mark_resolved(2, 3, range_id="legacy-1"),
+        context_write_summary("legacy-1", ".disco/context/summary/shared.md", "first"),
+        context_mark_resolved(2, 3, range_id="legacy-2"),
+        context_write_summary("legacy-2", ".disco/context/summary/shared.md", "second"),
+    ]
+    pack = build_context_pack(events)
+    assert [
+        ref.rel_path
+        for ref in pack.recoverable_refs
+        if ref.rel_path == ".disco/context/summary/shared.md"
+    ] == [".disco/context/summary/shared.md"]
+
+
 def test_failures_arg_surfaces_unresolved_only() -> None:
     failures = (
         VerifierFailureRef(kind="console_error", message="boom", severity=Severity.BLOCKER),

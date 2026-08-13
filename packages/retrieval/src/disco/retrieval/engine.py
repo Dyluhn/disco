@@ -13,6 +13,7 @@ from typing import Protocol, runtime_checkable
 from .models import ExtractedDoc, Passage, RetrievalRequest, RetrievalResult, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker, reciprocal_rank_fusion
+from .url_policy import source_url_key
 
 # Default cap on URLs sent to extraction per retrieve() (cost bound; [INTERIOR]).
 _CANDIDATE_CAP = 20
@@ -48,6 +49,34 @@ async def extract_discovered_hits(
     if isinstance(extraction, HitExtractionProvider):
         return await extraction.extract_hits(hits)
     return await extraction.extract_many([hit.url for hit in hits])
+
+
+def annotate_passage_dates(
+    extracted: list[ExtractedDoc], hits: list[SearchHit]
+) -> list[ExtractedDoc]:
+    """Carry exact discovery dates onto citable extracted passages by source id."""
+
+    dates = {
+        source_url_key(hit.url): hit.published_at
+        for hit in hits
+        if hit.published_at is not None
+    }
+    if not dates:
+        return extracted
+    annotated: list[ExtractedDoc] = []
+    for document in extracted:
+        published_at = dates.get(source_url_key(document.url))
+        if published_at is None:
+            annotated.append(document)
+            continue
+        passages = [
+            passage
+            if passage.published_at is not None
+            else passage.model_copy(update={"published_at": published_at})
+            for passage in document.passages
+        ]
+        annotated.append(document.model_copy(update={"passages": passages}))
+    return annotated
 
 
 class DefaultRetrievalEngine:
@@ -117,14 +146,16 @@ class DefaultRetrievalEngine:
         candidate_hits = all_hits[:candidate_cap]
         if candidate_hits:
             extracted = await extract_discovered_hits(self._extraction, candidate_hits)
+            extracted = annotate_passage_dates(extracted, candidate_hits)
         else:
             extracted = []
 
         # Discovery and extraction are different facts.  Carry extraction
         # truth back onto every attempted hit; leave unattempted hits as None.
-        status_by_url = {doc.url: doc.status for doc in extracted}
+        status_by_url = {source_url_key(doc.url): doc.status for doc in extracted}
         all_hits = [
-            hit.model_copy(update={"status": status_by_url.get(hit.url)}) for hit in all_hits
+            hit.model_copy(update={"status": status_by_url.get(source_url_key(hit.url))})
+            for hit in all_hits
         ]
 
         # Passages come from EXTRACTED content + corpora — never from snippets.

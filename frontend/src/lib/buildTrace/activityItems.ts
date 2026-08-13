@@ -50,6 +50,23 @@ export function activityItemForAction(
   else if (ctx.status === "RUNNING") st = "running";
   else st = "done";
   const obs = ctx.observationByActionId.get(e.id);
+  if (e.meta?.verify_probe === true) {
+    return {
+      id: e.id,
+      kind: "system_note",
+      label: "Host ran an advisory finish check",
+      detail: detailFor(tc.tool_name, tc.arguments),
+      expandable: {
+        tool_name: tc.tool_name,
+        arguments: tc.arguments,
+        output: obs?.output,
+        error: obs?.error,
+        plainError: obs?.plainError,
+      },
+      status: st,
+      attention: false,
+    };
+  }
   return {
     id: e.id,
     kind: "action",

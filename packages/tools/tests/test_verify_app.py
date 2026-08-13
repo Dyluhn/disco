@@ -415,7 +415,10 @@ async def test_run_pass_with_stubbed_browser(monkeypatch):
     assert out.structured is not None
     assert out.structured["passed"] is True
     assert out.structured["verdict"] == "pass"
-    assert "PASS" in out.content
+    assert out.content.startswith("VERIFY_WEB_APP: RUNTIME CHECK PASS")
+    assert "checked: HTTP reachability/status" in out.content
+    assert "no screenshot pixels were supplied to the agent" in out.content
+    assert "task requirements" in out.content
 
 
 @pytest.mark.asyncio
@@ -810,7 +813,8 @@ def test_tool_definition_registered_low_risk():
     assert d.name == "verify_web_app"
     assert d.base_risk == SecurityRisk.LOW
     assert d.runs_in == "sandbox"
-    assert "not semantic completeness or completion authority" in d.description
+    assert "result states exactly what was checked" in d.description
+    assert "server reachable" not in d.description
     assert "TWO debug calls shared" in d.description
 
 

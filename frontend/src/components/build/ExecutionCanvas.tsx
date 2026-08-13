@@ -28,6 +28,7 @@ import { FilesPane } from "./canvas/FilesPane";
 import { TerminalPane } from "./canvas/TerminalPane";
 import { PreviewPane } from "./canvas/PreviewPane";
 import { CockpitPane } from "./canvas/CockpitPane";
+import { previewActiveStatus } from "./canvas/previewPaneParts/helpers";
 
 type TabId = "files" | "terminal" | "preview" | "cockpit";
 
@@ -116,11 +117,7 @@ export function ExecutionCanvas({
     wasFinished.current = finished;
   }, [status, events]);
 
-  const active =
-    status === "RUNNING" ||
-    status === "WAITING_FOR_CONFIRMATION" ||
-    status === "FINISHED" ||
-    status === "STUCK";
+  const active = previewActiveStatus(status);
 
   // Sessions polling lives HERE, not in TerminalPane: Radix unmounts inactive
   // tab content, and the tab-label busy dot must keep updating while the user

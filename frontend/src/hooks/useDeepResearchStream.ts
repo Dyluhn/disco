@@ -179,17 +179,22 @@ export function useDeepResearchStream(
 ): DeepResearchStream {
   const [state, dispatch] = useReducer(reducer, initial);
   const handle = useRef<AgentHandle | null>(null);
+  const sessionCid = session?.cid ?? null;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   useEffect(() => {
-    if (!session) {
+    if (!sessionCid) {
       // Dispatch reset so derived state (followUps, plan, report …) clears
       // immediately when the session goes away (e.g. navigate away → back).
       // Without this the reducer held stale events from the previous run.
       dispatch({ type: "reset" });
       return;
     }
+    const current = sessionRef.current;
+    if (current === null) return;
     dispatch({ type: "reset" });
-    const h = subscribeConversation(session.cid, (frame) =>
+    const h = subscribeConversation(sessionCid, (frame) =>
       dispatch({ type: "frame", frame }),
     );
     handle.current = h;
@@ -197,11 +202,14 @@ export function useDeepResearchStream(
     // existing run (resume / History) is a safe read — subscribe + replay only.
     // The engine's _propose_deep_research_plan path decomposes the query into a
     // PlanEvent + AWAITING_PLAN_APPROVAL; we then wait at the plan gate.
-    if (session.kick) {
-      h.send({ type: "send_message", content: session.query });
+    if (current.kick) {
+      h.send({ type: "send_message", content: current.query });
     }
-    return () => h.cancel();
-  }, [session]);
+    return () => {
+      h.cancel();
+      if (handle.current === h) handle.current = null;
+    };
+  }, [sessionCid]);
 
   const approvePlan = () => handle.current?.send({ type: "approve_plan" });
   const requestPlan = (text: string) =>

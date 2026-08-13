@@ -16,7 +16,7 @@ from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
 from .models import SearchHit
 from .providers import SearchProvider
-from .url_policy import source_url_key, url_allowed
+from .url_policy import parse_source_date, source_url_key, url_allowed
 
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
@@ -54,10 +54,7 @@ def _recency_start(time_filter: str | None) -> datetime.date | None:
 
 
 def _atom_date(value: str | None) -> datetime.date | None:
-    try:
-        return datetime.datetime.fromisoformat((value or "").replace("Z", "+00:00")).date()
-    except ValueError:
-        return None
+    return parse_source_date(value)
 
 
 class _HTMLTextExtractor(HTMLParser):
@@ -135,8 +132,8 @@ class ArxivSearchProvider:
 
         hits: list[SearchHit] = []
         for i, entry in enumerate(root.findall("a:entry", _ATOM_NS)):
+            published = _atom_date(entry.findtext("a:published", namespaces=_ATOM_NS))
             if recency_start is not None:
-                published = _atom_date(entry.findtext("a:published", namespaces=_ATOM_NS))
                 if published is None or published < recency_start:
                     continue
             url = _collapse_ws(entry.findtext("a:id", namespaces=_ATOM_NS))
@@ -149,6 +146,7 @@ class ArxivSearchProvider:
                     snippet=(entry.findtext("a:summary", namespaces=_ATOM_NS) or "").strip(),
                     source_engine="arxiv",
                     rank=i,
+                    published_at=published,
                 )
             )
             if len(hits) >= limit:
@@ -220,6 +218,7 @@ class NewsSearchProvider:
                         snippet=_strip_html(item.findtext("description")) or title or url,
                         source_engine="news",
                         rank=i,
+                        published_at=parse_source_date(item.findtext("pubDate")),
                     )
                 )
                 if len(hits) >= limit:
@@ -325,6 +324,7 @@ class SemanticScholarSearchProvider:
             snippet=str(paper.get("abstract") or ""),
             source_engine="semantic_scholar",
             rank=i,
+            published_at=parse_source_date(paper.get("publicationDate")),
         )
 
 
@@ -379,6 +379,7 @@ class SiteScopedSearchProvider:
                 snippet=h.snippet,
                 source_engine="site_scoped",
                 rank=h.rank,
+                published_at=h.published_at,
             )
             for h in hits
         ]

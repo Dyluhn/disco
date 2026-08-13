@@ -22,14 +22,12 @@ def _seq(events):
 
 
 def test_condenser_derives_thresholds_from_context_window():
-    # C9: thresholds derive from the window AND grow above the working budget up to
-    # a sane ceiling (4× = 96k soft / 128k hard). A 200k window → 0.65× = 130k
-    # exceeds the 24k budget, so the threshold grows to min(130k, 96k) = 96k —
-    # NOT pinned to 24k. Cost still scales with input tokens per call (the cap
-    # exists) but big-window models get to use their room.
+    # C9: a known live context window is authoritative. Condensation starts at
+    # its configured fractions rather than an unrelated pseudo-window ceiling;
+    # the summarizer input is bounded independently.
     c = LLMSummarizingCondenser(context_window=200_000)
-    assert c._max == 96_000  # min(130k, 4*24k ceiling), NOT 24_000
-    assert c._hard == 128_000  # min(160k, 4*32k ceiling), NOT 32_000
+    assert c._max == 130_000
+    assert c._hard == 160_000
 
 
 def test_condenser_falls_back_to_safe_defaults_without_window():
@@ -43,8 +41,7 @@ def test_condenser_explicit_overrides_win():
 
 
 def test_should_condense_fires_at_derived_soft_and_hard():
-    # 100k window → 0.65× = 65k (above 24k budget, below 96k ceiling) → soft=65k;
-    # 0.80× = 80k → hard=80k. should_condense waits for these (not the old 24k/32k).
+    # 100k window → 0.65× = 65k soft and 0.80× = 80k hard.
     c = LLMSummarizingCondenser(context_window=100_000)
     view = View(messages=[], visible_seqs=[], total_events=0, forgotten_count=0)
     assert c.should_condense(view, token_count=10_000) is None  # under soft

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from disco.core.auth import AuthSession, PreviewCapabilitySigner
@@ -14,14 +15,15 @@ def test_local_preview_lease_reuses_only_same_authority_and_rotates_generation(
     cid = "conv_a1b2c3d4owner"
     store.create_conversation(cid, owner_id="owner-a")
     ports = (19120, 19121, 19122)
+    now = int(time.time())
 
     first = store.acquire_local_preview_lease(
         conversation_id=cid,
         owner_id="owner-a",
         target_port=8000,
         authority_id="live:generation-one",
-        now=100,
-        expires_at=200,
+        now=now,
+        expires_at=now + 3_600,
         listener_ports=ports,
     )
     assert first is not None
@@ -29,15 +31,15 @@ def test_local_preview_lease_reuses_only_same_authority_and_rotates_generation(
     assert store.complete_local_preview_storage_reset(
         first.listener_port,
         authority_id="live:generation-one",
-        now=101,
+        now=now + 1,
     )
     refreshed = store.acquire_local_preview_lease(
         conversation_id=cid,
         owner_id="owner-a",
         target_port=8000,
         authority_id="live:generation-one",
-        now=110,
-        expires_at=220,
+        now=now + 10,
+        expires_at=now + 3_610,
         listener_ports=ports,
     )
     assert refreshed is not None
@@ -49,19 +51,50 @@ def test_local_preview_lease_reuses_only_same_authority_and_rotates_generation(
         owner_id="owner-a",
         target_port=8000,
         authority_id="live:generation-two",
-        now=120,
-        expires_at=230,
+        now=now + 20,
+        expires_at=now + 3_620,
         listener_ports=ports,
     )
     assert rotated is not None
     assert rotated.listener_port != first.listener_port
     assert rotated.storage_reset_required is True
-    assert store.resolve_local_preview_lease(first.listener_port, now=120) is None
-    assert store.resolve_local_preview_lease(rotated.listener_port, now=120) == rotated
+    assert store.resolve_local_preview_lease(first.listener_port, now=now + 20) is None
+    assert store.resolve_local_preview_lease(rotated.listener_port, now=now + 20) == rotated
     store.close()
 
     reopened = SqliteEventStore(path)
-    assert reopened.resolve_local_preview_lease(rotated.listener_port, now=120) == rotated
+    assert reopened.resolve_local_preview_lease(rotated.listener_port, now=now + 20) == rotated
+    reopened.close()
+
+
+def test_store_startup_purges_expired_lease_but_keeps_origin_fence(tmp_path: Path) -> None:
+    path = tmp_path / "startup-purge.sqlite3"
+    store = SqliteEventStore(path)
+    lease = store.acquire_local_preview_lease(
+        conversation_id="conv_expired_lease",
+        owner_id="owner-a",
+        target_port=8000,
+        authority_id="live:expired",
+        now=0,
+        expires_at=1,
+        listener_ports=(19120,),
+    )
+    assert lease is not None
+    assert store.complete_local_preview_storage_reset(
+        lease.listener_port,
+        authority_id="live:expired",
+        now=0,
+    )
+    store.close()
+
+    reopened = SqliteEventStore(path)
+    lease_rows = reopened._conn.execute("SELECT COUNT(*) FROM local_preview_leases").fetchone()
+    fence_rows = reopened._conn.execute(
+        "SELECT authority_id FROM local_preview_origin_state WHERE listener_port = ?",
+        (lease.listener_port,),
+    ).fetchone()
+    assert lease_rows[0] == 0
+    assert fence_rows[0] == "live:expired"
     reopened.close()
 
 

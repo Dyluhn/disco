@@ -242,13 +242,22 @@ def test_agent_websocket_inventory_actual_enforcement() -> None:
     app = create_agent_app(store, runtime=None)
     owner_b = TestClient(app)
     _install_session(owner_b, owner_id="owner-b", admin=True)
+    session_cookie = owner_b.cookies.get(SESSION_COOKIE)
+    assert session_cookie is not None
 
-    with pytest.raises(WebSocketDisconnect):
-        with owner_b.websocket_connect(
-            "/ws/conversations/conv_owner_a",
-            headers={"Origin": FRONTEND_ORIGIN},
-        ):
-            pass
+    with owner_b.websocket_connect(
+        "/ws/conversations/conv_owner_a",
+        headers={
+            "Origin": "http://testserver",
+            "Cookie": f"{SESSION_COOKIE}={session_cookie}",
+        },
+    ) as websocket:
+        frame = websocket.receive_json()
+        assert frame["type"] == "error"
+        assert frame["error"] == {"detail": "conversation_forbidden"}
+        with pytest.raises(WebSocketDisconnect) as disconnected:
+            websocket.receive_json()
+        assert disconnected.value.code == 1008
 
     with pytest.raises(WebSocketDisconnect):
         with owner_b.websocket_connect(

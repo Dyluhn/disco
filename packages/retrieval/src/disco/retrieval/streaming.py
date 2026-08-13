@@ -29,7 +29,7 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
-from .engine import extract_discovered_hits
+from .engine import annotate_passage_dates, extract_discovered_hits
 from .grounding import (
     _CITE,
     _drop_weak,
@@ -42,6 +42,7 @@ from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker
+from .url_policy import source_url_key
 from .vectorstore import VectorStore
 
 _LOG = logging.getLogger(__name__)
@@ -459,18 +460,25 @@ async def _extract_round_passages(
     once with a wider net (more hits) before giving up, since the next
     results are usually readable too. On re-search rounds, previously-
     extracted URLs are skipped so the round fetches fresh sources."""
-    candidate_hits: list[SearchHit] = [h for h in hits if h.url not in exclude_urls] or list(hits)
+    candidate_hits: list[SearchHit] = [
+        h for h in hits if source_url_key(h.url) not in exclude_urls
+    ] or list(hits)
     docs = await extract_discovered_hits(extraction, candidate_hits[:extract_cap])
+    docs = annotate_passage_dates(docs, candidate_hits[:extract_cap])
     passages = _passages_from_docs(docs)
     if not passages and len(candidate_hits) > extract_cap:
         extra = await extract_discovered_hits(
             extraction, candidate_hits[extract_cap:discover_limit]
         )
+        extra = annotate_passage_dates(extra, candidate_hits[extract_cap:discover_limit])
         docs = docs + extra
         passages = _passages_from_docs(docs)
-    status_by_url = {d.url: d.status for d in docs}
-    all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
-    this_round_urls = frozenset(h.url for h in hits)
+    status_by_url = {source_url_key(d.url): d.status for d in docs}
+    all_hits = [
+        {**h.model_dump(mode="json"), "status": status_by_url.get(source_url_key(h.url))}
+        for h in hits
+    ]
+    this_round_urls = frozenset(source_url_key(h.url) for h in hits)
     return docs, passages, all_hits, this_round_urls
 
 
@@ -565,7 +573,7 @@ def _build_final_answer(query: str, result: _RoundResult, follow_ups: list[str])
         "query": query,
         "blocks": result.blocks,
         "claims": result.claims,
-        "passages": [p.model_dump() for p in result.top],
+        "passages": [p.model_dump(mode="json") for p in result.top],
         "all_hits": result.all_hits,
         "unsupported_count": sum(1 for c in result.claims if c["verdict"] == "unsupported"),
         "follow_ups": follow_ups,

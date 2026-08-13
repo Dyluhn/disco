@@ -347,10 +347,116 @@ async def test_plan_step_transition_emits_mark_and_summary(monkeypatch) -> None:
     assert marks[0].source == EventSource.SYSTEM
     assert len(summaries) == 1
     assert summaries[0].rel_path.startswith(".disco/context/summary/")
-    assert (
-        "Step 'Add auth' completed; 1 tool call, last: file_write auth.py." in summaries[0].summary
-    )
+    assert "CLAIMED done: plan step 1 'Add auth'." in summaries[0].summary
+    assert "OBSERVED: 1 tool call; last: file_write auth.py." in summaries[0].summary
+    assert "HOST VERIFICATION: none" in summaries[0].summary
     assert fs.files[summaries[0].rel_path].decode("utf-8") == summaries[0].summary + "\n"
+
+
+@pytest.mark.asyncio
+async def test_one_range_completed_by_two_steps_emits_one_summary(monkeypatch) -> None:
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "on")
+    store = SqliteEventStore(":memory:")
+    fs = _MemFS()
+    loop = _make_loop(sandbox=fs)
+    loop.store = store
+    await store.append(CID, user_msg("build"))
+    await store.append(
+        CID,
+        PlanEvent(
+            summary="Build auth and UI",
+            steps=[PlanStep(title="Add auth"), PlanStep(title="Add UI")],
+            revision=3,
+        ),
+    )
+    write = await store.append(
+        CID,
+        ActionEvent(
+            thought="write both",
+            tool_call=ToolCall(
+                tool_name="file_write",
+                arguments={"path": "app.py", "content": "ok"},
+            ),
+        ),
+    )
+    await store.append(
+        CID,
+        ObservationEvent(
+            action_id=write.id,
+            tool_result=ToolResult(
+                call_id=write.tool_call.call_id,
+                tool_name="file_write",
+                success=True,
+                content="wrote app.py",
+            ),
+        ),
+    )
+    done = await store.append(
+        CID,
+        ActionEvent(
+            thought="record both",
+            tool_call=ToolCall(
+                tool_name="update_plan_progress",
+                arguments={
+                    "steps": [
+                        {"index": 1, "state": "done"},
+                        {"index": 2, "state": "done"},
+                    ]
+                },
+            ),
+        ),
+    )
+    await store.append(
+        CID,
+        ObservationEvent(
+            action_id=done.id,
+            tool_result=ToolResult(
+                call_id=done.tool_call.call_id,
+                tool_name="update_plan_progress",
+                success=True,
+                content="ok",
+            ),
+        ),
+    )
+
+    await loop._maybe_emit_plan_step_done_condition_note(done)
+    events = await store.get_events(CID)
+    marks = [event for event in events if isinstance(event, ContextResolvedEvent)]
+    summaries = [event for event in events if isinstance(event, ContextSummaryEvent)]
+    assert len(marks) == len(summaries) == 1
+    assert marks[0].meta["step_indices"] == [1, 2]
+    assert "1 'Add auth'; 2 'Add UI'" in summaries[0].summary
+    assert len(fs.files) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_event_range_in_distinct_plan_identity_emits_distinct_summary(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "on")
+    store = SqliteEventStore(":memory:")
+    loop, done, fs = await _seed_progress_events(store)
+    await store.append(
+        CID,
+        context_mark_resolved(
+            3,
+            6,
+            reason="plan_step_done",
+            range_id="cxr_plan_step_1_1_3_6",
+        ),
+    )
+
+    await loop._maybe_emit_plan_step_done_condition_note(done)
+
+    events = await store.get_events(CID)
+    marks = [event for event in events if isinstance(event, ContextResolvedEvent)]
+    summaries = [event for event in events if isinstance(event, ContextSummaryEvent)]
+    assert [mark.range_id for mark in marks] == [
+        "cxr_plan_step_1_1_3_6",
+        "cxr_plan_step_2_1_3_6",
+    ]
+    assert len(summaries) == 1
+    assert list(fs.files) == [".disco/context/summary/cxr_plan_step_2_1_3_6.md"]
 
 
 @pytest.mark.asyncio

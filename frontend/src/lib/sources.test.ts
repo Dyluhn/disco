@@ -70,4 +70,17 @@ describe("chips ↔ Sources panel alignment (the binding invariant)", () => {
       expect(n.get(p.id)).toBe(row + 1);
     }
   });
+
+  it("numbers tracking, fragment, scheme, and trailing-slash variants as one source", () => {
+    const answer = {
+      passages: [
+        { id: "a", source_url: "https://example.com/story?utm_source=feed#one" },
+        { id: "b", source_url: "http://example.com/story/" },
+        { id: "c", source_url: "https://other.example/item" },
+      ],
+      claims: [],
+    } as unknown as GroundedAnswer;
+
+    expect(Object.fromEntries(citationNumbers(answer))).toEqual({ a: 1, b: 1, c: 2 });
+  });
 });

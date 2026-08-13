@@ -7,6 +7,8 @@ and a fake router.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from disco.agent_server.title_service import (
     TitleService,
@@ -198,6 +200,71 @@ async def test_run_noop_when_no_first_message_yet() -> None:
     await svc._run("cid")  # type: ignore[attr-defined]
     assert store.updated_to is None
     assert router.calls == 0
+
+
+@pytest.mark.anyio
+async def test_ensure_joins_scheduled_title_generation_once() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BlockingRouter(_FakeRouter):
+        async def complete(self, req):  # noqa: ANN001
+            self.calls += 1
+            started.set()
+            await release.wait()
+            return _FakeResp("Open Source Release Survey")
+
+    store = _FakeStore([_user("What open-source models were released this week?")])
+    router = _BlockingRouter()
+    service = TitleService(store, lambda *args, **kwargs: router)
+    service.schedule("cid")
+    await started.wait()
+    waiters = [
+        asyncio.create_task(service.ensure("cid")),
+        asyncio.create_task(service.ensure("cid")),
+    ]
+    await asyncio.sleep(0)
+    release.set()
+
+    assert await asyncio.gather(*waiters) == [
+        "Open Source Release Survey",
+        "Open Source Release Survey",
+    ]
+    assert router.calls == 1
+
+
+@pytest.mark.anyio
+async def test_ensure_times_out_to_fallback_without_cancelling_canonical_title(
+    monkeypatch,
+) -> None:
+    import disco.agent_server.title_service as title_service
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _BlockingRouter(_FakeRouter):
+        async def complete(self, req):  # noqa: ANN001
+            self.calls += 1
+            started.set()
+            await release.wait()
+            return _FakeResp("Open Source Release Survey")
+
+    task_text = "What open-source models were released this week?"
+    store = _FakeStore([_user(task_text)])
+    router = _BlockingRouter()
+    service = TitleService(store, lambda *args, **kwargs: router)
+    monkeypatch.setattr(title_service, "_TITLE_ENSURE_TIMEOUT_S", 0.01)
+
+    ensure = asyncio.create_task(service.ensure("cid"))
+    await started.wait()
+    assert await ensure == fallback_title(task_text)
+    canonical = service._inflight["cid"]  # type: ignore[attr-defined]
+    assert not canonical.done()
+
+    release.set()
+    await canonical
+    assert store.title == "Open Source Release Survey"
+    assert router.calls == 1
 
 
 @pytest.mark.anyio

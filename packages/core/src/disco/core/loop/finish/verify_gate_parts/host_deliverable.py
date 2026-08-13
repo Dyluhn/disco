@@ -22,7 +22,9 @@ from ....verify_medium import (
 from ..common import (
     _LOG,
     AgentStep,
+    DeliverableEvent,
     Event,
+    EventSource,
     FileExistsPredicate,
     HostVerificationClaim,
     HostVerificationDeliverable,
@@ -40,10 +42,17 @@ from ..common import (
     artifact_manifest_reader_enabled,
     artifact_paths_from_events,
     artifact_paths_from_manifest_records,
+    current_workspace_agent_view_id,
     manifest_path_divergence,
 )
 from .host_authority import bind_host_verification_authority
-from .host_claims import governed_verification_required, user_verification_material
+from .host_claims import (
+    governed_verification_contract,
+    governed_verification_required,
+    handoff_matches_verification_contract,
+    preview_selection_at,
+    user_verification_material,
+)
 
 # Compatibility re-exports only. Medium detection no longer synthesizes this
 # requirement; an admitted target may still supply the exact claim explicitly.
@@ -253,6 +262,64 @@ async def _resolved_artifact_path(
     return _safe_deliverable_file_path(any_event.path)
 
 
+def _preview_generation_changed(events: list[Event], handoff: DeliverableEvent) -> bool:
+    """Whether one real handoff predates a different, still-active Preview."""
+
+    if type(handoff.seq) is not int:
+        return False
+    current_seq = max((event.seq or 0 for event in events), default=0)
+    handed_off = preview_selection_at(events, through_seq=handoff.seq)
+    current = preview_selection_at(events, through_seq=current_seq)
+    return bool(
+        handed_off is not None
+        and current is not None
+        and handed_off.operational_identity != current.operational_identity
+    )
+
+
+async def _rebind_current_preview_handoff(
+    gate: Any,
+    events: list[Event],
+    handoff: DeliverableEvent | None,
+) -> tuple[DeliverableEvent | None, list[Event]]:
+    """Move host-owned Preview bookkeeping without asking the model to re-serve.
+
+    A current `finish` is already the agent's completion intent. When the exact
+    governed app handoff still names the target but Preview restarted afterward,
+    mint a system-owned handoff at the active generation and let the verifier
+    decide health. Missing/stopped previews and mismatched target contracts remain
+    fail-closed; this only removes redundant model work from host bookkeeping.
+    """
+
+    if (
+        handoff is None
+        or handoff.artifact_kind != "app"
+        or not governed_verification_required(events)
+        or not _preview_generation_changed(events, handoff)
+    ):
+        return handoff, events
+    contract = governed_verification_contract(events)
+    if contract is not None and not handoff_matches_verification_contract(handoff, contract):
+        return handoff, events
+    emitted = await gate._loop._emit(
+        DeliverableEvent(
+            source=EventSource.SYSTEM,
+            agent_view_id=current_workspace_agent_view_id(events),
+            title=handoff.title,
+            path=handoff.path,
+            artifact_kind="app",
+            deployment_url=handoff.deployment_url,
+            target_id=handoff.target_id,
+            delivery_contract=handoff.delivery_contract,
+            verification_contract_digest=handoff.verification_contract_digest,
+            meta={"host_preview_rebind": True, "replaces_deliverable_id": handoff.id},
+        )
+    )
+    if not isinstance(emitted, DeliverableEvent):
+        return handoff, events
+    return emitted, await gate._loop._events()
+
+
 async def host_verify_deliverable(
     gate: Any,
     step: AgentStep,
@@ -304,6 +371,10 @@ async def host_verify_deliverable(
     )
     if path is None:
         return None
+    if isinstance(any_event, DeliverableEvent):
+        any_event, events = await _rebind_current_preview_handoff(
+            gate, events, any_event
+        )
     deployment_url = any_event.deployment_url if any_event is not None else ""
     artifact_kind = any_event.artifact_kind if any_event is not None else "app"
     deliverable = HostVerificationDeliverable(

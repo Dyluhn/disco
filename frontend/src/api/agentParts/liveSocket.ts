@@ -19,6 +19,8 @@ import type { AgentHandle, ConversationWsUrlFactory } from "../agent";
 const _RECONNECT_DEGRADED_AFTER_ATTEMPTS = 6;
 const _RECONNECT_BACKOFF_CAP_MS = 15000;
 const _STALE_FRAME_TIMEOUT_MS = 45000;
+const _TERMINAL_STATES = new Set(["FINISHED", "STUCK", "ERROR"]);
+const _POLICY_CLOSE_DETAILS = new Set(["conversation_forbidden"]);
 
 
 export const defaultConversationWsUrl: ConversationWsUrlFactory = (
@@ -40,6 +42,8 @@ export function subscribeLive(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let degraded = false;
+  let terminalIdle = false;
+  let policyClosed = false;
   // The production ASGI stack does not reliably apply the WebSocket route's
   // Query(default=0) when the parameter is omitted. In that shape it sends the
   // state snapshot but never drains durable history, leaving reopened runs on
@@ -56,7 +60,7 @@ export function subscribeLive(
 
   const armWatchdog = (socket: WebSocket) => {
     clearWatchdog();
-    if (closed) return;
+    if (closed || terminalIdle || policyClosed) return;
     watchdogTimer = setTimeout(() => {
       if (closed || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
       socket.close();
@@ -76,7 +80,7 @@ export function subscribeLive(
   async function connect() {
     timer = null;
     await ensureAgentSession();
-    if (closed) return;
+    if (closed || policyClosed) return;
     const socket = new WebSocket(wsUrlForCursor(cid, lastSeq));
     ws = socket;
     socket.onopen = () => {
@@ -92,12 +96,28 @@ export function subscribeLive(
     };
     socket.onmessage = (ev) => {
       if (closed || ws !== socket) return;
-      armWatchdog(socket);
       try {
         const frame = JSON.parse(ev.data) as WSServerFrame;
         if (frame.type === "event" && typeof frame.event.seq === "number") {
           lastSeq = Math.max(lastSeq, frame.event.seq);
         }
+        const status =
+          frame.type === "state"
+            ? frame.state.execution_status
+            : frame.type === "event" && frame.event.kind === "status"
+              ? frame.event.status
+              : null;
+        if (status !== null) {
+          terminalIdle = _TERMINAL_STATES.has(status);
+        }
+        if (
+          frame.type === "error" &&
+          _POLICY_CLOSE_DETAILS.has(frame.error.detail ?? "")
+        ) {
+          policyClosed = true;
+        }
+        if (terminalIdle || policyClosed) clearWatchdog();
+        else armWatchdog(socket);
         onFrame(frame);
       } catch {
         onFrame({ type: "error", error: { detail: "malformed frame from server" } });
@@ -109,6 +129,7 @@ export function subscribeLive(
       if (closed || ws !== socket) return;
       clearWatchdog();
       ws = null;
+      if (terminalIdle || policyClosed) return;
       attempt += 1;
       if (attempt > _RECONNECT_DEGRADED_AFTER_ATTEMPTS && !degraded) {
         degraded = true;
@@ -126,8 +147,15 @@ export function subscribeLive(
 
   return {
     send: (f) => {
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(f));
-      else queue.push(f);
+      if (policyClosed) return;
+      if (f.type !== "ping") terminalIdle = false;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        if (!terminalIdle) armWatchdog(ws);
+        ws.send(JSON.stringify(f));
+      } else {
+        queue.push(f);
+        if (ws === null && !timer) void connect();
+      }
     },
     cancel: () => {
       closed = true;
