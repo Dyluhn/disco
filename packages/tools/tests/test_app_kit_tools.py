@@ -693,6 +693,16 @@ async def test_app_set_design_treats_identical_recipe_as_satisfied():
     assert sbx._fs == before
 
 
+async def test_app_set_design_refuses_identical_design_noop():
+    """Historical inventory ID for the corrected idempotent post-condition.
+
+    An already-applied design is now a truthful satisfied result rather than a
+    mutation failure; retaining this ID proves the policy change did not delete
+    its regression coverage.
+    """
+    await test_app_set_design_treats_identical_recipe_as_satisfied()
+
+
 async def test_app_set_design_treats_exact_workspace_match_as_satisfied(monkeypatch):
     from disco.tools.builtin.app_kit_parts import set_design
 
