@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "0866b79a29a2987d393a075e8bafc111705d7427",
+  "source_identity": "e6efd3da6f6876cb02c1d98c9a6194301e74c51b",
   "collected": {
     "counts": {
-      "packages": 10708,
+      "packages": 10710,
       "harness": 1400,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12513,
+    "total": 12515,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -8452,6 +8452,7 @@
         "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_records_a_clean_in_sync_version",
         "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_refuses_without_an_app",
         "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_same_second_never_overwrites",
+        "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
         "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_advertises_typed_items_array_schema",
         "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_changes_authoritative_identity_without_section_selector",
         "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_changes_identity_and_copy_atomically",
@@ -10438,6 +10439,7 @@
         "packages/tools/tests/test_validation_executor.py::test_malformed_nested_arg_is_rejected_never_coerced",
         "packages/tools/tests/test_validation_executor.py::test_missing_required_message_names_field",
         "packages/tools/tests/test_validation_executor.py::test_nested_shape_hint_is_generic_across_tools",
+        "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path",
         "packages/tools/tests/test_validation_executor.py::test_release_declare_behavior_is_truthful_and_never_dirties_the_workspace_epoch",
         "packages/tools/tests/test_validation_executor.py::test_repair_loop_then_success",
         "packages/tools/tests/test_validation_executor.py::test_schema_is_single_source",
@@ -12534,9 +12536,9 @@
     }
   },
   "mapping_static": {
-    "identity": "0866b79a29a2987d393a075e8bafc111705d7427",
+    "identity": "e6efd3da6f6876cb02c1d98c9a6194301e74c51b",
     "python_test_file_count": 844,
-    "python_static_test_id_count": 10288,
+    "python_static_test_id_count": 10290,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -21347,6 +21349,7 @@
       "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_records_a_clean_in_sync_version",
       "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_refuses_without_an_app",
       "packages/tools/tests/test_app_kit_tools.py::test_app_snapshot_version_same_second_never_overwrites",
+      "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
       "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_advertises_typed_items_array_schema",
       "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_changes_authoritative_identity_without_section_selector",
       "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_changes_identity_and_copy_atomically",
@@ -23041,6 +23044,7 @@
       "packages/tools/tests/test_validation_executor.py::test_malformed_nested_arg_is_rejected_never_coerced",
       "packages/tools/tests/test_validation_executor.py::test_missing_required_message_names_field",
       "packages/tools/tests/test_validation_executor.py::test_nested_shape_hint_is_generic_across_tools",
+      "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path",
       "packages/tools/tests/test_validation_executor.py::test_release_declare_behavior_is_truthful_and_never_dirties_the_workspace_epoch",
       "packages/tools/tests/test_validation_executor.py::test_repair_loop_then_success",
       "packages/tools/tests/test_validation_executor.py::test_schema_is_single_source",
@@ -33337,6 +33341,32 @@
           "packages/core/tests/test_w39_shell_escalation.py::test_notice_still_never_skips_and_stays_advisory",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_is_repetition_aware",
           "packages/core/tests/test_w39_shell_escalation.py::test_shell_notice_names_the_consequence"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V32-APPKIT-REPRESENTATION",
+      "root": "packages",
+      "source_identity_before": "0866b79a29a2987d393a075e8bafc111705d7427",
+      "source_identity_after": "e6efd3da6f6876cb02c1d98c9a6194301e74c51b",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10708,
+          "after_count": 10710,
+          "added_ids": [
+            "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
+            "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
+          "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

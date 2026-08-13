@@ -137,8 +137,11 @@ def _failure_reasons(unknown: list[str], errors: list[dict[str, Any]]) -> list[s
         if etype == "missing":
             reasons.append(f"missing required argument {loc!r}")
         elif etype in {"extra_forbidden", "unexpected_keyword_argument"}:
-            # already covered by `unknown` above; skip to avoid duplication
-            continue
+            # Top-level extras are already named by `unknown`; nested extras are
+            # not. Preserve their full path so a malformed nested object never
+            # collapses to the useless generic "did not match" response.
+            if len(err.get("loc", ())) > 1 or not unknown:
+                reasons.append(f"unexpected argument {loc!r} — not accepted by this tool")
         else:
             reasons.append(f"argument {loc!r}: {err.get('msg', etype)}")
     if not reasons:

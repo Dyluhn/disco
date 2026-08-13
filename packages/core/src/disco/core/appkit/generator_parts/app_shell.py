@@ -26,6 +26,8 @@ def _emit_content_ts(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
         content = section.content
         slot: dict[str, object] = {}
         if content is not None:
+            if content.eyebrow is not None:
+                slot["eyebrow"] = content.eyebrow
             if content.heading is not None:
                 slot["heading"] = content.heading
             if content.subheading is not None:
