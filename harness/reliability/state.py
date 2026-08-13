@@ -319,6 +319,8 @@ def _count_claim_evidence(
                 if claim is None:
                     continue
                 if claim.proof == "fresh_device":
+                    if result.get("status") != PASS:
+                        continue
                     device_id = result.get("fresh_device_id")
                     if isinstance(device_id, str) and device_id:
                         fresh_devices[claim.id].add(device_id)
