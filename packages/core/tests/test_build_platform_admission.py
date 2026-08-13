@@ -20,9 +20,74 @@ from disco.core import (
     event_from_json_dict,
     event_to_json_dict,
 )
+from disco.core.verification import (
+    AdmittedVerificationContract,
+    VerificationCheckContract,
+    VerificationClaimKind,
+    VerificationDeliveryContract,
+    default_structured_web_claims,
+)
 
 _DIGEST = "sha256:" + "a" * 64
 _RUN_ID = "run:sha256:" + "b" * 64
+
+
+def _artifact_contract() -> AdmittedVerificationContract:
+    return AdmittedVerificationContract(
+        target_id="disco.legacy_artifact@1",
+        verifier_id="disco.host_web_verifier@1",
+        delivery=VerificationDeliveryContract(
+            shape="artifact.legacy_deliverable",
+            mode="artifact",
+            entry_kind="deliverable_manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="none",
+        checks=(),
+        required=False,
+        unavailable="degrade",
+        unverified_finish="allow_without_verified_label",
+    )
+
+
+def _web_contract() -> AdmittedVerificationContract:
+    claims = default_structured_web_claims()
+    return AdmittedVerificationContract(
+        target_id="disco.legacy_web@1",
+        verifier_id="disco.host_web_verifier@1",
+        delivery=VerificationDeliveryContract(
+            shape="web.legacy_deliverable",
+            mode="interactive",
+            entry_kind="deliverable_manifest",
+            entry_reference="active-deliverable",
+        ),
+        preview_modality="legacy_host",
+        checks=(
+            VerificationCheckContract(
+                check_id="web_functional",
+                receipt_kind="disco.web_functional@1",
+                issuer_id="disco.host_web_verifier@1",
+                operation="host.verify_deliverable",
+                required_execution_modality="managed_preview",
+                delegated_issuer_ids=frozenset({"model_role.verifier@1"}),
+                accepted_claim_kinds=frozenset(
+                    {
+                        VerificationClaimKind.ARTIFACT_IDENTITY,
+                        VerificationClaimKind.HTTP_READY,
+                        VerificationClaimKind.RENDERED_CONTENT,
+                        VerificationClaimKind.VISIBLE_TEXT,
+                        VerificationClaimKind.CONSOLE_CLEAN,
+                        VerificationClaimKind.NETWORK_CLEAN,
+                        VerificationClaimKind.INTERACTION,
+                        VerificationClaimKind.ROUTE,
+                        VerificationClaimKind.CONTRACT_SEMANTIC,
+                        VerificationClaimKind.VISUAL_SEMANTIC,
+                    }
+                ),
+                claims=claims,
+            ),
+        ),
+    )
 
 
 def _intent(seq: int = 1) -> WorkspaceMutationEvent:
@@ -206,6 +271,108 @@ def test_appkit_ejection_and_superseding_freeform_admission_round_trip() -> None
         supersedes_admission_id="appkit-admission",
     )
     assert current_build_platform_admission([*lifecycle, replacement]) == replacement
+
+
+def test_delivery_selection_supersedes_only_the_current_same_run_target() -> None:
+    initial = _platform()
+    artifact = BuildPlatformAdmissionEvent(
+        id="artifact-selection",
+        seq=3,
+        route="platform",
+        profile_id="disco.freeform_artifact@1",
+        run_intent_id="intent",
+        composition_authority="build_platform_core",
+        composition_digest="sha256:" + "c" * 64,
+        run_identity="run:sha256:" + "d" * 64,
+        transition="delivery_selection",
+        supersedes_admission_id=initial.id,
+        verification_contract=_artifact_contract(),
+    )
+    events = [_intent(), initial, artifact]
+    assert current_build_platform_admission(events) == artifact
+    restored = event_from_json_dict(event_to_json_dict(artifact))
+    assert restored == artifact
+
+    stale = artifact.model_copy(
+        update={
+            "id": "stale-selection",
+            "seq": 4,
+            "supersedes_admission_id": initial.id,
+        }
+    )
+    assert current_build_platform_admission([*events, stale]) == artifact
+
+
+def test_delivery_selection_profile_cannot_carry_a_foreign_target_contract() -> None:
+    web_contract = _web_contract()
+    valid = BuildPlatformAdmissionEvent(
+        route="platform",
+        profile_id="disco.freeform_web@1",
+        run_intent_id="intent",
+        composition_authority="build_platform_core",
+        composition_digest=_DIGEST,
+        run_identity=_RUN_ID,
+        transition="delivery_selection",
+        supersedes_admission_id="prior",
+        verification_claims=web_contract.required_claims,
+        verification_contract=web_contract,
+    )
+    assert valid.verification_contract == web_contract
+
+    with pytest.raises(ValueError, match="contract does not match"):
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.freeform_web@1",
+            run_intent_id="intent",
+            composition_authority="build_platform_core",
+            composition_digest=_DIGEST,
+            run_identity=_RUN_ID,
+            transition="delivery_selection",
+            supersedes_admission_id="prior",
+            verification_contract=_artifact_contract(),
+        )
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [
+        _web_contract().model_copy(update={"preview_modality": "none"}),
+        _web_contract().model_copy(update={"unavailable": "degrade"}),
+        _web_contract().model_copy(
+            update={
+                "checks": (
+                    _web_contract().checks[0].model_copy(update={"issuer_id": "foreign@1"}),
+                )
+            }
+        ),
+        _web_contract().model_copy(
+            update={
+                "checks": (
+                    _web_contract().checks[0].model_copy(
+                        update={"claims": _web_contract().checks[0].claims[1:]}
+                    ),
+                )
+            }
+        ),
+    ],
+    ids=["preview", "unavailable-policy", "issuer", "functional-floor"],
+)
+def test_web_delivery_selection_requires_the_exact_builtin_contract(
+    contract: AdmittedVerificationContract,
+) -> None:
+    with pytest.raises(ValueError, match="contract does not match"):
+        BuildPlatformAdmissionEvent(
+            route="platform",
+            profile_id="disco.freeform_web@1",
+            run_intent_id="intent",
+            composition_authority="build_platform_core",
+            composition_digest=_DIGEST,
+            run_identity=_RUN_ID,
+            transition="delivery_selection",
+            supersedes_admission_id="prior",
+            verification_claims=contract.required_claims,
+            verification_contract=contract,
+        )
 
 
 def test_appkit_ejection_authority_requires_complete_guarantees_and_causal_evidence() -> None:

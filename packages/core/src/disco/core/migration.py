@@ -52,4 +52,11 @@ def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
             f"Event SCHEMA_VERSION {CURRENT_EVENT_SCHEMA_VERSION}; the event "
             "cannot be read under an older shape"
         )
+    # DeliverableEvent historically declared ``artifact_kind='app'`` on the
+    # model itself. Preserve that exact read-time meaning for already-persisted
+    # v1 bytes, while current event construction remains required to provide a
+    # host-derived kind explicitly. This is compatibility migration, not a new
+    # emission default; no workspace evidence exists at this pure read seam.
+    if raw.get("kind") == "deliverable" and "artifact_kind" not in raw:
+        raw["artifact_kind"] = "app"
     return raw

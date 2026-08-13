@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 if TYPE_CHECKING:
     from . import view_render
@@ -402,6 +402,10 @@ class TurnControlPort(Protocol):
     _retry_interrupt: asyncio.Event
 
     _control_fence: ControlFenceFactory
+
+    _declared_delivery_kind: Literal["app", "files"] | None
+
+    _delivery_contract_resolver: Callable[[str], Awaitable[None]] | None
 
     _stop_hooks: list[StopHook]
 

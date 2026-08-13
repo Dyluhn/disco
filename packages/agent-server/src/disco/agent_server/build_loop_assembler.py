@@ -6,7 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 from disco.core import LLMSummarizingCondenser, SecurityRisk, StatusEvent, VerifierVerdictEvent
 from disco.core.build_platform import ObserveOnlyShadowRecord
@@ -75,6 +75,7 @@ class _LoopPresentation:
     quiet: bool
     autonomous: bool
     context_window: int | None
+    delivery_kind: Literal["app", "files"] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,7 @@ class _LoopHooks:
     terminal_hook: Callable[[StatusEvent], Awaitable[StatusEvent]]
     seal_probe: SealabilityProbe
     fence: Callable[[], AbstractAsyncContextManager[None]]
+    delivery_contract_resolver: Callable[[str], Awaitable[None]] | None
 
 
 class BuildLoopAssembler:
@@ -119,12 +121,17 @@ class BuildLoopAssembler:
         mcp_risks: dict[str, SecurityRisk],
     ) -> AgentLoop:
         finish_alias = self._finish_alias(conversation_id, sealed_workflow_run)
+        delivery_kind = self._contract.expected_delivery_mode(conversation_id)
+        build_admission_enabled = sealed_workflow_run is None and not (
+            context.modes.art_mode or context.modes.workflow_router_mode
+        )
         self._set_finish_alias(agent, finish_alias)
         self._observe_composition(
             conversation_id,
             executor,
             context,
             sealed=sealed_workflow_run is not None,
+            delivery_kind=delivery_kind,
         )
         runtime = _LoopRuntime(
             conversation_id=conversation_id,
@@ -139,8 +146,14 @@ class BuildLoopAssembler:
             quiet=self._settings._effective_quiet(conversation_id),
             autonomous=self._settings._effective_autonomous(conversation_id),
             context_window=context.policy.driver_context_window,
+            delivery_kind=delivery_kind,
         )
-        hooks = self._hooks(conversation_id, router, executor)
+        hooks = self._hooks(
+            conversation_id,
+            router,
+            executor,
+            delivery_binding_enabled=build_admission_enabled,
+        )
         if sealed_workflow_run is not None:
             return self._sealed_loop(
                 runtime,
@@ -175,6 +188,7 @@ class BuildLoopAssembler:
         context: ComposeContext,
         *,
         sealed: bool,
+        delivery_kind: Literal["app", "files"] | None,
     ) -> None:
         modes = context.modes
         if build_platform_shadow_enabled() and not sealed:
@@ -184,6 +198,7 @@ class BuildLoopAssembler:
                     observe_legacy_build(
                         appkit_mode=modes.appkit_mode,
                         tool_specs=executor.available_tools(),
+                        delivery_kind=delivery_kind or "app",
                     ),
                 )
             except Exception:
@@ -197,6 +212,7 @@ class BuildLoopAssembler:
             eligible=not sealed
             and not (modes.art_mode or modes.workflow_router_mode),
             tool_specs=executor.available_tools(),
+            delivery_kind=delivery_kind,
         )
 
     def _hooks(
@@ -204,7 +220,18 @@ class BuildLoopAssembler:
         conversation_id: str,
         router: DefaultLLMRouter,
         executor: DefaultToolExecutor,
+        *,
+        delivery_binding_enabled: bool,
     ) -> _LoopHooks:
+        async def bind_delivery(delivery_kind: str) -> None:
+            if delivery_kind not in {"app", "files"}:
+                raise ValueError("delivery kind must be app or files")
+            await self._build_platform.bind_delivery_locked(
+                conversation_id,
+                cast(Literal["app", "files"], delivery_kind),
+                tool_specs=executor.available_tools(),
+            )
+
         host_verify_timeout_s = VerifyWebAppTool.definition.timeout_s
         if host_verify_timeout_s is None:
             raise RuntimeError("verify_web_app must declare its host verification budget")
@@ -231,6 +258,7 @@ class BuildLoopAssembler:
             terminal_hook=self._workspace.terminal_commit_hook(conversation_id),
             seal_probe=self._workspace.finish_sealability_probe(conversation_id),
             fence=lambda: self._workspace.fence(conversation_id),
+            delivery_contract_resolver=(bind_delivery if delivery_binding_enabled else None),
         )
 
     @staticmethod
@@ -253,6 +281,8 @@ class BuildLoopAssembler:
             "terminal_commit_hook": hooks.terminal_hook,
             "finish_sealability_probe": hooks.seal_probe,
             "control_fence": hooks.fence,
+            "declared_delivery_kind": presentation.delivery_kind,
+            "delivery_contract_resolver": hooks.delivery_contract_resolver,
         }
 
     def _sealed_loop(

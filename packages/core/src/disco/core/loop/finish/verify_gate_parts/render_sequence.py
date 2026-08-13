@@ -216,6 +216,12 @@ async def _render_verify_run_checks(
     strict_appkit: bool,
     appkit_prepared: _AppkitPrepared,
 ) -> tuple[Disp, list[Event]]:
+    contract = governed_verification_contract(events)
+    if contract is not None and not contract.required and not contract.checks:
+        # An admitted artifact target with no checks is an explicit target
+        # decision, not an invitation for legacy preview residue or a global
+        # advisory flag to arm the web verifier.
+        return Disp.FALLTHROUGH, events
     if strict_appkit:
         return await _render_verify_appkit_checks(gate, step, events, appkit_prepared)
     if gate._host_verify_authoritative() or governed_verification_required(events):

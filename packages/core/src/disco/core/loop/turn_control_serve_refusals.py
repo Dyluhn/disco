@@ -42,9 +42,8 @@ def serve_spend_escalation(repeats: int, why: str, body: str) -> str:
 _SERVE_ARGUMENT_DEFECTS: dict[str, tuple[str, str]] = {
     "no_arguments": (
         "the call carried no arguments.",
-        "re-send `serve` with the required string fields `title` and `path`; set "
-        "`kind` to exactly `app` or `files` only if the documented `app` default "
-        "is wrong for this handoff.",
+        "re-send `serve` with the required string fields `title` and `path`; the "
+        "platform derives the delivery kind from the artifact and admitted target.",
     ),
     "title_missing": (
         "`title` was empty or missing.",
@@ -57,13 +56,22 @@ _SERVE_ARGUMENT_DEFECTS: dict[str, tuple[str, str]] = {
     ),
     "kind_invalid": (
         "`kind` was {detail!r}, which is neither `app` nor `files`.",
-        "re-send the same entry with `kind` set to exactly `app` or `files`, or "
-        "omit `kind` to take the documented `app` default.",
+        "re-send the same entry without `kind`; the platform derives it from the "
+        "artifact and admitted target.",
     ),
     "path_unresolvable": (
         "`path` normalized to nothing (you sent {detail!r}, which resolves "
         "outside or above the workspace root).",
         "re-send a workspace-relative entry FILE path, such as `dist/index.html`.",
+    ),
+    "declared_app_evidence_missing": (
+        "{detail}.",
+        "hand off the actual HTML entry, or start the managed app runtime with a "
+        "command that selects this entry, then re-send the same handoff.",
+    ),
+    "declared_files_contract_mismatch": (
+        "{detail}.",
+        "hand off the artifact entry governed by the files delivery contract.",
     ),
 }
 

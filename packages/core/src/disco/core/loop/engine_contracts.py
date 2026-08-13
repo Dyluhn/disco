@@ -632,11 +632,11 @@ _REMEMBER_SCHEMA = {
 # usually serves, optionally debugs, then finishes).
 _SERVE_DESCRIPTION = (
     "Hand off a finished deliverable to the user when you've produced something they "
-    "should open or download. Set `kind`='app' for a runnable result opened in the live "
-    "preview (a built site / running dev server selected by the entry file at `path`) — "
-    "start it with `preview_start` and use the platform-assigned preview; never assume a port. Set "
-    "`kind`='files' for artifacts to download (`path` = the file or folder). "
-    "Give a short human `title`. This does NOT end the run. Use optional debugging "
+    "should open or download. Give the actual entry file or artifact at `path`; the platform "
+    "derives whether it is an app or downloadable files from the admitted artifact contract, "
+    "the artifact itself, and any managed app runtime. Do not start a static server merely to "
+    "change how a non-app file is classified. Give a short human `title`. This does NOT end "
+    "the run. Use optional debugging "
     "only when it can guide a concrete fix, then call finish; platform acceptance runs separately."
 )
 _SERVE_SCHEMA = {
@@ -649,11 +649,6 @@ _SERVE_SCHEMA = {
         "path": {
             "type": "string",
             "description": "Workspace-relative path: entry file (app) or file/folder (files).",
-        },
-        "kind": {
-            "type": "string",
-            "enum": ["app", "files"],
-            "description": "'app' = open in live preview; 'files' = download. Default 'app'.",
         },
         "url": {
             "type": "string",

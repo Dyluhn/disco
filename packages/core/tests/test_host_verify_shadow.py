@@ -348,13 +348,40 @@ async def test_non_file_app_handoff_without_primary_artifact_skips_host_verify()
 
 
 @pytest.mark.asyncio
-async def test_explicit_python_entry_file_is_host_verified_without_index_rewrite() -> None:
+async def test_explicit_python_entry_file_is_not_sent_to_web_host_verifier() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
     execu.sandbox = _PathSandbox({"server.py"})  # type: ignore[attr-defined]
     loop, store = _loop(_python_entry_deliverable_agent(), execu, host_verifier=host)
 
     await loop.send_message("build a Python server")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    events = await store.get_events("conv")
+    deliverable = next(event for event in events if isinstance(event, DeliverableEvent))
+    assert (deliverable.path, deliverable.artifact_kind) == ("server.py", "files")
+    assert not any(
+        isinstance(event, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_python_entry_file_is_host_verified_without_index_rewrite() -> None:
+    """A persisted explicit legacy-app assertion retains its compatibility path."""
+
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox({"server.py"})  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("finish a persisted legacy Python app")
+    await store.append(
+        "conv",
+        DeliverableEvent(title="Legacy app", path="server.py", artifact_kind="app"),
+    )
     state = await loop.run()
 
     assert state.execution_status == ConversationStatus.FINISHED
