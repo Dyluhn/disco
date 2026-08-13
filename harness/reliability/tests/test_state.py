@@ -106,6 +106,44 @@ def test_infrastructure_failure_does_not_taint_but_never_counts() -> None:
     assert report["claims"][0]["observed"] == 100
 
 
+@pytest.mark.parametrize("status", [INFRA, INVALID])
+def test_nonpass_fresh_device_fingerprint_never_counts(status: str) -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    for index in range(10):
+        result = _result(status, 0, device=f"{index:024x}")
+        result.update(
+            kind="fresh_device",
+            claims=["fresh.install_boot_upgrade_uninstall"],
+        )
+        _record(state, f"nonpass-{index}", "subject", result)
+
+    report = promotion_report(
+        state,
+        matrix,
+        revision="subject",
+        claim_ids={"fresh.install_boot_upgrade_uninstall"},
+    )
+
+    assert report["tainted"] is False
+    assert report["eligible"] is False
+    assert report["claims"][0]["observed"] == 0
+
+    passed = _result(PASS, 1, device=f"{0:024x}")
+    passed.update(
+        kind="fresh_device",
+        claims=["fresh.install_boot_upgrade_uninstall"],
+    )
+    _record(state, "pass", "subject", passed)
+    report = promotion_report(
+        state,
+        matrix,
+        revision="subject",
+        claim_ids={"fresh.install_boot_upgrade_uninstall"},
+    )
+    assert report["claims"][0]["observed"] == 1
+
+
 def test_invalid_cohort_preserves_its_completed_pass_cells() -> None:
     matrix = load_matrix(MATRIX)
     state = empty_state()
