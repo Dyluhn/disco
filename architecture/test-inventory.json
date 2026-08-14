@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "31f5be5bb03211e231c271d857bd2f455154961e",
+  "source_identity": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
   "collected": {
     "counts": {
-      "packages": 10735,
+      "packages": 10736,
       "harness": 1415,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12555,
+    "total": 12556,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -8657,6 +8657,7 @@
         "packages/tools/tests/test_bp_g10_filtered_default.py::test_gvisor_sealed_and_open_paths_remain_sibling_isolated",
         "packages/tools/tests/test_bp_g10_filtered_default.py::test_registry_egress_allow_covers_npm_pip_git",
         "packages/tools/tests/test_bp_g10_filtered_default.py::test_registry_egress_allow_does_not_cover_alternative_git_hosts",
+        "packages/tools/tests/test_browser.py::test_browser_reads_large_response_from_file_not_bounded_stdout",
         "packages/tools/tests/test_browser.py::test_browser_returns_fenced_untrusted_data_via_the_sandbox",
         "packages/tools/tests/test_browser.py::test_browser_runs_in_sandbox_and_network_is_a_granted_need",
         "packages/tools/tests/test_browser.py::test_browser_schema_makes_navigation_precondition_and_url_scope_explicit",
@@ -12576,9 +12577,9 @@
     }
   },
   "mapping_static": {
-    "identity": "31f5be5bb03211e231c271d857bd2f455154961e",
+    "identity": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10326,
+    "python_static_test_id_count": 10327,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -21597,6 +21598,7 @@
       "packages/tools/tests/test_bp_g10_filtered_default.py::test_gvisor_sealed_and_open_paths_remain_sibling_isolated",
       "packages/tools/tests/test_bp_g10_filtered_default.py::test_registry_egress_allow_covers_npm_pip_git",
       "packages/tools/tests/test_bp_g10_filtered_default.py::test_registry_egress_allow_does_not_cover_alternative_git_hosts",
+      "packages/tools/tests/test_browser.py::test_browser_reads_large_response_from_file_not_bounded_stdout",
       "packages/tools/tests/test_browser.py::test_browser_returns_fenced_untrusted_data_via_the_sandbox",
       "packages/tools/tests/test_browser.py::test_browser_runs_in_sandbox_and_network_is_a_granted_need",
       "packages/tools/tests/test_browser.py::test_browser_schema_makes_navigation_precondition_and_url_scope_explicit",
@@ -33629,6 +33631,30 @@
         "python_static_test_ids": [
           "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
           "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V37-BROWSER-RESPONSE-FILE",
+      "root": "packages",
+      "source_identity_before": "31f5be5bb03211e231c271d857bd2f455154961e",
+      "source_identity_after": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10735,
+          "after_count": 10736,
+          "added_ids": [
+            "packages/tools/tests/test_browser.py::test_browser_reads_large_response_from_file_not_bounded_stdout"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_browser.py::test_browser_reads_large_response_from_file_not_bounded_stdout"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
