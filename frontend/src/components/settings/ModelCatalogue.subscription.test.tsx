@@ -28,7 +28,9 @@ describe("ModelCatalogue subscription pricing", () => {
     expect(screen.getByText("Maximum output tokens (optional)")).toBeDefined();
 
     // Switch Pricing → Subscription.
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "subscription" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Pricing" }), {
+      target: { value: "subscription" },
+    });
 
     // The price fields are gone (no "0 = free"), and the Subscription note is shown.
     expect(screen.queryByText("Price in / Mtok (0 = free)")).toBeNull();

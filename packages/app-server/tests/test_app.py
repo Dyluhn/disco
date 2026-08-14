@@ -66,6 +66,7 @@ def test_models_catalogue_is_cost_and_capability_legible(client):
     # W-05 P1: a subscription tier is PAID (flat plan), so it must GROUP on the paid
     # ("openrouter") side — never collapse into "local/free" despite its 0 price.
     assert by_id["driver-minimax"]["provider"] == "openrouter"
+    assert by_id["driver-local"]["vision"] is None
 
 
 def test_provider_view_groups_subscription_as_paid_not_local():
@@ -269,6 +270,7 @@ def test_assignments_default_and_per_role(client):
     # role — exposing it here would be a false affordance (the assignment is ignored).
     assert set(a["roles"]) == {"rag_answerer", "query_rewriter", "summarizer"}
     assert "nli_verifier" not in a["roles"]
+    assert a["vision_model"] is None
 
 
 def test_encoders_config_round_trips(client):
@@ -334,6 +336,7 @@ def test_model_crud_add_edit_remove(client):
         "max_output_tokens": 6144,
         "quantization": "Q4_K_M",
         "capabilities": ["tool_calling", "long_context"],
+        "vision": True,
     }
     # add
     r = client.post("/api/models", json=new)
@@ -343,18 +346,30 @@ def test_model_crud_add_edit_remove(client):
     assert by_id["my-llama"]["base_url"] == "http://192.168.1.50:8080/v1"
     assert by_id["my-llama"]["max_output_tokens"] == 6144
     assert by_id["my-llama"]["provider"] == "local"  # free -> local view
-    assert set(by_id["my-llama"]["capabilities"]) == {"tool_calling", "long_context"}
+    assert set(by_id["my-llama"]["capabilities"]) == {
+        "tool_calling",
+        "long_context",
+        "vision",
+    }
+    assert by_id["my-llama"]["vision"] is True
+    assert "vision" in by_id["my-llama"]["capabilities"]
     # duplicate id is rejected
     assert client.post("/api/models", json=new).status_code == 400
     # the new model is assignable, and the assignment sticks
     client.put("/api/models/assignments", json={"roles": {"rag_answerer": "my-llama"}})
     assert client.get("/api/models/assignments").json()["roles"]["rag_answerer"] == "my-llama"
     # edit
-    edited = {**new, "context_window": 8192, "max_output_tokens": 4096}
+    edited = {
+        **new,
+        "context_window": 8192,
+        "max_output_tokens": 4096,
+        "vision": None,
+    }
     r = client.put("/api/models/my-llama", json=edited)
     assert r.status_code == 200
     assert {m["id"]: m for m in r.json()}["my-llama"]["context_window"] == 8192
     assert {m["id"]: m for m in r.json()}["my-llama"]["max_output_tokens"] == 4096
+    assert {m["id"]: m for m in r.json()}["my-llama"]["vision"] is None
     # cannot remove while assigned
     assert client.delete("/api/models/my-llama").status_code == 400
     # reassign away, then remove
@@ -410,14 +425,48 @@ def test_openrouter_key_lifecycle(client):
 
 
 def test_assignment_update_is_absolute(client):
-    body = {"roles": {"rag_answerer": "driver-overflow"}}
+    body = {
+        "roles": {"rag_answerer": "driver-overflow"},
+        "vision_model": "driver-overflow",
+    }
     resp = client.put("/api/models/assignments", json=body)
     assert resp.status_code == 200
     assert resp.json()["roles"]["rag_answerer"] == "driver-overflow"
+    assert resp.json()["vision_model"] == "driver-overflow"
     # persisted on the next read; other roles untouched
     roles = client.get("/api/models/assignments").json()["roles"]
     assert roles["rag_answerer"] == "driver-overflow"
     assert roles["summarizer"] == "summarizer-local"
+    preserved = client.put(
+        "/api/models/assignments",
+        json={"roles": {"summarizer": "rewriter-local"}},
+    ).json()
+    assert preserved["vision_model"] == "driver-overflow"
+    cleared = client.put("/api/models/assignments", json={"vision_model": None}).json()
+    assert cleared["vision_model"] is None
+    assert (
+        client.put("/api/models/assignments", json={"vision_model": "missing"}).status_code == 400
+    )
+
+
+def test_vision_model_assignment_guards_catalogue_deletion(client):
+    new = {
+        "id": "visual-only",
+        "model_id": "visual-model",
+        "base_url": "http://127.0.0.1:9999/v1",
+        "context_window": 8192,
+        "capabilities": [],
+        "vision": True,
+    }
+    assert client.post("/api/models", json=new).status_code == 201
+    assigned = client.put(
+        "/api/models/assignments",
+        json={"vision_model": "visual-only"},
+    )
+    assert assigned.status_code == 200
+    assert client.delete("/api/models/visual-only").status_code == 400
+    assert client.put("/api/models/assignments", json={"vision_model": None}).status_code == 200
+    assert client.delete("/api/models/visual-only").status_code == 200
 
 
 # ---- skills + mcp scaffolds -------------------------------------------------

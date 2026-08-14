@@ -116,6 +116,18 @@ def test_add_update_remove_model_round_trips(tmp_path):
     assert "my-llama" not in store.load().models
 
 
+def test_manual_vision_pin_round_trips_all_three_states(tmp_path):
+    store = _store(tmp_path)
+    store.add_model("visual", _entry(provider="visual", vision=None))
+    assert store.load().models["visual"].vision is None
+    store.update_model("visual", _entry(provider="visual", vision=True))
+    assert store.load().models["visual"].vision is True
+    assert Requirement.VISION in store.load().models["visual"].capabilities
+    store.update_model("visual", _entry(provider="visual", vision=False))
+    assert store.load().models["visual"].vision is False
+    assert Requirement.VISION not in store.load().models["visual"].capabilities
+
+
 def test_remove_rejects_a_model_in_use(tmp_path):
     store = _store(tmp_path)
     base = default_config()
@@ -125,6 +137,10 @@ def test_remove_rejects_a_model_in_use(tmp_path):
     # an assigned model can't be removed (rag-local is assigned to rag_answerer)
     with pytest.raises(ValueError, match="assigned to rag_answerer"):
         store.remove_model("rag-local")
+    cfg = store.load().model_copy(update={"vision_escalation_model": "driver-overflow"})
+    store.save(cfg)
+    with pytest.raises(ValueError, match="vision model"):
+        store.remove_model("driver-overflow")
 
 
 def test_added_model_becomes_assignable_and_routes(tmp_path):

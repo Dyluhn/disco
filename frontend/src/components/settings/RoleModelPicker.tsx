@@ -16,13 +16,15 @@ import { isFree, type ModelInfo, type ModelProvider } from "@/types/models";
  */
 interface Props {
   /** id of the currently-assigned model */
-  value: string;
-  onSelect: (id: string) => void;
+  value: string | null;
+  onSelect: (id: string | null) => void;
   /** accessible label for the trigger, e.g. "Choose model for RAG answerer" */
   ariaLabel: string;
   busy?: boolean;
   /** hard-disable: the assignment isn't consumed by the runtime yet (NotWired). */
   disabled?: boolean;
+  /** Optional null choice used by capabilities that can follow the main model. */
+  noneLabel?: string;
 }
 
 const GROUP_LABEL: Record<ModelProvider, string> = {
@@ -30,7 +32,14 @@ const GROUP_LABEL: Record<ModelProvider, string> = {
   openrouter: "Overflow — paid",
 };
 
-export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: Props) {
+export function RoleModelPicker({
+  value,
+  onSelect,
+  ariaLabel,
+  busy,
+  disabled,
+  noneLabel,
+}: Props) {
   const [open, setOpen] = useState(false);
   const { data: models } = useModels();
   const selected = findModel(models, value);
@@ -43,7 +52,7 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
     return by;
   }, [models]);
 
-  const pick = (id: string) => {
+  const pick = (id: string | null) => {
     onSelect(id);
     setOpen(false);
   };
@@ -54,12 +63,12 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
         <button
           type="button"
           data-disco-control="settings.model-assign"
-          data-model-id={value || undefined}
+          data-model-id={value ?? undefined}
           aria-label={ariaLabel}
           disabled={busy || disabled}
           className="flex w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64"
         >
-          <span className="truncate">{selected?.label ?? value}</span>
+          <span className="truncate">{selected?.label ?? noneLabel ?? value}</span>
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
         </button>
       </Dialog.Trigger>
@@ -72,10 +81,32 @@ export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: 
               Assign a model
             </Dialog.Title>
             <Dialog.Description className="font-ui text-[0.8rem] text-text-muted">
-              Absolute — the system uses exactly what you assign. No automatic routing.
+              {noneLabel
+                ? "Choose the optional dedicated observer, or let an image-capable main model inspect pixels directly."
+                : "Absolute — the system uses exactly what you assign. No automatic routing."}
             </Dialog.Description>
           </div>
           <div className="flex-1 overflow-y-auto px-body py-inline">
+            {noneLabel && (
+              <button
+                type="button"
+                data-disco-control="settings.model-assign-option"
+                data-model-id="main"
+                onClick={() => pick(null)}
+                className={cn(
+                  "mb-inline flex w-full items-center gap-inline rounded-control border px-inline py-inline text-left font-ui text-[0.84rem] transition-colors",
+                  value === null
+                    ? "border-accent/50 bg-surface-1"
+                    : "border-transparent hover:bg-surface-1",
+                )}
+              >
+                <Check
+                  className={cn("size-4", value === null ? "text-accent" : "opacity-0")}
+                  aria-hidden
+                />
+                {noneLabel}
+              </button>
+            )}
             {(["local", "openrouter"] as ModelProvider[]).map((prov) =>
               groups[prov].length === 0 ? null : (
                 <div key={prov} className="mb-section">

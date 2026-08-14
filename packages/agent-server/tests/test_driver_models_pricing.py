@@ -75,6 +75,7 @@ def test_driver_models_exposes_pricing_mode_and_honest_free(tmp_path):
     # Metered paid model.
     assert by_id["or-paid"]["pricing_mode"] == "metered"
     assert by_id["or-paid"]["free"] is False
+    assert by_id["local-free"]["capabilities"] == ["tool_calling"]
 
 
 def test_driver_models_excludes_models_the_live_router_cannot_wire(tmp_path):

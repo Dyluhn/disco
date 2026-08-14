@@ -76,6 +76,8 @@ class CapabilityBroker:
         self._revoked = False
 
     def register(self, name: str, handler: CapabilityHandler) -> None:
+        if self._revoked:
+            raise RuntimeError("capability broker has been revoked")
         self._handlers[name] = handler
 
     def grant(self, capabilities: frozenset[str]) -> CapabilitySet:
@@ -86,4 +88,7 @@ class CapabilityBroker:
     def revoke_all(self) -> None:
         """Kill-switch hook: drop all capabilities (§6.4)."""
         self._revoked = True
-        self._handlers = {}
+        # CapabilitySets intentionally share this mapping. Clear it in place so
+        # contexts issued before kill are revoked too; replacing the mapping
+        # would leave their old handlers callable.
+        self._handlers.clear()
