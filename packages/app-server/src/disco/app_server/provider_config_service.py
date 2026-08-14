@@ -301,6 +301,10 @@ class ProviderConfigService:
             context_window=context_window,
             max_output_tokens=_resolved_max_output_tokens(body, catalogue_model),
             capabilities=_resolved_capabilities(catalogue_model, context_window),
+            # Provider catalogue metadata seeds the advisory capability set, not
+            # the operator's manual override. Keep the pin unset so a live probe
+            # can correct stale provider metadata; only Settings may force it.
+            vision=None,
             price_in_per_m=price_in,
             price_out_per_m=price_out,
             pricing_mode="metered" if prices_known else "unknown",

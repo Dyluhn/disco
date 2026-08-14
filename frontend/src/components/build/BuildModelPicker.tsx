@@ -6,78 +6,147 @@
  */
 
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
-import { Check, ChevronDown, Cpu } from "lucide-react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { Check, ChevronDown, Cpu, Eye } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/cn";
-import { driverCostTag } from "@/lib/cost";
+import { costTag, driverCostTag } from "@/lib/cost";
 import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
+import {
+  useAssignments,
+  useModels,
+  useUpdateAssignments,
+} from "@/hooks/useModels";
 import { useToast } from "@/components/toastApi";
 import type { DriverModel } from "@/types/agent";
+import type { ModelInfo } from "@/types/models";
 
-export function BuildModelPicker({
-  value,
-  onChange,
-  disabled,
+const isSubscriptionDriver = (model: DriverModel) =>
+  model.pricing_mode === "subscription";
+
+function driverCostClass(model: DriverModel): string {
+  if (isSubscriptionDriver(model)) return "text-text-muted";
+  return model.free ? "text-supported" : "text-weak";
+}
+
+function VisionRecommendationDialog({
+  open,
+  onOpenChange,
+  candidates,
+  busy,
+  saveFailed,
+  onSelect,
 }: {
-  value: string | null;
-  onChange: (id: string | null) => void;
-  disabled?: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  candidates: ModelInfo[];
+  busy: boolean;
+  saveFailed: boolean;
+  onSelect: (id: string) => void;
 }) {
-  const { data } = useDriverModels();
-  const { data: lastSelected } = useLastSelectedModel();
-  const toast = useToast();
-  const models = data?.models ?? [];
-  const defaultId = data?.default ?? null;
-  // P3: prefer last-selected over the static settings default when null (no
-  // explicit pick for this conversation). Falls through to defaultId if no
-  // last-selected has been persisted yet.
-  const effectiveId = value ?? lastSelected ?? defaultId;
-  const current = models.find((m) => m.id === effectiveId);
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/45" />
+        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[80vh] w-[min(34rem,92vw)] -translate-x-1/2 -translate-y-1/2 flex-col gap-body overflow-y-auto rounded-card border border-hairline bg-bg p-body pmx-rise">
+          <div className="flex items-start gap-inline">
+            <Eye className="mt-px size-4 shrink-0 text-accent" aria-hidden />
+            <div>
+              <Dialog.Title className="font-ui text-[0.95rem] font-semibold text-text">
+                Add visual inspection?
+              </Dialog.Title>
+              <Dialog.Description className="font-ui text-[0.8rem] leading-snug text-text-muted">
+                Your selected main model is text-only. You can dedicate an
+                image-capable model to answer one focused screenshot question at a
+                time. It receives no tools or conversation history and never takes
+                over the agent.
+              </Dialog.Description>
+            </div>
+          </div>
+          {candidates.length > 0 ? (
+            <div className="flex flex-col gap-hair">
+              {candidates.map((model) => (
+                <button
+                  key={model.id}
+                  type="button"
+                  data-disco-control="build.vision-model-recommendation"
+                  data-model-id={model.id}
+                  disabled={busy}
+                  onClick={() => onSelect(model.id)}
+                  className="flex items-center justify-between gap-inline rounded-control border border-hairline px-inline py-inline text-left font-ui text-[0.82rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-50"
+                >
+                  <span>{model.label}</span>
+                  <span className="shrink-0 text-text-faint">{costTag(model)}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="font-ui text-[0.8rem] text-text-muted">
+              No configured model currently advertises image support. Mark the
+              correct model in Settings when one is available.
+            </p>
+          )}
+          {saveFailed && (
+            <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
+              The visual model assignment was not saved. Your main-model selection
+              is unchanged.
+            </p>
+          )}
+          <div className="flex justify-end gap-inline">
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+              >
+                Keep text/DOM fallback
+              </button>
+            </Dialog.Close>
+            <Link
+              to="/settings#models-providers"
+              onClick={() => onOpenChange(false)}
+              className="rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-bg"
+            >
+              Open model settings
+            </Link>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
 
-  // W-05-fu: a subscription model has price 0/token but is NOT free (it costs a
-  // flat plan fee) — give it its OWN cost tag + group so it never reads as "free".
-  const isSub = (m: DriverModel) => m.pricing_mode === "subscription";
-  const free = models.filter((m) => m.free && !isSub(m));
-  const subscription = models.filter(isSub);
-  const overflow = models.filter((m) => !m.free && !isSub(m));
-
-  // W-05: render the DISPLAY label ("Subscription"/"Free"/"Paid") via the shared
-  // formatter — never the raw lowercase pricing_mode enum. Same source of truth the
-  // catalogue/matrix/pill use, so "Subscription" reads identically everywhere.
-  const costTag = driverCostTag;
-  const costClass = (m: DriverModel) =>
-    isSub(m) ? "text-text-muted" : m.free ? "text-supported" : "text-weak";
-
-  const select = (m: DriverModel) => {
-    onChange(m.id === defaultId ? null : m.id);
-    // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
-    // pick drives every step. Say it once; a genuinely free model stays silent.
-    if (isSub(m)) {
-      toast.show({
-        tone: "cost",
-        title: `Now building with ${m.label}`,
-        body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
-      });
-    } else if (!m.free) {
-      toast.show({
-        tone: "cost",
-        title: `Now building with ${m.label}`,
-        body: "This paid model drives every step of the agent for this build.",
-      });
-    }
-  };
-
-  // W-05: each option sits under an explicit cost SECTION header below
-  // ("Local — free" / "Subscription" / "Overflow — paid"), so the row needs no
-  // redundant per-row tag — and never the raw lowercase pricing_mode enum. The
-  // collapsed trigger carries the cost label via the shared driverCostTag formatter.
-  const Row = ({ m }: { m: DriverModel }) => (
+function DriverModelMenu({
+  models,
+  current,
+  effectiveId,
+  disabled,
+  onSelect,
+}: {
+  models: DriverModel[];
+  current: DriverModel | undefined;
+  effectiveId: string | null;
+  disabled?: boolean;
+  onSelect: (model: DriverModel) => void;
+}) {
+  const free = models.filter((model) => model.free && !isSubscriptionDriver(model));
+  const subscription = models.filter(isSubscriptionDriver);
+  const overflow = models.filter(
+    (model) => !model.free && !isSubscriptionDriver(model),
+  );
+  const Row = ({ model }: { model: DriverModel }) => (
     <Dropdown.Item
-      onSelect={() => select(m)}
+      onSelect={() => onSelect(model)}
       className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.82rem] text-text outline-none data-[highlighted]:bg-surface-2"
     >
-      <Check className={cn("size-3.5 shrink-0", m.id === effectiveId ? "text-accent" : "opacity-0")} aria-hidden />
-      <span className="flex-1 truncate">{m.label}</span>
+      <Check
+        className={cn(
+          "size-3.5 shrink-0",
+          model.id === effectiveId ? "text-accent" : "opacity-0",
+        )}
+        aria-hidden
+      />
+      <span className="flex-1 truncate">{model.label}</span>
     </Dropdown.Item>
   );
 
@@ -90,10 +159,13 @@ export function BuildModelPicker({
       >
         <Cpu className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">
-          {current?.label ?? (models.length === 0 ? "Configure model" : "Default model")}
+          {current?.label ??
+            (models.length === 0 ? "Configure model" : "Default model")}
         </span>
         {current && (
-          <span className={cn("shrink-0", costClass(current))}>· {costTag(current)}</span>
+          <span className={cn("shrink-0", driverCostClass(current))}>
+            · {driverCostTag(current)}
+          </span>
         )}
         <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden />
       </Dropdown.Trigger>
@@ -106,7 +178,10 @@ export function BuildModelPicker({
           {models.length === 0 && (
             <div className="flex max-w-[16rem] flex-col gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted">
               <span>No driver model is configured.</span>
-              <Link className="font-medium text-accent hover:underline" to="/settings#catalogue">
+              <Link
+                className="font-medium text-accent hover:underline"
+                to="/settings#models-providers"
+              >
                 Configure in Settings
               </Link>
             </div>
@@ -116,19 +191,21 @@ export function BuildModelPicker({
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
                 Local — free
               </Dropdown.Label>
-              {free.map((m) => (
-                <Row key={m.id} m={m} />
+              {free.map((model) => (
+                <Row key={model.id} model={model} />
               ))}
             </>
           )}
           {subscription.length > 0 && (
             <>
-              {free.length > 0 && <Dropdown.Separator className="my-hair h-px bg-hairline" />}
+              {free.length > 0 && (
+                <Dropdown.Separator className="my-hair h-px bg-hairline" />
+              )}
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
                 Subscription
               </Dropdown.Label>
-              {subscription.map((m) => (
-                <Row key={m.id} m={m} />
+              {subscription.map((model) => (
+                <Row key={model.id} model={model} />
               ))}
             </>
           )}
@@ -140,13 +217,94 @@ export function BuildModelPicker({
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
                 Overflow — paid
               </Dropdown.Label>
-              {overflow.map((m) => (
-                <Row key={m.id} m={m} />
+              {overflow.map((model) => (
+                <Row key={model.id} model={model} />
               ))}
             </>
           )}
         </Dropdown.Content>
       </Dropdown.Portal>
     </Dropdown.Root>
+  );
+}
+
+export function BuildModelPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  onChange: (id: string | null) => void;
+  disabled?: boolean;
+}) {
+  const { data } = useDriverModels();
+  const { data: lastSelected } = useLastSelectedModel();
+  const { data: assignments } = useAssignments();
+  const { data: settingsModels } = useModels();
+  const updateAssignments = useUpdateAssignments();
+  const [visionPromptOpen, setVisionPromptOpen] = useState(false);
+  const toast = useToast();
+  const models = data?.models ?? [];
+  const defaultId = data?.default ?? null;
+  // P3: prefer last-selected over the static settings default when null (no
+  // explicit pick for this conversation). Falls through to defaultId if no
+  // last-selected has been persisted yet.
+  const effectiveId = value ?? lastSelected ?? defaultId;
+  const current = models.find((m) => m.id === effectiveId);
+
+  const visionCandidates = (settingsModels ?? []).filter((m) =>
+    m.capabilities.includes("vision"),
+  );
+  const selectVision = (id: string) => {
+    updateAssignments.mutate(
+      { vision_model: id },
+      { onSuccess: () => setVisionPromptOpen(false) },
+    );
+  };
+
+  const select = (m: DriverModel) => {
+    onChange(m.id === defaultId ? null : m.id);
+    // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
+    // pick drives every step. Say it once; a genuinely free model stays silent.
+    if (isSubscriptionDriver(m)) {
+      toast.show({
+        tone: "cost",
+        title: `Now building with ${m.label}`,
+        body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
+      });
+    } else if (!m.free) {
+      toast.show({
+        tone: "cost",
+        title: `Now building with ${m.label}`,
+        body: "This paid model drives every step of the agent for this build.",
+      });
+    }
+    if (
+      assignments &&
+      !assignments.vision_model &&
+      !m.capabilities.includes("vision")
+    ) {
+      setVisionPromptOpen(true);
+    }
+  };
+
+  return (
+    <>
+      <DriverModelMenu
+        models={models}
+        current={current}
+        effectiveId={effectiveId}
+        disabled={disabled}
+        onSelect={select}
+      />
+      <VisionRecommendationDialog
+        open={visionPromptOpen}
+        onOpenChange={setVisionPromptOpen}
+        candidates={visionCandidates}
+        busy={updateAssignments.isPending}
+        saveFailed={Boolean(updateAssignments.error)}
+        onSelect={selectVision}
+      />
+    </>
   );
 }

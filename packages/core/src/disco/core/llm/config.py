@@ -483,10 +483,10 @@ class RouterConfig(BaseModel):
     # appears on the Agent canvas browser pane (P4). The VNC stack spins up
     # lazily on first open; idle cost is ~0. gVisor needs D7 egress work.
     live_browser: LiveBrowserSettings = Field(default_factory=LiveBrowserSettings)
-    # DF-08: catalogue key of a vision-capable model to escalate image-bearing
-    # requests to when the primary model lacks VISION. None → vision guard stays
-    # hard (raise NoEligibleModel). Swappable to any vision model in the catalogue
-    # (e.g. "or-gemma-4-31b-free" for free tier, "driver-overflow" for Sonnet).
+    # Optional dedicated visual-inspection model. The browser uses it for one
+    # bounded screenshot question and returns text to the main agent; the model
+    # never takes over the agent loop or receives its transcript/tools. None uses
+    # the main model when it has VISION, otherwise the honest DOM/text fallback.
     vision_escalation_model: str | None = None
     # Auxiliary-role resilience: on transient primary failure, eligible non-driver
     # roles may retry against this prebuilt local OpenAI-compatible provider.
@@ -735,7 +735,7 @@ def default_config() -> RouterConfig:
         models=_default_models(),
         default_model="driver-local",
         assignments=_default_assignments(),
-        vision_escalation_model="or-gemini-3-flash",
+        vision_escalation_model=None,
     )
 
 

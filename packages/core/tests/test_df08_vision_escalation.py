@@ -1,10 +1,8 @@
-"""DF-08: Vision escalation to Gemini 3 Flash — unit tests.
+"""Vision request guard, bounded observer routing, and image serialization.
 
 Three test categories:
-1. Routing escalation: image-bearing request + no-vision primary + escalation
-   configured → routes to the escalation model, NO raise.
-2. Guard preserved: escalation UNSET or set to a non-vision model → still
-   raises NoEligibleModel.
+1. Ordinary image-bearing agent requests never transfer to the dedicated model.
+2. The hard image capability guard remains fail-closed.
 3. Provider image serialization: an image-bearing request via the OpenRouter
    path contains an `image_url` content part (not dropped).
 """
@@ -85,14 +83,38 @@ def _cfg_with_escalation(
     )
 
 
+@pytest.mark.parametrize(
+    ("target", "main_vision", "expected"),
+    [
+        (None, True, ("main", "local", "main_model_has_vision")),
+        ("vision-model", True, ("dedicated", "vision-model", "configured_vision_model")),
+        (None, False, ("unavailable", "local", "no_vision_model_configured")),
+        ("missing", False, ("unavailable", None, "vision_model_unknown")),
+    ],
+)
+def test_explicit_visual_inspection_route_precedence(target, main_vision, expected):
+    cfg = _cfg_with_escalation(target)
+    if main_vision:
+        local = cfg.models["local"].model_copy(
+            update={"capabilities": cfg.models["local"].capabilities | {Requirement.VISION}}
+        )
+        cfg = cfg.model_copy(update={"models": {**cfg.models, "local": local}})
+    from disco.core.llm.routing import DefaultLLMRouter
+
+    router = DefaultLLMRouter(cfg, {})
+    assert router.visual_inspection_route() == expected
+
+
 # ---------------------------------------------------------------------------
-# 1. Routing escalation — happy path
+# 1. Ordinary agent-turn isolation
 # ---------------------------------------------------------------------------
 
 
+# Keep these three historical node IDs stable: the inventory correctly treats a
+# test rename as deletion. Their docstrings and assertions now own the bounded
+# observer contract that replaced whole-agent escalation.
 async def test_vision_escalation_routes_to_escalation_model():
-    """Image-bearing request against a no-vision primary with a configured,
-    vision-capable escalation model → routes to the escalation model, NO raise."""
+    """A configured observer cannot inherit an image-bearing agent request."""
     cfg = _cfg_with_escalation("vision-model")
     providers = {
         "ollama": FakeModelProvider("ollama", text="local"),
@@ -105,22 +127,18 @@ async def test_vision_escalation_routes_to_escalation_model():
     sink = InMemoryRoutingSink()
     router = DefaultLLMRouter(cfg, providers, sink=sink)
 
-    resp = await router.complete(_img_req())
-    assert resp.model_used == "vision-model-1"
-    assert resp.text == "escalated-vision-response"
-    # Routing decision: path=overflow, overflow_triggers=["vision_escalation"]
-    assert resp.routing is not None
-    assert resp.routing.path == "overflow"
-    assert "vision_escalation" in resp.routing.overflow_triggers
-    # Sink recorded exactly 1 decision by complete (RT4: one per call).
+    with pytest.raises(NoEligibleModel, match="does not support VISION"):
+        await router.complete(_img_req())
+
+    assert providers["ollama"].calls == 0
+    assert providers["openrouter"].calls == 0
     assert len(sink.decisions) == 1
-    assert sink.decisions[0].path == "overflow"
-    assert sink.decisions[0].overflow_triggers == ["vision_escalation"]
+    assert sink.decisions[0].path == "pinned"
+    assert sink.decisions[0].overflow_triggers == ["capability_gap"]
 
 
 async def test_vision_escalation_does_not_affect_text_only_requests():
-    """A plain-text request against a no-vision primary → stays local (no
-    escalation triggered, since there are no images)."""
+    """A plain-text request stays with its assigned main model."""
     cfg = _cfg_with_escalation("vision-model")
     providers = {
         "ollama": FakeModelProvider("ollama", text="local-text-response"),
@@ -136,15 +154,18 @@ async def test_vision_escalation_does_not_affect_text_only_requests():
     assert resp.text == "local-text-response"
     assert resp.routing is not None
     assert resp.routing.path == "pinned"
-    assert "vision_escalation" not in resp.routing.overflow_triggers
+    assert resp.routing.overflow_triggers == []
     assert providers["openrouter"].calls == 0  # never touched
 
 
 async def test_escalation_model_receives_provider_and_model_id_correctly():
-    """The escalated request flows through the normal prompt-injection + budget
-    path — the provider sees the correct model_id."""
+    """Dedicated routing applies only to the explicit bounded capability."""
     openrouter_provider = FakeModelProvider("openrouter", text="escalated", cost_usd=0.01)
     cfg = _cfg_with_escalation("vision-model")
+    main = cfg.models["local"].model_copy(
+        update={"capabilities": cfg.models["local"].capabilities | {Requirement.VISION}}
+    )
+    cfg = cfg.model_copy(update={"models": {**cfg.models, "local": main}})
     providers = {
         "ollama": FakeModelProvider("ollama", text="local"),
         "openrouter": openrouter_provider,
@@ -153,16 +174,14 @@ async def test_escalation_model_receives_provider_and_model_id_correctly():
 
     router = DefaultLLMRouter(cfg, providers, sink=InMemoryRoutingSink())
 
-    await router.complete(_img_req())
-    # The escalated request should have been sent to the openrouter provider
-    assert openrouter_provider.calls == 1
-    _seen = openrouter_provider.seen_requests[0]
-    # The provider should have received the model_id from the escalation entry
-    # (FakeModelProvider doesn't inspect model parameter, but the call pattern is correct)
+    response = await router.complete(_img_req())
+    assert response.model_used == "local-novision"
+    assert providers["ollama"].calls == 1
+    assert openrouter_provider.calls == 0
 
 
 # ---------------------------------------------------------------------------
-# 2. Guard preserved — escalation is UNSET or invalid
+# 2. Guard preserved — dedicated observer configuration never weakens it
 # ---------------------------------------------------------------------------
 
 

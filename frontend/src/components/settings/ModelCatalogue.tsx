@@ -29,7 +29,6 @@ const CAPS: Capability[] = [
   "tool_calling",
   "json_mode",
   "long_context",
-  "vision",
 ];
 const BLANK: ModelUpsert = {
   id: "",
@@ -40,6 +39,7 @@ const BLANK: ModelUpsert = {
   max_output_tokens: null,
   quantization: "",
   capabilities: [],
+  vision: null,
   price_in_per_m: 0,
   price_out_per_m: 0,
   pricing_mode: "metered",
@@ -54,7 +54,8 @@ function toUpsert(m: ModelInfo): ModelUpsert {
     context_window: m.context_window,
     max_output_tokens: m.max_output_tokens ?? null,
     quantization: m.quantization ?? "",
-    capabilities: [...m.capabilities],
+    capabilities: m.capabilities.filter((capability) => capability !== "vision"),
+    vision: m.vision ?? null,
     price_in_per_m: m.price_in_per_m,
     price_out_per_m: m.price_out_per_m,
     // W-05: preserve the pay model on edit; derive a sensible default when unset.
@@ -68,6 +69,16 @@ const field =
   "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
 const labelCls =
   "font-ui text-[0.74rem] font-medium uppercase tracking-wide text-text-faint";
+
+function visionSelectValue(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) return "auto";
+  return String(value);
+}
+
+function visionFromSelect(value: string): boolean | null {
+  if (value === "auto") return null;
+  return value === "true";
+}
 
 function ModelForm({
   mode,
@@ -206,6 +217,23 @@ function ModelForm({
           ))}
         </div>
       </fieldset>
+
+      <label className="flex flex-col gap-hair">
+        <span className={labelCls}>Image understanding</span>
+        <select
+          className={field}
+          value={visionSelectValue(form.vision)}
+          onChange={(e) => set("vision", visionFromSelect(e.target.value))}
+        >
+          <option value="auto">Auto-detect from the provider</option>
+          <option value="true">Supports images</option>
+          <option value="false">Text only</option>
+        </select>
+        <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
+          Override detection only when you know the endpoint's actual image capability.
+          This controls whether pixels may be sent to the model.
+        </span>
+      </label>
 
       <div className="grid grid-cols-2 gap-body">
         {form.pricing_mode === "subscription" ? (

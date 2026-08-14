@@ -295,6 +295,7 @@ def test_enable_creates_catalogue_entry_visible_in_models(client, monkeypatch):
     assert added["max_output_tokens"] == 8192
     assert added["price_in_per_m"] == 3.0
     assert "vision" in added["capabilities"]
+    assert added["vision"] is None  # provider metadata is not an operator hard pin
 
     disabled = client.delete(
         f"/api/providers/openrouter-generic/enable/{added['id']}",

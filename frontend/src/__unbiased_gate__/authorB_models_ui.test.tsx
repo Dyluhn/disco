@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentStatusBar } from "@/components/build/AgentStatusBar";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
@@ -14,10 +15,25 @@ const hookState = vi.hoisted(() => ({
   driverModels: [] as DriverModel[],
   driverDefault: null as string | null,
   lastSelected: null as string | null,
+  visionModel: null as string | null,
+  updateAssignments: vi.fn(),
 }));
 
 vi.mock("@/hooks/useModels", () => ({
   useModels: () => ({ data: hookState.models }),
+  useAssignments: () => ({
+    data: {
+      default_model: hookState.driverDefault ?? "driver-local",
+      roles: {},
+      vision_model: hookState.visionModel,
+    },
+  }),
+  useUpdateAssignments: () => ({
+    mutateAsync: hookState.updateAssignments,
+    mutate: hookState.updateAssignments,
+    isPending: false,
+    error: null,
+  }),
   useDeleteModel: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useCreateModel: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
   useUpdateModel: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
@@ -56,6 +72,8 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
     hookState.driverModels = [];
     hookState.driverDefault = null;
     hookState.lastSelected = null;
+    hookState.visionModel = null;
+    hookState.updateAssignments.mockReset();
   });
 
   it("W-04 keeps the OpenRouter or- catalogue key but removes the bogus 'Or ' label prefix", async () => {
@@ -142,6 +160,7 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
         free: false,
         pricing_mode: "subscription",
         context_window: 200_000,
+        capabilities: ["tool_calling"],
       },
     ];
     hookState.driverDefault = "sub-driver";
@@ -155,5 +174,59 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
 
     await user.click(trigger);
     expect(await screen.findByText("Subscription")).toBeInTheDocument();
+  });
+
+  it("recommends and assigns a bounded visual model after a text-only driver pick", async () => {
+    const user = userEvent.setup();
+    hookState.models = [
+      subscriptionModel,
+      {
+        ...subscriptionModel,
+        id: "visual-model",
+        label: "Visual Model",
+        pricing_mode: "metered",
+        capabilities: ["vision"],
+      },
+    ];
+    hookState.driverModels = [
+      {
+        id: "visual-driver",
+        label: "Visual Driver",
+        provider: "local",
+        free: true,
+        context_window: 128_000,
+        capabilities: ["tool_calling", "vision"],
+      },
+      {
+        id: "text-driver",
+        label: "Text Driver",
+        provider: "local",
+        free: true,
+        context_window: 128_000,
+        capabilities: ["tool_calling"],
+      },
+    ];
+    hookState.driverDefault = "visual-driver";
+    hookState.updateAssignments.mockResolvedValue({
+      default_model: "visual-driver",
+      roles: {},
+      vision_model: "visual-model",
+    });
+
+    render(
+      <MemoryRouter>
+        <BuildModelPicker value="visual-driver" onChange={() => {}} />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /choose the model/i }));
+    await user.click(await screen.findByText("Text Driver"));
+
+    const dialog = await screen.findByRole("dialog", { name: /Add visual inspection/i });
+    expect(within(dialog).getByText(/no tools or conversation history/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: /Visual Model/i }));
+    expect(hookState.updateAssignments).toHaveBeenCalledWith(
+      { vision_model: "visual-model" },
+      { onSuccess: expect.any(Function) },
+    );
   });
 });

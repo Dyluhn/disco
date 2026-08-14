@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from disco.tools import (
     CapabilityBroker,
+    CapabilityDenied,
     DefaultToolExecutor,
     InMemorySecretsStore,
     ProcessSandboxService,
@@ -219,3 +220,21 @@ async def test_kill_switch_revokes_caps_egress_and_destroys_instance():
     assert after_shell.success is False and after_shell.structured["kind"] == "sandbox_error"
     after_search = await ex.execute(call("search", query="x"))
     assert after_search.success is False  # capabilities revoked
+
+
+async def test_kill_revokes_a_capability_set_issued_before_kill():
+    """A tool context already in flight cannot retain a stale handler map."""
+
+    async def handler():
+        return "should not run"
+
+    broker = CapabilityBroker()
+    broker.register("visual_inspection", handler)
+    issued = broker.grant(frozenset({"visual_inspection"}))
+    broker.revoke_all()
+
+    assert issued.has("visual_inspection") is False
+    with pytest.raises(CapabilityDenied):
+        await issued.call("visual_inspection")
+    with pytest.raises(RuntimeError, match="revoked"):
+        broker.register("visual_inspection", handler)

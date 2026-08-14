@@ -37,14 +37,10 @@ def test_openai_content_parts():
 
 
 def test_vision_capability_guard(monkeypatch):
-    """[DF-08 updated] Router raises NoEligibleModel when images are sent to
-    a non-vision model AND no valid vision escalation is configured. The guard
-    stays intact — it just now has an escape hatch via vision_escalation_model."""
+    """Ordinary image turns never hand the whole agent to a visual observer."""
     monkeypatch.setenv("PMX_DRIVER_VISION", "0")
     config = default_config()
-    # Disable the DF-08 vision escalation so the guard fires in its original
-    # BP-00 form — proving we didn't weaken the barrier when escalation is unset.
-    config = config.model_copy(update={"vision_escalation_model": None})
+    config = config.model_copy(update={"vision_escalation_model": "driver-overflow"})
 
     providers = {"qwen": OpenAIProvider(base_url="http://test", api_key="test")}
     router = DefaultLLMRouter(config, providers)
