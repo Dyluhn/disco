@@ -375,6 +375,67 @@ def _drive_capture(fake_page, elements_seq, action="navigate", params=None):
     return handler._handle_action(action, p)
 
 
+def test_fill_accepts_css_selector_without_a_transient_element_index():
+    """A DOM-changing interaction must not force a stale numeric fill target."""
+    from types import SimpleNamespace
+
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_fill
+
+    handler = MagicMock()
+    handler._freshness.return_value = {"schema_version": 1}
+    handler._selector_for.side_effect = daemon_mod.BrowserHandler._selector_for
+    locator = MagicMock()
+    handler._action_locator.return_value = (locator, None)
+    ctx = SimpleNamespace(
+        handler=handler,
+        page=MagicMock(),
+        params={"action": "fill", "selector": "#name", "text": "Jane Doe"},
+        lane_name="agent",
+        generation="g" * 32,
+        nonce="n" * 32,
+        requested_epoch=3,
+        sync_performed=False,
+    )
+
+    assert _handle_fill(ctx, MagicMock()) is None
+    handler._action_locator.assert_called_once_with(ctx.page, "#name", {"schema_version": 1})
+    locator.fill.assert_called_once_with("Jane Doe")
+
+
+@pytest.mark.integration
+def test_fill_css_selector_reaches_real_selected_renderer(tmp_path, monkeypatch):
+    import json
+
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin.browser import _installed_browser_executables
+
+    executables = _installed_browser_executables()
+    assert executables, "a real installed browser renderer is required"
+    monkeypatch.setenv("DISCO_BROWSER_EXECUTABLES", json.dumps(executables))
+    browser_state = daemon_mod.BrowserState()
+    monkeypatch.setattr(daemon_mod, "state", browser_state)
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+    monkeypatch.setattr(daemon_mod, "_page_kind", lambda _url: "external")
+
+    try:
+        browser_state.start()
+        page = browser_state.page
+        assert page is not None
+        page.set_content("<label>Name<input id='name'></label>")
+        handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+        result = handler._handle_action(
+            "fill",
+            {"action": "fill", "selector": "#name", "text": "Jane Doe"},
+        )
+
+        assert result["ok"] is True, result
+        assert page.locator("#name").input_value() == "Jane Doe"
+    finally:
+        browser_state.stop()
+
+
 def test_capture_retries_until_late_hydration_renders(tmp_path, monkeypatch):
     """B-F: a SPA that is blank for the first 2 reads then mounts must NOT be
     returned as a permanent empty observation — the capture path retries."""
@@ -716,5 +777,3 @@ def test_visible_semantic_elements_real_chromium():
                 assert _count_visible_semantic_elements(page) == expected, html
         finally:
             browser.close()
-
-

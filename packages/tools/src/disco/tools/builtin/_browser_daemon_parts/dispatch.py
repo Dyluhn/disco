@@ -237,11 +237,12 @@ def _handle_press(ctx: _ActionCtx, state):
 
 def _handle_fill(ctx: _ActionCtx, state):
     index = ctx.params.get("index")
-    if index is None:
+    selector = ctx.params.get("selector", "")
+    if index is None and not selector:
         return ctx.handler._error(
             "browser_action_failed",
             "selector_not_found",
-            "Index required for fill",
+            "Index or selector required for fill",
             ctx.handler._freshness(
                 ctx.lane_name, ctx.generation, ctx.nonce, ctx.requested_epoch, ctx.sync_performed
             ),

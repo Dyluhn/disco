@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "37786c69862390dac8b9946e0bc2a32133049de9",
+  "source_identity": "7be84bed68488c6b117b1850926789cd5d00247f",
   "collected": {
     "counts": {
-      "packages": 10713,
+      "packages": 10715,
       "harness": 1400,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12518,
+    "total": 12520,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -8664,6 +8664,8 @@
         "packages/tools/tests/test_browser_daemon.py::test_daemon_clear_console_clears_network",
         "packages/tools/tests/test_browser_daemon.py::test_daemon_network_ring_buffer_bounded",
         "packages/tools/tests/test_browser_daemon.py::test_daemon_stop_reports_failures_and_attempts_every_owner",
+        "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+        "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
         "packages/tools/tests/test_browser_daemon.py::test_main_document_content_type_real_chromium_rejects_page_spoof",
         "packages/tools/tests/test_browser_daemon.py::test_render_observation_hides_logs_when_no_problems",
         "packages/tools/tests/test_browser_daemon.py::test_render_observation_stack_truncated_to_cap",
@@ -12539,9 +12541,9 @@
     }
   },
   "mapping_static": {
-    "identity": "37786c69862390dac8b9946e0bc2a32133049de9",
+    "identity": "7be84bed68488c6b117b1850926789cd5d00247f",
     "python_test_file_count": 844,
-    "python_static_test_id_count": 10293,
+    "python_static_test_id_count": 10295,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -21554,6 +21556,8 @@
       "packages/tools/tests/test_browser_daemon.py::test_daemon_clear_console_clears_network",
       "packages/tools/tests/test_browser_daemon.py::test_daemon_network_ring_buffer_bounded",
       "packages/tools/tests/test_browser_daemon.py::test_daemon_stop_reports_failures_and_attempts_every_owner",
+      "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+      "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
       "packages/tools/tests/test_browser_daemon.py::test_main_document_content_type_real_chromium_rejects_page_spoof",
       "packages/tools/tests/test_browser_daemon.py::test_render_observation_hides_logs_when_no_problems",
       "packages/tools/tests/test_browser_daemon.py::test_render_observation_stack_truncated_to_cap",
@@ -26456,13 +26460,6 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 450,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"installed Chromium is required\")"
-      },
-      {
-        "framework": "pytest",
         "path": "packages/core/tests/test_verify_on_finish.py",
         "line": 474,
         "marker": "pytest.skip",
@@ -26484,6 +26481,13 @@
       },
       {
         "framework": "pytest",
+        "path": "packages/tools/tests/test_browser_daemon.py",
+        "line": 511,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"installed Chromium is required\")"
+      },
+      {
+        "framework": "pytest",
         "path": "packages/tools/tests/test_sandbox_integration.py",
         "line": 53,
         "marker": "pytest.mark.skipif",
@@ -26495,13 +26499,6 @@
         "line": 57,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"tmux is required for the real process-backend cleanup boundary\")"
-      },
-      {
-        "framework": "pytest",
-        "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 596,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"installed Chromium is required\")"
       },
       {
         "framework": "pytest",
@@ -26520,7 +26517,7 @@
       {
         "framework": "pytest",
         "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 651,
+        "line": 657,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"installed Chromium is required\")"
       },
@@ -26544,6 +26541,13 @@
         "line": 69,
         "marker": "pytest.mark.skipif",
         "source": ""
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/tools/tests/test_browser_daemon.py",
+        "line": 712,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"installed Chromium is required\")"
       },
       {
         "framework": "pytest",
@@ -33423,6 +33427,32 @@
         "python_static_test_ids": [
           "packages/tools/tests/test_app_kit_tools.py::test_app_update_content_accepts_the_generated_content_representation",
           "packages/tools/tests/test_validation_executor.py::test_nested_unknown_argument_names_its_full_path"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V35-BROWSER-FILL-SELECTOR",
+      "root": "packages",
+      "source_identity_before": "37786c69862390dac8b9946e0bc2a32133049de9",
+      "source_identity_after": "7be84bed68488c6b117b1850926789cd5d00247f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10713,
+          "after_count": 10715,
+          "added_ids": [
+            "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+            "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+          "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
