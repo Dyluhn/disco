@@ -64,6 +64,11 @@ async def test_dedicated_vision_route_gets_one_image_question_and_no_agent_autho
     assert request.profile.role is ModelRole.AGENT_DRIVER
     assert request.profile.requirements == frozenset({Requirement.VISION})
     assert request.tools is None
+    assert request.metadata == {
+        "bounded_visual_inspection": True,
+        "provider_ledger_purpose": "visual_inspection",
+        "provider_ledger_call_kind": "observer",
+    }
     assert len(request.messages) == 2
     assert request.messages[1].images == [f"data:image/png;base64,{_PNG_B64}"]
     assert "entire user payload" in request.messages[0].content

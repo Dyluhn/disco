@@ -144,6 +144,8 @@ def _require_exact_provider(
     *,
     expected_host: str,
     expected_model: str,
+    expected_vision_host: str = "",
+    expected_vision_model: str = "",
 ) -> dict[str, dict[str, Any]]:
     """Inject the campaign's exact wire-provider assertion into every scenario.
 
@@ -156,6 +158,12 @@ def _require_exact_provider(
     model = expected_model.strip()
     if not host or not model:
         raise ValueError("live provider evidence requires nonempty expected host and model")
+    vision_host = expected_vision_host.strip()
+    vision_model = expected_vision_model.strip()
+    if bool(vision_host) != bool(vision_model):
+        raise ValueError(
+            "live visual-provider evidence requires both expected vision host and model"
+        )
     secured = copy.deepcopy(selected)
     for scenario_id, scenario in secured.items():
         assertions = scenario.setdefault("assertions", {})
@@ -171,10 +179,26 @@ def _require_exact_provider(
                     f"{scenario_id}.assertions.provider.{field}={configured!r} "
                     f"conflicts with required {required!r}"
                 )
+        configured_visual = existing.get("visual_observer")
+        if configured_visual is not None:
+            required_visual = {
+                "require_host_substr": vision_host,
+                "model": vision_model,
+            }
+            if not vision_host or configured_visual != required_visual:
+                raise ValueError(
+                    f"{scenario_id}.assertions.provider.visual_observer="
+                    f"{configured_visual!r} conflicts with required {required_visual!r}"
+                )
         assertions["provider"] = {
             **existing,
             "require_ledger": True,
             "require_host_substr": host,
             "model": model,
         }
+        if vision_host:
+            assertions["provider"]["visual_observer"] = {
+                "require_host_substr": vision_host,
+                "model": vision_model,
+            }
     return secured

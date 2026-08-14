@@ -62,12 +62,22 @@ export DISCO_RELIABILITY_SEED_APPROVALS="$PWD/disco-approved-origins.json"
 export DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST='your-provider.example'
 export DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL='exact-wire-model-id'
 
+# Optional pair when settings route bounded screenshot questions to a dedicated observer.
+export DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST='vision-provider.example'
+export DISCO_RELIABILITY_EXPECTED_VISION_MODEL='exact-visual-model-id'
+
 # Set only when the seeded sandbox is a verified real runsc/gVisor backend.
 export DISCO_RELIABILITY_GVISOR=1
 ```
 
 Do not set a shared `DISCO_PROVIDER_LEDGER`; the outer runner replaces it with a
 suite-private path. `MINIMAX_RELAY_LOG` remains supported by direct build-soak use.
+The visual pair permits only provider records tagged by the host as
+`visual_inspection`/`observer`; those calls must contain one image and no tools.
+When the pair is configured, every image-bearing call must carry those tags; an
+untagged image or alternate model remains a provider fallback. Without the pair,
+a tagged visual observer is verified against the ordinary provider/model, which
+supports models that handle their own vision.
 Do not print or commit `DISCO_RELIABILITY_SEED_SECRET_KEY`; pass it through the
 environment only.
 

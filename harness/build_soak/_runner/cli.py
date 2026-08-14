@@ -129,6 +129,8 @@ def _preflight_scenario_controls(
                 selected,
                 expected_host=args.expected_provider_host,
                 expected_model=args.expected_provider_model,
+                expected_vision_host=getattr(args, "expected_vision_provider_host", ""),
+                expected_vision_model=getattr(args, "expected_vision_model", ""),
             )
         except ValueError as exc:
             raise _CliFailure(3, f"[build-soak] INFRA_FAILURE: {exc}") from exc
@@ -579,6 +581,29 @@ def _add_resource_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--resource-wait-timeout", type=float, default=1800.0)
 
 
+def _add_provider_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--expected-provider-host",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST", ""),
+        help="required substring in every observed provider-ledger host",
+    )
+    parser.add_argument(
+        "--expected-provider-model",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL", ""),
+        help="exact model id required in every ordinary provider-ledger record",
+    )
+    parser.add_argument(
+        "--expected-vision-provider-host",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST", ""),
+        help="exact host reserved for tagged visual-observer calls (optional as a pair)",
+    )
+    parser.add_argument(
+        "--expected-vision-model",
+        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_VISION_MODEL", ""),
+        help="exact model reserved for tagged visual-observer calls (optional as a pair)",
+    )
+
+
 def _argument_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Headless live-API Build Soak runner (§25).")
     p.add_argument(
@@ -599,16 +624,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         "live RAM/CPU/disk headroom",
     )
     p.add_argument("--model", default=None, help="driver model (default $DISCO_SOAK_MODEL)")
-    p.add_argument(
-        "--expected-provider-host",
-        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST", ""),
-        help="required substring in every observed provider-ledger host",
-    )
-    p.add_argument(
-        "--expected-provider-model",
-        default=os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL", ""),
-        help="exact model id required in every observed provider-ledger record",
-    )
+    _add_provider_arguments(p)
     p.add_argument("--out", default=_DEFAULT_OUT, help="output root for run folders")
     p.add_argument(
         "--summary-name",

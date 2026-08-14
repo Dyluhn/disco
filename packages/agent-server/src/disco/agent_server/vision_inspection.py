@@ -36,6 +36,37 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _observer_request(*, question: str, image_url: str) -> CompletionRequest:
+    return CompletionRequest(
+        profile=CapabilityProfile(
+            role=ModelRole.AGENT_DRIVER,
+            requirements=frozenset({Requirement.VISION}),
+            mode=OperatingMode.INTERACTIVE,
+        ),
+        messages=[
+            LLMMessage(role="system", content=_SYSTEM_PROMPT),
+            LLMMessage(
+                role="user",
+                content=(
+                    "<untrusted-visual-question-json>\n"
+                    + json.dumps({"visual_question": question}, ensure_ascii=False)
+                    + "\n</untrusted-visual-question-json>"
+                ),
+                images=[image_url],
+            ),
+        ],
+        tools=None,
+        temperature=0.0,
+        max_tokens=_MAX_OUTPUT_TOKENS,
+        enable_thinking=False,
+        metadata={
+            "bounded_visual_inspection": True,
+            "provider_ledger_purpose": "visual_inspection",
+            "provider_ledger_call_kind": "observer",
+        },
+    )
+
+
 class VisionInspectionCapability:
     """One-loop, host-side capability over an exact router snapshot."""
 
@@ -82,30 +113,7 @@ class VisionInspectionCapability:
             )
 
         assert model_key is not None
-        request = CompletionRequest(
-            profile=CapabilityProfile(
-                role=ModelRole.AGENT_DRIVER,
-                requirements=frozenset({Requirement.VISION}),
-                mode=OperatingMode.INTERACTIVE,
-            ),
-            messages=[
-                LLMMessage(role="system", content=_SYSTEM_PROMPT),
-                LLMMessage(
-                    role="user",
-                    content=(
-                        "<untrusted-visual-question-json>\n"
-                        + json.dumps({"visual_question": question}, ensure_ascii=False)
-                        + "\n</untrusted-visual-question-json>"
-                    ),
-                    images=[image_url],
-                ),
-            ],
-            tools=None,
-            temperature=0.0,
-            max_tokens=_MAX_OUTPUT_TOKENS,
-            enable_thinking=False,
-            metadata={"bounded_visual_inspection": True},
-        )
+        request = _observer_request(question=question, image_url=image_url)
         try:
             response = await self._router.complete(
                 request,

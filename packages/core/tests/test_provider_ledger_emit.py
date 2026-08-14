@@ -146,6 +146,29 @@ async def test_ledger_record_shape_and_harness_roundtrip(tmp_path, monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_ledger_keeps_only_bounded_machine_route_labels(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(path))
+    request = _req("conv_visual")
+    assert request.metadata is not None
+    request.metadata.update(
+        {
+            "provider_ledger_purpose": "visual_inspection",
+            "provider_ledger_call_kind": "observer",
+            "untrusted_note": "must never enter retained evidence",
+        }
+    )
+
+    await _provider().complete(request, model="minimax-m3")
+
+    record = json.loads(path.read_text())
+    assert record["purpose"] == "visual_inspection"
+    assert record["call_kind"] == "observer"
+    assert "untrusted_note" not in record
+    assert "must never enter retained evidence" not in path.read_text()
+
+
+@pytest.mark.asyncio
 async def test_ledger_failure_never_breaks_the_request(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("DISCO_PROVIDER_LEDGER", str(tmp_path))  # a DIRECTORY → open() fails
     resp = await _provider().complete(_req(), model="m")
