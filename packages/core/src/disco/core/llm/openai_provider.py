@@ -293,6 +293,8 @@ class OpenAIProvider:
         if not provider_ledger_enabled():
             return
         raw_cid = (req.metadata or {}).get("conversation_id")
+        raw_purpose = (req.metadata or {}).get("provider_ledger_purpose")
+        raw_call_kind = (req.metadata or {}).get("provider_ledger_call_kind")
         try:
             request_shape = _provider_request_shape(req, payload)
         except Exception:  # noqa: BLE001 - accounting must never block provider traffic
@@ -302,6 +304,8 @@ class OpenAIProvider:
             model=model,
             has_tools=bool(req.tools),
             conversation_id=str(raw_cid).strip() if raw_cid else None,
+            purpose=raw_purpose if isinstance(raw_purpose, str) else None,
+            call_kind=raw_call_kind if isinstance(raw_call_kind, str) else None,
             request_shape=request_shape,
         )
 

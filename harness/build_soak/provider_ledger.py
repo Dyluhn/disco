@@ -14,7 +14,9 @@ A ledger record (dict):
      "conversation_id": str|None}
 Only ``host`` is strictly required for enforcement; ``model``/``ts``/``after_terminal``/
 ``conversation_id`` default to "" / "" / False / None when the source line does
-not carry them.
+not carry them. Bounded route and request-shape fields are retained when the
+structured provider ledger supplies them so a dedicated visual observer can be
+verified independently from the ordinary driver route.
 """
 
 from __future__ import annotations
@@ -37,12 +39,17 @@ def _record(
     after_terminal: bool = False,
     has_tools: bool = True,
     conversation_id: str | None = None,
+    purpose: str | None = None,
+    call_kind: str | None = None,
+    stream: bool | None = None,
+    image_count: int | None = None,
+    tool_count: int | None = None,
 ) -> dict[str, Any]:
     # [REL-5b] has_tools defaults True (fail-closed): an UNMARKED record (older relay, or a loose
     # log line) is treated as a build-driver call so the after-terminal runaway check never silently
     # under-counts. A tool-less SUMMARIZER/title call is excluded only when the relay explicitly
     # marks has_tools=False.
-    return {
+    record: dict[str, Any] = {
         "ts": ts,
         "host": host,
         "model": model,
@@ -50,6 +57,17 @@ def _record(
         "has_tools": bool(has_tools),
         "conversation_id": _normalize_conversation_id(conversation_id),
     }
+    if isinstance(purpose, str) and purpose:
+        record["purpose"] = purpose
+    if isinstance(call_kind, str) and call_kind:
+        record["call_kind"] = call_kind
+    if type(stream) is bool:
+        record["stream"] = stream
+    if type(image_count) is int and image_count >= 0:
+        record["image_count"] = image_count
+    if type(tool_count) is int and tool_count >= 0:
+        record["tool_count"] = tool_count
+    return record
 
 
 def _normalize_conversation_id(value: Any) -> str | None:
@@ -113,6 +131,11 @@ def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
                             obj.get("has_tools", True)
                         ),  # [REL-5b] default True=fail-closed
                         conversation_id=obj.get("conversation_id"),
+                        purpose=obj.get("purpose"),
+                        call_kind=obj.get("call_kind"),
+                        stream=obj.get("stream"),
+                        image_count=obj.get("image_count"),
+                        tool_count=obj.get("tool_count"),
                     )
                 )
             continue

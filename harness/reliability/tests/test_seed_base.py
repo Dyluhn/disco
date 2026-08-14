@@ -24,6 +24,10 @@ PROVIDER_ENV = (
     "DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST",
     "DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL",
 )
+VISION_PROVIDER_ENV = (
+    "DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST",
+    "DISCO_RELIABILITY_EXPECTED_VISION_MODEL",
+)
 
 
 def _prepare_shapes(
@@ -31,9 +35,14 @@ def _prepare_shapes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     seed_base: str | None,
+    vision_host: str | None = None,
 ):
     for key in PROVIDER_ENV:
         monkeypatch.setenv(key, "test-value")
+    for key in VISION_PROVIDER_ENV:
+        monkeypatch.delenv(key, raising=False)
+    if vision_host is not None:
+        monkeypatch.setenv("DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST", vision_host)
     context = {
         "repo": str(tmp_path),
         "frontend": str(tmp_path / "frontend"),
@@ -97,6 +106,21 @@ def test_live_build_shapes_expands_exact_seed_base(
     assert launch.command[index + 1] == "90000"
 
 
+def test_live_build_shapes_refuses_partial_visual_provider_pair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launch = _prepare_shapes(
+        tmp_path,
+        monkeypatch,
+        seed_base="90000",
+        vision_host="ollama.com",
+    )
+
+    assert isinstance(launch, dict)
+    assert launch["status"] == INVALID
+    assert "visual provider host/model must be configured together" in launch["reason"]
+
+
 def test_seed_base_bounds() -> None:
     assert main(["--seed-base", "-1", "--list"]) == 2
     assert main(["--seed-base", "0", "--list"]) == 0
@@ -122,9 +146,7 @@ def test_build_soak_suites_receive_disjoint_seed_ranges() -> None:
 def test_build_soak_continuation_rewrites_units_and_iterations_together() -> None:
     suite = load_matrix(MATRIX).suites["live-build-shapes"]
 
-    selected = _override_build_soak_units(
-        argparse.Namespace(build_soak_units=47), [suite]
-    )
+    selected = _override_build_soak_units(argparse.Namespace(build_soak_units=47), [suite])
 
     assert selected[0].units == 47
     index = selected[0].command.index("--iterations")

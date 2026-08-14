@@ -137,12 +137,18 @@ def _override_build_soak_units(args: argparse.Namespace, suites: list[Suite]) ->
 def _product_bindings(suites: list[Suite]) -> dict[str, str]:
     if not any(suite.provider_evidence for suite in suites):
         return {}
-    return {
+    bindings = {
         "provider_host": os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST", "")
         .strip()
         .lower(),
         "provider_model": os.environ.get("DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL", "").strip(),
     }
+    vision_host = os.environ.get("DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST", "").strip()
+    vision_model = os.environ.get("DISCO_RELIABILITY_EXPECTED_VISION_MODEL", "").strip()
+    if vision_host or vision_model:
+        bindings["vision_provider_host"] = vision_host.lower()
+        bindings["vision_provider_model"] = vision_model
+    return bindings
 
 
 @dataclass(frozen=True)

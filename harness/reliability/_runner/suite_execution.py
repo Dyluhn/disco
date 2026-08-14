@@ -23,6 +23,8 @@ from .common import _expand, _utc_now
 from .provider_evidence import (
     _EXPECTED_PROVIDER_HOST_ENV,
     _EXPECTED_PROVIDER_MODEL_ENV,
+    _EXPECTED_VISION_MODEL_ENV,
+    _EXPECTED_VISION_PROVIDER_HOST_ENV,
     _PROVIDER_CONVERSATION_MANIFEST_ENV,
     _provider_evidence_result,
 )
@@ -311,6 +313,13 @@ def _prepare_suite_launch(
     }
     if missing_env:
         return _suite_refusal(base, f"missing required environment: {', '.join(missing_env)}")
+    vision_host = os.environ.get(_EXPECTED_VISION_PROVIDER_HOST_ENV, "").strip()
+    vision_model = os.environ.get(_EXPECTED_VISION_MODEL_ENV, "").strip()
+    if suite.provider_evidence and bool(vision_host) != bool(vision_model):
+        return _suite_refusal(
+            base,
+            "expected visual provider host/model must be configured together",
+        )
 
     suite_context = {**context, "suite_out": str(suite_out)}
     try:
@@ -475,6 +484,8 @@ def _adjudicate_provider_evidence(
         launch.provider_ledger_path,
         expected_host=os.environ.get(_EXPECTED_PROVIDER_HOST_ENV, ""),
         expected_model=os.environ.get(_EXPECTED_PROVIDER_MODEL_ENV, ""),
+        expected_vision_host=os.environ.get(_EXPECTED_VISION_PROVIDER_HOST_ENV, ""),
+        expected_vision_model=os.environ.get(_EXPECTED_VISION_MODEL_ENV, ""),
         units=units_passed or suite.units,
         conversation_manifest_path=launch.provider_conversation_manifest_path,
         expected_conversations=(suite.provider_conversation_count if status == PASS else None),

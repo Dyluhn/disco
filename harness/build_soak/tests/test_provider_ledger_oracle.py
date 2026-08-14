@@ -23,6 +23,36 @@ _PROV = {
     },
 }
 
+_VISUAL_PROV = {
+    "id": "mixed_main_visual_soak",
+    "assertions": {
+        "provider": {
+            "require_host_substr": "ollama.com",
+            "model": "deepseek-v4-flash",
+            "visual_observer": {
+                "require_host_substr": "ollama.com",
+                "model": "minimax-m3",
+            },
+        },
+    },
+}
+
+
+def _visual_record(**overrides):
+    record = {
+        "host": "ollama.com",
+        "model": "minimax-m3",
+        "after_terminal": False,
+        "has_tools": False,
+        "purpose": "visual_inspection",
+        "call_kind": "observer",
+        "stream": False,
+        "image_count": 1,
+        "tool_count": 0,
+    }
+    record.update(overrides)
+    return record
+
 
 def _run(ledger, scenario=_PROV):
     return ProviderLedgerOracle().check([], scenario=scenario, provider_ledger=ledger)
@@ -81,6 +111,89 @@ def test_passes_all_minimax_calls():
     r = _run(ledger)
     assert r[0].passed, r[0].to_dict()
     assert r[0].facts["calls"] == 2
+
+
+def test_mixed_main_and_tagged_visual_observer_models_pass():
+    ledger = [
+        {
+            "host": "ollama.com",
+            "model": "deepseek-v4-flash",
+            "has_tools": True,
+            "image_count": 0,
+        },
+        _visual_record(),
+    ]
+
+    result = _run(ledger, scenario=_VISUAL_PROV)[0]
+
+    assert result.passed, result.to_dict()
+    assert result.facts == {"calls": 2, "visual_observer_calls": 1}
+
+
+def test_visual_observer_wrong_model_still_fails_closed():
+    result = _run([_visual_record(model="unexpected-model")], scenario=_VISUAL_PROV)[0]
+
+    assert result.code == "PROVIDER_WRONG_MODEL"
+    assert result.first_broken_link == "soak -> visual_model_pinned"
+
+
+def test_visual_model_without_trusted_route_tag_is_main_model_fallback():
+    result = _run(
+        [
+            {
+                "host": "ollama.com",
+                "model": "minimax-m3",
+                "has_tools": False,
+                "image_count": 0,
+            }
+        ],
+        scenario=_VISUAL_PROV,
+    )[0]
+
+    assert result.code == "PROVIDER_WRONG_MODEL"
+    assert result.first_broken_link == "soak -> model_pinned"
+
+
+def test_dedicated_visual_policy_rejects_untagged_main_model_image_call():
+    result = _run(
+        [
+            {
+                "host": "ollama.com",
+                "model": "deepseek-v4-flash",
+                "has_tools": False,
+                "image_count": 1,
+            }
+        ],
+        scenario=_VISUAL_PROV,
+    )[0]
+
+    assert result.code == "MISSING_REQUIRED_EVIDENCE"
+    assert result.first_broken_link == "soak -> visual_route_identified"
+
+
+def test_tagged_visual_observer_uses_main_policy_without_dedicated_override():
+    scenario = {
+        "assertions": {
+            "provider": {
+                "require_host_substr": "ollama.com",
+                "model": "deepseek-v4-flash",
+            }
+        }
+    }
+
+    result = _run(
+        [_visual_record(model="deepseek-v4-flash")],
+        scenario=scenario,
+    )[0]
+
+    assert result.passed, result.to_dict()
+
+
+def test_visual_observer_must_keep_its_bounded_request_shape():
+    result = _run([_visual_record(has_tools=True)], scenario=_VISUAL_PROV)[0]
+
+    assert result.code == "MISSING_REQUIRED_EVIDENCE"
+    assert result.first_broken_link == "soak -> visual_observer_bounded"
 
 
 # --- the HARD constraint: no OpenRouter --------------------------------------
@@ -180,7 +293,9 @@ def test_parser_jsonl_records():
         [
             (
                 '{"ts": "t1", "host": "api.minimaxi.com", '
-                '"model": "MiniMax-M3", "conversation_id": "conv_parse"}'
+                '"model": "MiniMax-M3", "conversation_id": "conv_parse", '
+                '"purpose": "visual_inspection", "call_kind": "observer", '
+                '"stream": false, "image_count": 1, "tool_count": 0}'
             ),
             '{"url": "https://openrouter.ai/api/v1/chat", "model": "x"}',
         ]
@@ -189,6 +304,11 @@ def test_parser_jsonl_records():
     assert len(recs) == 2
     assert recs[0]["host"] == "api.minimaxi.com"
     assert recs[0]["conversation_id"] == "conv_parse"
+    assert recs[0]["purpose"] == "visual_inspection"
+    assert recs[0]["call_kind"] == "observer"
+    assert recs[0]["stream"] is False
+    assert recs[0]["image_count"] == 1
+    assert recs[0]["tool_count"] == 0
     assert recs[1]["host"] == "openrouter.ai"  # host derived from url
 
 

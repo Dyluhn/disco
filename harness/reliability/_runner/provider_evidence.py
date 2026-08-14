@@ -16,6 +16,8 @@ from harness.reliability.state import FAIL, INVALID, PASS
 
 _EXPECTED_PROVIDER_HOST_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_HOST"
 _EXPECTED_PROVIDER_MODEL_ENV = "DISCO_RELIABILITY_EXPECTED_PROVIDER_MODEL"
+_EXPECTED_VISION_PROVIDER_HOST_ENV = "DISCO_RELIABILITY_EXPECTED_VISION_PROVIDER_HOST"
+_EXPECTED_VISION_MODEL_ENV = "DISCO_RELIABILITY_EXPECTED_VISION_MODEL"
 _PROVIDER_CONVERSATION_MANIFEST_ENV = "DISCO_RELIABILITY_PROVIDER_CONVERSATION_MANIFEST"
 _PROVIDER_LEDGER_REQUIRED_KEYS = {
     "ts",
@@ -75,10 +77,52 @@ def _provider_records(path: Path) -> tuple[list[dict[str, Any]] | None, str]:
     return records, ""
 
 
+def _provider_route(
+    record: dict[str, Any],
+    index: int,
+    *,
+    required_host: str,
+    required_model: str,
+    required_vision_host: str,
+    required_vision_model: str,
+) -> tuple[str, str, str, bool, str]:
+    is_visual = record.get("purpose") == "visual_inspection"
+    if not is_visual:
+        if required_vision_host and record.get("image_count") != 0:
+            return (
+                INVALID,
+                "",
+                "",
+                False,
+                f"provider ledger record {index} does not identify its image-bearing route",
+            )
+        return PASS, required_host, required_model, False, ""
+    bounded = (
+        record.get("call_kind") == "observer"
+        and record.get("has_tools") is False
+        and record.get("stream") is False
+        and record.get("image_count") == 1
+        and record.get("tool_count") == 0
+    )
+    if not bounded:
+        return (
+            INVALID,
+            "",
+            "",
+            True,
+            f"provider ledger record {index} is not a bounded visual observer",
+        )
+    if not required_vision_host or not required_vision_model:
+        return PASS, required_host, required_model, True, ""
+    return PASS, required_vision_host, required_vision_model, True, ""
+
+
 def _collect_provider_scope(
     records: list[dict[str, Any]],
     required_host: str,
     required_model: str,
+    required_vision_host: str,
+    required_vision_model: str,
 ) -> tuple[str, _ProviderScope | None, str]:
     conversations: set[str] = set()
     tool_conversations: set[str] = set()
@@ -88,13 +132,25 @@ def _collect_provider_scope(
         if status != PASS or normalized is None:
             return status, None, reason
         host, model, has_tools, conversation_id = normalized
-        if host != required_host:
-            return FAIL, None, (f"provider fallback detected: host {host!r} != {required_host!r}")
-        if model != required_model:
+        route_status, expected_host, expected_model, is_visual, route_reason = _provider_route(
+            record,
+            index,
+            required_host=required_host,
+            required_model=required_model,
+            required_vision_host=required_vision_host,
+            required_vision_model=required_vision_model,
+        )
+        if route_status != PASS:
+            return route_status, None, route_reason
+        if is_visual:
+            auxiliary_calls += 1
+        if host != expected_host:
+            return FAIL, None, (f"provider fallback detected: host {host!r} != {expected_host!r}")
+        if model != expected_model:
             return (
                 FAIL,
                 None,
-                (f"provider fallback detected: model {model!r} != {required_model!r}"),
+                (f"provider fallback detected: model {model!r} != {expected_model!r}"),
             )
         if conversation_id is None:
             if has_tools:
@@ -106,7 +162,8 @@ def _collect_provider_scope(
                         "but no conversation_id"
                     ),
                 )
-            auxiliary_calls += 1
+            if not is_visual:
+                auxiliary_calls += 1
             continue
         conversations.add(conversation_id)
         if has_tools:
@@ -156,9 +213,7 @@ def _provider_scope_result(
             )
         missing_required = required_conversation_ids - conversations
         if missing_required:
-            return INVALID, (
-                f"missing {len(missing_required)} required PASS conversation ID(s)"
-            )
+            return INVALID, (f"missing {len(missing_required)} required PASS conversation ID(s)")
         required_without_tools = required_conversation_ids - scope.tool_conversations
         if required_without_tools:
             return INVALID, (
@@ -182,6 +237,8 @@ def _provider_evidence_result(
     *,
     expected_host: str,
     expected_model: str,
+    expected_vision_host: str = "",
+    expected_vision_model: str = "",
     units: int,
     conversation_manifest_path: Path | None = None,
     expected_conversations: int | None = None,
@@ -204,8 +261,16 @@ def _provider_evidence_result(
     required_model = expected_model.strip()
     if not required_host or not required_model:
         return INVALID, 0, "expected provider host/model is empty"
+    required_vision_host = expected_vision_host.strip().lower()
+    required_vision_model = expected_vision_model.strip()
+    if bool(required_vision_host) != bool(required_vision_model):
+        return INVALID, 0, "expected visual provider host/model must be configured together"
     scope_status, scope, scope_reason = _collect_provider_scope(
-        records, required_host, required_model
+        records,
+        required_host,
+        required_model,
+        required_vision_host,
+        required_vision_model,
     )
     if scope_status != PASS or scope is None:
         return scope_status, 0, scope_reason

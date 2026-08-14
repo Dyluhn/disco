@@ -40,3 +40,32 @@ def test_live_provider_requirement_rejects_conflicting_scenario() -> None:
         _require_exact_provider(
             source, expected_host="opencode.ai", expected_model="deepseek-v4-flash"
         )
+
+
+def test_live_provider_requirement_injects_exact_visual_observer_route() -> None:
+    secured = _require_exact_provider(
+        {"s": {"assertions": {}}},
+        expected_host="ollama.com",
+        expected_model="deepseek-v4-flash",
+        expected_vision_host="ollama.com",
+        expected_vision_model="minimax-m3",
+    )
+
+    assert secured["s"]["assertions"]["provider"]["visual_observer"] == {
+        "require_host_substr": "ollama.com",
+        "model": "minimax-m3",
+    }
+
+
+@pytest.mark.parametrize("vision_host,vision_model", [("", "minimax-m3"), ("ollama.com", "")])
+def test_live_provider_requirement_rejects_partial_visual_route(
+    vision_host: str, vision_model: str
+) -> None:
+    with pytest.raises(ValueError, match="requires both expected vision host and model"):
+        _require_exact_provider(
+            {"s": {"assertions": {}}},
+            expected_host="ollama.com",
+            expected_model="deepseek-v4-flash",
+            expected_vision_host=vision_host,
+            expected_vision_model=vision_model,
+        )
