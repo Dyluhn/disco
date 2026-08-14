@@ -119,15 +119,15 @@ class LifecycleRunState:
     def pop_pending_session(self, conversation_id: str):
         return self._resources.pop_pending_session(conversation_id)
 
-    def track_reclaim(
+    def _track_reclaim(
         self,
         conversation_id: str,
         reclaim: Coroutine[Any, Any, None],
     ) -> asyncio.Task[None]:
-        return self._resources.track_reclaim(conversation_id, reclaim)
+        return self._resources._track_reclaim(conversation_id, reclaim)
 
-    async def await_reclaims(self, conversation_id: str) -> None:
-        await self._resources.await_reclaims(conversation_id)
+    async def _await_reclaims(self, conversation_id: str) -> None:
+        await self._resources._await_reclaims(conversation_id)
 
     def conversation_ids(self, *, executors_only: bool = False) -> tuple[str, ...]:
         return self._resources.conversation_ids(executors_only=executors_only)

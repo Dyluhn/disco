@@ -183,12 +183,12 @@ async def test_resource_registry_close_joins_detached_reclaim():
         reclaim_entered.set()
         await reclaim_release.wait()
 
-    resources.track_reclaim(CID, _blocked_reclaim())
+    resources._track_reclaim(CID, _blocked_reclaim())
     closing = asyncio.create_task(resources.close())
     await asyncio.wait_for(reclaim_entered.wait(), timeout=2)
     assert not closing.done()
-    assert resources.has_reclaims(CID)
+    assert resources._has_reclaims(CID)
 
     reclaim_release.set()
     await asyncio.wait_for(closing, timeout=2)
-    assert not resources.has_reclaims(CID)
+    assert not resources._has_reclaims(CID)

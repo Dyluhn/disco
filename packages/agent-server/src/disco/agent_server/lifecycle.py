@@ -478,7 +478,7 @@ class LifecycleManager:
     ) -> asyncio.Task[None]:
         """Publish detached ownership before releasing the workspace fence."""
 
-        return self._run_state.track_reclaim(
+        return self._run_state._track_reclaim(
             conversation_id,
             self._reclaim_detached_sandbox(executor, pending),
         )
@@ -508,7 +508,7 @@ class LifecycleManager:
         # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
         executor, pending = self._detach_sandbox(conversation_id)
         self._track_detached_reclaim(conversation_id, executor, pending)
-        await self._run_state.await_reclaims(conversation_id)
+        await self._run_state._await_reclaims(conversation_id)
 
     def clear_session_markers(self, conversation_id: str) -> None:
         """Reset every cache that must not survive sandbox replacement."""
@@ -599,7 +599,7 @@ class LifecycleManager:
                     return
                 executor, pending = self._detach_sandbox(conversation_id)
                 self._track_detached_reclaim(conversation_id, executor, pending)
-            await self._run_state.await_reclaims(conversation_id)
+            await self._run_state._await_reclaims(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     def sandbox_state(self, conversation_id: str) -> str | None:

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b9386bf043b93e8d55d522586a8863b7233ecf97",
+  "source_identity": "346b284df2f9becdf223f0b135444f608440041f",
   "collected": {
     "counts": {
       "packages": 10738,
@@ -12579,7 +12579,7 @@
     }
   },
   "mapping_static": {
-    "identity": "b9386bf043b93e8d55d522586a8863b7233ecf97",
+    "identity": "346b284df2f9becdf223f0b135444f608440041f",
     "python_test_file_count": 846,
     "python_static_test_id_count": 10329,
     "python_test_files": [
@@ -30537,6 +30537,41 @@
         "packages": {
           "before_count": 10736,
           "after_count": 10736,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1415,
+          "after_count": 1415,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V39B-KILL-RECLAIM-OWNERSHIP",
+      "root": "multiple",
+      "source_identity_before": "b9386bf043b93e8d55d522586a8863b7233ecf97",
+      "source_identity_after": "346b284df2f9becdf223f0b135444f608440041f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10738,
+          "after_count": 10738,
           "added_ids": []
         },
         "harness": {
