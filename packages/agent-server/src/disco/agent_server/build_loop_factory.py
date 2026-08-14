@@ -662,12 +662,16 @@ class BuildLoopFactory:
         self,
         conversation_id: str,
         snapshot: ResolvedDriverContext,
+        *,
+        force_recompose: bool = False,
     ) -> AgentLoop:
         existing = self._loops.loop(conversation_id)
         if self._workspace.has_admitted_run(conversation_id):
             if existing is None:
                 raise RuntimeError("admitted conversation has no composed loop")
             return existing
+        if force_recompose:
+            return self._replace_binding(conversation_id, snapshot)
         if self._binding_unchanged(conversation_id, snapshot, existing):
             assert existing is not None
             return existing

@@ -58,8 +58,14 @@ class RunController:
         self._sandboxes.evict_stale(conversation_id)
 
         async def resolve_loop() -> AgentLoop:
-            await self._build_platform.prepare_route_pin(conversation_id)
+            force_recompose = await self._build_platform.prepare_route_pin(conversation_id)
             snapshot = await self._drivers.resolve_context(conversation_id)
+            if force_recompose is True:
+                return self._loops.loop_for_resolved(
+                    conversation_id,
+                    snapshot,
+                    force_recompose=True,
+                )
             return self._loops.loop_for_resolved(conversation_id, snapshot)
 
         self._supervisor.create_task(

@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "346b284df2f9becdf223f0b135444f608440041f",
+  "source_identity": "55d8771b6d06c4faf36342c942d8a2a5de0ed5b0",
   "collected": {
     "counts": {
-      "packages": 10738,
+      "packages": 10740,
       "harness": 1415,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12558,
+    "total": 12560,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1038,6 +1038,7 @@
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_failed_delivery_reselection_discards_stale_runtime_selection",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_freeform_opt_in_selects_platform_with_exact_legacy_execution_bridge",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_legacy_park_is_pinned_but_terminal_run_releases_rollout_choice",
+        "packages/agent-server/tests/test_build_platform_freeform_route.py::test_new_intent_recomposes_before_replacement_platform_admission",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_admission_is_durable_idempotent_and_restart_pinned",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_resolution_failure_blocks_without_legacy_fallback",
         "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission",
@@ -1254,6 +1255,7 @@
         "packages/agent-server/tests/test_dr_revision_replan.py::test_revision_via_request_plan_reproposes",
         "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_admitted_run_is_not_recomposed_until_next_run",
         "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_deep_research_loop_and_agent_share_resolved_context",
+        "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_forced_recomposition_replaces_an_unchanged_binding",
         "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_invalid_driver_config_is_normalized_to_resolution_error",
         "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_kick_registers_before_resolution_and_composition",
         "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_provisional_loop_recomposes_and_preserves_session",
@@ -12579,9 +12581,9 @@
     }
   },
   "mapping_static": {
-    "identity": "346b284df2f9becdf223f0b135444f608440041f",
+    "identity": "55d8771b6d06c4faf36342c942d8a2a5de0ed5b0",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10329,
+    "python_static_test_id_count": 10331,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15244,6 +15246,7 @@
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_failed_delivery_reselection_discards_stale_runtime_selection",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_freeform_opt_in_selects_platform_with_exact_legacy_execution_bridge",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_legacy_park_is_pinned_but_terminal_run_releases_rollout_choice",
+      "packages/agent-server/tests/test_build_platform_freeform_route.py::test_new_intent_recomposes_before_replacement_platform_admission",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_admission_is_durable_idempotent_and_restart_pinned",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_platform_resolution_failure_blocks_without_legacy_fallback",
       "packages/agent-server/tests/test_build_platform_freeform_route.py::test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission",
@@ -15435,6 +15438,7 @@
       "packages/agent-server/tests/test_driver_context_resolution.py::test_deep_research_loop_and_agent_share_resolved_context",
       "packages/agent-server/tests/test_driver_context_resolution.py::test_different_models_same_base_url_run_independently",
       "packages/agent-server/tests/test_driver_context_resolution.py::test_every_joined_waiter_has_an_independent_bound",
+      "packages/agent-server/tests/test_driver_context_resolution.py::test_forced_recomposition_replaces_an_unchanged_binding",
       "packages/agent-server/tests/test_driver_context_resolution.py::test_immutable",
       "packages/agent-server/tests/test_driver_context_resolution.py::test_invalid_driver_config_is_normalized_to_resolution_error",
       "packages/agent-server/tests/test_driver_context_resolution.py::test_kick_registers_before_resolution_and_composition",
@@ -31766,6 +31770,32 @@
           "packages/core/tests/test_serve_tool.py::test_serve_derives_files_when_kind_is_omitted_and_rejects_invalid_enum",
           "packages/core/tests/test_serve_tool.py::test_serve_schema_does_not_ask_the_model_to_select_delivery_kind",
           "packages/core/tests/test_serve_tool.py::test_static_http_preview_cannot_promote_python_source_to_app"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V40-ROUTE-ADMISSION-CONTINUITY",
+      "root": "packages",
+      "source_identity_before": "346b284df2f9becdf223f0b135444f608440041f",
+      "source_identity_after": "55d8771b6d06c4faf36342c942d8a2a5de0ed5b0",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10738,
+          "after_count": 10740,
+          "added_ids": [
+            "packages/agent-server/tests/test_build_platform_freeform_route.py::test_new_intent_recomposes_before_replacement_platform_admission",
+            "packages/agent-server/tests/test_driver_context_resolution.py::TestConversationRuntimeDriverContextSeams::test_forced_recomposition_replaces_an_unchanged_binding"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_build_platform_freeform_route.py::test_new_intent_recomposes_before_replacement_platform_admission",
+          "packages/agent-server/tests/test_driver_context_resolution.py::test_forced_recomposition_replaces_an_unchanged_binding"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

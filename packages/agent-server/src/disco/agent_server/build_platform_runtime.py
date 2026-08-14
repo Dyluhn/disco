@@ -63,8 +63,10 @@ class BuildRouteRollback(Protocol):
 class _RouteState:
     record: BuildPlatformRouteRecord | None = None
     pin: BuildRoute | None = None
+    pinned_profile: ComponentId | None = None
     selected_route: BuildRoute | None = None
     selected_profile: ComponentId | None = None
+    recomposition_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,9 +230,10 @@ def _transition_fields(
 def _restored_delivery_kind(state: _RouteState) -> Literal["app", "files"] | None:
     if state.pin is None:
         return None
-    if state.selected_profile == FREEFORM_ARTIFACT_PROFILE_ID:
+    profile = state.selected_profile or state.pinned_profile
+    if profile == FREEFORM_ARTIFACT_PROFILE_ID:
         return "files"
-    return "app" if state.selected_profile == FREEFORM_PROFILE_ID else None
+    return "app" if profile == FREEFORM_PROFILE_ID else None
 
 
 def _select_freeform_runtime(
@@ -245,7 +248,12 @@ def _select_freeform_runtime(
         state = runtime._state(conversation_id)
         runtime._save(
             conversation_id,
-            replace(state, selected_route=None, selected_profile=None),
+            replace(
+                state,
+                selected_route=None,
+                selected_profile=None,
+                recomposition_required=False,
+            ),
         )
         return
     state = runtime._state(conversation_id)
@@ -444,11 +452,32 @@ class BuildPlatformRuntime:
             if state.selected_profile is not None
         }
 
-    async def prepare_route_pin(self, conversation_id: str) -> None:
+    async def prepare_route_pin(self, conversation_id: str) -> bool:
+        """Restore the durable pin and report whether the loop must recompose.
+
+        A route pin is durable policy.  A selected Platform route is usable
+        runtime state only while its composition record proves the current
+        admission.  Keeping those states distinct prevents a new run intent
+        from inheriting a Platform selection with no composition authority.
+        """
+
         state = self._state(conversation_id)
+        had_runtime_selection = any(
+            (
+                state.pin is not None,
+                state.pinned_profile is not None,
+                state.selected_route is not None,
+                state.selected_profile is not None,
+                state.record is not None,
+                state.recomposition_required,
+            )
+        )
         if not self._surfaces.is_build_like(conversation_id):
-            self._save(conversation_id, replace(state, pin=None))
-            return
+            self._save(
+                conversation_id,
+                replace(state, pin=None, pinned_profile=None, recomposition_required=False),
+            )
+            return False
         events = await self._store.get_events(conversation_id)
         admission = current_build_platform_admission(events)
         restored_profile = next(
@@ -470,16 +499,27 @@ class BuildPlatformRuntime:
             conversation_id,
             ejected=current_appkit_ejection(events) is not None,
         )
+        selection_ready = (
+            admission is not None
+            and restored_profile is not None
+            and (admission.route == "legacy" or reusable_record is not None)
+        )
+        requires_recomposition = (
+            had_runtime_selection if admission is None else not selection_ready
+        )
         self._save(
             conversation_id,
             replace(
                 state,
                 pin=admission.route if admission is not None else None,
-                selected_route=admission.route if admission is not None else None,
-                selected_profile=restored_profile,
+                pinned_profile=restored_profile,
+                selected_route=admission.route if selection_ready else None,
+                selected_profile=restored_profile if selection_ready else None,
                 record=reusable_record,
+                recomposition_required=requires_recomposition,
             ),
         )
+        return requires_recomposition
 
     def _set_selection(
         self,
@@ -496,6 +536,7 @@ class BuildPlatformRuntime:
                 selected_route=route,
                 selected_profile=profile,
                 record=record,
+                recomposition_required=False,
             ),
         )
 
@@ -530,7 +571,12 @@ class BuildPlatformRuntime:
             state = self._state(conversation_id)
             self._save(
                 conversation_id,
-                replace(state, selected_route=None, selected_profile=None),
+                replace(
+                    state,
+                    selected_route=None,
+                    selected_profile=None,
+                    recomposition_required=False,
+                ),
             )
             return
         state = self._state(conversation_id)
@@ -624,6 +670,8 @@ class BuildPlatformRuntime:
         route = state.selected_route
         profile = state.selected_profile
         if route is None or profile is None:
+            if state.recomposition_required:
+                raise RuntimeError("Build route requires recomposition before admission")
             return
         events = await self._store.get_events(conversation_id)
         intent, events = await self._current_intent(conversation_id, events)
@@ -742,6 +790,7 @@ class BuildPlatformRuntime:
             _RouteState(
                 record=record,
                 pin=existing.route,
+                pinned_profile=FREEFORM_PROFILE_ID,
                 selected_route=existing.route,
                 selected_profile=FREEFORM_PROFILE_ID,
             ),
