@@ -22,6 +22,7 @@ import { apiGet, apiSend, fixtureDelay, isLive } from "../client";
 // don't leak into the fixture constants).
 let fixtureAssignments: ModelAssignments = {
   default_model: DEFAULT_ASSIGNMENTS.default_model,
+  vision_model: DEFAULT_ASSIGNMENTS.vision_model,
   roles: { ...DEFAULT_ASSIGNMENTS.roles },
 };
 let fixtureCatalogue: ModelInfo[] = MODEL_CATALOGUE.map((m) => ({ ...m }));
@@ -49,11 +50,13 @@ export function toModelInfo(u: ModelUpsert): ModelInfo {
     // price, so it can't be inferred); carry an explicit mode through verbatim.
     pricing_mode: u.pricing_mode ?? (paid ? "metered" : "free"),
     capabilities: [...u.capabilities],
+    vision: u.vision ?? null,
     note,
     model_id: u.model_id,
     base_url: u.base_url ?? null,
     api_key_env: u.api_key_env ?? null,
     context_window: u.context_window,
+    max_output_tokens: u.max_output_tokens ?? null,
     quantization: u.quantization ?? null,
   };
 }
@@ -93,6 +96,9 @@ export async function deleteModel(id: string): Promise<ModelInfo[]> {
   }
   const role = Object.entries(fixtureAssignments.roles).find(([, k]) => k === id)?.[0];
   if (role) throw new ApiError(`${id} is assigned to ${role} — reassign first`, 400);
+  if (id === fixtureAssignments.vision_model) {
+    throw new ApiError(`${id} is the vision model — reassign vision first`, 400);
+  }
   fixtureCatalogue = fixtureCatalogue.filter((m) => m.id !== id);
   return fixtureCatalogue.map((m) => ({ ...m }));
 }
@@ -102,6 +108,7 @@ export async function getAssignments(): Promise<ModelAssignments> {
   await fixtureDelay();
   return {
     default_model: fixtureAssignments.default_model,
+    vision_model: fixtureAssignments.vision_model,
     roles: { ...fixtureAssignments.roles },
   };
 }
@@ -116,10 +123,14 @@ export async function updateAssignments(patch: AssignmentsPatch): Promise<ModelA
   await fixtureDelay();
   fixtureAssignments = {
     default_model: patch.default_model ?? fixtureAssignments.default_model,
+    vision_model: Object.prototype.hasOwnProperty.call(patch, "vision_model")
+      ? (patch.vision_model ?? null)
+      : fixtureAssignments.vision_model,
     roles: { ...fixtureAssignments.roles, ...(patch.roles ?? {}) },
   };
   return {
     default_model: fixtureAssignments.default_model,
+    vision_model: fixtureAssignments.vision_model,
     roles: { ...fixtureAssignments.roles },
   };
 }

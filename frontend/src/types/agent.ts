@@ -549,6 +549,7 @@ export interface DriverModel {
   // sends an effective mode (derives "free"/"metered" when unset).
   pricing_mode?: "metered" | "subscription" | "free";
   context_window: number;
+  capabilities: Array<"vision" | "long_context" | "tool_calling" | "json_mode">;
 }
 export interface DriverModels {
   models: DriverModel[];

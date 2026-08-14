@@ -29,5 +29,14 @@ class ConfigAssignments:
         if patch.roles:
             for role_str, key in patch.roles.items():
                 assignments[ModelRole(role_str)] = key  # ValueError on a bad role
-        new_cfg = self._store.sections.save_assignments(default_model, assignments)
+        vision_model = (
+            patch.vision_model
+            if "vision_model" in patch.model_fields_set
+            else cfg.vision_escalation_model
+        )
+        new_cfg = self._store.sections.save_assignments(
+            default_model,
+            assignments,
+            vision_escalation_model=vision_model,
+        )
         return _assignments_from(new_cfg)

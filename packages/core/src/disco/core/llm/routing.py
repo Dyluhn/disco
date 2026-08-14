@@ -271,14 +271,12 @@ class DefaultLLMRouter:
                 f"— fix the assignment in Settings"
             )
 
-        # [BP-00] Vision capability guard: if the request carries images, the
-        # model MUST support VISION. DF-08: when the primary lacks vision,
-        # escalate to the configured vision_escalation_model instead of raising.
+        # [BP-00] Vision capability guard: an ordinary image-bearing request
+        # stays with its assigned model, which MUST support VISION. Dedicated
+        # visual inspection is a separate, bounded host capability; it must
+        # never inherit a whole agent request, transcript, or tool set here.
         if any(getattr(m, "images", None) for m in req.messages):
             if Requirement.VISION not in (entry.capabilities or []):
-                escalated = self._try_vision_escalation(profile, key, entry, path)
-                if escalated is not None:
-                    return escalated
                 self._sink.record(
                     RoutingDecision(
                         profile=profile,
@@ -296,31 +294,34 @@ class DefaultLLMRouter:
 
         return key, entry, path, "config", []
 
-    # -- vision escalation (DF-08) ---------------------------------------------
+    def visual_inspection_route(
+        self,
+    ) -> tuple[Literal["main", "dedicated", "unavailable"], str | None, str]:
+        """Resolve the explicit browser visual-inspection route.
 
-    def _try_vision_escalation(
-        self, profile, key: str, entry: ModelEntry, original_path: Path
-    ) -> tuple[str, ModelEntry, Path, str, list[str]] | None:
-        """DF-08: escalate an image-bearing request to the configured vision
-        model when the primary lacks VISION. Returns (model key, entry, path,
-        reason, overflow_triggers) or None if escalation is not possible (guard
-        stays hard). Does NOT emit to the sink — the caller (complete) owns the one
-        and only RoutingDecision per call (RT4)."""
+        A configured dedicated model wins even when the main model can accept
+        images. Without one, the exact driver assignment handles pixels when it
+        advertises VISION. Invalid or text-only choices fail closed so the browser
+        can return its honest DOM/text fallback instead of silently changing the
+        model that owns the agent turn.
+        """
+
         target_key = self._config.vision_escalation_model
-        if target_key is None:
-            return None
-        target = self._config.models.get(target_key)
-        if target is None:
-            return None
-        if Requirement.VISION not in (target.capabilities or []):
-            return None
-        return (
-            target_key,
-            target,
-            "overflow",
-            f"vision escalation: {key} lacks VISION → {target_key}",
-            ["vision_escalation"],
-        )
+        if target_key is not None:
+            target = self._config.models.get(target_key)
+            if target is None:
+                return "unavailable", None, "vision_model_unknown"
+            if Requirement.VISION not in target.capabilities:
+                return "unavailable", target_key, "vision_model_text_only"
+            return "dedicated", target_key, "configured_vision_model"
+
+        main_key = self._config.model_for(ModelRole.AGENT_DRIVER)
+        main = self._config.models.get(main_key)
+        if main is None:
+            return "unavailable", None, "main_model_unknown"
+        if Requirement.VISION in main.capabilities:
+            return "main", main_key, "main_model_has_vision"
+        return "unavailable", main_key, "no_vision_model_configured"
 
     # -- prompt injection (RT3, §8) -------------------------------------------
 
@@ -359,8 +360,7 @@ class DefaultLLMRouter:
         routing sink on invalid lookups).
 
         Returns None for: missing model entry, missing provider, image-bearing
-        requests (vision escalation may change window), provider lacking the
-        preview method, or any preview failure.
+        requests, provider lacking the preview method, or any preview failure.
         """
         profile = req.profile
 

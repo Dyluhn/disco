@@ -51,7 +51,6 @@ import shlex as shlex
 from collections.abc import Mapping as Mapping
 from dataclasses import dataclass as dataclass
 from typing import TYPE_CHECKING as TYPE_CHECKING
-from typing import Any
 
 from disco.core import SecurityRisk
 from disco.core.appkit import (
@@ -390,6 +389,10 @@ from .design_lint_parts._model import (
 from .design_lint_parts._model import (
     DesignFinding as DesignFinding,
 )
+from .design_lint_parts._render import (
+    _RENDER_FINDING_LIMIT as _RENDER_FINDING_LIMIT,
+)
+from .design_lint_parts._render import render_verdict as _render
 from .design_lint_parts._rules_basic import (
     _rule_ai_purple as _rule_ai_purple,
 )
@@ -573,27 +576,6 @@ from .design_lint_parts._suppression import (
 from .design_lint_parts._suppression import (
     _normalize_choice as _normalize_choice,
 )
-
-_RENDER_FINDING_LIMIT = 20
-
-
-def _render(verdict: dict[str, Any]) -> str:
-    lines = [f"DESIGN_LINT: {'PASS' if verdict['ok'] else 'FINDINGS'}", verdict["summary"]]
-    if not verdict["design_spec_present"]:
-        lines.append("note: no .disco/designspec.json — off-default values can't be justified.")
-    elif not verdict["design_spec_valid"]:
-        lines.append("note: .disco/designspec.json is invalid — justifications ignored.")
-    findings = verdict["findings"]
-    for f in findings[:_RENDER_FINDING_LIMIT]:
-        lines.append(
-            f"  [{f['severity']}] {f['rule_id']} ({f['choice_key']}) "
-            f"{f['path']}:{f['line']} — {f['evidence']}"
-        )
-    omitted = len(findings) - _RENDER_FINDING_LIMIT
-    if omitted > 0:
-        lines.append(f"…and {omitted} more findings — fix the above first, then re-run.")
-    return "\n".join(lines)
-
 
 # ---- the tool wrapper ---------------------------------------------------------
 

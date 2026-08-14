@@ -105,6 +105,7 @@ export const MODEL_CATALOGUE: ModelInfo[] = [
 
 export const DEFAULT_ASSIGNMENTS: ModelAssignments = {
   default_model: "driver-local",
+  vision_model: null,
   roles: {
     // Only the GENERATIVE LLM roles are assignable. The NLI verifier is a bundled
     // ENCODER (Settings → Encoders), not an LLM-router role.

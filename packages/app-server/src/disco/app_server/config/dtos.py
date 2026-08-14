@@ -26,6 +26,9 @@ class ModelDTO(BaseModel):
     # derives it from price/provider for back-compat (price 0 → free, else metered).
     pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
     capabilities: list[str]
+    # Manual capability pin: null = auto-detect, true/false = operator override.
+    # This is distinct from ``capabilities``, which is the currently-resolved view.
+    vision: bool | None = None
     note: str | None = None
     # raw editable fields (so the edit form prefills the real config, not a view):
     model_id: str
@@ -49,6 +52,9 @@ class ModelUpsert(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1)
     quantization: str | None = None
     capabilities: list[str] = []
+    # Omitted preserves an existing pin for older clients; explicit null returns
+    # the model to auto-detection.
+    vision: bool | None = None
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
     # W-05: how the user pays — threaded so an edited/added subscription model keeps
@@ -335,11 +341,16 @@ class ProbeResult(BaseModel):
 class AssignmentsDTO(BaseModel):
     default_model: str
     roles: dict[str, str]  # {rag_answerer, query_rewriter, summarizer, nli_verifier} -> model id
+    # Optional bounded visual-inspection model. Null means use the main model
+    # when it supports images, otherwise return the honest text/DOM fallback.
+    vision_model: str | None = None
 
 
 class AssignmentsPatch(BaseModel):
     default_model: str | None = None
     roles: dict[str, str] | None = None
+    # Explicit null clears the override; omission preserves it.
+    vision_model: str | None = None
 
 
 class SandboxConnectionDTO(BaseModel):
