@@ -11,6 +11,7 @@ still resolve through the actual class/instance at call time.
 from __future__ import annotations
 
 import json
+import shlex
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     import re
 
     from ...anatomy import ToolContext, ToolOutcome
+    from ...sandbox.base import ExecResult
     from ..browser import BrowserArgs, BrowserTool, BrowserUnavailableError
 
 
@@ -55,7 +57,7 @@ async def _submit_job(
     request_nonce: str,
     *,
     vision_mode: Callable[[], bool],
-):
+) -> tuple[ExecResult, str]:
     # `BrowserTool.run` proves the sandbox before dispatching; the extraction
     # moved this code out of that narrowed scope, so restate the parent's own
     # invariant (it carried this same assert at browser.py:373/735/795/808/821).
@@ -96,18 +98,49 @@ async def _submit_job(
     # without leaking one file per action. Keep the legacy job.json
     # mirror for diagnostics and compatibility; it is never dispatched.
     job_path = f"/workspace/.pmx/job-{ctx.browser_lane}.json"
+    response_path = f"/workspace/.pmx/response-{ctx.browser_lane}.json"
     encoded_job = json.dumps(job).encode("utf-8")
     await ctx.sandbox.write_file(job_path, encoded_job)
     await ctx.sandbox.write_file("/workspace/.pmx/job.json", encoded_job)
 
-    return await ctx.sandbox.exec_shell(
-        f"curl -s -X POST {daemon_url} -d @{job_path}",
+    # The container shell transport intentionally bounds stdout at 128 KiB.
+    # Browser responses can legitimately exceed that whenever screenshot pixels
+    # or extensive diagnostics are present, so stdout is not a valid response
+    # channel. Remove any stale lane response, have curl write the exact bytes to
+    # the workspace file channel, and let the caller consume that file below.
+    try:
+        await ctx.sandbox.delete_file(response_path)
+    except FileNotFoundError:
+        pass
+    res = await ctx.sandbox.exec_shell(
+        "curl --silent --show-error"
+        f" --output {shlex.quote(response_path)}"
+        f" -X POST {shlex.quote(daemon_url)}"
+        f" -d {shlex.quote('@' + job_path)}",
         timeout_s=ctx.timeout_s,
     )
+    return res, response_path
 
 
-def _parse_response(tool: BrowserTool, res) -> tuple[dict[str, Any] | None, ToolOutcome | None]:
+async def _discard_response_file(ctx: ToolContext, response_path: str) -> None:
+    assert ctx.sandbox is not None
+    try:
+        await ctx.sandbox.delete_file(response_path)
+    except Exception:
+        # This is a fixed, overwritten lane path rather than an accumulating
+        # tempfile. Cleanup must not replace the daemon result with a new error.
+        pass
+
+
+async def _parse_response(
+    tool: BrowserTool,
+    res: ExecResult,
+    ctx: ToolContext,
+    response_path: str,
+) -> tuple[dict[str, Any] | None, ToolOutcome | None]:
+    assert ctx.sandbox is not None
     if res.exit_code != 0:
+        await _discard_response_file(ctx, response_path)
         return None, tool._classified_failure(
             "browser_daemon_unavailable",
             "transport_failed",
@@ -115,7 +148,22 @@ def _parse_response(tool: BrowserTool, res) -> tuple[dict[str, Any] | None, Tool
             f" {str(res.stderr).strip()[:160]}",
         )
     try:
-        data = json.loads(res.stdout)
+        payload: bytes | str = await ctx.sandbox.read_file(response_path)
+    except FileNotFoundError:
+        # Compatibility for non-container/custom SandboxInstance implementations
+        # that return the response body directly. Production curl uses --output,
+        # so a missing file there cannot silently fall back to truncated stdout.
+        payload = res.stdout
+    finally:
+        await _discard_response_file(ctx, response_path)
+    if not payload:
+        return None, tool._classified_failure(
+            "browser_daemon_unavailable",
+            "response_unavailable",
+            "browser daemon response was unavailable",
+        )
+    try:
+        data = json.loads(payload)
     except (TypeError, ValueError):
         return None, tool._freshness_protocol_failure("daemon response was not valid JSON")
     if not isinstance(data, dict):
@@ -322,10 +370,10 @@ async def run(
             return identity_failure
         request_nonce = uuid.uuid4().hex
 
-        res = await _submit_job(
+        res, response_path = await _submit_job(
             args, ctx, daemon_url, expected_daemon_id, request_nonce, vision_mode=vision_mode
         )
-        data, parse_error = _parse_response(tool, res)
+        data, parse_error = await _parse_response(tool, res, ctx, response_path)
         if parse_error is not None:
             return parse_error
         assert data is not None

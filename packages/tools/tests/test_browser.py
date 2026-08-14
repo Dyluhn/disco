@@ -13,6 +13,7 @@ Proves the STRUCTURAL read/act separation, not just that one prompt didn't fire:
 from __future__ import annotations
 
 import json
+import shlex
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -68,6 +69,25 @@ class _PageSandbox(FakeSandboxInstance):
             return ExecResult(exit_code=0, stdout="OK", stderr="")
         if "POST" in cmd:
             return ExecResult(exit_code=0, stdout=json.dumps(self._data), stderr="")
+        return ExecResult(exit_code=0, stdout="", stderr="")
+
+
+class _ResponseFilePageSandbox(_PageSandbox):
+    """Simulate the bounded shell transport used by the container backend."""
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
+        self.execs.append(cmd)
+        if "health" in cmd:
+            return ExecResult(exit_code=0, stdout="OK", stderr="")
+        if "POST" in cmd:
+            argv = shlex.split(cmd)
+            response_path = argv[argv.index("--output") + 1]
+            self._fs[response_path] = json.dumps(self._data).encode("utf-8")
+            return ExecResult(
+                exit_code=0,
+                stdout='{"ok": true, "truncated": "...<output truncated>...',
+                stderr="",
+            )
         return ExecResult(exit_code=0, stdout="", stderr="")
 
 
@@ -226,6 +246,31 @@ async def test_vision_gate_requests_and_passes_through_b64(monkeypatch):
     assert b64 not in res.content
     assert "screenshot: .pmx/screenshots/0001-screenshot.png" in res.content
     assert "visual_evidence: NOT AVAILABLE" not in res.content
+
+
+async def test_browser_reads_large_response_from_file_not_bounded_stdout(monkeypatch):
+    """A screenshot response larger than shell stdout's 128 KiB remains intact."""
+    monkeypatch.setenv("PMX_DRIVER_VISION", "1")
+    b64 = "A" * 200_000
+    data = {
+        "ok": True,
+        "url": "http://127.0.0.1:8000",
+        "title": "Large screenshot",
+        "console": [],
+        "elements": [],
+        "text": "hello",
+        "screenshot_path": ".pmx/screenshots/large.png",
+        "screenshot_b64": b64,
+    }
+    sandbox = _ResponseFilePageSandbox(data)
+
+    res = await _exec(sandbox).execute(call("browser", action="screenshot"))
+
+    assert res.success
+    assert res.structured["screenshot_b64"] == b64
+    response_path = "/workspace/.pmx/response-agent.json"
+    assert any(f"--output {response_path}" in command for command in sandbox.execs)
+    assert response_path not in sandbox._fs
 
 
 async def test_vision_gate_off_does_not_request_b64(monkeypatch):

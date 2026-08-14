@@ -508,6 +508,12 @@ class _WireSandbox:
     async def write_file(self, *_args: object) -> None:
         return None
 
+    async def read_file(self, *_args: object) -> bytes:
+        raise FileNotFoundError
+
+    async def delete_file(self, *_args: object) -> None:
+        raise FileNotFoundError
+
     async def exec_shell(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
         return self.responses.pop(0)
 
