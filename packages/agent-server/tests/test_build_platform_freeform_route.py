@@ -186,7 +186,7 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
     assert contract.required_claims == admission.verification_claims
 
     live_record = runtime._build_platform.route_records["durable"]
-    await runtime._build_platform.prepare_route_pin("durable")
+    assert await runtime._build_platform.prepare_route_pin("durable") is False
     assert runtime._build_platform.route_records["durable"] is live_record
     await runtime._build_platform.record_route_locked("durable")
     assert len(
@@ -200,7 +200,7 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
     monkeypatch.delenv("DISCO_FREEFORM_PLATFORM_ROUTE", raising=False)
     restarted = ConversationRuntime(runtime._store)
     restarted.settings._set_surface("durable", "agent")
-    await restarted._build_platform.prepare_route_pin("durable")
+    assert await restarted._build_platform.prepare_route_pin("durable") is True
     assert restarted._build_platform.route_pins["durable"] == "platform"
     with mock.patch.object(restarted, "_sandbox_service_now"):
         restarted._compose_build_loop(
@@ -250,6 +250,94 @@ async def test_platform_admission_is_durable_idempotent_and_restart_pinned(monke
 
 
 @pytest.mark.asyncio
+async def test_new_intent_recomposes_before_replacement_platform_admission(
+    monkeypatch,
+) -> None:
+    conversation_id = "steer-reentry"
+    runtime, loop = _compose(monkeypatch, conversation_id, platform=True)
+    first_intent = await runtime._store.append(
+        conversation_id,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+    await runtime._build_platform.record_route_locked(conversation_id)
+    first_admission = current_build_platform_admission(
+        await runtime._store.get_events(conversation_id)
+    )
+    assert first_admission is not None
+    assert first_admission.run_intent_id == first_intent.id
+
+    second_intent = await runtime._store.append(
+        conversation_id,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.user-turn",
+            run_protocol_version=1,
+        ),
+    )
+
+    assert await runtime._build_platform.prepare_route_pin(conversation_id) is True
+    assert runtime._build_platform.route_pins[conversation_id] == "platform"
+    assert conversation_id not in runtime._build_platform.selected_routes
+    assert conversation_id not in runtime._build_platform.selected_profiles
+    assert conversation_id not in runtime._build_platform.route_records
+    with pytest.raises(RuntimeError, match="requires recomposition"):
+        await runtime._build_platform.record_route_locked(conversation_id)
+
+    runtime._build_platform.select_freeform(
+        conversation_id,
+        eligible=True,
+        tool_specs=loop.executor.available_tools(),
+    )
+    await runtime._build_platform.record_route_locked(conversation_id)
+
+    admissions = [
+        event
+        for event in await runtime._store.get_events(conversation_id)
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ]
+    assert len(admissions) == 2
+    replacement = admissions[-1]
+    assert replacement.run_intent_id == second_intent.id
+    assert replacement.composition_digest == first_admission.composition_digest
+    assert replacement.run_identity != first_admission.run_identity
+    resolver = loop._delivery_contract_resolver
+    assert resolver is not None
+    async with runtime.workspace.fence(conversation_id):
+        await resolver("app")
+
+    await runtime._store.append(
+        conversation_id,
+        StatusEvent(status=ConversationStatus.ERROR),
+    )
+    recovery_intent = await runtime._store.append(
+        conversation_id,
+        WorkspaceMutationEvent(
+            operation="agent.run-intent.stranded-followup",
+            run_protocol_version=1,
+        ),
+    )
+    assert await runtime._build_platform.prepare_route_pin(conversation_id) is True
+    assert await runtime._build_platform.prepare_route_pin(conversation_id) is True
+    with pytest.raises(RuntimeError, match="requires recomposition"):
+        await runtime._build_platform.record_route_locked(conversation_id)
+    runtime._build_platform.select_freeform(
+        conversation_id,
+        eligible=True,
+        tool_specs=loop.executor.available_tools(),
+    )
+    await runtime._build_platform.record_route_locked(conversation_id)
+    recovered = current_build_platform_admission(
+        await runtime._store.get_events(conversation_id)
+    )
+    assert recovered is not None
+    assert recovered.run_intent_id == recovery_intent.id
+    async with runtime.workspace.fence(conversation_id):
+        await resolver("app")
+
+
+@pytest.mark.asyncio
 async def test_prepare_route_pin_discards_a_live_record_that_drifted_from_admission(
     monkeypatch,
 ) -> None:
@@ -276,10 +364,11 @@ async def test_prepare_route_pin_discards_a_live_record_that_drifted_from_admiss
         record=drifted_record,
     )
 
-    await runtime._build_platform.prepare_route_pin("drifted-reentry")
+    assert await runtime._build_platform.prepare_route_pin("drifted-reentry") is True
 
     assert "drifted-reentry" not in runtime._build_platform.route_records
     assert runtime._build_platform.route_pins["drifted-reentry"] == "platform"
+    assert "drifted-reentry" not in runtime._build_platform.selected_routes
 
 
 @pytest.mark.asyncio
