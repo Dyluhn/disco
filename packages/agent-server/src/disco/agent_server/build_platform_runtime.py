@@ -39,12 +39,11 @@ from .build_platform_shadow import (
     select_freeform_platform_route,
 )
 from .build_platform_verification import record_verification_contract
+from .build_route_reentry import EMPTY_ROUTE_STATE, BuildRoute, RouteState, restore_route_pin
 from .workspace_fence import WorkspaceFenceService
 
-BuildRoute = Literal["legacy", "platform"]
 CompositionAuthority = Literal["legacy", "build_platform_core"]
 _FREEFORM_PROFILES = (FREEFORM_PROFILE_ID, FREEFORM_ARTIFACT_PROFILE_ID)
-_KNOWN_PROFILES = (*_FREEFORM_PROFILES, APPKIT_PROFILE_ID)
 
 
 class BuildSurfaceClassifier(Protocol):
@@ -60,14 +59,6 @@ class BuildRouteRollback(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class _RouteState:
-    record: BuildPlatformRouteRecord | None = None
-    pin: BuildRoute | None = None
-    selected_route: BuildRoute | None = None
-    selected_profile: ComponentId | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _AdmissionFields:
     authority: CompositionAuthority
     digest: str | None
@@ -76,7 +67,6 @@ class _AdmissionFields:
     verification_contract: AdmittedVerificationContract | None
 
 
-_EMPTY_ROUTE_STATE = _RouteState()
 _LEGACY_ADMISSION = _AdmissionFields(
     authority="legacy",
     digest=None,
@@ -140,7 +130,7 @@ def _validate_existing_admission(
 
 def _reusable_platform_record(
     conversation_id: str,
-    state: _RouteState,
+    state: RouteState,
     admission: BuildPlatformAdmissionEvent | None,
     restored_profile: ComponentId | None,
     events: list[Event],
@@ -225,12 +215,13 @@ def _transition_fields(
     return fields, prepared_record
 
 
-def _restored_delivery_kind(state: _RouteState) -> Literal["app", "files"] | None:
+def _restored_delivery_kind(state: RouteState) -> Literal["app", "files"] | None:
     if state.pin is None:
         return None
-    if state.selected_profile == FREEFORM_ARTIFACT_PROFILE_ID:
+    profile = state.selected_profile or state.pinned_profile
+    if profile == FREEFORM_ARTIFACT_PROFILE_ID:
         return "files"
-    return "app" if state.selected_profile == FREEFORM_PROFILE_ID else None
+    return "app" if profile == FREEFORM_PROFILE_ID else None
 
 
 def _select_freeform_runtime(
@@ -245,7 +236,12 @@ def _select_freeform_runtime(
         state = runtime._state(conversation_id)
         runtime._save(
             conversation_id,
-            replace(state, selected_route=None, selected_profile=None),
+            replace(
+                state,
+                selected_route=None,
+                selected_profile=None,
+                recomposition_required=False,
+            ),
         )
         return
     state = runtime._state(conversation_id)
@@ -257,9 +253,7 @@ def _select_freeform_runtime(
     # serve derives the real kind and atomically replaces this target before it
     # emits a deliverable or completion can use that handoff.
     effective_delivery = delivery_kind or restored_kind or "app"
-    platform = state.pin == "platform" or (
-        state.pin is None and freeform_platform_route_enabled()
-    )
+    platform = state.pin == "platform" or (state.pin is None and freeform_platform_route_enabled())
     route: BuildRoute = "platform" if platform else "legacy"
     selected_profile = (
         FREEFORM_ARTIFACT_PROFILE_ID if effective_delivery == "files" else FREEFORM_PROFILE_ID
@@ -401,13 +395,13 @@ class BuildPlatformRuntime:
         self._surfaces = surfaces
         self._rollback = rollback
         self._ejections = ejections
-        self._states: dict[str, _RouteState] = {}
+        self._states: dict[str, RouteState] = {}
 
-    def _state(self, conversation_id: str) -> _RouteState:
-        return self._states.get(conversation_id, _EMPTY_ROUTE_STATE)
+    def _state(self, conversation_id: str) -> RouteState:
+        return self._states.get(conversation_id, EMPTY_ROUTE_STATE)
 
-    def _save(self, conversation_id: str, state: _RouteState) -> None:
-        if state == _EMPTY_ROUTE_STATE:
+    def _save(self, conversation_id: str, state: RouteState) -> None:
+        if state == EMPTY_ROUTE_STATE:
             self._states.pop(conversation_id, None)
         else:
             self._states[conversation_id] = state
@@ -444,42 +438,23 @@ class BuildPlatformRuntime:
             if state.selected_profile is not None
         }
 
-    async def prepare_route_pin(self, conversation_id: str) -> None:
-        state = self._state(conversation_id)
-        if not self._surfaces.is_build_like(conversation_id):
-            self._save(conversation_id, replace(state, pin=None))
-            return
-        events = await self._store.get_events(conversation_id)
-        admission = current_build_platform_admission(events)
-        restored_profile = next(
-            (
-                profile
-                for profile in _KNOWN_PROFILES
-                if admission is not None and profile.canonical == admission.profile_id
-            ),
-            None,
-        )
-        reusable_record = _reusable_platform_record(
+    async def prepare_route_pin(self, conversation_id: str) -> bool:
+        """Restore durable route state and report whether the loop must recompose."""
+        state, ejected = await restore_route_pin(
             conversation_id,
-            state,
-            admission,
-            restored_profile,
-            events,
+            state=self._state(conversation_id),
+            is_build_like=self._surfaces.is_build_like,
+            load_events=self._store.get_events,
+            restore_record=_reusable_platform_record,
+            read_ejection=current_appkit_ejection,
         )
-        self._ejections.record(
-            conversation_id,
-            ejected=current_appkit_ejection(events) is not None,
-        )
+        if ejected is not None:
+            self._ejections.record(conversation_id, ejected=ejected)
         self._save(
             conversation_id,
-            replace(
-                state,
-                pin=admission.route if admission is not None else None,
-                selected_route=admission.route if admission is not None else None,
-                selected_profile=restored_profile,
-                record=reusable_record,
-            ),
+            state,
         )
+        return state.recomposition_required
 
     def _set_selection(
         self,
@@ -496,6 +471,7 @@ class BuildPlatformRuntime:
                 selected_route=route,
                 selected_profile=profile,
                 record=record,
+                recomposition_required=False,
             ),
         )
 
@@ -530,7 +506,12 @@ class BuildPlatformRuntime:
             state = self._state(conversation_id)
             self._save(
                 conversation_id,
-                replace(state, selected_route=None, selected_profile=None),
+                replace(
+                    state,
+                    selected_route=None,
+                    selected_profile=None,
+                    recomposition_required=False,
+                ),
             )
             return
         state = self._state(conversation_id)
@@ -624,6 +605,8 @@ class BuildPlatformRuntime:
         route = state.selected_route
         profile = state.selected_profile
         if route is None or profile is None:
+            if state.recomposition_required:
+                raise RuntimeError("Build route requires recomposition before admission")
             return
         events = await self._store.get_events(conversation_id)
         intent, events = await self._current_intent(conversation_id, events)
@@ -739,9 +722,10 @@ class BuildPlatformRuntime:
         self._ejections.record(conversation_id, ejected=True)
         self._save(
             conversation_id,
-            _RouteState(
+            RouteState(
                 record=record,
                 pin=existing.route,
+                pinned_profile=FREEFORM_PROFILE_ID,
                 selected_route=existing.route,
                 selected_profile=FREEFORM_PROFILE_ID,
             ),

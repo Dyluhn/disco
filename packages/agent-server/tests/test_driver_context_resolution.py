@@ -398,6 +398,10 @@ class TestConversationRuntimeDriverContextSeams:
         stale_backend_checked = False
         original_create_run_task = rt._run_supervisor.create_task
 
+        async def prepare_route_pin(requested_cid: str) -> bool:
+            assert requested_cid == cid
+            return True
+
         def create_run_task(*args: Any, **kwargs: Any) -> tuple[asyncio.Task[Any], int]:
             nonlocal create_run_task_calls
             create_run_task_calls += 1
@@ -415,9 +419,15 @@ class TestConversationRuntimeDriverContextSeams:
             await release_resolution.wait()
             return resolved
 
-        def compose(requested_cid: str, snapshot: ResolvedDriverContext) -> object:
+        def compose(
+            requested_cid: str,
+            snapshot: ResolvedDriverContext,
+            *,
+            force_recompose: bool = False,
+        ) -> object:
             assert requested_cid == cid
             assert snapshot is resolved
+            assert force_recompose is True
             composed.set()
             return loop_sentinel
 
@@ -430,6 +440,7 @@ class TestConversationRuntimeDriverContextSeams:
         def legacy_compose(_cid: str) -> object:
             raise AssertionError("legacy synchronous composition ran before resolution")
 
+        monkeypatch.setattr(rt._build_platform, "prepare_route_pin", prepare_route_pin)
         monkeypatch.setattr(rt.drivers, "resolve_context", resolve)
         monkeypatch.setattr(rt._loop_factory, "loop_for_resolved", compose)
         monkeypatch.setattr(rt, "_loop_for", legacy_compose)
@@ -551,6 +562,36 @@ class TestConversationRuntimeDriverContextSeams:
         assert executor is not None
         assert executor._sandbox is session
         assert recomposed._driver_context_window_value == 16384
+
+    @pytest.mark.asyncio
+    async def test_forced_recomposition_replaces_an_unchanged_binding(self) -> None:
+        rt = _runtime("ok")
+        cid = "route-refresh"
+        await _seed_conversation(rt, cid)
+        resolved = ResolvedDriverContext(
+            model_key="m",
+            provider="fake",
+            model_id="test/model",
+            context_window=16384,
+            source="live",
+            resolved_at=datetime.now(UTC),
+        )
+        first = rt._loop_factory.loop_for_resolved(cid, resolved)
+        first_executor = rt._run_resources.executor(cid)
+        assert first_executor is not None
+        session = first_executor._sandbox
+
+        replacement = rt._loop_factory.loop_for_resolved(
+            cid,
+            resolved,
+            force_recompose=True,
+        )
+
+        assert replacement is not first
+        replacement_executor = rt._run_resources.executor(cid)
+        assert replacement_executor is not None
+        assert replacement_executor is not first_executor
+        assert replacement_executor._sandbox is session
 
     @pytest.mark.asyncio
     async def test_admitted_run_is_not_recomposed_until_next_run(self) -> None:
