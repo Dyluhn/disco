@@ -9,8 +9,9 @@ subowners and passes them to the lifecycle collaborators.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from disco.core import EventFilter
 from disco.core.llm import ConfigStore
@@ -28,6 +29,7 @@ from .workspace_persistence import WorkspacePersistence, probe_finish_sealabilit
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
+
 
 class LifecycleStoreAccess:
     """Narrow the event store to the reads lifecycle sweeps and suspend need."""
@@ -117,6 +119,16 @@ class LifecycleRunState:
     def pop_pending_session(self, conversation_id: str):
         return self._resources.pop_pending_session(conversation_id)
 
+    def track_reclaim(
+        self,
+        conversation_id: str,
+        reclaim: Coroutine[Any, Any, None],
+    ) -> asyncio.Task[None]:
+        return self._resources.track_reclaim(conversation_id, reclaim)
+
+    async def await_reclaims(self, conversation_id: str) -> None:
+        await self._resources.await_reclaims(conversation_id)
+
     def conversation_ids(self, *, executors_only: bool = False) -> tuple[str, ...]:
         return self._resources.conversation_ids(executors_only=executors_only)
 
@@ -186,6 +198,7 @@ class LifecycleConnections:
 
     def preview_capture_active(self, conversation_id: str) -> bool:
         return self._preview_capture_ownership.active(conversation_id)
+
 
 class LifecycleIdleSweepDeps:
     """Idle TTL configuration for lifecycle suspension decisions."""

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Protocol, cast
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from disco.core import ConversationState, ConversationStatus
 from disco.core.loop import AgentLoop
@@ -70,9 +71,7 @@ class RunRegistry:
 
     def active_conversation_ids(self) -> tuple[str, ...]:
         return tuple(
-            conversation_id
-            for conversation_id, task in self._tasks.items()
-            if not task.done()
+            conversation_id for conversation_id, task in self._tasks.items() if not task.done()
         )
 
     def owns_task(self, conversation_id: str, task: RunTask) -> bool:
@@ -218,11 +217,12 @@ class LoopRegistry:
 
 
 class RunResourceRegistry:
-    """Live loop executors and pre-composition sandbox sessions."""
+    """Live, pending, and detached resources owned by conversation."""
 
     def __init__(self) -> None:
         self._executors: dict[str, DefaultToolExecutor] = {}
         self._pending_sessions: dict[str, SandboxSession] = {}
+        self._reclaims: dict[str, set[asyncio.Task[None]]] = {}
 
     def executor(self, conversation_id: str) -> DefaultToolExecutor | None:
         return self._executors.get(conversation_id)
@@ -255,6 +255,42 @@ class RunResourceRegistry:
     def pop_pending_session(self, conversation_id: str) -> SandboxSession | None:
         return self._pending_sessions.pop(conversation_id, None)
 
+    def track_reclaim(
+        self,
+        conversation_id: str,
+        reclaim: Coroutine[Any, Any, None],
+    ) -> asyncio.Task[None]:
+        """Own detached teardown until the backend has actually finished it."""
+
+        task = asyncio.create_task(reclaim)
+        self._reclaims.setdefault(conversation_id, set()).add(task)
+        task.add_done_callback(lambda done: self._discard_reclaim(conversation_id, done))
+        return task
+
+    def _discard_reclaim(
+        self,
+        conversation_id: str,
+        task: asyncio.Task[None],
+    ) -> None:
+        owned = self._reclaims.get(conversation_id)
+        if owned is None:
+            return
+        owned.discard(task)
+        if not owned:
+            self._reclaims.pop(conversation_id, None)
+
+    def has_reclaims(self, conversation_id: str) -> bool:
+        return bool(self._reclaims.get(conversation_id))
+
+    async def await_reclaims(self, conversation_id: str) -> None:
+        """Join every detached generation owned when this call settles."""
+
+        while tasks := tuple(self._reclaims.get(conversation_id, ())):
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in tasks),
+                return_exceptions=True,
+            )
+
     def park_executor_session(self, conversation_id: str) -> None:
         executor = self._executors.pop(conversation_id, None)
         if conversation_id in self._pending_sessions or executor is None:
@@ -269,6 +305,9 @@ class RunResourceRegistry:
         return tuple(dict.fromkeys((*self._executors, *self._pending_sessions)))
 
     async def close(self) -> None:
+        while self._reclaims:
+            for conversation_id in tuple(self._reclaims):
+                await self.await_reclaims(conversation_id)
         for executor in tuple(self._executors.values()):
             with contextlib.suppress(Exception):
                 await executor.kill()
@@ -277,6 +316,7 @@ class RunResourceRegistry:
                 await session.destroy()
         self._executors.clear()
         self._pending_sessions.clear()
+        self._reclaims.clear()
 
 
 class RunRecoveryLedger:

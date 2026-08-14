@@ -106,6 +106,10 @@ class RunKillService:
         executor = self._resources.pop_executor(conversation_id)
         pending = self._resources.pop_pending_session(conversation_id)
         self._loops.forget(conversation_id)
+        # Auto-suspend detaches before releasing the workspace fence, then reclaims
+        # outside it. A hard kill that acquires the fence afterward must join that
+        # owned teardown before it can truthfully publish IDLE or return success.
+        await self._resources.await_reclaims(conversation_id)
         if executor is not None:
             await executor.kill()
         if pending is not None:

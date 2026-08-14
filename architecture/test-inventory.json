@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "41c6471fd02f8029c041107100f02c766d54e0d3",
+  "source_identity": "b9386bf043b93e8d55d522586a8863b7233ecf97",
   "collected": {
     "counts": {
-      "packages": 10736,
+      "packages": 10738,
       "harness": 1415,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12556,
+    "total": 12558,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1519,6 +1519,7 @@
         "packages/agent-server/tests/test_lifecycle.py::test_explicit_teardown_overrides_pending_preview_intent",
         "packages/agent-server/tests/test_lifecycle.py::test_finished_preview_handoff_holds_then_releases_suspend_ownership",
         "packages/agent-server/tests/test_lifecycle.py::test_fresh_event_not_swept",
+        "packages/agent-server/tests/test_lifecycle.py::test_hard_kill_waits_for_detached_suspend_reclaim",
         "packages/agent-server/tests/test_lifecycle.py::test_http_state_route_overlays_sandbox_state",
         "packages/agent-server/tests/test_lifecycle.py::test_idle_statuses_are_eligible[ERROR]",
         "packages/agent-server/tests/test_lifecycle.py::test_idle_statuses_are_eligible[FINISHED]",
@@ -2614,6 +2615,7 @@
         "packages/agent-server/tests/test_synthetic_deliverable.py::test_unpaired_or_missing_verified_entry_cannot_override_root",
         "packages/agent-server/tests/test_synthetic_deliverable.py::test_verified_appkit_app_handoff_is_not_superseded_by_file",
         "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_a_pinned_snapshot_does_not_keep_anything_alive",
+        "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_resource_registry_close_joins_detached_reclaim",
         "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_teardown_is_idempotent_on_an_already_clean_conversation",
         "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_teardown_leaves_zero_relevant_resources",
         "packages/agent-server/tests/test_title_service.py::test_backfill_leaves_real_titles_alone_even_when_forced[asyncio]",
@@ -12577,9 +12579,9 @@
     }
   },
   "mapping_static": {
-    "identity": "41c6471fd02f8029c041107100f02c766d54e0d3",
+    "identity": "b9386bf043b93e8d55d522586a8863b7233ecf97",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10327,
+    "python_static_test_id_count": 10329,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15663,6 +15665,7 @@
       "packages/agent-server/tests/test_lifecycle.py::test_explicit_teardown_overrides_pending_preview_intent",
       "packages/agent-server/tests/test_lifecycle.py::test_finished_preview_handoff_holds_then_releases_suspend_ownership",
       "packages/agent-server/tests/test_lifecycle.py::test_fresh_event_not_swept",
+      "packages/agent-server/tests/test_lifecycle.py::test_hard_kill_waits_for_detached_suspend_reclaim",
       "packages/agent-server/tests/test_lifecycle.py::test_http_state_route_overlays_sandbox_state",
       "packages/agent-server/tests/test_lifecycle.py::test_idle_statuses_are_eligible",
       "packages/agent-server/tests/test_lifecycle.py::test_live_run_task_blocks_suspend",
@@ -16658,6 +16661,7 @@
       "packages/agent-server/tests/test_synthetic_deliverable.py::test_unpaired_or_missing_verified_entry_cannot_override_root",
       "packages/agent-server/tests/test_synthetic_deliverable.py::test_verified_appkit_app_handoff_is_not_superseded_by_file",
       "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_a_pinned_snapshot_does_not_keep_anything_alive",
+      "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_resource_registry_close_joins_detached_reclaim",
       "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_teardown_is_idempotent_on_an_already_clean_conversation",
       "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_teardown_leaves_zero_relevant_resources",
       "packages/agent-server/tests/test_title_service.py::test_backfill_leaves_real_titles_alone_even_when_forced",
@@ -31940,6 +31944,32 @@
           "packages/core/tests/test_build_platform_host_profiles.py::test_the_same_os_label_with_different_evidence_advertises_differently",
           "packages/core/tests/test_build_platform_host_profiles.py::test_the_three_named_platforms_are_all_shipped",
           "packages/core/tests/test_build_platform_host_profiles.py::test_unevidenced_platforms_may_be_declared_experimental_and_still_grant_nothing"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V39-KILL-RECLAIM-OWNERSHIP",
+      "root": "packages",
+      "source_identity_before": "41c6471fd02f8029c041107100f02c766d54e0d3",
+      "source_identity_after": "b9386bf043b93e8d55d522586a8863b7233ecf97",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10736,
+          "after_count": 10738,
+          "added_ids": [
+            "packages/agent-server/tests/test_lifecycle.py::test_hard_kill_waits_for_detached_suspend_reclaim",
+            "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_resource_registry_close_joins_detached_reclaim"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_lifecycle.py::test_hard_kill_waits_for_detached_suspend_reclaim",
+          "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_resource_registry_close_joins_detached_reclaim"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
