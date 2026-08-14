@@ -854,3 +854,49 @@ async def test_suspend_releases_workspace_lock_before_kill(tmp_path):
     kill_release.set()
     await asyncio.wait_for(suspend_task, timeout=2)
     await probe_task
+
+
+async def test_hard_kill_waits_for_detached_suspend_reclaim(tmp_path, monkeypatch):
+    """A successful hard kill owns teardown already detached by auto-suspend."""
+
+    store = SqliteEventStore(":memory:")
+    rt = _runtime_with_storage(store, str(tmp_path))
+    cid = await _make_conversation(store, ConversationStatus.PAUSED)
+
+    reclaim_entered = asyncio.Event()
+    reclaim_release = asyncio.Event()
+    hard_kill_joined = asyncio.Event()
+    join_calls = 0
+
+    async def _blocked_kill() -> None:
+        reclaim_entered.set()
+        await reclaim_release.wait()
+
+    original_await_reclaims = rt._run_resources.await_reclaims
+
+    async def _observed_await_reclaims(conversation_id: str) -> None:
+        nonlocal join_calls
+        join_calls += 1
+        if join_calls == 2:
+            hard_kill_joined.set()
+        await original_await_reclaims(conversation_id)
+
+    monkeypatch.setattr(rt._run_resources, "await_reclaims", _observed_await_reclaims)
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock(side_effect=_blocked_kill)
+    rt._run_resources.set_executor(cid, fake_executor)
+    rt.lifecycle._maybe_snapshot = AsyncMock()  # type: ignore[method-assign]
+
+    suspend_task = asyncio.create_task(rt.lifecycle._suspend(cid))
+    await asyncio.wait_for(reclaim_entered.wait(), timeout=2)
+    assert rt._run_resources.has_reclaims(cid)
+
+    hard_kill = asyncio.create_task(rt.kill(cid))
+    await asyncio.wait_for(hard_kill_joined.wait(), timeout=2)
+    assert not hard_kill.done()
+    assert (await store.get_state(cid)).execution_status is ConversationStatus.PAUSED
+
+    reclaim_release.set()
+    await asyncio.wait_for(asyncio.gather(suspend_task, hard_kill), timeout=2)
+    assert not rt._run_resources.has_reclaims(cid)
+    assert (await store.get_state(cid)).execution_status is ConversationStatus.IDLE

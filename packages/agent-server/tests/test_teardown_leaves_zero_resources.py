@@ -171,3 +171,24 @@ async def test_teardown_is_idempotent_on_an_already_clean_conversation():
     await manager._teardown_sandbox(CID)
     await manager._teardown_sandbox(CID)
     assert all(v in (False, []) for v in _residue(run_state, connections, rehydration).values())
+
+
+@pytest.mark.asyncio
+async def test_resource_registry_close_joins_detached_reclaim():
+    resources = RunResourceRegistry()
+    reclaim_entered = asyncio.Event()
+    reclaim_release = asyncio.Event()
+
+    async def _blocked_reclaim() -> None:
+        reclaim_entered.set()
+        await reclaim_release.wait()
+
+    resources.track_reclaim(CID, _blocked_reclaim())
+    closing = asyncio.create_task(resources.close())
+    await asyncio.wait_for(reclaim_entered.wait(), timeout=2)
+    assert not closing.done()
+    assert resources.has_reclaims(CID)
+
+    reclaim_release.set()
+    await asyncio.wait_for(closing, timeout=2)
+    assert not resources.has_reclaims(CID)

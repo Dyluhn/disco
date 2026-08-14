@@ -470,6 +470,19 @@ class LifecycleManager:
             with contextlib.suppress(Exception):
                 await pending.destroy()
 
+    def _track_detached_reclaim(
+        self,
+        conversation_id: str,
+        executor: Any,
+        pending: Any,
+    ) -> asyncio.Task[None]:
+        """Publish detached ownership before releasing the workspace fence."""
+
+        return self._run_state.track_reclaim(
+            conversation_id,
+            self._reclaim_detached_sandbox(executor, pending),
+        )
+
     async def _teardown_sandbox(self, conversation_id: str) -> None:
         """Explicit kill/delete overrides a pending inter-request preview intent."""
         async with self._connections.preview_capture_lock(conversation_id):
@@ -494,7 +507,8 @@ class LifecycleManager:
         #       resume-critical invariants (fresh rebuild + rehydrate) always hold.
         # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
         executor, pending = self._detach_sandbox(conversation_id)
-        await self._reclaim_detached_sandbox(executor, pending)
+        self._track_detached_reclaim(conversation_id, executor, pending)
+        await self._run_state.await_reclaims(conversation_id)
 
     def clear_session_markers(self, conversation_id: str) -> None:
         """Reset every cache that must not survive sandbox replacement."""
@@ -584,7 +598,8 @@ class LifecycleManager:
                 ):
                     return
                 executor, pending = self._detach_sandbox(conversation_id)
-            await self._reclaim_detached_sandbox(executor, pending)
+                self._track_detached_reclaim(conversation_id, executor, pending)
+            await self._run_state.await_reclaims(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
     def sandbox_state(self, conversation_id: str) -> str | None:
