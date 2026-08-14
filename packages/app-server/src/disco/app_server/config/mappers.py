@@ -131,6 +131,7 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
                 price_out_per_m=entry.price_out_per_m,
                 pricing_mode=_pricing_mode(entry),
                 capabilities=sorted(r.value for r in entry.capabilities),
+                vision=entry.vision,
                 note=_note(entry),
                 model_id=entry.model_id,
                 base_url=entry.base_url,
@@ -200,22 +201,40 @@ def _capabilities(values: list[str]) -> frozenset[Requirement]:
     return frozenset(out)
 
 
-def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
+def _entry_from(
+    upsert: ModelUpsert,
+    *,
+    provider: str,
+    existing: ModelEntry | None = None,
+) -> ModelEntry:
     """Build a ModelEntry from an upsert. `provider` is the endpoint key — the
     model's own id for a new model, or the existing entry's key on edit (so the
     endpoint grouping of seeded models is preserved)."""
+    vision = upsert.vision
+    if "vision" not in upsert.model_fields_set and existing is not None:
+        vision = existing.vision
+    capabilities = _capabilities(upsert.capabilities)
+    if vision is True:
+        capabilities = capabilities | {Requirement.VISION}
+    elif vision is False:
+        capabilities = capabilities - {Requirement.VISION}
     return ModelEntry(
         model_id=upsert.model_id,
         provider=provider,
         context_window=upsert.context_window,
         max_output_tokens=upsert.max_output_tokens,
-        capabilities=_capabilities(upsert.capabilities),
+        capabilities=capabilities,
         quantization=upsert.quantization,
         price_in_per_m=upsert.price_in_per_m,
         price_out_per_m=upsert.price_out_per_m,
         pricing_mode=upsert.pricing_mode,  # W-05: carry the pay model through edits
         base_url=upsert.base_url,
         api_key_env=upsert.api_key_env,
+        vision=vision,
+        # These are not editable on this surface; retain their architectural
+        # meaning instead of erasing them on an unrelated catalogue edit.
+        family=existing.family if existing is not None else None,
+        tier=existing.tier if existing is not None else None,
     )
 
 
@@ -237,7 +256,11 @@ def _assignments_from(config: RouterConfig) -> AssignmentsDTO:
         for role in ModelRole
         if role not in _NON_ASSIGNABLE_ROLES
     }
-    return AssignmentsDTO(default_model=config.default_model, roles=roles)
+    return AssignmentsDTO(
+        default_model=config.default_model,
+        roles=roles,
+        vision_model=config.vision_escalation_model,
+    )
 
 
 def _encoders_from(config: RouterConfig) -> EncodersConfigDTO:

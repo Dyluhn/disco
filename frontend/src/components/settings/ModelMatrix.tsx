@@ -49,7 +49,9 @@ function MatrixRow({
       <div className="flex flex-col gap-hair sm:items-end">
         <RoleModelPicker
           value={row.modelId ?? ""}
-          onSelect={row.onSelect}
+          onSelect={(id) => {
+            if (id !== null) row.onSelect(id);
+          }}
           ariaLabel={`Choose model for ${row.label}`}
           busy={busy}
         />
@@ -71,10 +73,100 @@ function MatrixRow({
   );
 }
 
+function VisualModelRow({
+  modelId,
+  model,
+  busy,
+  onSelect,
+}: {
+  modelId: string | null;
+  model: ModelInfo | null;
+  busy: boolean;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-inline border-b border-hairline py-body sm:flex-row sm:items-start sm:justify-between sm:gap-section">
+      <div className="sm:max-w-xs">
+        <div className="font-ui text-[0.9rem] font-medium text-text">
+          Visual inspection (optional)
+        </div>
+        <p className="font-ui text-[0.8rem] leading-snug text-text-muted">
+          Receives one screenshot and one focused question, with no tools or
+          conversation history, then returns advisory text to the main model. It
+          never takes over the agent.
+        </p>
+      </div>
+      <div className="flex flex-col gap-hair sm:items-end">
+        <RoleModelPicker
+          value={modelId}
+          onSelect={onSelect}
+          ariaLabel="Choose optional visual inspection model"
+          busy={busy}
+          noneLabel="Use main model when capable"
+        />
+        {model && (
+          <div className="flex flex-wrap items-center gap-inline sm:justify-end">
+            <span
+              className={cn(
+                "font-ui text-[0.74rem]",
+                isFree(model) ? "text-text-muted" : "text-accent",
+              )}
+            >
+              {costLabel(model)}
+            </span>
+            <CapabilityBadges capabilities={model.capabilities} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VisualModelGuidance({
+  primary,
+  visualId,
+  visual,
+}: {
+  primary: ModelInfo | null;
+  visualId: string | null;
+  visual: ModelInfo | null;
+}) {
+  if (!visualId && !primary?.capabilities.includes("vision")) {
+    return (
+      <div
+        role="status"
+        data-disco-flag="vision-model-recommendation"
+        className="rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted"
+      >
+        <span className="font-medium text-text">Your primary is text-only.</span>{" "}
+        Add a dedicated image-capable model above for pixel questions. Leaving it
+        unset is supported: the agent keeps working from DOM, console, and other
+        text evidence and will say that it did not inspect pixels.
+      </div>
+    );
+  }
+  if (visualId && !visual?.capabilities.includes("vision")) {
+    return (
+      <div
+        role="status"
+        data-disco-flag="vision-model-text-only"
+        className="rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted"
+      >
+        The selected visual model is currently marked text-only. It remains a valid
+        selection, but pixel questions will use the honest DOM/text fallback until
+        its image capability is corrected or another model is chosen.
+      </div>
+    );
+  }
+  return null;
+}
+
 export function ModelMatrix() {
   const { data: assignments, isLoading, isError } = useAssignments();
   const { data: models } = useModels();
   const update = useUpdateAssignments();
+  const primary = findModel(models, assignments?.default_model ?? null);
+  const visual = findModel(models, assignments?.vision_model ?? null);
 
   return (
     <section
@@ -120,6 +212,12 @@ export function ModelMatrix() {
               models={models}
               busy={update.isPending}
             />
+            <VisualModelRow
+              modelId={assignments.vision_model}
+              model={visual}
+              busy={update.isPending}
+              onSelect={(id) => update.mutate({ vision_model: id })}
+            />
             {ROLES.map((role) => (
               <MatrixRow
                 key={role.id}
@@ -137,6 +235,14 @@ export function ModelMatrix() {
           </>
         )}
       </div>
+
+      {assignments && (
+        <VisualModelGuidance
+          primary={primary}
+          visualId={assignments.vision_model}
+          visual={visual}
+        />
+      )}
 
       {update.error && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">

@@ -54,6 +54,31 @@ describe("Settings — model-assignment matrix", () => {
       ).toHaveTextContent(/Summarizer Local/i),
     );
   });
+
+  it("recommends a visual model for a text-only primary and can assign one", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    expect(
+      await screen.findByText(/Your primary is text-only/i),
+    ).toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", {
+      name: /Choose optional visual inspection model/i,
+    });
+    expect(trigger).toHaveTextContent(/Use main model when capable/i);
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByText(/Driver Overflow/i));
+    await waitFor(() => expect(trigger).toHaveTextContent(/Driver Overflow/i));
+
+    await user.click(trigger);
+    await user.click(
+      within(screen.getByRole("dialog")).getByText(/Use main model when capable/i),
+    );
+    await waitFor(() =>
+      expect(trigger).toHaveTextContent(/Use main model when capable/i),
+    );
+  });
 });
 
 describe("Settings — Encoders (bundled-local vs remote)", () => {
@@ -89,6 +114,31 @@ describe("Settings — model catalogue (CRUD)", () => {
     await waitFor(() =>
       expect(screen.getByText(/Test Model — test/i)).toBeInTheDocument(),
     );
+  });
+
+  it("lets the user explicitly mark a model as image-capable", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+    await screen.findByText("Catalogue");
+
+    await user.click(screen.getByRole("button", { name: /Add model/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.type(within(dialog).getByPlaceholderText("my-llama"), "visual-test");
+    await user.type(within(dialog).getByPlaceholderText(/llama-3.3-70b/i), "visual.gguf");
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: /Image understanding/i }),
+      "true",
+    );
+    await user.click(within(dialog).getByRole("button", { name: /^Add model$/i }));
+
+    const label = await screen.findByText(/Visual Test — visual/i);
+    const row = label.closest("li");
+    expect(row).not.toBeNull();
+    await user.click(within(row!).getByRole("button", { name: /Edit visual-test/i }));
+    const editDialog = await screen.findByRole("dialog");
+    expect(
+      within(editDialog).getByRole("combobox", { name: /Image understanding/i }),
+    ).toHaveValue("true");
   });
 });
 

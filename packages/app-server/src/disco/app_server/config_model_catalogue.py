@@ -43,7 +43,7 @@ class ConfigModelCatalogue:
         sharing a backend isn't silently split off. Raises ValueError if missing."""
         existing = self._store.load().models.get(model_id)
         provider = existing.provider if existing is not None else model_id
-        entry = _entry_from(upsert, provider=provider)
+        entry = _entry_from(upsert, provider=provider, existing=existing)
         self._store.update_model(model_id, entry)
         self._approve_model_origin(entry, model_id=model_id)
         return _models_from(self._store.load())

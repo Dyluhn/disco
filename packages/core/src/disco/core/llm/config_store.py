@@ -152,6 +152,8 @@ class ConfigStore:
             raise ValueError(f"unknown model {key!r}")
         if key == cfg.default_model:
             raise ValueError(f"{key!r} is the default model — reassign the default first")
+        if key == cfg.vision_escalation_model:
+            raise ValueError(f"{key!r} is the vision model — reassign vision first")
         used_by = [r.value for r, k in cfg.assignments.items() if k == key]
         if used_by:
             raise ValueError(f"{key!r} is assigned to {', '.join(used_by)} — reassign first")
@@ -319,7 +321,16 @@ def _apply_overlay(base: RouterConfig, overlay: dict) -> RouterConfig:
             role = _role(role_str)
             if role is not None and isinstance(key, str) and key in base.models:
                 assignments[role] = key
-    return base.model_copy(update={"default_model": default_model, "assignments": assignments})
+    vision_model = overlay.get("vision_escalation_model", base.vision_escalation_model)
+    if not isinstance(vision_model, str) or vision_model not in base.models:
+        vision_model = None
+    return base.model_copy(
+        update={
+            "default_model": default_model,
+            "assignments": assignments,
+            "vision_escalation_model": vision_model,
+        }
+    )
 
 
 def _model_secret_slot(key: str, entry: ModelEntry) -> str:

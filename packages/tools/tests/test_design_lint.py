@@ -906,6 +906,9 @@ def test_clean_recipe_sample_passes():
     )
     v = lint_design({"site.css": css, "index.html": html}, ds, spec_present=True, spec_valid=True)
     assert v["ok"] is True, v["findings"]
+    rendered = design_lint_module._render(v)
+    assert "covers the current artifact bytes" in rendered
+    assert "do not re-run unless a relevant file changes" in rendered
 
 
 # --- pure engine: missing / invalid spec -------------------------------------
@@ -947,6 +950,8 @@ async def test_tool_returns_structured_verdict_over_workspace():
     # node_modules was skipped — every finding path is a real source file
     assert all("node_modules" not in f["path"] for f in out.structured["findings"])
     assert "DESIGN_LINT" in out.content
+    assert "this result is stale after mutation" in out.content
+    assert "Otherwise proceed without claiming a clean lint result" in out.content
 
 
 @pytest.mark.asyncio

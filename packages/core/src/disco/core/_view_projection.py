@@ -306,17 +306,31 @@ def _build_action_result_maps(
 def _find_latest_screenshot_seq(
     events: list[Event],
     is_visible_fn: Callable[[Event], bool],
+    *,
+    allow_legacy_driver_image: bool,
 ) -> int | None:
-    """Find the latest visible browser screenshot seq."""
+    """Find the latest visible screenshot only when that exact result may attach.
+
+    A newer screenshot path is a state barrier even when its pixels were routed
+    to a dedicated observer or unavailable. Never walk past it and attach an
+    older main-model image to the current turn.
+    """
     for e in reversed(events):
-        if (
+        if not (
             isinstance(e, ObservationEvent)
             and e.seq is not None
             and is_visible_fn(e)
             and e.tool_result.tool_name in _SCREENSHOT_TOOLS
-            and (e.tool_result.structured or {}).get("screenshot_b64")
+        ):
+            continue
+        structured = e.tool_result.structured or {}
+        if not structured.get("screenshot_path"):
+            continue
+        if structured.get("screenshot_b64") and (
+            allow_legacy_driver_image or structured.get("visual_delivery") == "main"
         ):
             return e.seq
+        return None
     return None
 
 
@@ -618,9 +632,11 @@ def build_view_messages(events: list[Event]) -> tuple[list[LLMMessage], list[int
     from .env import disco_env
 
     driver_has_vision = disco_env("DRIVER_VISION") == "1"
-    latest_screenshot_seq = None
-    if driver_has_vision:
-        latest_screenshot_seq = _find_latest_screenshot_seq(events, is_visible)
+    latest_screenshot_seq = _find_latest_screenshot_seq(
+        events,
+        is_visible,
+        allow_legacy_driver_image=driver_has_vision,
+    )
 
     visible_obs = [
         e.seq

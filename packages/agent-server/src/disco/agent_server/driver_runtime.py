@@ -408,6 +408,7 @@ class DriverRuntime:
             "free": pricing_mode == "free",
             "pricing_mode": pricing_mode,
             "context_window": live["n_ctx"] or entry.context_window,
+            "capabilities": sorted(capability.value for capability in entry.capabilities),
         }
 
     def _resolve_secret(self, name: str | None) -> str | None:

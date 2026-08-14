@@ -101,7 +101,12 @@ except Exception as e:
 from disco.core.events import ObservationEvent, ToolResult  # noqa: E402
 
 
-def _browser_obs(b64: str | None, n: int) -> ObservationEvent:
+def _browser_obs(
+    b64: str | None,
+    n: int,
+    *,
+    visual_delivery: str | None = None,
+) -> ObservationEvent:
     """A successful browser observation; carries screenshot_b64 iff b64 is set."""
     structured: dict = {
         "url": "http://127.0.0.1:8000",
@@ -109,6 +114,8 @@ def _browser_obs(b64: str | None, n: int) -> ObservationEvent:
     }
     if b64 is not None:
         structured["screenshot_b64"] = b64
+    if visual_delivery is not None:
+        structured["visual_delivery"] = visual_delivery
     return ObservationEvent(
         tool_result=ToolResult(
             call_id="c",
@@ -157,6 +164,42 @@ def test_no_images_when_gate_off(monkeypatch):
             user_msg("Start"),
             action(thought="browse", tool="browser", args={"action": "navigate"}),
             _browser_obs("AAA", 1),
+        ]
+    )
+    assert _image_messages(View.of(events)) == []
+
+
+def test_exact_main_visual_delivery_attaches_without_process_global_env(monkeypatch):
+    """The bound loop route, not a process-global default, decides that this
+    conversation's exact main model receives the screenshot."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(
+                thought="inspect",
+                tool="browser",
+                args={"action": "screenshot", "visual_question": "Is it aligned?"},
+            ),
+            _browser_obs("AAA", 1, visual_delivery="main"),
+        ]
+    )
+    imaged = _image_messages(View.of(events))
+    assert len(imaged) == 1
+    assert imaged[0].images == ["data:image/png;base64,AAA"]
+
+
+def test_newer_dedicated_or_fallback_screenshot_blocks_stale_main_pixels(monkeypatch):
+    """A later text-only visual result is a barrier, not permission to walk
+    backward and attach an older screenshot to the main model."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    events = with_seqs(
+        [
+            user_msg("Start"),
+            action(thought="inspect first", tool="browser", args={"action": "screenshot"}),
+            _browser_obs("OLD", 1, visual_delivery="main"),
+            action(thought="inspect now", tool="browser", args={"action": "screenshot"}),
+            _browser_obs(None, 2, visual_delivery="dedicated"),
         ]
     )
     assert _image_messages(View.of(events)) == []

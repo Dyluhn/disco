@@ -60,6 +60,7 @@ from .driver_context import ResolvedDriverContext
 from .driver_context_state import DriverContextState
 from .run_registry import LoopRegistry, RunResourceRegistry
 from .security_live_verifier import make_security_live_verifier
+from .vision_inspection import VisionInspectionCapability
 from .workflow_events import handle_workflow_tool_event
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,18 @@ class BuildCapabilityBroker:
     def __init__(self, retrieval: LoopRetrievalPort) -> None:
         self._retrieval = retrieval
 
-    def build(self) -> CapabilityBroker:
+    def build(
+        self,
+        *,
+        router: DefaultLLMRouter | None = None,
+        conversation_id: str | None = None,
+    ) -> CapabilityBroker:
         broker = CapabilityBroker()
         broker.register("search", self._retrieval.capability_search)
         broker.register("extract", self._retrieval.capability_extract)
+        if router is not None and conversation_id is not None:
+            visual = VisionInspectionCapability(router, conversation_id=conversation_id)
+            broker.register("visual_inspection", visual.inspect)
         return broker
 
 
@@ -115,9 +124,7 @@ class BuildSessionFactory:
             sandbox_spec = sandbox_spec.model_copy(
                 update={
                     "permitted": sandbox_spec.permitted - {Capability.NETWORK},
-                    "egress_allow": frozenset(
-                        sealed_workflow_run.definition.policies.egress_allow
-                    ),
+                    "egress_allow": frozenset(sealed_workflow_run.definition.policies.egress_allow),
                     "public_web": False,
                 }
             )
@@ -379,15 +386,12 @@ class BuildExecutorFactory:
         workflow_store = JsonDirWorkflowStore(
             self._project.current_project_store().root or "",
             owner_id=(
-                self._event_store.conversation_owner_id_sync(conversation_id)
-                or DEFAULT_OWNER_ID
+                self._event_store.conversation_owner_id_sync(conversation_id) or DEFAULT_OWNER_ID
             ),
         )
 
         def mcp_tool_names() -> frozenset[str]:
-            return frozenset(
-                name for name in registry.names() if name.startswith("mcp__")
-            )
+            return frozenset(name for name in registry.names() if name.startswith("mcp__"))
 
         if context.modes.workflow_router_mode:
             for tool in workflow_router_tools(
@@ -475,7 +479,7 @@ class BuildLoopComposer:
         executor = self._executors.create(
             conversation_id,
             session,
-            self._brokers.build(),
+            self._brokers.build(router=router, conversation_id=conversation_id),
             context,
             sealed_workflow_run,
         )
@@ -597,9 +601,7 @@ class BuildLoopFactory:
             agent,
             driver_context_window,
         )
-        loop.stream_sink = (
-            lambda frame: self._event_store.publish_ephemeral(conversation_id, frame)
-        )
+        loop.stream_sink = lambda frame: self._event_store.publish_ephemeral(conversation_id, frame)
         self._loops.bind(conversation_id, loop)
         return loop
 

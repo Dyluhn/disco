@@ -217,6 +217,9 @@ export async function enableProviderModel(
     context_window: live?.context_window ?? 8192,
     quantization: null,
     capabilities: live?.capabilities ?? [],
+    // Provider metadata is advisory; only the explicit Settings control creates
+    // a manual pin that can override later runtime detection.
+    vision: null,
     price_in_per_m: live?.price_in_per_m ?? 0,
     price_out_per_m: live?.price_out_per_m ?? 0,
   };

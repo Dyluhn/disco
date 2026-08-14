@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "37786c69862390dac8b9946e0bc2a32133049de9",
+  "source_identity": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -10562,7 +10562,8 @@
             "async def complete(self, req: CompletionRequest, *, context: CallContext | None=None) -> CompletionResponse",
             "async def stream_complete(self, req: CompletionRequest, *, context: CallContext | None=None) -> AsyncIterator[StreamChunk]",
             "def __init__(self, config: RouterConfig, providers: dict[str, ModelProvider], *, prompt_provider: PromptProvider | None=None, sink: RoutingSink | None=None, cost_tracker: CostTracker | None=None) -> None",
-            "def request_budget_preview(self, req: CompletionRequest, *, context: CallContext) -> RequestBudgetEstimate | None"
+            "def request_budget_preview(self, req: CompletionRequest, *, context: CallContext) -> RequestBudgetEstimate | None",
+            "def visual_inspection_route(self) -> tuple[Literal['main', 'dedicated', 'unavailable'], str | None, str]"
           ],
           "fields": []
         },
@@ -21622,7 +21623,7 @@
         {
           "kind": "function",
           "name": "RoleModelPicker",
-          "signature": "export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: Props)"
+          "signature": "export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled, noneLabel, }: Props)"
         }
       ]
     },
@@ -22782,7 +22783,7 @@
         {
           "kind": "variable",
           "name": "DEFAULT_ASSIGNMENTS",
-          "signature": "export const DEFAULT_ASSIGNMENTS: ModelAssignments = { default_model: \"driver-local\", roles: { // Only the GENERATIVE LLM roles are assignable. The NLI verifier is a bundled // ENCODER (Settings \u2192 Encoders), not an LLM-router role. rag_answerer: \"rag-local\", query_rewriter: \"rewriter-local\", summarizer: \"summarizer-local\", }, };"
+          "signature": "export const DEFAULT_ASSIGNMENTS: ModelAssignments = { default_model: \"driver-local\", vision_model: null, roles: { // Only the GENERATIVE LLM roles are assignable. The NLI verifier is a bundled // ENCODER (Settings \u2192 Encoders), not an LLM-router role. rag_answerer: \"rag-local\", query_rewriter: \"rewriter-local\", summarizer: \"summarizer-local\", }, };"
         },
         {
           "kind": "variable",
@@ -25121,7 +25122,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DriverModel",
-          "signature": "export interface DriverModel { id: string; // catalogue key \u2014 the model_override label: string; provider: \"local\" | \"openrouter\"; free: boolean; // W-05-fu: how the user pays \u2014 distinguishes a flat-rate SUBSCRIPTION model // (price 0/token but NOT free) from a genuinely free one. The server always // sends an effective mode (derives \"free\"/\"metered\" when unset). pricing_mode?: \"metered\" | \"subscription\" | \"free\"; context_window: number; }"
+          "signature": "export interface DriverModel { id: string; // catalogue key \u2014 the model_override label: string; provider: \"local\" | \"openrouter\"; free: boolean; // W-05-fu: how the user pays \u2014 distinguishes a flat-rate SUBSCRIPTION model // (price 0/token but NOT free) from a genuinely free one. The server always // sends an effective mode (derives \"free\"/\"metered\" when unset). pricing_mode?: \"metered\" | \"subscription\" | \"free\"; context_window: number; capabilities: Array<\"vision\" | \"long_context\" | \"tool_calling\" | \"json_mode\">; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25471,7 +25472,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "AssignmentsPatch",
-          "signature": "export interface AssignmentsPatch { default_model?: string; roles?: Partial<Record<AssignableRole, string>>; }"
+          "signature": "export interface AssignmentsPatch { default_model?: string; roles?: Partial<Record<AssignableRole, string>>; /** Explicit null clears the dedicated visual model. */ vision_model?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25501,17 +25502,17 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelAssignments",
-          "signature": "export interface ModelAssignments { default_model: string; // AGENT_DRIVER's model id roles: Record<AssignableRole, string>; }"
+          "signature": "export interface ModelAssignments { default_model: string; // AGENT_DRIVER's model id roles: Record<AssignableRole, string>; /** null = use the main model when capable, otherwise honest text/DOM fallback. */ vision_model: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelInfo",
-          "signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
+          "signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelUpsert",
-          "signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
+          "signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -29684,6 +29685,70 @@
       "target_sha256": "5ed93e70b37faef12af496bbb17013a992e2221b7dbf768b57ccd71eb6a58d59",
       "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
       "reason": "PKG-19 v32 makes AppKit's generated content representation an accepted input while preserving canonical AppSpec storage."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/RoleModelPicker.tsx",
+      "public_name": "RoleModelPicker",
+      "target_sha256": "dccf090e21e13ad37c0ee78cc286003d5afa1c184e0982bdaaf48dc397bf8f30",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Allows an optional dedicated visual-model assignment to be selected or cleared."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/fixtures/models.ts",
+      "public_name": "DEFAULT_ASSIGNMENTS",
+      "target_sha256": "d130c4e192591fbc5040fb3b41a59d493b9d07ba516c286f00ebb709ae19fdb4",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Carries the optional visual-model assignment in the canonical UI fixture."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "DriverModel",
+      "target_sha256": "960e7c420f1d271b92f2e859b489ffc9dd9e6874d7862c172ccac0b87b6f9bda",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Carries resolved vision capability into build-time model selection."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "AssignmentsPatch",
+      "target_sha256": "b30ac95b7eed56571e5304d00f7346f6c0cdbd9fdb70f3f74b1c22b5b1ea2998",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Accepts explicit updates and clearing for the dedicated visual-model assignment."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelAssignments",
+      "target_sha256": "b1027703adcebcf4f608dc00f05d074c56f0bc9b41c77c50185c760966a8c3e7",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Reports the optional dedicated visual-model assignment."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Carries the operator vision-capability override state."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Accepts the operator vision-capability override state."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "DefaultLLMRouter",
+      "target_sha256": "816f47133875e3839168008566b5b693994dec571663e340a05f61b8a7a22e09",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "reason": "Adds bounded visual-observer route selection without transferring the agent loop."
     }
   ],
   "compatibility_bridges": [],
@@ -29917,6 +29982,21 @@
       "owner_package": "PKG-08-VERIFY",
       "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
       "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "DefaultLLMRouter",
+      "origin": "disco.core.llm.routing.DefaultLLMRouter",
+      "removed_members": [],
+      "added_members": [
+        "def visual_inspection_route(self) -> tuple[Literal['main', 'dedicated', 'unavailable'], str | None, str]"
+      ],
+      "old_signature_sha256": "d075fe99572e79fded65f295ffa7045b77f63e2460c798895c13bb14f0066e36",
+      "new_signature_sha256": "7858fa90b28e873bed7518b7b4c15f6872f9e2695ca1b356bb555869076bcb7a",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -30191,6 +30271,97 @@
       "owner_package": "PKG-03-EDIT-EVIDENCE",
       "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
       "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "AssignmentsPatch",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface AssignmentsPatch { default_model?: string; roles?: Partial<Record<AssignableRole, string>>; }",
+      "new_signature": "export interface AssignmentsPatch { default_model?: string; roles?: Partial<Record<AssignableRole, string>>; /** Explicit null clears the dedicated visual model. */ vision_model?: string | null; }",
+      "old_target_sha256": "73e023309578b4818f8314506ec5a47f935763b2cb8446900cc0948858ba806a",
+      "new_target_sha256": "b30ac95b7eed56571e5304d00f7346f6c0cdbd9fdb70f3f74b1c22b5b1ea2998",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "DriverModel",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DriverModel { id: string; // catalogue key \u2014 the model_override label: string; provider: \"local\" | \"openrouter\"; free: boolean; // W-05-fu: how the user pays \u2014 distinguishes a flat-rate SUBSCRIPTION model // (price 0/token but NOT free) from a genuinely free one. The server always // sends an effective mode (derives \"free\"/\"metered\" when unset). pricing_mode?: \"metered\" | \"subscription\" | \"free\"; context_window: number; }",
+      "new_signature": "export interface DriverModel { id: string; // catalogue key \u2014 the model_override label: string; provider: \"local\" | \"openrouter\"; free: boolean; // W-05-fu: how the user pays \u2014 distinguishes a flat-rate SUBSCRIPTION model // (price 0/token but NOT free) from a genuinely free one. The server always // sends an effective mode (derives \"free\"/\"metered\" when unset). pricing_mode?: \"metered\" | \"subscription\" | \"free\"; context_window: number; capabilities: Array<\"vision\" | \"long_context\" | \"tool_calling\" | \"json_mode\">; }",
+      "old_target_sha256": "4286b34d33888c5bdb124f4e551a9f2ece7ba9d41c7ca0acdc1b0393de9e0aa4",
+      "new_target_sha256": "960e7c420f1d271b92f2e859b489ffc9dd9e6874d7862c172ccac0b87b6f9bda",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelAssignments",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelAssignments { default_model: string; // AGENT_DRIVER's model id roles: Record<AssignableRole, string>; }",
+      "new_signature": "export interface ModelAssignments { default_model: string; // AGENT_DRIVER's model id roles: Record<AssignableRole, string>; /** null = use the main model when capable, otherwise honest text/DOM fallback. */ vision_model: string | null; }",
+      "old_target_sha256": "c470e13b48e1a7a90836c2da3cadad951ce2d75f3a727d36fd0413c1973a37a3",
+      "new_target_sha256": "b1027703adcebcf4f608dc00f05d074c56f0bc9b41c77c50185c760966a8c3e7",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "new_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "old_target_sha256": "7df39daa8231b23207cc71fde6557373c7729da6e410d263e1090eb56b9c01ce",
+      "new_target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "new_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "old_target_sha256": "209385dbb1cce1b130ddfe1fc4fec4d2e1b9db82bad189e1b710a1063d2c939e",
+      "new_target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/RoleModelPicker.tsx",
+      "public_name": "RoleModelPicker",
+      "declaration_kind": "function",
+      "old_signature": "export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled }: Props)",
+      "new_signature": "export function RoleModelPicker({ value, onSelect, ariaLabel, busy, disabled, noneLabel, }: Props)",
+      "old_target_sha256": "c1651cbaa47fd69a49c92fbbc2e988579d62c51a0fe9ed6ba2e86de8cc5fa158",
+      "new_target_sha256": "dccf090e21e13ad37c0ee78cc286003d5afa1c184e0982bdaaf48dc397bf8f30",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/fixtures/models.ts",
+      "public_name": "DEFAULT_ASSIGNMENTS",
+      "declaration_kind": "variable",
+      "old_signature": "export const DEFAULT_ASSIGNMENTS: ModelAssignments = { default_model: \"driver-local\", roles: { // Only the GENERATIVE LLM roles are assignable. The NLI verifier is a bundled // ENCODER (Settings \u2192 Encoders), not an LLM-router role. rag_answerer: \"rag-local\", query_rewriter: \"rewriter-local\", summarizer: \"summarizer-local\", }, };",
+      "new_signature": "export const DEFAULT_ASSIGNMENTS: ModelAssignments = { default_model: \"driver-local\", vision_model: null, roles: { // Only the GENERATIVE LLM roles are assignable. The NLI verifier is a bundled // ENCODER (Settings \u2192 Encoders), not an LLM-router role. rag_answerer: \"rag-local\", query_rewriter: \"rewriter-local\", summarizer: \"summarizer-local\", }, };",
+      "old_target_sha256": "3a672f8a38217a3c5d30f0c4702b5ed4a19a43ed43a856506cb257e32a5bc12a",
+      "new_target_sha256": "d130c4e192591fbc5040fb3b41a59d493b9d07ba516c286f00ebb709ae19fdb4",
+      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "frontend",

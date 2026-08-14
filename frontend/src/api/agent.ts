@@ -196,8 +196,8 @@ export async function listDriverModels(): Promise<DriverModels> {
   if (!agentLive())
     return {
       models: [
-        { id: "driver-local", label: "Qwen3.6-27B", provider: "local", free: true, context_window: 131072 },
-        { id: "driver-overflow", label: "claude-3.5-sonnet", provider: "openrouter", free: false, context_window: 200000 },
+        { id: "driver-local", label: "Qwen3.6-27B", provider: "local", free: true, context_window: 131072, capabilities: ["tool_calling"] },
+        { id: "driver-overflow", label: "claude-3.5-sonnet", provider: "openrouter", free: false, context_window: 200000, capabilities: ["tool_calling", "vision"] },
       ],
       default: "driver-local",
     };

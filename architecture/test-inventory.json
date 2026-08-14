@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "37786c69862390dac8b9946e0bc2a32133049de9",
+  "source_identity": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
   "collected": {
     "counts": {
-      "packages": 10713,
+      "packages": 10734,
       "harness": 1400,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12518,
+    "total": 12539,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -2735,6 +2735,9 @@
         "packages/agent-server/tests/test_verify_probe.py::test_compute_web_app_verdict_reuses_collected_probe_shape",
         "packages/agent-server/tests/test_verify_probe.py::test_host_web_app_verifier_client_fallback_uses_shared_verdict",
         "packages/agent-server/tests/test_verify_probe.py::test_validate_app_deliverables_fetches_collected_targets",
+        "packages/agent-server/tests/test_vision_inspection.py::test_dedicated_vision_route_gets_one_image_question_and_no_agent_authority",
+        "packages/agent-server/tests/test_vision_inspection.py::test_main_vision_route_attaches_pixels_without_a_secondary_call",
+        "packages/agent-server/tests/test_vision_inspection.py::test_unavailable_route_and_provider_errors_never_fabricate_an_answer",
         "packages/agent-server/tests/test_vision_probe_startup.py::test_prewarm_is_fail_soft_on_probe_error",
         "packages/agent-server/tests/test_vision_probe_startup.py::test_prewarm_runs_probe_and_overlays_vision",
         "packages/agent-server/tests/test_webhook_cloudflare_deploy.py::test_combined_stripe_webhook_deploy_mints_one_union_token",
@@ -2875,6 +2878,7 @@
         "packages/app-server/tests/test_app.py::test_skills_crud_round_trip",
         "packages/app-server/tests/test_app.py::test_skills_update_missing_is_404",
         "packages/app-server/tests/test_app.py::test_tts_config_round_trips",
+        "packages/app-server/tests/test_app.py::test_vision_model_assignment_guards_catalogue_deletion",
         "packages/app-server/tests/test_live_browser_backend_gate.py::test_disable_always_allowed_even_on_local",
         "packages/app-server/tests/test_live_browser_backend_gate.py::test_enable_allowed_on_gvisor_backend",
         "packages/app-server/tests/test_live_browser_backend_gate.py::test_enable_rejected_on_local_backend",
@@ -3701,6 +3705,7 @@
         "packages/core/tests/test_build_agent_isolation.py::test_build_execution_prompt_equals_constant",
         "packages/core/tests/test_build_agent_isolation.py::test_build_planning_prompt_equals_constant",
         "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_contain_build_identity_not_task_identity",
+        "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_explain_the_bounded_visual_question_route",
         "packages/core/tests/test_build_agent_isolation.py::test_constructing_agent_flavor_does_not_mutate_module_constants",
         "packages/core/tests/test_build_agent_isolation.py::test_default_execution_prompt_equals_constant",
         "packages/core/tests/test_build_agent_isolation.py::test_default_planning_prompt_equals_constant",
@@ -4439,6 +4444,7 @@
         "packages/core/tests/test_config_store.py::test_legacy_pi_config_loads_without_losing_sibling_settings",
         "packages/core/tests/test_config_store.py::test_legacy_procedural_image_gen_provider_migrates_on_load",
         "packages/core/tests/test_config_store.py::test_load_with_no_file_is_the_base_config",
+        "packages/core/tests/test_config_store.py::test_manual_vision_pin_round_trips_all_three_states",
         "packages/core/tests/test_config_store.py::test_remove_rejects_a_model_in_use",
         "packages/core/tests/test_config_store.py::test_save_build_kernel_normalizes_legacy_to_disco[garbage]",
         "packages/core/tests/test_config_store.py::test_save_build_kernel_normalizes_legacy_to_disco[pi]",
@@ -4745,6 +4751,10 @@
         "packages/core/tests/test_design_directions.py::test_pick_direction_is_deterministic_and_keyword_sensitive",
         "packages/core/tests/test_design_directions.py::test_render_design_direction_is_stable_and_carries_anti_slop_bans",
         "packages/core/tests/test_df08_vision_escalation.py::test_escalation_model_receives_provider_and_model_id_correctly",
+        "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[None-False-expected2]",
+        "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[None-True-expected0]",
+        "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[missing-False-expected3]",
+        "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[vision-model-True-expected1]",
         "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_model_lacks_vision",
         "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_not_in_catalogue",
         "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_unset",
@@ -7681,8 +7691,10 @@
         "packages/core/tests/test_view.py::test_recitation_scopes_plan_steps_to_the_current_plan",
         "packages/core/tests/test_view.py::test_tombstone_drops_span_and_inserts_summary_once",
         "packages/core/tests/test_view.py::test_view_is_deterministic",
+        "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
         "packages/core/tests/test_view_kv_stability.py::test_image_flip_fingerprint_stability",
         "packages/core/tests/test_view_kv_stability.py::test_latest_image_only",
+        "packages/core/tests/test_view_kv_stability.py::test_newer_dedicated_or_fallback_screenshot_blocks_stale_main_pixels",
         "packages/core/tests/test_view_kv_stability.py::test_no_images_when_gate_off",
         "packages/core/tests/test_view_kv_stability.py::test_verify_web_app_no_image_when_gate_off",
         "packages/core/tests/test_view_kv_stability.py::test_verify_web_app_screenshot_attached_under_vision",
@@ -8650,8 +8662,14 @@
         "packages/tools/tests/test_browser.py::test_page_content_becomes_a_tool_observation_not_an_instruction",
         "packages/tools/tests/test_browser.py::test_quarantine_strips_active_markup_keeps_structure",
         "packages/tools/tests/test_browser.py::test_submit_is_high_and_gated_read_is_not",
+        "packages/tools/tests/test_browser.py::test_text_only_screenshot_discloses_that_pixels_are_not_visible",
         "packages/tools/tests/test_browser.py::test_vision_gate_off_does_not_request_b64",
         "packages/tools/tests/test_browser.py::test_vision_gate_requests_and_passes_through_b64",
+        "packages/tools/tests/test_browser.py::test_visual_question_attaches_pixels_only_for_the_exact_main_route",
+        "packages/tools/tests/test_browser.py::test_visual_question_falls_back_honestly_without_a_visual_route",
+        "packages/tools/tests/test_browser.py::test_visual_question_is_rejected_for_non_screenshot_actions",
+        "packages/tools/tests/test_browser.py::test_visual_question_returns_only_bounded_dedicated_answer_to_main",
+        "packages/tools/tests/test_browser.py::test_visual_question_without_captured_pixels_has_a_typed_result",
         "packages/tools/tests/test_browser_daemon.py::test_browser_render_observation",
         "packages/tools/tests/test_browser_daemon.py::test_capture_blank_page_returns_empty_after_bounded_cap",
         "packages/tools/tests/test_browser_daemon.py::test_capture_breaks_on_elements_only",
@@ -8664,6 +8682,8 @@
         "packages/tools/tests/test_browser_daemon.py::test_daemon_clear_console_clears_network",
         "packages/tools/tests/test_browser_daemon.py::test_daemon_network_ring_buffer_bounded",
         "packages/tools/tests/test_browser_daemon.py::test_daemon_stop_reports_failures_and_attempts_every_owner",
+        "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+        "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
         "packages/tools/tests/test_browser_daemon.py::test_main_document_content_type_real_chromium_rejects_page_spoof",
         "packages/tools/tests/test_browser_daemon.py::test_render_observation_hides_logs_when_no_problems",
         "packages/tools/tests/test_browser_daemon.py::test_render_observation_stack_truncated_to_cap",
@@ -10192,6 +10212,7 @@
         "packages/tools/tests/test_security.py::test_capability_mediates_without_exposing_the_credential",
         "packages/tools/tests/test_security.py::test_denied_capability_is_not_silently_granted",
         "packages/tools/tests/test_security.py::test_empty_allowlist_denies_all_network",
+        "packages/tools/tests/test_security.py::test_kill_revokes_a_capability_set_issued_before_kill",
         "packages/tools/tests/test_security.py::test_kill_switch_revokes_caps_egress_and_destroys_instance",
         "packages/tools/tests/test_security.py::test_no_secret_in_the_box",
         "packages/tools/tests/test_security.py::test_no_secret_in_the_box_even_when_output_spills",
@@ -12539,9 +12560,9 @@
     }
   },
   "mapping_static": {
-    "identity": "37786c69862390dac8b9946e0bc2a32133049de9",
-    "python_test_file_count": 844,
-    "python_static_test_id_count": 10293,
+    "identity": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+    "python_test_file_count": 845,
+    "python_static_test_id_count": 10311,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12813,6 +12834,7 @@
       "packages/agent-server/tests/test_upload_corpus.py",
       "packages/agent-server/tests/test_verify.py",
       "packages/agent-server/tests/test_verify_probe.py",
+      "packages/agent-server/tests/test_vision_inspection.py",
       "packages/agent-server/tests/test_vision_probe_startup.py",
       "packages/agent-server/tests/test_webhook_cloudflare_deploy.py",
       "packages/agent-server/tests/test_webhook_host_service_bus.py",
@@ -16696,6 +16718,9 @@
       "packages/agent-server/tests/test_verify_probe.py::test_compute_web_app_verdict_reuses_collected_probe_shape",
       "packages/agent-server/tests/test_verify_probe.py::test_host_web_app_verifier_client_fallback_uses_shared_verdict",
       "packages/agent-server/tests/test_verify_probe.py::test_validate_app_deliverables_fetches_collected_targets",
+      "packages/agent-server/tests/test_vision_inspection.py::test_dedicated_vision_route_gets_one_image_question_and_no_agent_authority",
+      "packages/agent-server/tests/test_vision_inspection.py::test_main_vision_route_attaches_pixels_without_a_secondary_call",
+      "packages/agent-server/tests/test_vision_inspection.py::test_unavailable_route_and_provider_errors_never_fabricate_an_answer",
       "packages/agent-server/tests/test_vision_probe_startup.py::test_prewarm_is_fail_soft_on_probe_error",
       "packages/agent-server/tests/test_vision_probe_startup.py::test_prewarm_runs_probe_and_overlays_vision",
       "packages/agent-server/tests/test_webhook_cloudflare_deploy.py::test_combined_stripe_webhook_deploy_mints_one_union_token",
@@ -16818,6 +16843,7 @@
       "packages/app-server/tests/test_app.py::test_skills_crud_round_trip",
       "packages/app-server/tests/test_app.py::test_skills_update_missing_is_404",
       "packages/app-server/tests/test_app.py::test_tts_config_round_trips",
+      "packages/app-server/tests/test_app.py::test_vision_model_assignment_guards_catalogue_deletion",
       "packages/app-server/tests/test_live_browser_backend_gate.py::test_disable_always_allowed_even_on_local",
       "packages/app-server/tests/test_live_browser_backend_gate.py::test_enable_allowed_on_gvisor_backend",
       "packages/app-server/tests/test_live_browser_backend_gate.py::test_enable_rejected_on_local_backend",
@@ -17403,6 +17429,7 @@
       "packages/core/tests/test_build_agent_isolation.py::test_build_execution_prompt_equals_constant",
       "packages/core/tests/test_build_agent_isolation.py::test_build_planning_prompt_equals_constant",
       "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_contain_build_identity_not_task_identity",
+      "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_explain_the_bounded_visual_question_route",
       "packages/core/tests/test_build_agent_isolation.py::test_constructing_agent_flavor_does_not_mutate_module_constants",
       "packages/core/tests/test_build_agent_isolation.py::test_default_execution_prompt_equals_constant",
       "packages/core/tests/test_build_agent_isolation.py::test_default_planning_prompt_equals_constant",
@@ -18100,6 +18127,7 @@
       "packages/core/tests/test_config_store.py::test_legacy_pi_config_loads_without_losing_sibling_settings",
       "packages/core/tests/test_config_store.py::test_legacy_procedural_image_gen_provider_migrates_on_load",
       "packages/core/tests/test_config_store.py::test_load_with_no_file_is_the_base_config",
+      "packages/core/tests/test_config_store.py::test_manual_vision_pin_round_trips_all_three_states",
       "packages/core/tests/test_config_store.py::test_remove_rejects_a_model_in_use",
       "packages/core/tests/test_config_store.py::test_save_build_kernel_normalizes_legacy_to_disco",
       "packages/core/tests/test_config_store.py::test_save_extraction_local_clears_stale_base_url",
@@ -18308,6 +18336,7 @@
       "packages/core/tests/test_design_directions.py::test_pick_direction_is_deterministic_and_keyword_sensitive",
       "packages/core/tests/test_design_directions.py::test_render_design_direction_is_stable_and_carries_anti_slop_bans",
       "packages/core/tests/test_df08_vision_escalation.py::test_escalation_model_receives_provider_and_model_id_correctly",
+      "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence",
       "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_model_lacks_vision",
       "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_not_in_catalogue",
       "packages/core/tests/test_df08_vision_escalation.py::test_guard_preserved_when_escalation_unset",
@@ -20717,8 +20746,10 @@
       "packages/core/tests/test_view.py::test_recitation_scopes_plan_steps_to_the_current_plan",
       "packages/core/tests/test_view.py::test_tombstone_drops_span_and_inserts_summary_once",
       "packages/core/tests/test_view.py::test_view_is_deterministic",
+      "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
       "packages/core/tests/test_view_kv_stability.py::test_image_flip_fingerprint_stability",
       "packages/core/tests/test_view_kv_stability.py::test_latest_image_only",
+      "packages/core/tests/test_view_kv_stability.py::test_newer_dedicated_or_fallback_screenshot_blocks_stale_main_pixels",
       "packages/core/tests/test_view_kv_stability.py::test_no_images_when_gate_off",
       "packages/core/tests/test_view_kv_stability.py::test_verify_web_app_no_image_when_gate_off",
       "packages/core/tests/test_view_kv_stability.py::test_verify_web_app_screenshot_attached_under_vision",
@@ -21540,8 +21571,14 @@
       "packages/tools/tests/test_browser.py::test_page_content_becomes_a_tool_observation_not_an_instruction",
       "packages/tools/tests/test_browser.py::test_quarantine_strips_active_markup_keeps_structure",
       "packages/tools/tests/test_browser.py::test_submit_is_high_and_gated_read_is_not",
+      "packages/tools/tests/test_browser.py::test_text_only_screenshot_discloses_that_pixels_are_not_visible",
       "packages/tools/tests/test_browser.py::test_vision_gate_off_does_not_request_b64",
       "packages/tools/tests/test_browser.py::test_vision_gate_requests_and_passes_through_b64",
+      "packages/tools/tests/test_browser.py::test_visual_question_attaches_pixels_only_for_the_exact_main_route",
+      "packages/tools/tests/test_browser.py::test_visual_question_falls_back_honestly_without_a_visual_route",
+      "packages/tools/tests/test_browser.py::test_visual_question_is_rejected_for_non_screenshot_actions",
+      "packages/tools/tests/test_browser.py::test_visual_question_returns_only_bounded_dedicated_answer_to_main",
+      "packages/tools/tests/test_browser.py::test_visual_question_without_captured_pixels_has_a_typed_result",
       "packages/tools/tests/test_browser_daemon.py::test_browser_render_observation",
       "packages/tools/tests/test_browser_daemon.py::test_capture_blank_page_returns_empty_after_bounded_cap",
       "packages/tools/tests/test_browser_daemon.py::test_capture_breaks_on_elements_only",
@@ -21554,6 +21591,8 @@
       "packages/tools/tests/test_browser_daemon.py::test_daemon_clear_console_clears_network",
       "packages/tools/tests/test_browser_daemon.py::test_daemon_network_ring_buffer_bounded",
       "packages/tools/tests/test_browser_daemon.py::test_daemon_stop_reports_failures_and_attempts_every_owner",
+      "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+      "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
       "packages/tools/tests/test_browser_daemon.py::test_main_document_content_type_real_chromium_rejects_page_spoof",
       "packages/tools/tests/test_browser_daemon.py::test_render_observation_hides_logs_when_no_problems",
       "packages/tools/tests/test_browser_daemon.py::test_render_observation_stack_truncated_to_cap",
@@ -22828,6 +22867,7 @@
       "packages/tools/tests/test_security.py::test_capability_mediates_without_exposing_the_credential",
       "packages/tools/tests/test_security.py::test_denied_capability_is_not_silently_granted",
       "packages/tools/tests/test_security.py::test_empty_allowlist_denies_all_network",
+      "packages/tools/tests/test_security.py::test_kill_revokes_a_capability_set_issued_before_kill",
       "packages/tools/tests/test_security.py::test_kill_switch_revokes_caps_egress_and_destroys_instance",
       "packages/tools/tests/test_security.py::test_no_secret_in_the_box",
       "packages/tools/tests/test_security.py::test_no_secret_in_the_box_even_when_output_spills",
@@ -23684,7 +23724,7 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
     "typescript_test_file_count": 239,
-    "typescript_static_test_id_count": 1211,
+    "typescript_static_test_id_count": 1214,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24034,6 +24074,7 @@
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::W-05 model picker selected state says Subscription, not Free or a price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::W-05 status bar shows Subscription and never Free or a per-token price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::W-05 treats a zero-price subscription as subscription, not free or metered",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::recommends and assigns a bounded visual model after a text-only driver pick",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-06 keeps typed draft text when toggling standard search to Deep Research and back",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-07 Attach is usable before a cid exists and uploads through the lazy cid pipeline",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-13/W-24 Build Slides handoff creates an autonomous agent run and flips the surface toggle to Agent",
@@ -25130,8 +25171,10 @@
       "frontend/src/views/history.test.tsx::shows a calm empty state when there are no conversations",
       "frontend/src/views/settings.test.tsx::adds a new model via the form and it appears in the catalogue",
       "frontend/src/views/settings.test.tsx::changes a role assignment (the picker is enabled and the row reflects it)",
+      "frontend/src/views/settings.test.tsx::lets the user explicitly mark a model as image-capable",
       "frontend/src/views/settings.test.tsx::lists MCP connections with a live (wired) add affordance",
       "frontend/src/views/settings.test.tsx::offers the two live backends with isolation tiers legible; Podman is hidden for now",
+      "frontend/src/views/settings.test.tsx::recommends a visual model for a text-only primary and can assign one",
       "frontend/src/views/settings.test.tsx::saves a backend change (round-trips through the data layer)",
       "frontend/src/views/settings.test.tsx::saves the key and adds an OpenRouter model to the catalogue",
       "frontend/src/views/settings.test.tsx::shows the absolute/manual story with a default primary + every role, cost-legible",
@@ -26456,13 +26499,6 @@
       },
       {
         "framework": "pytest",
-        "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 450,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"installed Chromium is required\")"
-      },
-      {
-        "framework": "pytest",
         "path": "packages/core/tests/test_verify_on_finish.py",
         "line": 474,
         "marker": "pytest.skip",
@@ -26484,6 +26520,13 @@
       },
       {
         "framework": "pytest",
+        "path": "packages/tools/tests/test_browser_daemon.py",
+        "line": 511,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"installed Chromium is required\")"
+      },
+      {
+        "framework": "pytest",
         "path": "packages/tools/tests/test_sandbox_integration.py",
         "line": 53,
         "marker": "pytest.mark.skipif",
@@ -26495,13 +26538,6 @@
         "line": 57,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"tmux is required for the real process-backend cleanup boundary\")"
-      },
-      {
-        "framework": "pytest",
-        "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 596,
-        "marker": "pytest.skip",
-        "source": "pytest.skip(\"installed Chromium is required\")"
       },
       {
         "framework": "pytest",
@@ -26520,7 +26556,7 @@
       {
         "framework": "pytest",
         "path": "packages/tools/tests/test_browser_daemon.py",
-        "line": 651,
+        "line": 657,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"installed Chromium is required\")"
       },
@@ -26544,6 +26580,13 @@
         "line": 69,
         "marker": "pytest.mark.skipif",
         "source": ""
+      },
+      {
+        "framework": "pytest",
+        "path": "packages/tools/tests/test_browser_daemon.py",
+        "line": 712,
+        "marker": "pytest.skip",
+        "source": "pytest.skip(\"installed Chromium is required\")"
       },
       {
         "framework": "pytest",
@@ -26886,7 +26929,7 @@
         ]
       }
     },
-    "vitest_ids": 1161,
+    "vitest_ids": 1164,
     "vitest_files": 176,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
@@ -26906,6 +26949,7 @@
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > W-05 model picker selected state says Subscription, not Free or a price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > W-05 status bar shows Subscription and never Free or a per-token price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > W-05 treats a zero-price subscription as subscription, not free or metered",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > recommends and assigns a bounded visual model after a text-only driver pick",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-06 keeps typed draft text when toggling standard search to Deep Research and back",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-07 Attach is usable before a cid exists and uploads through the lazy cid pipeline",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-13/W-24 Build Slides handoff creates an autonomous agent run and flips the surface toggle to Agent",
@@ -28043,7 +28087,9 @@
       "frontend/src/views/settings.test.tsx::Settings \u2014 Encoders (bundled-local vs remote) > shows the encoder mode as an honest, wired toggle (default bundled-local)",
       "frontend/src/views/settings.test.tsx::Settings \u2014 OpenRouter > saves the key and adds an OpenRouter model to the catalogue",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model catalogue (CRUD) > adds a new model via the form and it appears in the catalogue",
+      "frontend/src/views/settings.test.tsx::Settings \u2014 model catalogue (CRUD) > lets the user explicitly mark a model as image-capable",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model-assignment matrix > changes a role assignment (the picker is enabled and the row reflects it)",
+      "frontend/src/views/settings.test.tsx::Settings \u2014 model-assignment matrix > recommends a visual model for a text-only primary and can assign one",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model-assignment matrix > shows the absolute/manual story with a default primary + every role, cost-legible",
       "frontend/src/views/settings.test.tsx::Settings \u2014 sandbox > offers the two live backends with isolation tiers legible; Podman is hidden for now",
       "frontend/src/views/settings.test.tsx::Settings \u2014 sandbox > saves a backend change (round-trips through the data layer)",
@@ -31826,6 +31872,73 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
+      "root": "packages",
+      "source_identity_before": "37786c69862390dac8b9946e0bc2a32133049de9",
+      "source_identity_after": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10713,
+          "after_count": 10734,
+          "added_ids": [
+            "packages/agent-server/tests/test_vision_inspection.py::test_dedicated_vision_route_gets_one_image_question_and_no_agent_authority",
+            "packages/agent-server/tests/test_vision_inspection.py::test_main_vision_route_attaches_pixels_without_a_secondary_call",
+            "packages/agent-server/tests/test_vision_inspection.py::test_unavailable_route_and_provider_errors_never_fabricate_an_answer",
+            "packages/app-server/tests/test_app.py::test_vision_model_assignment_guards_catalogue_deletion",
+            "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_explain_the_bounded_visual_question_route",
+            "packages/core/tests/test_config_store.py::test_manual_vision_pin_round_trips_all_three_states",
+            "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[None-False-expected2]",
+            "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[None-True-expected0]",
+            "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[missing-False-expected3]",
+            "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence[vision-model-True-expected1]",
+            "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
+            "packages/core/tests/test_view_kv_stability.py::test_newer_dedicated_or_fallback_screenshot_blocks_stale_main_pixels",
+            "packages/tools/tests/test_browser.py::test_text_only_screenshot_discloses_that_pixels_are_not_visible",
+            "packages/tools/tests/test_browser.py::test_visual_question_attaches_pixels_only_for_the_exact_main_route",
+            "packages/tools/tests/test_browser.py::test_visual_question_falls_back_honestly_without_a_visual_route",
+            "packages/tools/tests/test_browser.py::test_visual_question_is_rejected_for_non_screenshot_actions",
+            "packages/tools/tests/test_browser.py::test_visual_question_returns_only_bounded_dedicated_answer_to_main",
+            "packages/tools/tests/test_browser.py::test_visual_question_without_captured_pixels_has_a_typed_result",
+            "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+            "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
+            "packages/tools/tests/test_security.py::test_kill_revokes_a_capability_set_issued_before_kill"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_vision_inspection.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_vision_inspection.py::test_dedicated_vision_route_gets_one_image_question_and_no_agent_authority",
+          "packages/agent-server/tests/test_vision_inspection.py::test_main_vision_route_attaches_pixels_without_a_secondary_call",
+          "packages/agent-server/tests/test_vision_inspection.py::test_unavailable_route_and_provider_errors_never_fabricate_an_answer",
+          "packages/app-server/tests/test_app.py::test_vision_model_assignment_guards_catalogue_deletion",
+          "packages/core/tests/test_build_agent_isolation.py::test_build_prompts_explain_the_bounded_visual_question_route",
+          "packages/core/tests/test_config_store.py::test_manual_vision_pin_round_trips_all_three_states",
+          "packages/core/tests/test_df08_vision_escalation.py::test_explicit_visual_inspection_route_precedence",
+          "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
+          "packages/core/tests/test_view_kv_stability.py::test_newer_dedicated_or_fallback_screenshot_blocks_stale_main_pixels",
+          "packages/tools/tests/test_browser.py::test_text_only_screenshot_discloses_that_pixels_are_not_visible",
+          "packages/tools/tests/test_browser.py::test_visual_question_attaches_pixels_only_for_the_exact_main_route",
+          "packages/tools/tests/test_browser.py::test_visual_question_falls_back_honestly_without_a_visual_route",
+          "packages/tools/tests/test_browser.py::test_visual_question_is_rejected_for_non_screenshot_actions",
+          "packages/tools/tests/test_browser.py::test_visual_question_returns_only_bounded_dedicated_answer_to_main",
+          "packages/tools/tests/test_browser.py::test_visual_question_without_captured_pixels_has_a_typed_result",
+          "packages/tools/tests/test_browser_daemon.py::test_fill_accepts_css_selector_without_a_transient_element_index",
+          "packages/tools/tests/test_browser_daemon.py::test_fill_css_selector_reaches_real_selected_renderer",
+          "packages/tools/tests/test_security.py::test_kill_revokes_a_capability_set_issued_before_kill"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::recommends and assigns a bounded visual model after a text-only driver pick",
+          "frontend/src/views/settings.test.tsx::lets the user explicitly mark a model as image-capable",
+          "frontend/src/views/settings.test.tsx::recommends a visual model for a text-only primary and can assign one"
+        ],
+        "fixtures": []
       }
     },
     {

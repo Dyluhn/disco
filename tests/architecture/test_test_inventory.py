@@ -568,10 +568,18 @@ class TestMappingStatic:
             # terminalization before Build admission.
             # V34 adds one same-file content-target regression: Preview activity
             # cannot substitute an inferred index.html for the current handoff.
-            "python_test_file_count": 844,
-            "python_static_test_id_count": 10293,
+            # V35 adds two same-file browser regressions: selector-only fill at
+            # the dispatch boundary and through a measured real renderer.
+            # V36 adds one same-file browser regression: a screenshot requested
+            # by a text-only model discloses that no pixels were supplied.
+            # The configurable visual-inspection fold-in adds 15 static Python
+            # ids and three TypeScript ids across settings, routing, prompt
+            # disclosure, pixel isolation, and revocation. One Python test file
+            # is new; the TypeScript file count is unchanged.
+            "python_test_file_count": 845,
+            "python_static_test_id_count": 10311,
             "typescript_test_file_count": 239,
-            "typescript_static_test_id_count": 1211,
+            "typescript_static_test_id_count": 1214,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -701,11 +709,11 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1161, 176)
+            == (1164, 176)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1161
+        assert len(set(frontend["vitest_ids_list"])) == 1164
         assert len(set(frontend["vitest_files_list"])) == 176
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
@@ -937,7 +945,10 @@ class TestCollectedCounts:
             # ids in existing files; neither is parametrized.
             # V33 adds two non-parametrized package ids in existing files.
             # V34 adds one non-parametrized package id in an existing file.
-            "packages": 10713,
+            # V35 adds two non-parametrized browser fill ids in an existing file.
+            # V36 adds 18 collected package ids for configurable visual routing;
+            # three parameter expansions account for the collected/static gap.
+            "packages": 10734,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1055,7 +1066,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12518 == sum(expected.values())
+        assert collected["total"] == 12539 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1071,7 +1082,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12518}
+        assert result == {"collected_total": 12539}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1090,9 +1101,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10293,
-            "typescript_static_ids": 1211,
-            "collected_total": 12518,
+            "python_static_ids": 10311,
+            "typescript_static_ids": 1214,
+            "collected_total": 12539,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
