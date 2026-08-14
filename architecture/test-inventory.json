@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
+  "source_identity": "41c6471fd02f8029c041107100f02c766d54e0d3",
   "collected": {
     "counts": {
       "packages": 10736,
@@ -12577,7 +12577,7 @@
     }
   },
   "mapping_static": {
-    "identity": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
+    "identity": "41c6471fd02f8029c041107100f02c766d54e0d3",
     "python_test_file_count": 846,
     "python_static_test_id_count": 10327,
     "python_test_files": [
@@ -30513,6 +30513,41 @@
         "tests": {
           "before_count": 386,
           "after_count": 386,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V38-BROWSER-RESPONSE-FILE",
+      "root": "multiple",
+      "source_identity_before": "5f223b6ae3e28fefaa96e9c9968a11b4445a1a40",
+      "source_identity_after": "41c6471fd02f8029c041107100f02c766d54e0d3",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10736,
+          "after_count": 10736,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1415,
+          "after_count": 1415,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
           "added_ids": []
         }
       },
