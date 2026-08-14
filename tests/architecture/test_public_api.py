@@ -967,7 +967,8 @@ class TestFrontendPublicApi:
         # 13-C records FinishGate's explicit typed-service methods without
         # asserting a false relocation origin. 9 records AgentErrorEvent's
         # exact semantic fields; v31 adds delivery selection and loop collaborators;
-        # v32 adds SectionContent's generated eyebrow slot.
+        # v32 adds SectionContent's generated eyebrow slot; v36 adds the
+        # bounded visual-inspection route on DefaultLLMRouter.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -979,6 +980,7 @@ class TestFrontendPublicApi:
             "AgentErrorEvent",
             "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent",
             "LLMSummarizingCondenser", "ReportEvent", "Passage", "ReportFromRun",
+            "DefaultLLMRouter",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

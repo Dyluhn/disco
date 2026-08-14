@@ -31,8 +31,8 @@ from disco.core.llm import (
 from disco.core.llm.openai_provider import OpenAIProvider
 from disco.core.llm.prompts import DriverPrompts
 
-_PLANNING_SHA256 = "43717a2304d16bf40f17b9a9ec7bc44fd0c2924a75a4f5de07d8d130f099b2ec"
-_RESUME_SHA256 = "ba89ea21de811902ad157126330facbf8247dd5b7a0ad89d9b8307a24f0e1277"
+_PLANNING_SHA256 = "e409bbb816fda1ca5e45771363d9530ecabb2696009d75292b1f5bae00097be0"
+_RESUME_SHA256 = "86e2dc191eaea6fbff48d546a7af91312c599ceb00ef9cbbb2bbf4a987a8d2d9"
 _EXPECTED_KEYS = (
     "model",
     "messages",
@@ -209,7 +209,7 @@ async def test_planning_request_matches_accepted_ordered_bytes() -> None:
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 321, 12_045, 11_432, 430, 2, 2)
+    assert _budget_values(estimate) == (65_536, 321, 12_196, 11_583, 430, 2, 2)
     assert response.routing is not None and response.routing.attempt == 1
     assert captured[0][1] == "golden-plan"
     _assert_request(
@@ -293,7 +293,7 @@ async def test_long_horizon_resume_retries_the_exact_compacted_request() -> None
     response = await router.complete(request, context=context)
 
     assert estimate is not None
-    assert _budget_values(estimate) == (65_536, 777, 16_580, 15_967, 430, 5, 2)
+    assert _budget_values(estimate) == (65_536, 777, 17_003, 16_390, 430, 5, 2)
     assert response.routing is not None and response.routing.attempt == 2
     assert len(captured) == 2
     assert captured[0] == captured[1]

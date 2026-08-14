@@ -14,7 +14,7 @@ while a property would still count).
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 from .config import (
     EncodersSettings,
@@ -29,6 +29,13 @@ from .config import (
     TtsSettings,
 )
 from .types import ModelRole
+
+
+class _PreserveVisionModel:
+    pass
+
+
+_PRESERVE_VISION_MODEL = _PreserveVisionModel()
 
 
 class _Document(Protocol):
@@ -138,7 +145,11 @@ class ConfigSectionWriter:
     # -- assignments ----------------------------------------------------------
 
     def save_assignments(
-        self, default_model: str, assignments: dict[ModelRole, str]
+        self,
+        default_model: str,
+        assignments: dict[ModelRole, str],
+        *,
+        vision_escalation_model: str | None | _PreserveVisionModel = _PRESERVE_VISION_MODEL,
     ) -> RouterConfig:
         """Persist new assignments over the current catalogue. Raises ValueError on
         a key that isn't in the catalogue (routing couldn't resolve it)."""
@@ -148,6 +159,19 @@ class ConfigSectionWriter:
         for role, key in assignments.items():
             if key not in cfg.models:
                 raise ValueError(f"unknown model {key!r} for role {role.value}")
+        target = (
+            cfg.vision_escalation_model
+            if vision_escalation_model is _PRESERVE_VISION_MODEL
+            else cast(str | None, vision_escalation_model)
+        )
+        if target is not None and target not in cfg.models:
+            raise ValueError(f"unknown vision_model {target!r}")
         return self._document.save(
-            cfg.model_copy(update={"default_model": default_model, "assignments": assignments})
+            cfg.model_copy(
+                update={
+                    "default_model": default_model,
+                    "assignments": assignments,
+                    "vision_escalation_model": target,
+                }
+            )
         )

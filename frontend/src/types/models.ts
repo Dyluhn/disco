@@ -31,6 +31,8 @@ export interface ModelInfo {
   /** how the user pays; undefined → derived (price 0 → free, else metered). */
   pricing_mode?: PricingMode;
   capabilities: Capability[];
+  /** Manual vision pin: null/undefined = auto-detect, true/false = override. */
+  vision?: boolean | null;
   /** optional provenance note (e.g. quantization) shown as a quiet caption. */
   note?: string;
   // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the
@@ -141,6 +143,8 @@ export interface ModelUpsert {
   max_output_tokens?: number | null;
   quantization?: string | null;
   capabilities: Capability[];
+  /** null = auto-detect; true/false explicitly overrides detection. */
+  vision?: boolean | null;
   price_in_per_m: number;
   price_out_per_m: number;
   pricing_mode?: PricingMode;
@@ -304,12 +308,16 @@ export const ROLES: RoleMeta[] = [
 export interface ModelAssignments {
   default_model: string; // AGENT_DRIVER's model id
   roles: Record<AssignableRole, string>;
+  /** null = use the main model when capable, otherwise honest text/DOM fallback. */
+  vision_model: string | null;
 }
 
 /** A partial change to the assignments (one slot at a time). */
 export interface AssignmentsPatch {
   default_model?: string;
   roles?: Partial<Record<AssignableRole, string>>;
+  /** Explicit null clears the dedicated visual model. */
+  vision_model?: string | null;
 }
 
 /** Live browser (noVNC) toggle — wire mirror of LiveBrowserSettings. Off by default.

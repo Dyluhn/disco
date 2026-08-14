@@ -377,12 +377,13 @@ class TestFrontendDeclarationAuthorized:
     def test_python_member_authority_is_unaffected(self) -> None:
         """The live authority still carries its Python member transitions.
 
-        Twenty as of PKG-19 v32; the frontend declaration authority must stay
+        Twenty as of PKG-19 v32 and twenty-one after V36 added the bounded
+        visual-route method; the frontend declaration authority must stay
         disjoint from the Python member authority however many rows the latter
         carries.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 20
+        assert len(baseline["member_transitions"]) == 21
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

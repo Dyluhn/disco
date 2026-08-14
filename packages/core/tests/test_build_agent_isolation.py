@@ -96,6 +96,32 @@ def test_default_execution_prompt_equals_constant():
     assert got == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
+def test_build_prompts_explain_the_bounded_visual_question_route():
+    """Planning plus both execution tiers describe the same honest affordance."""
+    prompts = DriverPrompts(flavor="build")
+    planning = prompts.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.PLANNING,
+        role=ModelRole.AGENT_DRIVER,
+    )
+    capable = prompts.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.LONG_HORIZON,
+        role=ModelRole.AGENT_DRIVER,
+        assist=False,
+    )
+    assisted = prompts.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.LONG_HORIZON,
+        role=ModelRole.AGENT_DRIVER,
+        assist=True,
+    )
+
+    assert all("visual_question" in prompt for prompt in (planning, capable, assisted))
+    assert "completion authority" in capable
+    assert "untrusted advisory evidence" in assisted
+
+
 # ---------------------------------------------------------------------------
 # 3. Build prompts carry "build" identity — never "task" (agent-only phrasing)
 # ---------------------------------------------------------------------------
