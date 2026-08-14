@@ -376,12 +376,13 @@ class BrowserArgs(BaseModel):
         ),
     )
     index: int | None = Field(default=None, description="Element index for click/fill/submit.")
-    # W6: CSS selector and visible-text alternatives to index for click actions.
-    # Useful when the page uses div/span-based clickables without data-pmx-index.
+    # W6: CSS selector alternative to index for click and fill actions; visible
+    # text remains click-only.  Fill selectors keep form interaction stable when
+    # a preceding DOM change renumbers the observation's transient element IDs.
     selector: str = Field(
         default="",
         description=(
-            "CSS selector for click action (alternative to index). "
+            "CSS selector for click or fill action (alternative to index). "
             "E.g. '#my-button', '.dock-icon[data-app=finder]'."
         ),
     )
