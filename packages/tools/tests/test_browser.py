@@ -34,7 +34,7 @@ from disco.core.security import RuleBasedAnalyzer
 from disco.tools.builtin.browser import _FENCE_CLOSE, _FENCE_OPEN, BrowserTool, _quarantine
 from disco.tools.executor import DefaultToolExecutor
 from disco.tools.registry import agent_scope
-from disco.tools.sandbox.base import ExecResult
+from disco.tools.sandbox.base import ExecResult, SandboxError
 from disco.tools.secrets import CapabilityBroker
 from tool_fakes import FakeSandboxInstance, call
 
@@ -74,6 +74,14 @@ class _PageSandbox(FakeSandboxInstance):
 
 class _ResponseFilePageSandbox(_PageSandbox):
     """Simulate the bounded shell transport used by the container backend."""
+
+    async def delete_file(self, path: str) -> None:
+        if path not in self._fs:
+            # The live container path historically classified an absent secure
+            # delete as SandboxError. Curl must be allowed to create its output
+            # before cleanup is attempted.
+            raise SandboxError(f"no response file: {path}")
+        del self._fs[path]
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         self.execs.append(cmd)

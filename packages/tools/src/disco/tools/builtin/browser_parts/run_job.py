@@ -106,12 +106,9 @@ async def _submit_job(
     # The container shell transport intentionally bounds stdout at 128 KiB.
     # Browser responses can legitimately exceed that whenever screenshot pixels
     # or extensive diagnostics are present, so stdout is not a valid response
-    # channel. Remove any stale lane response, have curl write the exact bytes to
-    # the workspace file channel, and let the caller consume that file below.
-    try:
-        await ctx.sandbox.delete_file(response_path)
-    except FileNotFoundError:
-        pass
+    # channel. Curl opens its output with truncation, so every successful
+    # invocation replaces any stale lane response without a separate preflight
+    # delete. The caller consumes and removes that exact file below.
     res = await ctx.sandbox.exec_shell(
         "curl --silent --show-error"
         f" --output {shlex.quote(response_path)}"
