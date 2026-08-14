@@ -255,7 +255,7 @@ class RunResourceRegistry:
     def pop_pending_session(self, conversation_id: str) -> SandboxSession | None:
         return self._pending_sessions.pop(conversation_id, None)
 
-    def track_reclaim(
+    def _track_reclaim(
         self,
         conversation_id: str,
         reclaim: Coroutine[Any, Any, None],
@@ -279,10 +279,10 @@ class RunResourceRegistry:
         if not owned:
             self._reclaims.pop(conversation_id, None)
 
-    def has_reclaims(self, conversation_id: str) -> bool:
+    def _has_reclaims(self, conversation_id: str) -> bool:
         return bool(self._reclaims.get(conversation_id))
 
-    async def await_reclaims(self, conversation_id: str) -> None:
+    async def _await_reclaims(self, conversation_id: str) -> None:
         """Join every detached generation owned when this call settles."""
 
         while tasks := tuple(self._reclaims.get(conversation_id, ())):
@@ -307,7 +307,7 @@ class RunResourceRegistry:
     async def close(self) -> None:
         while self._reclaims:
             for conversation_id in tuple(self._reclaims):
-                await self.await_reclaims(conversation_id)
+                await self._await_reclaims(conversation_id)
         for executor in tuple(self._executors.values()):
             with contextlib.suppress(Exception):
                 await executor.kill()

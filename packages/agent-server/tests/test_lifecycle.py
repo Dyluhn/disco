@@ -872,7 +872,7 @@ async def test_hard_kill_waits_for_detached_suspend_reclaim(tmp_path, monkeypatc
         reclaim_entered.set()
         await reclaim_release.wait()
 
-    original_await_reclaims = rt._run_resources.await_reclaims
+    original_await_reclaims = rt._run_resources._await_reclaims
 
     async def _observed_await_reclaims(conversation_id: str) -> None:
         nonlocal join_calls
@@ -881,7 +881,7 @@ async def test_hard_kill_waits_for_detached_suspend_reclaim(tmp_path, monkeypatc
             hard_kill_joined.set()
         await original_await_reclaims(conversation_id)
 
-    monkeypatch.setattr(rt._run_resources, "await_reclaims", _observed_await_reclaims)
+    monkeypatch.setattr(rt._run_resources, "_await_reclaims", _observed_await_reclaims)
     fake_executor = MagicMock()
     fake_executor.kill = AsyncMock(side_effect=_blocked_kill)
     rt._run_resources.set_executor(cid, fake_executor)
@@ -889,7 +889,7 @@ async def test_hard_kill_waits_for_detached_suspend_reclaim(tmp_path, monkeypatc
 
     suspend_task = asyncio.create_task(rt.lifecycle._suspend(cid))
     await asyncio.wait_for(reclaim_entered.wait(), timeout=2)
-    assert rt._run_resources.has_reclaims(cid)
+    assert rt._run_resources._has_reclaims(cid)
 
     hard_kill = asyncio.create_task(rt.kill(cid))
     await asyncio.wait_for(hard_kill_joined.wait(), timeout=2)
@@ -898,5 +898,5 @@ async def test_hard_kill_waits_for_detached_suspend_reclaim(tmp_path, monkeypatc
 
     reclaim_release.set()
     await asyncio.wait_for(asyncio.gather(suspend_task, hard_kill), timeout=2)
-    assert not rt._run_resources.has_reclaims(cid)
+    assert not rt._run_resources._has_reclaims(cid)
     assert (await store.get_state(cid)).execution_status is ConversationStatus.IDLE
