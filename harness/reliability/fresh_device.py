@@ -206,6 +206,7 @@ def _run_data_lifecycle(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     name: str,
     *arguments: str,
@@ -215,7 +216,7 @@ def _run_data_lifecycle(
         name,
         [
             sys.executable,
-            str(checkout / "scripts/self_host_data.py"),
+            str(lifecycle_script),
             "--engine",
             engine.binary,
             "--compose-file",
@@ -235,6 +236,7 @@ def _create_backup(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     out: Path,
     name: str,
@@ -245,6 +247,7 @@ def _create_backup(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         name,
         "backup",
@@ -438,6 +441,7 @@ def _phase_upgrade(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -457,6 +461,7 @@ def _phase_upgrade(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         front,
         app,
@@ -476,6 +481,7 @@ def _phase_backup_restore(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -492,6 +498,7 @@ def _phase_backup_restore(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         front,
         app,
@@ -553,6 +560,7 @@ def _phase_cold_restart(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -569,6 +577,7 @@ def _phase_cold_restart(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         front,
         app,
@@ -644,6 +653,14 @@ def _phase_preflight(
     return fingerprint, device_label, engine, ui_port, app_port, agent_port, pristine
 
 
+def _candidate_lifecycle_script() -> Path:
+    """Return the candidate controller tool, independent of the mutable stack checkout."""
+    script = Path(__file__).resolve().parents[2] / "scripts/self_host_data.py"
+    if not script.is_file():
+        raise InfraError(f"candidate lifecycle controller is absent: {script}")
+    return script
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_fresh_device_args(argv)
 
@@ -682,12 +699,14 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         base_commit, upgrade_commit = _phase_clone_and_verify(runner, args, checkout)
+        lifecycle_script = _candidate_lifecycle_script()
         _record_pass(
             checks,
             "clean-clone",
             "candidate was cloned into a new directory and two distinct refs resolved",
             base_commit=base_commit,
             upgrade_commit=upgrade_commit,
+            lifecycle_script_sha256=_sha256_bytes(lifecycle_script.read_bytes()),
         )
 
         project = f"discofresh-{_safe_device_label(device_label)}-{fingerprint[:8]}"
@@ -709,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
             engine=engine,
             project=project,
             checkout=checkout,
+            lifecycle_script=lifecycle_script,
             compose_env=compose_env,
             out=out,
             ui_port=ui_port,

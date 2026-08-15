@@ -89,6 +89,7 @@ def phase_cold_restart(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -102,7 +103,14 @@ def phase_cold_restart(
     from .. import fresh_device as fd
 
     _, manifest_before = fd._create_backup(
-        runner, engine, project, checkout, compose_env, out, "restart-before"
+        runner,
+        engine,
+        project,
+        checkout,
+        lifecycle_script,
+        compose_env,
+        out,
+        "restart-before",
     )
     before_digest = fd._manifest_digest(manifest_before, include_database=True)
     started = time.monotonic()
@@ -125,7 +133,14 @@ def phase_cold_restart(
     if current_project_digests != project_digests:
         raise ProductError("project bytes changed across a full stack restart")
     _, manifest_after = fd._create_backup(
-        runner, engine, project, checkout, compose_env, out, "restart-after"
+        runner,
+        engine,
+        project,
+        checkout,
+        lifecycle_script,
+        compose_env,
+        out,
+        "restart-after",
     )
     after_digest = fd._manifest_digest(manifest_after, include_database=True)
     if after_digest != before_digest:
@@ -193,6 +208,7 @@ def _assert_upgrade_persistence(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     api: ApiSession,
@@ -219,6 +235,7 @@ def _assert_upgrade_persistence(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         out,
         "upgrade-after",
@@ -275,6 +292,7 @@ def phase_upgrade(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -295,6 +313,7 @@ def phase_upgrade(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         out,
         "upgrade-before",
@@ -316,6 +335,7 @@ def phase_upgrade(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         front,
         api,
@@ -341,6 +361,7 @@ def phase_backup_restore(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -357,7 +378,14 @@ def phase_backup_restore(
     if projects_at_snapshot != original_project_ids:
         raise ProductError("backup snapshot contains an unbound project identity")
     selected_archive, selected_manifest = fd._create_backup(
-        runner, engine, project, checkout, compose_env, out, "selected-backup"
+        runner,
+        engine,
+        project,
+        checkout,
+        lifecycle_script,
+        compose_env,
+        out,
+        "selected-backup",
     )
     selected_digest = fd._manifest_digest(selected_manifest, include_database=True)
     readiness_seconds = _restore_selected_archive(
@@ -365,6 +393,7 @@ def phase_backup_restore(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         front,
         app,
@@ -376,6 +405,7 @@ def phase_backup_restore(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         app,
         agent,
@@ -404,6 +434,7 @@ def _restore_selected_archive(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     front: str,
     app: str,
@@ -425,6 +456,7 @@ def _restore_selected_archive(
         engine,
         project,
         checkout,
+        lifecycle_script,
         compose_env,
         "restore-selected-backup",
         "restore",
@@ -443,6 +475,7 @@ def _assert_restored_volume(
     engine: Engine,
     project: str,
     checkout: Path,
+    lifecycle_script: Path,
     compose_env: dict[str, str],
     app: str,
     agent: str,
@@ -452,7 +485,14 @@ def _assert_restored_volume(
     from .. import fresh_device as fd
 
     _, restored_manifest = fd._create_backup(
-        runner, engine, project, checkout, compose_env, out, "restored-backup"
+        runner,
+        engine,
+        project,
+        checkout,
+        lifecycle_script,
+        compose_env,
+        out,
+        "restored-backup",
     )
     restored_digest = fd._manifest_digest(restored_manifest, include_database=True)
     if restored_digest != selected_digest:

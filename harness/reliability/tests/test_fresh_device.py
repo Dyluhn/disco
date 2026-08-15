@@ -114,6 +114,56 @@ def test_compose_image_ids_ignore_provider_chatter(tmp_path: Path) -> None:
     ) == ["sha256:0123456789abcdef", "sha256:abcdef123456"]
 
 
+def test_lifecycle_controller_is_independent_of_historical_stack_checkout(
+    tmp_path: Path,
+) -> None:
+    stack_checkout = tmp_path / "historical-stack"
+    stack_script = stack_checkout / "scripts/self_host_data.py"
+    candidate_script = tmp_path / "candidate-controller/scripts/self_host_data.py"
+    stack_script.parent.mkdir(parents=True)
+    candidate_script.parent.mkdir(parents=True)
+    stack_script.write_text("raise RuntimeError('historical controller')\n", encoding="utf-8")
+    candidate_script.write_text("# candidate controller\n", encoding="utf-8")
+    (stack_checkout / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    calls: list[tuple[tuple[str, ...], Path | None, dict[str, str] | None]] = []
+
+    class LifecycleRunner(CommandRunner):
+        def run(
+            self,
+            _name: str,
+            command: list[str] | tuple[str, ...],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: float = 600,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout, check
+            calls.append((tuple(command), cwd, env))
+            return subprocess.CompletedProcess(command, 0, stdout="")
+
+    compose_env = {"DISCO_LOCAL_ENGINE": "podman"}
+    fresh_device_module._run_data_lifecycle(
+        LifecycleRunner(tmp_path),
+        Engine("podman", ("podman", "compose"), "/run/podman/podman.sock"),
+        "project",
+        stack_checkout,
+        candidate_script,
+        compose_env,
+        "restart-before",
+        "backup",
+        "--output",
+        str(tmp_path / "backup.tar.gz"),
+    )
+
+    command, cwd, env = calls[0]
+    assert command[1] == str(candidate_script)
+    assert command[command.index("--compose-file") + 1] == str(stack_checkout / "compose.yaml")
+    assert str(stack_script) not in command
+    assert cwd == stack_checkout
+    assert env == compose_env
+
+
 def test_project_ids_reject_bad_shape_and_missing_workspaces() -> None:
     assert _project_ids(
         {
@@ -523,6 +573,7 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
         engine=engine,
         project="compose-project",
         checkout=tmp_path / "checkout",
+        lifecycle_script=tmp_path / "controller/scripts/self_host_data.py",
         compose_env=compose_env,
         out=tmp_path / "evidence",
         ui_port=8088,
@@ -544,6 +595,9 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
         "uninstall",
     ]
     assert calls[1][1] == ("app", "front", "agent")
+    assert calls[4][1][4] == tmp_path / "controller/scripts/self_host_data.py"
+    assert calls[5][1][4] == tmp_path / "controller/scripts/self_host_data.py"
+    assert calls[6][1][4] == tmp_path / "controller/scripts/self_host_data.py"
     assert calls[4][1][-3:] == (["project-a"], project_digests, tmp_path / "evidence")
     assert calls[5][1][-6:] == (
         ["project-a"],
@@ -597,6 +651,7 @@ def test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure(
             engine=object(),
             project="project",
             checkout=tmp_path / "checkout",
+            lifecycle_script=tmp_path / "controller/scripts/self_host_data.py",
             compose_env={},
             out=tmp_path / "out",
             ui_port=1,
@@ -643,6 +698,7 @@ def test_device_journey_rejects_empty_phase_image_inventory(
             engine=object(),
             project="project",
             checkout=tmp_path / "checkout",
+            lifecycle_script=tmp_path / "controller/scripts/self_host_data.py",
             compose_env={},
             out=tmp_path / "out",
             ui_port=1,
