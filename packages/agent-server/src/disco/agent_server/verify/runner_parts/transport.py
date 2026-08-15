@@ -307,23 +307,26 @@ class HttpVerifyClient(AbstractVerifyClient):
         session_cookie = self.auth.session_cookie()
         if not session_cookie:
             raise RuntimeError("agent-server WebSocket has no authenticated session cookie")
-        try:
-            async with _ws_connect(
-                ws_url,
-                origin=self.auth.origin,
-                additional_headers={"Cookie": f"{SESSION_COOKIE}={session_cookie}"},
-            ) as ws:
-                await _send_first_frame(ws, prompt, send_build_brief)
-                await _drive_ws_gates(
-                    ws,
-                    cid,
-                    deadline=deadline,
-                    approve_plan=approve_plan,
-                    auto_answer=auto_answer,
-                    ws_commands=ws_commands,
-                )
-        except Exception as exc:  # noqa: BLE001
-            log.warning("run_ws_exchange error on %s: %s", cid, exc)
+        async with _ws_connect(
+            ws_url,
+            origin=self.auth.origin,
+            additional_headers={"Cookie": f"{SESSION_COOKIE}={session_cookie}"},
+        ) as ws:
+            # The server's first application frame is the connection-time state
+            # snapshot. Consume it before submitting a new run: a fresh
+            # conversation is IDLE, and treating that pre-message snapshot as
+            # the submitted run's terminal state closes the socket before plan
+            # approval can be delivered.
+            await _receive_initial_state(ws, deadline=deadline)
+            await _send_first_frame(ws, prompt, send_build_brief)
+            await _drive_ws_gates(
+                ws,
+                cid,
+                deadline=deadline,
+                approve_plan=approve_plan,
+                auto_answer=auto_answer,
+                ws_commands=ws_commands,
+            )
 
     async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
         try:
@@ -478,6 +481,25 @@ async def _send_first_frame(ws: Any, prompt: str, send_build_brief: bool) -> Non
         # so an empty (all-default) BuildBrief is a valid, sufficient signal.
         first_frame["build_brief"] = {}
     await ws.send(json.dumps(first_frame))
+
+
+async def _receive_initial_state(ws: Any, *, deadline: float) -> dict[str, Any]:
+    """Consume the server's mandatory connection-time state snapshot.
+
+    This frame describes the conversation *before* the new user message.  It
+    therefore cannot be used to decide whether the new run is terminal.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("conversation WebSocket timed out before initial state")
+    raw: str = await asyncio.wait_for(ws.recv(decode=True), timeout=min(remaining, 10.0))
+    frame: Any = json.loads(raw)
+    if not isinstance(frame, dict) or frame.get("type") != "state":
+        raise RuntimeError("conversation WebSocket did not begin with a state frame")
+    state = frame.get("state")
+    if not isinstance(state, dict):
+        raise RuntimeError("conversation WebSocket initial state frame is malformed")
+    return state
 
 
 async def _drive_ws_gates(
