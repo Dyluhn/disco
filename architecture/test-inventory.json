@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8bc052f850d461d344d99e963a1f5e4525d2742e",
+  "source_identity": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
   "collected": {
     "counts": {
-      "packages": 10770,
+      "packages": 10771,
       "harness": 1429,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12604,
+    "total": 12605,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6975,6 +6975,7 @@
         "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels[podman]",
         "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
         "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+        "packages/core/tests/test_self_host_data.py::test_container_helper_executes_the_invoking_controller_not_the_service_image",
         "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume",
         "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
         "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
@@ -12625,9 +12626,9 @@
     }
   },
   "mapping_static": {
-    "identity": "8bc052f850d461d344d99e963a1f5e4525d2742e",
+    "identity": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10366,
+    "python_static_test_id_count": 10367,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20289,6 +20290,7 @@
       "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels",
       "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
       "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+      "packages/core/tests/test_self_host_data.py::test_container_helper_executes_the_invoking_controller_not_the_service_image",
       "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume",
       "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
       "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
@@ -34104,6 +34106,30 @@
           "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
           "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
           "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V55-HELPER-CONTROLLER-PROVENANCE",
+      "root": "packages",
+      "source_identity_before": "8bc052f850d461d344d99e963a1f5e4525d2742e",
+      "source_identity_after": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10770,
+          "after_count": 10771,
+          "added_ids": [
+            "packages/core/tests/test_self_host_data.py::test_container_helper_executes_the_invoking_controller_not_the_service_image"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_self_host_data.py::test_container_helper_executes_the_invoking_controller_not_the_service_image"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
