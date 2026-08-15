@@ -251,6 +251,54 @@ def _assert_pristine(
     }
 
 
+def _phase_failure_cleanup(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    checkout: Path,
+    compose_env: dict[str, str],
+    status: str,
+    keep_on_failure: bool,
+) -> None:
+    """Preserve failure evidence before best-effort host teardown."""
+    compose = [*engine.compose, "-p", project]
+    if status != PASS:
+        with contextlib.suppress(Exception):
+            runner.run(
+                "copy-failure-dossiers",
+                [
+                    *compose,
+                    "cp",
+                    "agent-server:/app/test-record/disco-verify",
+                    str(runner.out / "failure-dossiers"),
+                ],
+                cwd=checkout,
+                env=compose_env,
+                timeout=300,
+                check=False,
+            )
+    with contextlib.suppress(Exception):
+        runner.run(
+            "failure-compose-logs",
+            [*compose, "logs", "--no-color"],
+            cwd=checkout,
+            env=compose_env,
+            timeout=180,
+            check=False,
+        )
+    if status != PASS and not keep_on_failure:
+        with contextlib.suppress(Exception):
+            runner.run(
+                "failure-cleanup",
+                [*compose, "down", "--volumes", "--remove-orphans", "--rmi", "all"],
+                cwd=checkout,
+                env=compose_env,
+                timeout=1_200,
+                check=False,
+            )
+        shutil.rmtree(checkout, ignore_errors=True)
+
+
 __all__ = [
     "FAIL",
     "INFRA",
@@ -264,6 +312,7 @@ __all__ = [
     "_detect_engine",
     "_machine_fingerprint",
     "_object_lines",
+    "_phase_failure_cleanup",
     "_port_available",
     "_safe_device_label",
 ]

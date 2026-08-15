@@ -11,13 +11,11 @@ the campaign ledger, so ten labels for one host cannot satisfy ten-device proof.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import json
 import os
 import re
 import secrets
-import shutil
 import sys
 import time
 import urllib.error
@@ -45,6 +43,7 @@ from ._runner.fresh_device_host import (
     _canonical_image_id,
     _detect_engine,
     _machine_fingerprint,
+    _phase_failure_cleanup,
     _safe_device_label,
 )
 from ._runner.fresh_device_host import (
@@ -520,40 +519,6 @@ def _phase_uninstall(
         out,
         known_image_ids,
     )
-
-
-def _phase_failure_cleanup(
-    runner: CommandRunner,
-    engine: Engine,
-    project: str,
-    checkout: Path,
-    compose_env: dict[str, str],
-    status: str,
-    keep_on_failure: bool,
-) -> None:
-    """Best-effort cleanup on failure (logs + teardown)."""
-    with contextlib.suppress(Exception):
-        runner.run(
-            "failure-compose-logs",
-            _compose_command(engine, project, "logs", "--no-color"),
-            cwd=checkout,
-            env=compose_env,
-            timeout=180,
-            check=False,
-        )
-    if status != PASS and not keep_on_failure:
-        with contextlib.suppress(Exception):
-            runner.run(
-                "failure-cleanup",
-                _compose_command(
-                    engine, project, "down", "--volumes", "--remove-orphans", "--rmi", "all"
-                ),
-                cwd=checkout,
-                env=compose_env,
-                timeout=1_200,
-                check=False,
-            )
-        shutil.rmtree(checkout, ignore_errors=True)
 
 
 def _phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
