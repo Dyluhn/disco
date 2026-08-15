@@ -62,6 +62,19 @@ def test_backup_uses_sqlite_api_and_restores_complete_data_tree(tmp_path: Path) 
     assert "disco.db-wal" not in paths
     assert "disco.db-shm" not in paths
 
+    archive.seek(0)
+    with tarfile.open(fileobj=archive, mode="r:gz") as backup:
+        database_member = backup.extractfile(f"{lifecycle._DATA_PREFIX}disco.db")
+        assert database_member is not None
+        database_bytes = database_member.read()
+    assert database_bytes[18:20] == b"\x01\x01"
+    with closing(sqlite3.connect(":memory:")) as database:
+        database.deserialize(database_bytes)
+        assert database.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert database.execute("SELECT id, title FROM projects").fetchall() == [
+            ("project-1", "Restored project")
+        ]
+
     restored = tmp_path / "restored"
     archive.seek(0)
     lifecycle.restore_archive(archive, restored)

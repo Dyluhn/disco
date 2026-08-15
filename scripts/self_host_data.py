@@ -143,6 +143,14 @@ def _sqlite_backup(source: Path, destination: Path) -> None:
         ):
             with dst:
                 src.backup(dst)
+            # backup() copies the live database's WAL-mode header. The archive
+            # deliberately omits transient WAL/SHM files, so normalize only
+            # this private snapshot into one standalone SQLite main file.
+            journal_mode = dst.execute("PRAGMA journal_mode=DELETE").fetchone()
+            if journal_mode != ("delete",):
+                raise DataLifecycleError(
+                    f"SQLite backup did not become standalone: {journal_mode!r}"
+                )
         with closing(sqlite3.connect(f"file:{destination}?mode=ro", uri=True)) as check:
             result = check.execute("PRAGMA integrity_check").fetchone()
     except sqlite3.Error as exc:
