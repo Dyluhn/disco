@@ -29,9 +29,11 @@ from disco.agent_server.verify.runner import (
     _run_forbid_checks,
     run_scenario,
 )
+from disco.agent_server.verify.runner_parts import orchestration as orchestration_module
 from disco.agent_server.verify.runner_parts import transport as transport_module
 from disco.agent_server.verify.scenarios import (
     missing_file_sandbox_error,
+    research_report_export,
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
@@ -705,6 +707,7 @@ async def test_run_scenario_happy_path_writes_dossier(tmp_path: Path) -> None:
             _slides_observation_event("deck.pptx"),
             _deliverable_files_event("deck.pptx"),
             {"kind": "status", "source": "system", "status": "FINISHED", "detail": None},
+            {"kind": "workspace_version", "trigger": "finish", "version_seq": 1},
         ],
         artifacts={"deck.pptx": _clean_pptx_bytes()},  # a real, clean deck → validators pass
     )
@@ -958,6 +961,54 @@ def test_missing_file_scenario_has_expected_shape() -> None:
     assert s.forbid == []
 
 
+def test_research_export_scenario_approves_its_required_plan() -> None:
+    s = research_report_export
+    assert s.surface == "deep_research"
+    assert s.approve_plan is True
+    assert s.report_export == "md"
+
+
+async def test_finished_workspace_waits_for_typed_commit_and_times_out_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    before = [
+        {"kind": "deliverable", "artifact_kind": "app", "path": "index.html"},
+        {"kind": "status", "status": "FINISHED"},
+    ]
+    committed = [
+        *before,
+        {"kind": "workspace_version", "trigger": "finish", "version_seq": 1},
+    ]
+
+    class CommitClient(FakeVerifyClient):
+        async def get_events(self, cid: str) -> list[dict[str, Any]]:
+            self.calls.append("get_events")
+            return list(committed)
+
+    monkeypatch.setattr(orchestration_module, "_WORKSPACE_COMMIT_POLL_INTERVAL", 0.0)
+    client = CommitClient(events=before)
+    observed, problem = await orchestration_module._wait_for_finished_workspace_commit(
+        client,
+        client.cid,
+        before,
+        _locate_deliverables(before),
+        timeout_s=1.0,
+    )
+    assert observed == committed
+    assert problem is None
+    assert client.calls == ["get_events"]
+
+    observed, problem = await orchestration_module._wait_for_finished_workspace_commit(
+        client,
+        client.cid,
+        before,
+        _locate_deliverables(before),
+        timeout_s=0.0,
+    )
+    assert observed == before
+    assert problem == "finished workspace did not publish its commit event"
+
+
 def test_verify_result_is_pydantic() -> None:
     r = VerifyResult(
         scenario_id="x",
@@ -984,9 +1035,17 @@ def test_locate_app_deliverable() -> None:
 
 async def test_app_scenario_passes_when_app_served_and_reachable(tmp_path: Path) -> None:
     url = "http://127.0.0.1:9/preview"
+    before_commit = [
+        _app_deliverable_event("index.html", url),
+        {"kind": "status", "status": "FINISHED"},
+    ]
     client = FakeVerifyClient(
         final_state={"execution_status": "FINISHED"},
-        events=[_app_deliverable_event("site", url)],
+        events=before_commit,
+        post_fire_events=[
+            *before_commit,
+            {"kind": "workspace_version", "trigger": "finish", "version_seq": 1},
+        ],
         app_responses={url: (200, b"<html><body>ok</body></html>")},
     )
     scenario = Scenario(
@@ -997,7 +1056,9 @@ async def test_app_scenario_passes_when_app_served_and_reachable(tmp_path: Path)
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert result.passed
+    assert client.calls.count("get_events") == 2
     assert "fetch_app" in client.calls
+    assert "download_artifact" not in client.calls
 
 
 async def test_app_scenario_fails_when_no_app_delivered(tmp_path: Path) -> None:
@@ -1055,7 +1116,7 @@ async def test_app_urlless_passes_when_entry_file_served(tmp_path: Path) -> None
     """codex round-6: a URL-less app is still output-probed via its built index.html."""
     client = FakeVerifyClient(
         final_state={"execution_status": "FINISHED"},
-        events=[_app_deliverable_event("site", "")],
+        events=[_app_deliverable_event("index.html", "")],
         preview_response=(200, b"<!doctype html><title>My App</title><h1>Hi</h1>"),
     )
     scenario = Scenario(
@@ -1066,6 +1127,8 @@ async def test_app_urlless_passes_when_entry_file_served(tmp_path: Path) -> None
     )
     result = await run_scenario(scenario, dossier_base=tmp_path / "d", _client=client)
     assert result.passed
+    assert "fetch_preview" in client.calls
+    assert "download_artifact" not in client.calls
 
 
 async def test_app_urlless_fails_when_preview_unavailable(tmp_path: Path) -> None:

@@ -11,8 +11,10 @@ unchanged.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +40,86 @@ from .transport import _TERMINAL, AbstractVerifyClient, HttpVerifyClient
 
 log = logging.getLogger(__name__)
 
+_WORKSPACE_COMMIT_POLL_INTERVAL = 0.1
+_WORKSPACE_COMMIT_TIMEOUT_S = 60.0
+
+
+def _has_finished_workspace_commit(events: list[dict[str, Any]]) -> bool:
+    """Whether the terminal workspace has reached its durable commit event."""
+    return any(
+        event.get("kind") == "workspace_version" and event.get("trigger") == "finish"
+        for event in events
+    )
+
+
+def _needs_finished_workspace_commit(
+    events: list[dict[str, Any]], deliverables: list[dict[str, Any]]
+) -> bool:
+    """Only workspace-backed FINISHED outputs need the post-terminal commit fence."""
+    finished = any(
+        event.get("kind") == "status" and event.get("status") == "FINISHED"
+        for event in events
+    )
+    workspace_backed = any(
+        str(deliverable.get("path", "")).strip() for deliverable in deliverables
+    )
+    return finished and workspace_backed
+
+
+async def _wait_for_finished_workspace_commit(
+    client: AbstractVerifyClient,
+    cid: str,
+    events: list[dict[str, Any]],
+    deliverables: list[dict[str, Any]],
+    *,
+    timeout_s: float,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Wait for the event-log commit fence before probing finished output bytes.
+
+    ``FINISHED`` is the canonical terminal fence, while the following
+    ``workspace_version(trigger=finish)`` is the documented durable-output
+    commit signal.  Artifact and preview routes correctly refuse the short
+    interval between them, so the verifier follows that event contract instead
+    of racing or retrying individual URLs.
+    """
+    if not _needs_finished_workspace_commit(events, deliverables):
+        return events, None
+    deadline = time.monotonic() + max(0.0, timeout_s)
+    observed = events
+    while not _has_finished_workspace_commit(observed):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return observed, "finished workspace did not publish its commit event"
+        await asyncio.sleep(min(_WORKSPACE_COMMIT_POLL_INTERVAL, remaining))
+        observed = await client.get_events(cid)
+    return observed, None
+
+
+async def _get_committed_finished_events(
+    client: AbstractVerifyClient,
+    cid: str,
+    *,
+    timeout_s: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+    """Fetch events and cross the finished-workspace commit fence when needed."""
+    events = await client.get_events(cid)
+    deliverables = _locate_deliverables(events)
+    events, problem = await _wait_for_finished_workspace_commit(
+        client,
+        cid,
+        events,
+        deliverables,
+        timeout_s=timeout_s,
+    )
+    return events, _locate_deliverables(events), problem
+
+
+def _is_validatable_file_deliverable(deliverable: dict[str, Any]) -> bool:
+    """Keep app entry points on the preview path, not the artifact-file path."""
+    return deliverable.get("kind") != "app" and str(deliverable.get("path", "")).lower().endswith(
+        _VALIDATABLE_EXTS
+    )
+
 
 async def _run_file_validators(
     deliverables: list[dict[str, Any]],
@@ -50,9 +132,7 @@ async def _run_file_validators(
     not a path that happens to exist in the runner's cwd (the old check silently skipped every
     live artifact). This is what catches a procedural-image deck or a corrupt artifact live."""
     problems: list[str] = []
-    file_deliverables = [
-        d for d in deliverables if str(d.get("path", "")).lower().endswith(_VALIDATABLE_EXTS)
-    ]
+    file_deliverables = list(filter(_is_validatable_file_deliverable, deliverables))
     if file_deliverables:
         dest_dir.mkdir(parents=True, exist_ok=True)
     for d in file_deliverables:
@@ -289,8 +369,13 @@ async def run_scenario(
     terminal_status = str(final_state.get("execution_status", "UNKNOWN"))
     log.info("[%s] cid=%s terminal_status=%s", run_id, cid, terminal_status)
 
-    # (d) fetch evidence — fresh snapshots after the run terminates
-    events = await client.get_events(cid)
+    # (d) fetch evidence — fresh snapshots after the run terminates. A FINISHED
+    # workspace becomes downloadable only at its typed workspace-version commit.
+    events, deliverables, commit_problem = await _get_committed_finished_events(
+        client,
+        cid,
+        timeout_s=min(effective_timeout, _WORKSPACE_COMMIT_TIMEOUT_S),
+    )
     # Re-fetch state for the dossier (clean post-run snapshot distinct from the
     # poll's last-seen state, which may have been fetched mid-sleep).
     evidence_state = await client.get_state(cid)
@@ -298,18 +383,20 @@ async def run_scenario(
     manifest = await client.get_manifest(cid)
 
     # (e) locate deliverables
-    deliverables = _locate_deliverables(events)
     log.info("[%s] deliverables=%d", run_id, len(deliverables))
 
     # (f) validate — download + inspect the REAL delivered bytes
     artifacts_dir = dossier_base / run_id / "artifacts"
-    validator_problems = await _run_validators(
-        scenario,
-        deliverables,
-        events,
-        client=client,
-        cid=cid,
-        dest_dir=artifacts_dir,
+    validator_problems = [commit_problem] if commit_problem is not None else []
+    validator_problems.extend(
+        await _run_validators(
+            scenario,
+            deliverables,
+            events,
+            client=client,
+            cid=cid,
+            dest_dir=artifacts_dir,
+        )
     )
     validator_problems.extend(
         await _run_report_export_check(scenario, cid, client=client, dest_dir=artifacts_dir)

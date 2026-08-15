@@ -891,18 +891,21 @@ class _FailureCleanupRunner(CommandRunner):
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env, timeout
         self.calls.append((name, tuple(command), check))
-        return subprocess.CompletedProcess(command, 0, stdout="")
+        output = "abcdef1234567890\n" if name == "resolve-failure-dossier-container" else ""
+        return subprocess.CompletedProcess(command, 0, stdout=output)
 
 
-def test_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path: Path) -> None:
+def _assert_failure_cleanup_preserves_verifier_dossiers_before_teardown(
+    tmp_path: Path, binary: str
+) -> None:
     checkout = tmp_path / "clone"
     checkout.mkdir()
     out = tmp_path / "evidence"
     out.mkdir()
     runner = _FailureCleanupRunner(out)
     engine = Engine(
-        binary="docker",
-        compose=("docker", "compose"),
+        binary=binary,
+        compose=(binary, "compose"),
         sandbox_socket="/var/run/docker.sock",
     )
 
@@ -917,17 +920,31 @@ def test_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path: P
     )
 
     assert [name for name, _command, _check in runner.calls] == [
+        "resolve-failure-dossier-container",
         "copy-failure-dossiers",
         "failure-compose-logs",
         "failure-cleanup",
     ]
-    copy_command = runner.calls[0][1]
+    resolve_command = runner.calls[0][1]
+    assert resolve_command[-3:] == ("ps", "-q", "agent-server")
+    copy_command = runner.calls[1][1]
+    assert copy_command[:2] == (binary, "cp")
     assert copy_command[-2:] == (
-        "agent-server:/app/test-record/disco-verify",
+        "abcdef1234567890:/app/test-record/disco-verify",
         str(out / "failure-dossiers"),
     )
-    assert runner.calls[0][2] is False
+    assert runner.calls[1][2] is False
     assert not checkout.exists()
+
+
+def test_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path: Path) -> None:
+    _assert_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path, "docker")
+
+
+def test_failure_cleanup_preserves_verifier_dossiers_before_teardown_with_podman(
+    tmp_path: Path,
+) -> None:
+    _assert_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path, "podman")
 
 
 def test_uninstall_binds_known_compose_images_and_removes_clone(tmp_path: Path) -> None:
