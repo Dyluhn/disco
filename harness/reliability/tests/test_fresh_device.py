@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from disco.app_server.routes.secrets import _validate as validate_secret_route_name
 from disco.core.llm.secret_refs import is_legacy_env_name
 
 from harness.reliability import fresh_device as fresh_device_module
@@ -681,7 +682,7 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
         (
             "PUT",
             "app",
-            "/api/secrets/fresh-device-driver",
+            "/api/secrets/fresh_device_driver",
             {"value": "driver-secret"},
         ),
     )
@@ -689,7 +690,8 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
     model_request = calls[3][1]
     assert model_request[0:2] == ("POST", "app/api/models")
     assert model_request[2]["id"] == "fresh-device-driver"
-    assert model_request[2]["api_key_env"] == "fresh-device-driver"
+    assert model_request[2]["api_key_env"] == "fresh_device_driver"
+    assert validate_secret_route_name(model_request[2]["api_key_env"]) == "fresh_device_driver"
     assert not is_legacy_env_name(model_request[2]["api_key_env"])
     assert calls[4][0:1] == ("json",)
     assert calls[4][1][0:3] == ("PUT", "app", "/api/models/assignments")

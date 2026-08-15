@@ -85,7 +85,8 @@ class ApiSession:
 
 def _configure_driver(session: ApiSession, *, base_url: str, model: str, api_key: str) -> None:
     model_id = "fresh-device-driver"
-    key_name = model_id
+    # Model ids and SecretStore route refs have different public grammars.
+    key_name = "fresh_device_driver"
     if api_key:
         session.json(
             "PUT",
