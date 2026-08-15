@@ -326,6 +326,7 @@ _FRESH_DEVICE_EVIDENCE_KEYS = {
         "project_digests",
         "base_commit",
         "upgrade_commit",
+        "candidate_front_door",
         "image_ids",
     },
     "backup-restore": {
@@ -473,6 +474,28 @@ def _valid_restart(evidence: dict[str, Any], projects: Any) -> bool:
     )
 
 
+def _valid_candidate_front_door(value: Any) -> bool:
+    if not isinstance(value, dict) or set(value) != {"app", "agent"}:
+        return False
+    app = value["app"]
+    agent = value["agent"]
+    if not isinstance(app, str) or not isinstance(agent, str):
+        return False
+    app_suffix = "/svc/app"
+    agent_suffix = "/svc/agent"
+    if not app.endswith(app_suffix) or not agent.endswith(agent_suffix):
+        return False
+    app_front = app[: -len(app_suffix)]
+    agent_front = agent[: -len(agent_suffix)]
+    return (
+        app_front == agent_front
+        and (
+            (app_front.startswith("http://") and len(app_front) > len("http://"))
+            or (app_front.startswith("https://") and len(app_front) > len("https://"))
+        )
+    )
+
+
 def _valid_upgrade(
     evidence: dict[str, Any],
     *,
@@ -491,6 +514,7 @@ def _valid_upgrade(
             evidence["project_digests"] == projects,
             evidence["base_commit"] == base_commit,
             evidence["upgrade_commit"] == upgrade_commit,
+            _valid_candidate_front_door(evidence["candidate_front_door"]),
             set(install_images).issubset(image_ids),
         )
     )

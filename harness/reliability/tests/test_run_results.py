@@ -1171,6 +1171,10 @@ def _valid_fresh_device_report() -> dict:
                     "project_digests": dict(project_digests),
                     "base_commit": "base",
                     "upgrade_commit": "upgrade",
+                    "candidate_front_door": {
+                        "app": "http://127.0.0.1:8088/svc/app",
+                        "agent": "http://127.0.0.1:8088/svc/agent",
+                    },
                     "image_ids": ["sha256:base", "sha256:upgrade"],
                 },
             },
@@ -1227,6 +1231,7 @@ def test_fresh_device_uses_harness_fingerprint_not_label(tmp_path: Path) -> None
         "bad-digest",
         "changed-project",
         "excessive-readiness",
+        "invalid-candidate-front-door",
     ],
 )
 def test_fresh_device_refuses_incomplete_or_malformed_phase_evidence(
@@ -1246,6 +1251,10 @@ def test_fresh_device_refuses_incomplete_or_malformed_phase_evidence(
         checks[6]["evidence"]["data_digest"] = "not-a-digest"
     elif mutation == "changed-project":
         checks[8]["evidence"]["project_digests"]["project-b"] = "f" * 64
+    elif mutation == "invalid-candidate-front-door":
+        checks[7]["evidence"]["candidate_front_door"]["agent"] = (
+            "http://127.0.0.1:9099/svc/agent"
+        )
     else:
         checks[7]["evidence"]["readiness_seconds"] = 901
     path = tmp_path / f"fresh-device-{mutation}.json"
