@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "636cb41dc19f1c4471d27e3adf82c768296d3335",
+  "source_identity": "e2e3b507eac725249a549229be10a2ae308ada5f",
   "collected": {
     "counts": {
-      "packages": 10754,
-      "harness": 1421,
+      "packages": 10756,
+      "harness": 1422,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12580,
+    "total": 12583,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1238,6 +1238,8 @@
         "packages/agent-server/tests/test_disco_verify_runner.py::test_validator_raw_html_default_ok_when_pptx_also_present",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_verify_result_is_pydantic",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_commands_forwarded_to_exchange",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_consumes_pre_message_idle_before_submitting_run",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state",
         "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_month_maps_to_timelimit_m",
         "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_none_filter_passes_no_timelimit",
         "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_week_maps_to_timelimit_w",
@@ -12009,6 +12011,7 @@
         "harness/reliability/tests/test_fresh_device.py::test_device_label_is_only_safe_human_metadata",
         "harness/reliability/tests/test_fresh_device.py::test_docker_fresh_device_explicitly_selects_docker_backend",
         "harness/reliability/tests/test_fresh_device.py::test_every_project_export_is_bound_to_a_deterministic_digest",
+        "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
         "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
         "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
         "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
@@ -12601,9 +12604,9 @@
     }
   },
   "mapping_static": {
-    "identity": "636cb41dc19f1c4471d27e3adf82c768296d3335",
+    "identity": "e2e3b507eac725249a549229be10a2ae308ada5f",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10349,
+    "python_static_test_id_count": 10352,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14406,6 +14409,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_device_label_is_only_safe_human_metadata",
       "harness/reliability/tests/test_fresh_device.py::test_docker_fresh_device_explicitly_selects_docker_backend",
       "harness/reliability/tests/test_fresh_device.py::test_every_project_export_is_bound_to_a_deterministic_digest",
+      "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
       "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
       "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
       "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
@@ -15444,6 +15448,8 @@
       "packages/agent-server/tests/test_disco_verify_runner.py::test_validator_raw_html_default_ok_when_pptx_also_present",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_verify_result_is_pydantic",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_commands_forwarded_to_exchange",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_consumes_pre_message_idle_before_submitting_run",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state",
       "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_month_maps_to_timelimit_m",
       "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_none_filter_passes_no_timelimit",
       "packages/agent-server/tests/test_dr1_dr3.py::test_ddgs_week_maps_to_timelimit_w",
@@ -29901,6 +29907,40 @@
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V48B-VERIFIER-RUN-START-SYNC",
+      "root": "multiple",
+      "source_identity_before": "636cb41dc19f1c4471d27e3adf82c768296d3335",
+      "source_identity_after": "e2e3b507eac725249a549229be10a2ae308ada5f",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10754,
+          "after_count": 10756,
+          "added_ids": [
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_consumes_pre_message_idle_before_submitting_run",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state"
+          ]
+        },
+        "harness": {
+          "before_count": 1421,
+          "after_count": 1422,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_consumes_pre_message_idle_before_submitting_run",
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
