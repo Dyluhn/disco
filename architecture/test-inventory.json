@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "9bfb4373e2545524766f6d939d478f79bd01209e",
+  "source_identity": "41de5b8c8377032e63562fea7fe4952974bd7156",
   "collected": {
     "counts": {
-      "packages": 10764,
+      "packages": 10770,
       "harness": 1428,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12597,
+    "total": 12603,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6970,6 +6970,12 @@
         "packages/core/tests/test_selection_edit.py::TestParseSelectionRef::test_wrong_shape_for_kind_rejected",
         "packages/core/tests/test_self_host_data.py::test_backup_refuses_symlink_that_escapes_data_volume",
         "packages/core/tests/test_self_host_data.py::test_backup_uses_sqlite_api_and_restores_complete_data_tree",
+        "packages/core/tests/test_self_host_data.py::test_compose_missing_volume_distinguishes_new_from_unowned",
+        "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels[docker]",
+        "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels[podman]",
+        "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
+        "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+        "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume",
         "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
         "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
         "packages/core/tests/test_self_host_data.py::test_restore_rejects_traversal_before_writing_target",
@@ -12618,9 +12624,9 @@
     }
   },
   "mapping_static": {
-    "identity": "9bfb4373e2545524766f6d939d478f79bd01209e",
+    "identity": "41de5b8c8377032e63562fea7fe4952974bd7156",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10360,
+    "python_static_test_id_count": 10365,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20277,6 +20283,11 @@
       "packages/core/tests/test_selection_edit.py::test_wrong_shape_for_kind_rejected",
       "packages/core/tests/test_self_host_data.py::test_backup_refuses_symlink_that_escapes_data_volume",
       "packages/core/tests/test_self_host_data.py::test_backup_uses_sqlite_api_and_restores_complete_data_tree",
+      "packages/core/tests/test_self_host_data.py::test_compose_missing_volume_distinguishes_new_from_unowned",
+      "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels",
+      "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
+      "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+      "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume",
       "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
       "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
       "packages/core/tests/test_self_host_data.py::test_restore_rejects_traversal_before_writing_target",
@@ -33999,6 +34010,39 @@
           "tests/architecture/test_attestation_binding.py::test_production_prose_corpus_is_non_empty",
           "tests/architecture/test_attestation_binding.py::test_the_gate_permits_a_fragment_probe",
           "tests/architecture/test_attestation_binding.py::test_the_gate_refuses_a_recreated_F58_shape"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V52-COMPOSE-LIFECYCLE-PORTABILITY",
+      "root": "packages",
+      "source_identity_before": "9bfb4373e2545524766f6d939d478f79bd01209e",
+      "source_identity_after": "41de5b8c8377032e63562fea7fe4952974bd7156",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10764,
+          "after_count": 10770,
+          "added_ids": [
+            "packages/core/tests/test_self_host_data.py::test_compose_missing_volume_distinguishes_new_from_unowned",
+            "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels[docker]",
+            "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels[podman]",
+            "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
+            "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+            "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_self_host_data.py::test_compose_missing_volume_distinguishes_new_from_unowned",
+          "packages/core/tests/test_self_host_data.py::test_compose_resource_discovery_uses_native_project_labels",
+          "packages/core/tests/test_self_host_data.py::test_compose_running_service_discovery_rejects_multiple_owners",
+          "packages/core/tests/test_self_host_data.py::test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership",
+          "packages/core/tests/test_self_host_data.py::test_restore_lets_compose_create_and_then_binds_a_missing_volume"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
