@@ -1,4 +1,4 @@
-"""F59 — thrash oracle counts every tool but notice reached only shell/plan; now generic covers the rest.
+"""F59 — the thrash oracle counts every tool; generic notice covers the rest.
 
 Contract: every tool class culpable under the exact-call streak must have a
 reachable generic notice before the fatal occurrence. Shell and plan retain
@@ -33,9 +33,20 @@ def _tool_call(tool: str, call_id: str, args: dict | None = None) -> ActionEvent
     )
 
 
-def _obs(action: ActionEvent, success: bool = True, content: str = "ok") -> ObservationEvent:
+def _obs(
+    action: ActionEvent,
+    success: bool = True,
+    content: str = "ok",
+    structured: dict | None = None,
+) -> ObservationEvent:
     return ObservationEvent(
-        tool_result=ToolResult(call_id=action.tool_call.call_id, tool_name=action.tool_call.tool_name, success=success, content=content),
+        tool_result=ToolResult(
+            call_id=action.tool_call.call_id,
+            tool_name=action.tool_call.tool_name,
+            success=success,
+            content=content,
+            structured=structured,
+        ),
         action_id=action.id,
     )
 
@@ -47,6 +58,7 @@ def _generic_remind(events: list[Event]) -> tuple[bool, int, str]:
 
 
 # ---- helpers that drive the real oracle path (harness dict events) ----
+
 
 def _harness_action(seq: int, tool: str, args: dict | None = None) -> dict:
     from harness.build_soak.tests._eventlog import action as h_action
@@ -85,7 +97,9 @@ def test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle():
     # ---- loop-level notice at occurrence 2 ----
     first = _tool_call("verify_web_app", "v1", {"url": "http://127.0.0.1:8080/"})
     second = _tool_call("verify_web_app", "v2", {"url": "http://127.0.0.1:8080/"})
-    events_loop = with_seqs([user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second])
+    events_loop = with_seqs(
+        [user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second]
+    )
     should, prior, text = _generic_remind(events_loop)
     assert should is True, "generic notice must fire at occurrence 2"
     assert prior is not None and prior > 0
@@ -97,7 +111,9 @@ def test_generic_notice_fires_for_verify_web_app_before_fatal_via_real_oracle():
     # Build harness dict events: three identical verify_web_app calls, all success
     harness_events = []
     for seq in (1, 3, 5):
-        harness_events.append(_harness_action(seq, "verify_web_app", {"url": "http://127.0.0.1:8080/"}))
+        harness_events.append(
+            _harness_action(seq, "verify_web_app", {"url": "http://127.0.0.1:8080/"})
+        )
         harness_events.append(_harness_obs(seq + 1, seq, tool="verify_web_app", success=True))
     # At 3 repeats with allowed=2, ThrashOracle must convict identical streak
     result = ThrashOracle().check(harness_events, scenario=_scenario_allows_two())[0]
@@ -152,15 +168,43 @@ def test_generic_notice_is_repetition_aware_and_consequence_naming():
     assert _W39_CAP_CONSEQUENCE in text2
     assert "2 times" in text2
 
-    from disco.core import MessageEvent, LLMMessage
+    from disco.core import LLMMessage, MessageEvent
     from disco.core.events import EventSource
 
-    notice2 = MessageEvent(message=LLMMessage(role="system", content=text2), source=EventSource.SYSTEM)
+    notice2 = MessageEvent(
+        message=LLMMessage(role="system", content=text2), source=EventSource.SYSTEM
+    )
     events3 = with_seqs([user_msg("go"), first, _obs(first), second, _obs(second), notice2, third])
-    should3, _, text3 = _w39_generic_reminder(third.tool_call.tool_name, third.tool_call.arguments, events3)
+    should3, _, text3 = _w39_generic_reminder(
+        third.tool_call.tool_name, third.tool_call.arguments, events3
+    )
     assert should3 is True
     assert "3 times" in text3
     assert text2 != text3
+
+
+def test_appkit_mutation_makes_an_earlier_read_stale():
+    first = _tool_call("file_read", "r1", {"path": "src/generated/content.ts"})
+    update = _tool_call("app_update_content", "a1", {"title": "Revised"})
+    repeat = _tool_call("file_read", "r2", {"path": "src/generated/content.ts"})
+    events = with_seqs(
+        [
+            user_msg("revise it"),
+            first,
+            _obs(first, content="old title"),
+            update,
+            _obs(
+                update,
+                content="content updated",
+                structured={"files_written": ["src/generated/content.ts"]},
+            ),
+            repeat,
+        ]
+    )
+
+    should, _prior, _text = _generic_remind(events)
+
+    assert should is False
 
 
 def test_generic_notice_negative_control_without_it_verify_web_app_is_silent():
@@ -188,12 +232,18 @@ def test_generic_notice_anti_spam_one_per_occurrence():
     assert should is True
     assert "2 times" in text2
 
-    from disco.core import MessageEvent, LLMMessage
+    from disco.core import LLMMessage, MessageEvent
     from disco.core.events import EventSource
 
-    notice2 = MessageEvent(message=LLMMessage(role="system", content=text2), source=EventSource.SYSTEM)
-    events_third = with_seqs([user_msg("go"), first, _obs(first), second, _obs(second), notice2, third])
-    should3, _, text3 = _w39_generic_reminder(third.tool_call.tool_name, third.tool_call.arguments, events_third)
+    notice2 = MessageEvent(
+        message=LLMMessage(role="system", content=text2), source=EventSource.SYSTEM
+    )
+    events_third = with_seqs(
+        [user_msg("go"), first, _obs(first), second, _obs(second), notice2, third]
+    )
+    should3, _, text3 = _w39_generic_reminder(
+        third.tool_call.tool_name, third.tool_call.arguments, events_third
+    )
     assert should3 is True
     assert "3 times" in text3
     assert text2 != text3
@@ -261,12 +311,25 @@ def test_no_observation_streak_is_action_no_observation_not_thrash():
     assert is_no_observation_streak(harness_events, outcomes, streak_seqs) is True
 
     # check_streak_thrash must NOT return a thrash red for this streak
-    limits = {"max_identical_action_repeats": 2, "max_same_tool_error_repeats": 2, "max_actionless_pauses": 0, "max_same_model_repair_repeats": 1, "max_total_model_repairs": 3}
-    err, *_ = check_streak_thrash(harness_events, outcomes, [e for e in harness_events if e["kind"] == "action"], limits, _longest_identical_streak)
+    limits = {
+        "max_identical_action_repeats": 2,
+        "max_same_tool_error_repeats": 2,
+        "max_actionless_pauses": 0,
+        "max_same_model_repair_repeats": 1,
+        "max_total_model_repairs": 3,
+    }
+    err, *_ = check_streak_thrash(
+        harness_events,
+        outcomes,
+        [e for e in harness_events if e["kind"] == "action"],
+        limits,
+        _longest_identical_streak,
+    )
     assert err is None, "no-observation streak must not be thrash"
 
-    # ThrashOracle overall must not be thrash either — it will be overtaken by EventChain in pipeline,
-    # but its own check must not be thrash (it returns None for streak, then checks other thrash types)
+    # ThrashOracle overall must not be thrash either — EventChain will overtake
+    # it in the pipeline, but its own check must return no streak before checking
+    # the other thrash types.
     thrash_result = ThrashOracle().check(harness_events, scenario=_scenario_allows_two())[0]
     # Since thrash check returns None for streak, but EventChain would have already failed,
     # ThrashOracle alone would be PASS (or other thrash). It must NOT be identical-streak thrash.
@@ -295,10 +358,13 @@ def test_every_generic_exclusion_is_owned_or_absent():
     assert _W39_GENERIC_EXCLUDED == frozenset(), "prefer no silent exclusions"
 
     # Shell and plan richer notices are retained and reachable
-    from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS, _W39_SHELL_TOOLS
+    from disco.core.loop.dedup import (
+        _W39_PLAN_TOOLS,
+        _W39_SHELL_TOOLS,
+        _w39_shell_verify_reminder,
+    )
     from disco.core.loop.dedup_generic_notice import _w39_generic_reminder as generic_fn
     from disco.core.loop.dedup_plan_notice import _w39_plan_progress_reminder
-    from disco.core.loop.dedup import _w39_shell_verify_reminder
 
     assert callable(generic_fn)
     assert callable(_w39_plan_progress_reminder)
@@ -307,7 +373,9 @@ def test_every_generic_exclusion_is_owned_or_absent():
     # Shell tools are in notice tools and have richer shell reminder, not generic
     for tool in list(_W39_SHELL_TOOLS)[:2]:
         first = _tool_call(tool, "s1", {"command": "echo hi"} if tool == "shell" else {"path": "x"})
-        second = _tool_call(tool, "s2", {"command": "echo hi"} if tool == "shell" else {"path": "x"})
+        second = _tool_call(
+            tool, "s2", {"command": "echo hi"} if tool == "shell" else {"path": "x"}
+        )
         # generic must NOT fire for shell tools (richer renderer owns it)
         events = with_seqs([user_msg("go"), first, _obs(first), second])
         should_generic, _, _ = _generic_remind(events)
@@ -347,8 +415,11 @@ def test_shell_and_plan_richer_notices_preserved_and_anti_spam():
     first_p = _tool_call("update_plan_progress", "p1", {"step": "x"})
     second_p = _tool_call("update_plan_progress", "p2", {"step": "x"})
     events_p = with_seqs([user_msg("go"), first_p, _obs(first_p), second_p])
-    remind_p, seq_p, text_p = _w39_plan_progress_reminder("update_plan_progress", {"step": "x"}, events_p)
-    # plan notice may not fire for non-identical? At least check callable and that generic doesn't double-fire
+    remind_p, seq_p, text_p = _w39_plan_progress_reminder(
+        "update_plan_progress", {"step": "x"}, events_p
+    )
+    # A plan notice may not fire for non-identical calls. The generic path must
+    # still not double-fire.
     assert isinstance(remind_p, bool)
 
 
@@ -357,14 +428,11 @@ async def test_verify_web_app_notice_via_real_observation_execution_integration_
     from disco.core import MessageEvent, ObservationEvent, ToolResult
     from disco.core.events import EventSource
     from disco.core.loop.observation_execution import execute_and_observe
-    from disco.core.loop.dedup_generic_notice import _W39_GENERIC_REMINDER_SENTINEL
 
     url = "http://127.0.0.1:8080/"
     first = _tool_call("verify_web_app", "v1", {"url": "http://127.0.0.1:8080/"})
     second = _tool_call("verify_web_app", "v2", {"url": url})
-    seeded = with_seqs(
-        [user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second]
-    )
+    seeded = with_seqs([user_msg("go"), first, _obs(first, content="VERIFY_WEB_APP: PASS"), second])
 
     class Executor:
         calls: list[ToolCall] = []
@@ -403,9 +471,7 @@ async def test_verify_web_app_notice_via_real_observation_execution_integration_
         def _readonly_tool_names(self) -> frozenset[str]:
             return frozenset()
 
-        async def _maybe_emit_plan_step_done_condition_note(
-            self, _action: ActionEvent
-        ) -> None:
+        async def _maybe_emit_plan_step_done_condition_note(self, _action: ActionEvent) -> None:
             return None
 
     loop = Loop()

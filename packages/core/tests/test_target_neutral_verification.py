@@ -11,6 +11,7 @@ from disco.core import (
     ConversationStatus,
     DeliverableEvent,
     EventSource,
+    MessageEvent,
     NoOpCondenser,
     SqliteEventStore,
     StatusEvent,
@@ -23,7 +24,13 @@ from disco.core.loop.finish import (
     _last_productive_seq,
     _last_verification_authority_seq,
 )
-from disco.core.loop.finish.verify_gates import _typed_host_mismatch, _typed_host_result
+from disco.core.loop.finish.verify_gates import (
+    _prepare_typed_host_verdict,
+    _typed_host_mismatch,
+    _typed_host_result,
+    host_unavailable_verdict,
+    verdict_label,
+)
 from disco.core.verification import (
     AdmittedVerificationContract,
     HostVerificationClaim,
@@ -652,6 +659,34 @@ def test_unavailable_result_retains_the_admitted_check_authority() -> None:
     assert receipt.is_current_for(deliverable, observed_url="")
 
 
+@pytest.mark.asyncio
+async def test_invalid_host_receipt_replacement_returns_its_typed_result() -> None:
+    check = _check("launch", _claim("native.launch", "bundle launches"))
+    deliverable = _deliverable(_contract((check,)), check)
+
+    class Gate:
+        _verdict_label = staticmethod(verdict_label)
+
+        async def _model_judged_verdict(self, deliverable, events, verdict):
+            return verdict
+
+        @staticmethod
+        def _host_unavailable_verdict(deliverable, detail):
+            return host_unavailable_verdict(deliverable, detail)
+
+    verdict, typed_result, _browser_unavailable = await _prepare_typed_host_verdict(
+        Gate(),
+        deliverable,
+        [],
+        {"passed": False, "verdict": "unavailable", "url": "", "summary": "offline"},
+    )
+
+    assert typed_result is not None
+    assert typed_result.status is VerificationClaimStatus.UNAVAILABLE
+    assert typed_result.is_current_for(deliverable, observed_url="")
+    assert verdict["summary"] == typed_result.reason
+
+
 class _NativeVerifier:
     def __init__(self, *, available: bool = True) -> None:
         self.available = available
@@ -743,6 +778,7 @@ def _native_loop(
         tools=[
             ToolSpec(name="file_write", description="write", parameters_schema={}),
             ToolSpec(name="serve", description="serve", parameters_schema={}),
+            ToolSpec(name="shell", description="run", parameters_schema={}),
         ]
     )
     loop = AgentLoop(
@@ -822,6 +858,44 @@ async def test_governed_native_finish_uses_target_verifier_without_browser_gate(
     assert not any(
         isinstance(event, StatusEvent) and event.detail == "unverified_release" for event in events
     )
+
+
+@pytest.mark.asyncio
+async def test_optional_finish_probe_waits_for_governed_handoff() -> None:
+    check = _check("launch", _claim("native.launch", "bundle launches"))
+    contract = _contract((check,))
+    verifier = _NativeVerifier()
+    loop, store = _native_loop(
+        ScriptedAgent(
+            [
+                action_step(
+                    tool="file_write",
+                    args={"path": "build/Fixture.app", "content": "native-bundle"},
+                ),
+                action_step(
+                    tool="finish",
+                    args={"summary": "done", "verify": "pytest -q"},
+                ),
+            ]
+        ),
+        verifier,
+    )
+    await loop._emit(_native_admission(contract))
+    await loop.send_message("build a native application fixture")
+
+    state = await loop.run()
+    events = await store.get_events("conv_native")
+
+    assert state.execution_status is not ConversationStatus.FINISHED
+    assert [call.tool_name for call in loop.executor.calls] == ["file_write"]
+    assert verifier.calls == []
+    messages = [
+        event.message.content
+        for event in events
+        if isinstance(event, MessageEvent) and event.message is not None
+    ]
+    assert any("there is no handoff for the current target at all" in text for text in messages)
+    assert not any("finish-advisory-probe" in text for text in messages)
 
 
 @pytest.mark.asyncio

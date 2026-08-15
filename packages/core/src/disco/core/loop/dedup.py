@@ -36,16 +36,22 @@ from ..events import (
     WorkspaceMutationEvent,  # noqa: F401 — compatibility facade binding
 )
 from ..receipt_currency import latest_currency_boundary_seq
-# 2026-08-07n — shared notice vocabulary, one owner (see `dedup_notice_common`).
-from .dedup_notice_common import (
-    _W39_ESCALATION_CLAUSE, _W39_SCRIPT_ESCALATION_CLAUSE, _w39_identical_call_count,
-)
 from ..script_identity import (
     SHELL_TOOLS,
     describe_script_fingerprint,
     foreground_script_fingerprints,
 )
 from ..tool_fingerprint import tool_call_fingerprint
+
+# 2026-08-07n — shared notice vocabulary, one owner (see `dedup_notice_common`).
+from .dedup_notice_common import (
+    _W39_ESCALATION_CLAUSE,
+    _W39_REMINDER_TEMPLATE,
+    _W39_SCRIPT_ESCALATION_CLAUSE,
+    _W39_SCRIPT_REMINDER_TEMPLATE,
+    _w39_exact_subject,
+    _w39_identical_call_count,
+)
 from .resource_context import (  # noqa: F401 — compatibility facade bindings
     canonical_workspace_identifier,
     latest_read_revision_by_resource,
@@ -618,42 +624,6 @@ _W39_COMMAND_MAX_CHARS = 200
 # it already has — but still bounded so a build log is not re-inlined whole.
 _W39_RESULT_MAX_CHARS = 800
 
-# Advisory reminder text. ADVISORY ONLY — it never asserts "nothing changed"
-# in absolute terms; it puts the judgment on the model ("re-run only if you
-# changed something"). format-only (single source of truth).
-#
-# 2026-08-06z (GROUNDED FEEDBACK constraints 1 and 3): the claim is now scoped to
-# what the sentence can actually support. It used to read "and nothing has
-# changed since", which is an absolute claim about the world; what the product
-# knows is that the RECORD shows no currency boundary since that run — the same
-# predicate, and the same evidence, the repeat-cap will be graded by. Saying the
-# larger thing was the F49 error one dimension over (a claim asserted wider than
-# its warrant), and the narrower sentence is strictly more useful to the agent
-# because it names WHERE the assurance comes from.
-_W39_REMINDER_TEMPLATE = (
-    "<system-reminder>\n"
-    "{sentinel} You already ran `{command}` earlier (step {step}) and it "
-    "passed, and this run's record shows no change since then. Re-run it "
-    "only if you have changed something relevant — otherwise act on the "
-    "result you already have instead of re-verifying.{escalation}{result}\n"
-    "</system-reminder>"
-)
-
-# F47 (2026-08-06x) — the SCRIPT-class reminder. The command the agent is about
-# to issue is NOT byte-identical to the one it repeats, so the text names the
-# SCRIPT (the question) and the earlier command (what it actually ran) rather
-# than pretending the two commands were the same. Same advisory posture: the
-# judgment stays with the model and the command still executes.
-_W39_SCRIPT_REMINDER_TEMPLATE = (
-    "<system-reminder>\n"
-    "{sentinel} You already ran `{script}` at step {step} (as `{command}`) and it "
-    "passed, and this run's record shows no change since then. Spelling the command "
-    "differently asks the same question. Re-run it only if you have changed "
-    "something relevant — otherwise act on the result you already have instead of "
-    "re-verifying.{escalation}{result}\n"
-    "</system-reminder>"
-)
-
 # The prior result block, appended only when a result was actually captured.
 # A6.3 §2's sentence is "here is that result"; an empty block would promise one
 # and deliver nothing.
@@ -911,6 +881,7 @@ def _w39_reminder_text(
         count = _w39_identical_call_count(events[:-1] if events else [], current_fingerprint)
         return _W39_REMINDER_TEMPLATE.format(
             sentinel=sentinel,
+            subject=_w39_exact_subject(e),
             command=short_command,
             step=prior_seq,
             escalation=_W39_ESCALATION_CLAUSE.format(count=count),
@@ -985,8 +956,12 @@ _W39_PLAN_TOOLS = frozenset({"plan_step", "update_plan_progress"})
 # non-weakening — see `dedup_generic_notice._W39_GENERIC_EXCLUDED` and
 # `test_generic_notice_exclusion_is_oracle_owned`. A parallel silent list is
 # not acceptable.
-_W39_GENERIC_TOOLS: frozenset[str] = frozenset()  # placeholder — generic covers any tool not in shell/plan
-_W39_NOTICE_TOOLS = _W39_SHELL_TOOLS | _W39_PLAN_TOOLS  # + generic (any other tool via dedup_generic_notice)
+_W39_GENERIC_TOOLS: frozenset[str] = (
+    frozenset()
+)  # placeholder — generic covers any tool not in shell/plan
+_W39_NOTICE_TOOLS = (
+    _W39_SHELL_TOOLS | _W39_PLAN_TOOLS
+)  # + generic (any other tool via dedup_generic_notice)
 
 
 def _w39_shell_verify_reminder(

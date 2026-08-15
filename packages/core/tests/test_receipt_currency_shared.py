@@ -144,6 +144,34 @@ def _mutation_action(seq: int, action_id: str = "m1") -> dict[str, object]:
     )
 
 
+def _appkit_action(seq: int, action_id: str = "app1") -> dict[str, object]:
+    return _event(
+        "action",
+        seq,
+        id=action_id,
+        tool_call={"tool_name": "app_update_content", "arguments": {"title": "Revised"}},
+    )
+
+
+def _appkit_receipt(
+    seq: int,
+    *,
+    action_id: str = "app1",
+    success: bool = True,
+    files_written: list[str] | None = None,
+) -> dict[str, object]:
+    return _event(
+        "observation",
+        seq,
+        action_id=action_id,
+        tool_result={
+            "success": success,
+            "tool_name": "app_update_content",
+            "structured": {"files_written": files_written or []},
+        },
+    )
+
+
 def test_every_declared_boundary_kind_is_actually_reachable():
     """A vocabulary entry no event can produce is a lie in a frozenset."""
     gen_a, gen_b = "pv_" + "1" * 32, "pv_" + "2" * 32
@@ -195,6 +223,44 @@ def test_a_mutation_of_UNKNOWN_outcome_is_a_boundary():
     assert (
         rc.CurrencyBoundaries().crossing(_mutation_action(1), failed_action_ids=None)
         == rc.BOUNDARY_WORKSPACE_MUTATION
+    )
+
+
+def test_appkit_mutation_and_landed_receipt_end_shared_currency():
+    # AppKit reports exact landed paths. Its action alone is not evidence of a
+    # change; only the non-empty receipt closes the prior currency window.
+    assert (
+        rc.CurrencyBoundaries().crossing(_appkit_action(1), failed_action_ids=frozenset()) is None
+    )
+    assert rc.trusted_mutation_receipt_outcome(
+        _appkit_receipt(2, files_written=["src/generated/content.ts"]),
+        action_ids=frozenset({"app1"}),
+    )
+    assert (
+        rc.CurrencyBoundaries().crossing(
+            _appkit_receipt(2, files_written=["src/generated/content.ts"]),
+            action_ids=frozenset({"app1"}),
+        )
+        == rc.BOUNDARY_TRUSTED_MUTATION_RECEIPT
+    )
+
+
+def test_appkit_noop_or_failed_observation_is_not_a_trusted_receipt():
+    assert not rc.trusted_mutation_receipt_outcome(
+        _appkit_receipt(2, files_written=[]),
+        action_ids=frozenset({"app1"}),
+    )
+    assert not rc.trusted_mutation_receipt_outcome(
+        _appkit_receipt(
+            2,
+            success=False,
+            files_written=["src/generated/content.ts"],
+        ),
+        action_ids=frozenset({"app1"}),
+    )
+    assert (
+        rc.CurrencyBoundaries().crossing(_appkit_action(1), failed_action_ids=frozenset({"app1"}))
+        is None
     )
 
 
@@ -264,9 +330,7 @@ def test_the_two_consumers_agree_on_the_same_run():
             _event("action", 5, id="r4", tool_call=call),
         ]
         failed: frozenset[str] = frozenset()
-        echo_stale = not rc.prior_result_is_current(
-            events, prior_seq=2, failed_action_ids=failed
-        )
+        echo_stale = not rc.prior_result_is_current(events, prior_seq=2, failed_action_ids=failed)
         streak, _fp, _seqs = thrash._longest_identical_streak(
             events, action_ids=frozenset({"w1"}), failed_action_ids=failed
         )
