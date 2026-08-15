@@ -29,12 +29,117 @@ from disco.agent_server.verify.runner import (
     _run_forbid_checks,
     run_scenario,
 )
+from disco.agent_server.verify.runner_parts import transport as transport_module
 from disco.agent_server.verify.scenarios import (
     missing_file_sandbox_error,
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
 from disco.core.auth import SESSION_COOKIE
+
+
+async def test_ws_exchange_consumes_pre_message_idle_before_submitting_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations: list[tuple[str, str]] = []
+
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.frames = [
+                {"type": "state", "state": {"execution_status": "IDLE"}},
+                {
+                    "type": "event",
+                    "event": {"kind": "status", "status": "AWAITING_PLAN_APPROVAL"},
+                },
+                {"type": "event", "event": {"kind": "status", "status": "FINISHED"}},
+            ]
+
+        async def recv(self, *, decode: bool) -> str:
+            assert decode is True
+            frame = self.frames.pop(0)
+            operations.append(
+                (
+                    "recv",
+                    str((frame.get("state") or frame.get("event") or {}).get("execution_status")
+                        or (frame.get("event") or {}).get("status")),
+                )
+            )
+            return json.dumps(frame)
+
+        async def send(self, raw: str) -> None:
+            operations.append(("send", str(json.loads(raw)["type"])))
+
+    class FakeConnection:
+        async def __aenter__(self) -> FakeWebSocket:
+            return websocket
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    websocket = FakeWebSocket()
+    monkeypatch.setattr(transport_module, "_ws_connect", lambda *_args, **_kwargs: FakeConnection())
+    client = HttpVerifyClient("http://127.0.0.1:8000")
+
+    async def session_ready() -> None:
+        return None
+
+    monkeypatch.setattr(client.auth, "ensure_session", session_ready)
+    monkeypatch.setattr(client.auth, "session_cookie", lambda: "session-proof")
+
+    await client.run_ws_exchange(
+        "conv_start_sync",
+        "Build the requested app",
+        approve_plan=True,
+        timeout_s=10,
+    )
+
+    assert operations == [
+        ("recv", "IDLE"),
+        ("send", "send_message"),
+        ("recv", "AWAITING_PLAN_APPROVAL"),
+        ("send", "approve_plan"),
+        ("recv", "FINISHED"),
+    ]
+
+
+async def test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWebSocket:
+        sent: list[str] = []
+
+        async def recv(self, *, decode: bool) -> str:
+            assert decode is True
+            return json.dumps({"type": "event", "event": {"kind": "status", "status": "IDLE"}})
+
+        async def send(self, raw: str) -> None:
+            self.sent.append(raw)
+
+    class FakeConnection:
+        async def __aenter__(self) -> FakeWebSocket:
+            return websocket
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    websocket = FakeWebSocket()
+    monkeypatch.setattr(transport_module, "_ws_connect", lambda *_args, **_kwargs: FakeConnection())
+    client = HttpVerifyClient("http://127.0.0.1:8000")
+
+    async def session_ready() -> None:
+        return None
+
+    monkeypatch.setattr(client.auth, "ensure_session", session_ready)
+    monkeypatch.setattr(client.auth, "session_cookie", lambda: "session-proof")
+
+    with pytest.raises(RuntimeError, match="did not begin with a state frame"):
+        await client.run_ws_exchange(
+            "conv_bad_start",
+            "Build the requested app",
+            approve_plan=True,
+            timeout_s=10,
+        )
+    assert websocket.sent == []
 
 
 async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path() -> None:

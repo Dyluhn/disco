@@ -32,12 +32,14 @@ from harness.reliability.fresh_device import (
     _export_project_digests,
     _manifest_digest,
     _phase_compose_env,
+    _phase_failure_cleanup,
     _phase_uninstall,
     _project_ids,
     _safe_device_label,
     _sha256_bytes,
     _validate_zip,
 )
+from harness.reliability.state import FAIL
 
 
 def _zip_bytes(files: dict[str, bytes]) -> bytes:
@@ -870,6 +872,62 @@ class _UninstallRunner(CommandRunner):
         elif name == "uninstall-retired-images" and self.removal_succeeds:
             self.all_images = ""
         return subprocess.CompletedProcess(command, 0, stdout=output)
+
+
+class _FailureCleanupRunner(CommandRunner):
+    def __init__(self, out: Path) -> None:
+        self.out = out
+        self.calls: list[tuple[str, tuple[str, ...], bool]] = []
+
+    def run(
+        self,
+        name: str,
+        command: list[str] | tuple[str, ...],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        timeout: float = 600,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, env, timeout
+        self.calls.append((name, tuple(command), check))
+        return subprocess.CompletedProcess(command, 0, stdout="")
+
+
+def test_failure_cleanup_preserves_verifier_dossiers_before_teardown(tmp_path: Path) -> None:
+    checkout = tmp_path / "clone"
+    checkout.mkdir()
+    out = tmp_path / "evidence"
+    out.mkdir()
+    runner = _FailureCleanupRunner(out)
+    engine = Engine(
+        binary="docker",
+        compose=("docker", "compose"),
+        sandbox_socket="/var/run/docker.sock",
+    )
+
+    _phase_failure_cleanup(
+        runner,
+        engine,
+        "project",
+        checkout,
+        {},
+        FAIL,
+        keep_on_failure=False,
+    )
+
+    assert [name for name, _command, _check in runner.calls] == [
+        "copy-failure-dossiers",
+        "failure-compose-logs",
+        "failure-cleanup",
+    ]
+    copy_command = runner.calls[0][1]
+    assert copy_command[-2:] == (
+        "agent-server:/app/test-record/disco-verify",
+        str(out / "failure-dossiers"),
+    )
+    assert runner.calls[0][2] is False
+    assert not checkout.exists()
 
 
 def test_uninstall_binds_known_compose_images_and_removes_clone(tmp_path: Path) -> None:

@@ -532,6 +532,22 @@ def _phase_failure_cleanup(
     keep_on_failure: bool,
 ) -> None:
     """Best-effort cleanup on failure (logs + teardown)."""
+    if status != PASS:
+        with contextlib.suppress(Exception):
+            runner.run(
+                "copy-failure-dossiers",
+                _compose_command(
+                    engine,
+                    project,
+                    "cp",
+                    "agent-server:/app/test-record/disco-verify",
+                    str(runner.out / "failure-dossiers"),
+                ),
+                cwd=checkout,
+                env=compose_env,
+                timeout=300,
+                check=False,
+            )
     with contextlib.suppress(Exception):
         runner.run(
             "failure-compose-logs",
