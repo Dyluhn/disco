@@ -187,7 +187,8 @@ def _run_persistence_phases(
     _record_pass(
         checks,
         "upgrade-in-place",
-        "distinct source upgrade retained configuration/projects and completed a new edge build",
+        "candidate front door retained the session/configuration/projects "
+        "and completed an edge build",
         **upgrade_evidence,
     )
     upgraded_image_ids = _validated_image_ids(upgrade_evidence.get("image_ids"), phase="upgrade")
@@ -234,7 +235,7 @@ def run_device_journey(
     _record_pass(
         checks,
         "install-and-boot",
-        "compose built all images and the packaged front door plus both APIs became healthy",
+        "compose built all images; frontend assets and both backend health endpoints became ready",
         ui=front,
         image_ids=known_image_ids,
     )
@@ -242,7 +243,7 @@ def run_device_journey(
     _record_pass(
         checks,
         "first-pair-and-config",
-        "fresh browser-equivalent session paired and configured a driver",
+        "historical base was configured through its loopback migration-fixture APIs",
     )
     bindings.verify_and_scenarios(runner, engine, project, checkout, compose_env)
     _record_pass(

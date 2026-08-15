@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from harness.reliability import fresh_device as fresh_device_module
+from harness.reliability._runner import fresh_device_phases
 from harness.reliability._runner.api_session import ApiSession
 from harness.reliability._runner.fresh_device_host import CommandRunner, Engine
 from harness.reliability._runner.fresh_device_journey import (
@@ -654,7 +655,7 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
 
     assert isinstance(api, FakeApi)
     assert calls[0:2] == [
-        ("init", ("front/svc/app", "front/svc/agent", "front")),
+        ("init", ("app", "agent", "app")),
         ("pair", None),
     ]
     assert calls[2][0] == "configure"
@@ -666,8 +667,61 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
     }
     assert calls[3] == (
         "json",
-        ("GET", "front/svc/app", "/api/models/assignments"),
+        ("GET", "app", "/api/models/assignments"),
     )
+
+
+def test_api_session_handoff_preserves_credentials_on_packaged_front_door() -> None:
+    api = ApiSession(
+        app_base="http://host:8800",
+        agent_base="http://host:8000",
+        origin="http://host:8800",
+    )
+    api.csrf = "retained-csrf"
+    _add_session_cookie(api)
+    original_jar = api.jar
+    original_opener = api.opener
+
+    api.use_packaged_front_door("http://host:8088/")
+
+    assert (api.app_base, api.agent_base, api.origin) == (
+        "http://host:8088/svc/app",
+        "http://host:8088/svc/agent",
+        "http://host:8088",
+    )
+    assert api.jar is original_jar
+    assert api.opener is original_opener
+    assert api.csrf == "retained-csrf"
+
+
+def test_candidate_front_door_handoff_authenticates_before_candidate_api_use() -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    class FakeApi:
+        app_base = "http://host:8800"
+        agent_base = "http://host:8000"
+
+        def use_packaged_front_door(self, front: str) -> None:
+            calls.append(("handoff", front, ""))
+            self.app_base = f"{front}/svc/app"
+            self.agent_base = f"{front}/svc/agent"
+
+        def json(self, method: str, base: str, path: str) -> dict[str, bool]:
+            calls.append((method, base, path))
+            return {"authenticated": True, "admin": True}
+
+    api = FakeApi()
+
+    routes = fresh_device_phases._activate_candidate_front_door(api, "http://host:8088")
+
+    assert calls == [
+        ("handoff", "http://host:8088", ""),
+        ("GET", "http://host:8088/svc/app", "/api/auth/session"),
+    ]
+    assert routes == {
+        "app": "http://host:8088/svc/app",
+        "agent": "http://host:8088/svc/agent",
+    }
 
 
 def test_api_session_pair_uses_tokenless_mint_without_fetching_token(
