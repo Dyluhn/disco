@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -264,19 +265,33 @@ def _phase_failure_cleanup(
     compose = [*engine.compose, "-p", project]
     if status != PASS:
         with contextlib.suppress(Exception):
-            runner.run(
-                "copy-failure-dossiers",
-                [
-                    *compose,
-                    "cp",
-                    "agent-server:/app/test-record/disco-verify",
-                    str(runner.out / "failure-dossiers"),
-                ],
+            resolved = runner.run(
+                "resolve-failure-dossier-container",
+                [*compose, "ps", "-q", "agent-server"],
                 cwd=checkout,
                 env=compose_env,
-                timeout=300,
+                timeout=60,
                 check=False,
             )
+            container_ids = [
+                line.strip()
+                for line in resolved.stdout.splitlines()
+                if re.fullmatch(r"[0-9a-f]{12,64}", line.strip())
+            ]
+            if len(container_ids) == 1:
+                runner.run(
+                    "copy-failure-dossiers",
+                    [
+                        engine.binary,
+                        "cp",
+                        f"{container_ids[0]}:/app/test-record/disco-verify",
+                        str(runner.out / "failure-dossiers"),
+                    ],
+                    cwd=checkout,
+                    env=compose_env,
+                    timeout=300,
+                    check=False,
+                )
     with contextlib.suppress(Exception):
         runner.run(
             "failure-compose-logs",

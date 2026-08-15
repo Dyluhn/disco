@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e2e3b507eac725249a549229be10a2ae308ada5f",
+  "source_identity": "701582b072c700c19b6801f2b41557e253fc8af9",
   "collected": {
     "counts": {
-      "packages": 10756,
-      "harness": 1422,
+      "packages": 10758,
+      "harness": 1423,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12583,
+    "total": 12586,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1198,6 +1198,7 @@
         "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_flag_undownloadable_deliverable",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_report_problems",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_run_on_downloaded_bytes",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_finished_workspace_waits_for_typed_commit_and_times_out_closed",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_when_hook_rejected",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_without_run_event",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_passes_when_run_event_appears",
@@ -1216,6 +1217,7 @@
         "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_blank_md_fails",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_md_validates_and_passes",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_unreachable_fails",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_research_export_scenario_approves_its_required_plan",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_all_client_methods_called",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_approve_plan_forwarded",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_catches_procedural_deck_via_download",
@@ -12012,6 +12014,7 @@
         "harness/reliability/tests/test_fresh_device.py::test_docker_fresh_device_explicitly_selects_docker_backend",
         "harness/reliability/tests/test_fresh_device.py::test_every_project_export_is_bound_to_a_deterministic_digest",
         "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
+        "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown_with_podman",
         "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
         "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
         "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
@@ -12604,9 +12607,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e2e3b507eac725249a549229be10a2ae308ada5f",
+    "identity": "701582b072c700c19b6801f2b41557e253fc8af9",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10352,
+    "python_static_test_id_count": 10355,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14410,6 +14413,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_docker_fresh_device_explicitly_selects_docker_backend",
       "harness/reliability/tests/test_fresh_device.py::test_every_project_export_is_bound_to_a_deterministic_digest",
       "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
+      "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown_with_podman",
       "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
       "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
       "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
@@ -15408,6 +15412,7 @@
       "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_flag_undownloadable_deliverable",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_report_problems",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_file_validators_run_on_downloaded_bytes",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_finished_workspace_waits_for_typed_commit_and_times_out_closed",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_when_hook_rejected",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_without_run_event",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_passes_when_run_event_appears",
@@ -15426,6 +15431,7 @@
       "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_blank_md_fails",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_md_validates_and_passes",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_report_export_unreachable_fails",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_research_export_scenario_approves_its_required_plan",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_all_client_methods_called",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_approve_plan_forwarded",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_run_scenario_catches_procedural_deck_via_download",
@@ -29941,6 +29947,40 @@
           "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown",
           "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_consumes_pre_message_idle_before_submitting_run",
           "packages/agent-server/tests/test_disco_verify_runner.py::test_ws_exchange_refuses_non_state_handshake_instead_of_polling_stale_state"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V49-VERIFIER-EVIDENCE-READINESS",
+      "root": "multiple",
+      "source_identity_before": "e2e3b507eac725249a549229be10a2ae308ada5f",
+      "source_identity_after": "701582b072c700c19b6801f2b41557e253fc8af9",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10756,
+          "after_count": 10758,
+          "added_ids": [
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_finished_workspace_waits_for_typed_commit_and_times_out_closed",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_research_export_scenario_approves_its_required_plan"
+          ]
+        },
+        "harness": {
+          "before_count": 1422,
+          "after_count": 1423,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown_with_podman"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_failure_cleanup_preserves_verifier_dossiers_before_teardown_with_podman",
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_finished_workspace_waits_for_typed_commit_and_times_out_closed",
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_research_export_scenario_approves_its_required_plan"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

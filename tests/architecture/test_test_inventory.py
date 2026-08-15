@@ -601,8 +601,12 @@ class TestMappingStatic:
             # V48 adds two verifier WebSocket run-start synchronization
             # regressions and one fresh-device failure-dossier preservation
             # regression, all in existing Python test files.
+            # V49 adds two same-file verifier regressions for required research
+            # approval and the typed finished-workspace commit fence. The
+            # Docker/Podman cleanup coverage preserves the existing Docker id
+            # and adds a distinct Podman id in the same harness test file.
             "python_test_file_count": 846,
-            "python_static_test_id_count": 10352,
+            "python_static_test_id_count": 10355,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1214,
         }
@@ -982,7 +986,8 @@ class TestCollectedCounts:
             # resolution across the supported Compose engines.
             # V48 adds two non-parametrized verifier run-start synchronization
             # ids in an existing package test file.
-            "packages": 10756,
+            # V49 adds two non-parametrized verifier contract ids in that file.
+            "packages": 10758,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1053,7 +1058,8 @@ class TestCollectedCounts:
             # V45 adds one collected parameter case proving that candidate route
             # evidence must describe one shared packaged front door.
             # V48 adds one fresh-device failure-dossier preservation id.
-            "harness": 1422,
+            # V49 preserves that Docker id and adds one distinct Podman id.
+            "harness": 1423,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1107,7 +1113,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12583 == sum(expected.values())
+        assert collected["total"] == 12586 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1123,7 +1129,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12583}
+        assert result == {"collected_total": 12586}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1142,9 +1148,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10352,
+            "python_static_ids": 10355,
             "typescript_static_ids": 1214,
-            "collected_total": 12583,
+            "collected_total": 12586,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
