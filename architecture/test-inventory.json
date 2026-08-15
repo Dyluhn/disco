@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "baca5a30519103c9906ac6c9aeb125104b88bcbd",
+  "source_identity": "8bc052f850d461d344d99e963a1f5e4525d2742e",
   "collected": {
     "counts": {
       "packages": 10770,
@@ -12625,7 +12625,7 @@
     }
   },
   "mapping_static": {
-    "identity": "baca5a30519103c9906ac6c9aeb125104b88bcbd",
+    "identity": "8bc052f850d461d344d99e963a1f5e4525d2742e",
     "python_test_file_count": 846,
     "python_static_test_id_count": 10366,
     "python_test_files": [
@@ -30928,6 +30928,41 @@
         "harness": {
           "before_count": 1421,
           "after_count": 1421,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V54-STANDALONE-SQLITE-BACKUP",
+      "root": "multiple",
+      "source_identity_before": "baca5a30519103c9906ac6c9aeb125104b88bcbd",
+      "source_identity_after": "8bc052f850d461d344d99e963a1f5e4525d2742e",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10770,
+          "after_count": 10770,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1429,
+          "after_count": 1429,
           "added_ids": []
         },
         "integrations": {
