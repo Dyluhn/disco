@@ -345,6 +345,20 @@ async def test_unavailable_verdict_is_typed_not_silent_pass() -> None:
         assert claim_result["status"] == "unavailable"
 
 
+@pytest.mark.asyncio
+async def test_unavailable_verdict_retains_exact_authority_and_reason() -> None:
+    verifier = HostWebAppVerifier()
+    deliverable = _deliverable_with_authority().model_copy(update={"deployment_url": ""})
+
+    verdict = await verifier.verify(deliverable)
+
+    receipt = HostVerificationResult.model_validate(verdict["verification_result"])
+    assert receipt.reason == "host verifier unavailable: no host verifier context available"
+    assert receipt.workspace_generation == deliverable.workspace_generation
+    assert receipt.workspace_epoch == deliverable.workspace_epoch
+    assert receipt.is_current_for(deliverable, observed_url=str(verdict["url"]))
+
+
 # ---------------------------------------------------------------------------
 # 5. Valid browser/client and optional-preview positive controls
 # ---------------------------------------------------------------------------
