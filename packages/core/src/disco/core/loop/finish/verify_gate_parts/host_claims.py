@@ -13,6 +13,7 @@ import hashlib
 import json
 import posixpath
 import re
+from collections.abc import Callable
 from typing import Any
 
 from ....events import active_verification_requirements_event
@@ -35,6 +36,8 @@ from ..common import (
     VerificationClaimKind,
     VerifierReferenceImage,
     VerifierStartedEvent,
+    _latest_app_deliverable_event,
+    _latest_deliverable_event,
     current_build_platform_admission,
     default_structured_web_claims,
     dictated_content_conditions_from_events,
@@ -372,6 +375,32 @@ def handoff_matches_verification_contract(
     contract: AdmittedVerificationContract,
 ) -> bool:
     return all(ok for _, ok in handoff_clauses(handoff, contract))
+
+
+def handoff_precondition_missing(
+    events: list[Event],
+    contract: AdmittedVerificationContract | None,
+    *,
+    strict_appkit: bool,
+    appkit_scope_active: Callable[[], bool],
+) -> bool:
+    """Whether verification must wait for the target-owned local handoff.
+
+    This is intentionally side-effect free.  Finish normalization uses it only
+    to defer an optional model-authored probe; the shared render gate remains
+    the sole owner of the canonical refusal and its no-progress accounting.
+    """
+
+    if contract is not None:
+        handoff = _latest_deliverable_event(events)
+        return bool(
+            governed_verification_required(events)
+            and not strict_appkit
+            and (handoff is None or not handoff_matches_verification_contract(handoff, contract))
+        )
+    if not governed_structured_browser_target(events):
+        return False
+    return not appkit_scope_active() and _latest_app_deliverable_event(events) is None
 
 
 def handoff_refusal_detail(

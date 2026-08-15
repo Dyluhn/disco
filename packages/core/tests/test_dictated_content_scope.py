@@ -11,10 +11,49 @@ and finish-gate refusal/cap behavior.
 
 from __future__ import annotations
 
+import logging
+from typing import Literal
+
+import pytest
 from _dictated_content_support import _plan, _scoped_edit_directive, _status, _user
+from disco.core.loop.finish.content_gate_parts.dictated_content_scan import (
+    first_dictated_content_miss,
+)
 from disco.core.loop.finish.verify_gate_parts.host_claims import host_verification_claims
-from disco.core.loop.plan_conditions import dictated_content_conditions_from_events
+from disco.core.loop.plan_conditions import (
+    DictatedContentCondition,
+    dictated_content_conditions_from_events,
+)
 from disco.core.verification import VerificationClaimKind
+
+
+async def _scan_literal(
+    source: str,
+    *,
+    literal: str,
+    surface: Literal["visible_text", "source_text"],
+) -> tuple[DictatedContentCondition, list[str]] | None:
+    async def read_bytes(path: str) -> bytes | None:
+        assert path == "index.html"
+        return source.encode()
+
+    return await first_dictated_content_miss(
+        [
+            DictatedContentCondition(
+                revision=1,
+                literal=literal,
+                source_event_id="user-1",
+                content_surface=surface,
+            )
+        ],
+        ["index.html"],
+        strict=True,
+        read_bytes=read_bytes,
+        max_file_bytes=100_000,
+        max_total_bytes=100_000,
+        binary_suffixes=frozenset(),
+        log=logging.getLogger(__name__),
+    )
 
 
 def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():
@@ -202,3 +241,56 @@ def test_compact_parenthesized_multifile_requirements_keep_exact_html_target():
         if claim.kind is VerificationClaimKind.VISIBLE_TEXT and claim.required
     }
     assert required_copy == {"Atlas Home"}
+
+
+@pytest.mark.asyncio
+async def test_visible_text_accepts_copy_split_across_nested_markup():
+    miss = await _scan_literal(
+        "<h1>Our <span>Services</span></h1>",
+        literal="Our Services",
+        surface="visible_text",
+    )
+
+    assert miss is None
+
+
+@pytest.mark.asyncio
+async def test_visible_text_preserves_inline_adjacency_without_inventing_spaces():
+    miss = await _scan_literal(
+        "<h1><span>Our</span><span>Services</span></h1>",
+        literal="Our Services",
+        surface="visible_text",
+    )
+
+    assert miss is not None
+
+
+@pytest.mark.asyncio
+async def test_visible_text_inserts_boundaries_between_block_elements():
+    miss = await _scan_literal(
+        "<h1>Our</h1><p>Services</p>",
+        literal="Our Services",
+        surface="visible_text",
+    )
+
+    assert miss is None
+
+
+@pytest.mark.asyncio
+async def test_visible_text_does_not_accept_copy_only_inside_nonvisible_markup():
+    miss = await _scan_literal(
+        "<script>const label = 'Our Services'</script><h1>Elsewhere</h1>",
+        literal="Our Services",
+        surface="visible_text",
+    )
+
+    assert miss is not None
+    assert miss[0].literal == "Our Services"
+
+
+@pytest.mark.asyncio
+async def test_source_text_retains_exact_source_matching():
+    source = '<nav class="site-nav"><span>Home</span></nav>'
+
+    assert await _scan_literal(source, literal="site-nav", surface="source_text") is None
+    assert await _scan_literal(source, literal="site-nav", surface="visible_text") is not None

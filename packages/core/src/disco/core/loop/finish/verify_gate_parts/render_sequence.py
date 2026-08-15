@@ -24,7 +24,6 @@ from ..common import (
     VerificationClaimStatus,
     VerifierStartedEvent,
     _appkit_scope_active,
-    _latest_app_deliverable_event,
     _latest_deliverable_event,
 )
 from .appkit_typed import (
@@ -33,10 +32,10 @@ from .appkit_typed import (
     recorded_appkit_typed_status,
 )
 from .host_claims import (
-    governed_structured_browser_target,
     governed_verification_contract,
     governed_verification_required,
     handoff_matches_verification_contract,
+    handoff_precondition_missing,
     handoff_refusal_detail,
     strict_appkit_compatibility_error,
     strict_appkit_contract,
@@ -94,13 +93,13 @@ async def _render_verify_missing_handoff_disposition(
     strict_appkit: bool,
 ) -> Disp | None:
     handoff = _latest_deliverable_event(events)
-    missing_or_foreign_handoff = (
-        contract is not None
-        and governed_verification_required(events)
-        and not strict_appkit
-        and (handoff is None or not handoff_matches_verification_contract(handoff, contract))
+    missing_handoff = handoff_precondition_missing(
+        events,
+        contract,
+        strict_appkit=strict_appkit,
+        appkit_scope_active=lambda: _appkit_scope_active(gate._loop),
     )
-    if missing_or_foreign_handoff:
+    if missing_handoff and contract is not None:
         detail = handoff_refusal_detail(handoff, contract)
         return await gate._governed_contract_refusal(
             events,
@@ -112,13 +111,7 @@ async def _render_verify_missing_handoff_disposition(
                 "change the fact named above."
             ),
         )
-    legacy_missing_web_handoff = (
-        contract is None
-        and governed_structured_browser_target(events)
-        and not _appkit_scope_active(gate._loop)
-        and _latest_app_deliverable_event(events) is None
-    )
-    if legacy_missing_web_handoff:
+    if missing_handoff:
         gate._loop._invisible_steps += 1
         # Constraint 4: this refusal fires on EVERY finish attempt until a
         # handoff exists, and `serve` does not count as work — so a static body
@@ -179,8 +172,7 @@ async def _render_verify_appkit_checks(
         missing = (
             "no typed AppKit preflight authority was prepared"
             if appkit_prepared is None
-            else "no typed AppKit result is recorded for verifier run "
-            f"{appkit_prepared[0].id}"
+            else f"no typed AppKit result is recorded for verifier run {appkit_prepared[0].id}"
             if appkit_result is None
             else f"the recorded typed AppKit result for verifier run "
             f"{appkit_prepared[0].id} did not pass"

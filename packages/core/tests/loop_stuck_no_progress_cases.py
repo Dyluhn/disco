@@ -165,6 +165,7 @@ def _impl_test_failed_verifier_fingerprint_resets_on_effective_mutation_change_o
         ("file_str_replace", {"path": "src/App.tsx", "sha256": "a" * 64}, True),
         ("file_write", None, True),
         ("file_write", {"path": "src/App.tsx", "sha256": "a" * 64}, False),
+        ("app_update_content", {"files_written": [" "]}, True),
     ],
 )
 def _impl_test_failed_verifier_noop_or_receipt_empty_mutation_does_not_reset(

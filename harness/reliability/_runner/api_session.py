@@ -9,9 +9,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-
-class ProductError(RuntimeError):
-    status = "FAIL"
+from .fresh_device_host import ProductError
 
 
 class ApiSession:
@@ -45,13 +43,20 @@ class ApiSession:
             return exc.code, exc.read(), dict(exc.headers.items())
 
     def pair(self) -> None:
-        status, raw, _ = self._request("GET", f"{self.app_base}/api/auth/pairing-token")
-        if status != 200:
-            raise ProductError(f"pairing-token endpoint returned HTTP {status}")
-        token = str(json.loads(raw).get("pairing_token") or "")
-        status, raw, _ = self._request(
-            "POST", f"{self.app_base}/api/auth/mint", data={"pairing_token": token}
-        )
+        status, raw, _ = self._request("POST", f"{self.app_base}/api/auth/mint", data={})
+        if status == 401:
+            token_status, token_raw, _ = self._request(
+                "GET", f"{self.app_base}/api/auth/pairing-token"
+            )
+            if token_status != 200:
+                raise ProductError(
+                    "pairing is required and the pairing-token endpoint returned "
+                    f"HTTP {token_status}"
+                )
+            token = str(json.loads(token_raw).get("pairing_token") or "")
+            status, raw, _ = self._request(
+                "POST", f"{self.app_base}/api/auth/mint", data={"pairing_token": token}
+            )
         if status != 200:
             raise ProductError(f"first pairing returned HTTP {status}: {raw[:500]!r}")
         self.csrf = str(json.loads(raw).get("csrf_token") or "")

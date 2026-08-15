@@ -216,9 +216,7 @@ def test_script_class_respects_the_freshness_boundary():
         ),
     )
     second = _shell("c2", C97903_SECOND)
-    events = with_seqs(
-        [user_msg("build it"), first, _obs(first, C97903_RESULT), write, second]
-    )
+    events = with_seqs([user_msg("build it"), first, _obs(first, C97903_RESULT), write, second])
     should, _prior_seq, _text = _remind(events)
     assert should is False
 
@@ -231,9 +229,7 @@ def test_script_class_requires_the_prior_run_to_have_SUCCEEDED():
     """
     first = _shell("c1", C97903_FIRST)
     second = _shell("c2", C97903_SECOND)
-    events = with_seqs(
-        [user_msg("build it"), first, _obs(first, "", success=False), second]
-    )
+    events = with_seqs([user_msg("build it"), first, _obs(first, "", success=False), second])
     should, _prior_seq, _text = _remind(events)
     assert should is False
 
@@ -250,6 +246,22 @@ def test_verify_probe_priors_are_excluded_exactly_as_the_oracle_excludes_them():
     events = with_seqs([user_msg("build it"), probe, _obs(probe, C97903_RESULT), second])
     should, _prior_seq, _text = _remind(events)
     assert should is False
+
+
+def test_exact_host_verify_probe_uses_host_owned_wording():
+    probe = _shell("c1", "pytest -q")
+    probe.meta["verify_probe"] = True
+    repeat = _shell("c2", "pytest -q")
+    events = with_seqs([user_msg("finish"), probe, _obs(probe, "PASS"), repeat])
+
+    should, prior_seq, text = _remind(events)
+
+    assert should is True
+    assert prior_seq == events[1].seq
+    assert _W39_REMINDER_SENTINEL in text
+    assert "The host verification probe already ran `pytest -q` earlier" in text
+    assert "You already ran" not in text
+    assert "That run produced:" in text
 
 
 # ---------------------------------------------------------------------------
@@ -442,9 +454,7 @@ def test_the_plan_notice_requires_the_prior_call_to_have_SUCCEEDED():
     assurance — the agent holds a failure, not an answer."""
     first = _plan_call("p1")
     second = _plan_call("p2")
-    events = with_seqs(
-        [user_msg("go"), first, _plan_obs(first, success=False), second]
-    )
+    events = with_seqs([user_msg("go"), first, _plan_obs(first, success=False), second])
 
     should, _seq, _text = _plan_remind(events)
 
@@ -510,10 +520,10 @@ def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
     asserts against the sets the loop ACTUALLY gates on and the generic notice
     that closes the gap. Per binding correction #1, no silent exclusions remain.
     """
+    from disco.core import ActionEvent, ObservationEvent, ToolCall, ToolResult
     from disco.core.loop.dedup import _W39_NOTICE_TOOLS, _W39_PLAN_TOOLS
     from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED, _w39_generic_reminder
     from event_fakes import user_msg, with_seqs
-    from disco.core import ActionEvent, ToolCall, ToolResult, ObservationEvent
 
     assert _W39_SHELL_TOOLS <= _W39_NOTICE_TOOLS
     assert _W39_PLAN_TOOLS <= _W39_NOTICE_TOOLS
@@ -526,12 +536,23 @@ def test_the_notice_gate_admits_every_class_the_oracle_counts_repeats_on():
     assert _W39_GENERIC_EXCLUDED == frozenset(), "prefer no silent exclusions"
     assert "propose_plan_update" not in _W39_NOTICE_TOOLS
     assert "submit_plan" not in _W39_NOTICE_TOOLS
+
     # Those planning tools now correctly reach the generic notice (no silent gap)
     def _tool(tool: str, args: dict) -> ActionEvent:
-        return ActionEvent(thought="do", tool_call=ToolCall(tool_name=tool, call_id="c", arguments=args))
+        return ActionEvent(
+            thought="do", tool_call=ToolCall(tool_name=tool, call_id="c", arguments=args)
+        )
 
     def _obs(a: ActionEvent) -> ObservationEvent:
-        return ObservationEvent(tool_result=ToolResult(call_id=a.tool_call.call_id, tool_name=a.tool_call.tool_name, success=True, content="ok"), action_id=a.id)
+        return ObservationEvent(
+            tool_result=ToolResult(
+                call_id=a.tool_call.call_id,
+                tool_name=a.tool_call.tool_name,
+                success=True,
+                content="ok",
+            ),
+            action_id=a.id,
+        )
 
     for tool in ("propose_plan_update", "submit_plan"):
         first = _tool(tool, {"foo": "bar"})
@@ -549,6 +570,7 @@ def test_generic_notice_exclusion_is_oracle_owned():
     tool has a notice (generic or richer). This test proves that invariant.
     """
     from disco.core.loop.dedup_generic_notice import _W39_GENERIC_EXCLUDED
+
     from harness.build_soak.oracles.thrash import _longest_identical_streak
 
     # No silent exclusions: the only load-bearing exclusions are the richer

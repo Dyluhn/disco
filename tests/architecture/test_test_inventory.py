@@ -588,8 +588,14 @@ class TestMappingStatic:
             # V40 adds two same-file route-admission regressions: a new intent
             # requires composition refresh, and an unchanged driver binding is
             # forcibly recomposed when that route refresh is pending.
+            # V41 adds twelve same-file regressions for the five bounded
+            # post-wave cleanup owners: typed unavailable receipts, semantic
+            # visible text, AppKit receipt currency, handoff-first optional
+            # verification, and host-owned reminder wording.
+            # V42 adds three same-file fresh-device harness regressions for the
+            # packaged front-door pairing order and shared failure taxonomy.
             "python_test_file_count": 846,
-            "python_static_test_id_count": 10331,
+            "python_static_test_id_count": 10346,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1214,
         }
@@ -963,7 +969,9 @@ class TestCollectedCounts:
             # V37 adds the one non-parametrized response-file transport id.
             # V39 adds the two non-parametrized lifecycle ownership ids above.
             # V40 adds the same two non-parametrized route-admission ids above.
-            "packages": 10740,
+            # V41 adds thirteen package ids for twelve static regressions; the
+            # malformed AppKit receipt extends one existing parametrization.
+            "packages": 10753,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1029,7 +1037,8 @@ class TestCollectedCounts:
             # V30 adds five collected provider-transport classification cases.
             # The provider-route evidence correction adds 15 harness ids; its
             # one parametrized provider-pair test owns the collected/static gap.
-            "harness": 1415,
+            # V42 adds the same three non-parametrized fresh-device harness ids.
+            "harness": 1418,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1083,7 +1092,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12560 == sum(expected.values())
+        assert collected["total"] == 12576 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1099,7 +1108,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12560}
+        assert result == {"collected_total": 12576}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1118,9 +1127,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10331,
+            "python_static_ids": 10346,
             "typescript_static_ids": 1214,
-            "collected_total": 12560,
+            "collected_total": 12576,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
