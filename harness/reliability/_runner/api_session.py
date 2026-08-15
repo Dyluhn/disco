@@ -85,7 +85,7 @@ class ApiSession:
 
 def _configure_driver(session: ApiSession, *, base_url: str, model: str, api_key: str) -> None:
     model_id = "fresh-device-driver"
-    key_name = "DISCO_FRESH_DEVICE_DRIVER_API_KEY"
+    key_name = model_id
     if api_key:
         session.json(
             "PUT",
