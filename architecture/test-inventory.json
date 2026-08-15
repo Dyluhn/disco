@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "701582b072c700c19b6801f2b41557e253fc8af9",
+  "source_identity": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
   "collected": {
     "counts": {
-      "packages": 10758,
+      "packages": 10764,
       "harness": 1423,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12586,
+    "total": 12592,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1202,6 +1202,12 @@
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_when_hook_rejected",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_without_run_event",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_passes_when_run_event_appears",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_completes_preview_storage_reset_handoff",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[failed_handoff-expected2]",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[malformed_document-None]",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[premature_cookie-None]",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[session_cookie-None]",
+        "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[wrong_target-None]",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fetches_selected_preview_through_clean_capability",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path",
         "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_refuses_bootstrap_that_installs_app_session",
@@ -12607,9 +12613,9 @@
     }
   },
   "mapping_static": {
-    "identity": "701582b072c700c19b6801f2b41557e253fc8af9",
+    "identity": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10355,
+    "python_static_test_id_count": 10357,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15416,6 +15422,8 @@
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_when_hook_rejected",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_fails_without_run_event",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_fire_schedule_passes_when_run_event_appears",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_completes_preview_storage_reset_handoff",
+      "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fetches_selected_preview_through_clean_capability",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path",
       "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_refuses_bootstrap_that_installs_app_session",
@@ -32273,6 +32281,36 @@
           "packages/core/tests/test_build_platform_host_profiles.py::test_the_same_os_label_with_different_evidence_advertises_differently",
           "packages/core/tests/test_build_platform_host_profiles.py::test_the_three_named_platforms_are_all_shipped",
           "packages/core/tests/test_build_platform_host_profiles.py::test_unevidenced_platforms_may_be_declared_experimental_and_still_grant_nothing"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V50-PREVIEW-VERIFIER-HANDOFF",
+      "root": "packages",
+      "source_identity_before": "701582b072c700c19b6801f2b41557e253fc8af9",
+      "source_identity_after": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10758,
+          "after_count": 10764,
+          "added_ids": [
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_completes_preview_storage_reset_handoff",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[failed_handoff-expected2]",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[malformed_document-None]",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[premature_cookie-None]",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[session_cookie-None]",
+            "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff[wrong_target-None]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_completes_preview_storage_reset_handoff",
+          "packages/agent-server/tests/test_disco_verify_runner.py::test_http_verify_client_fails_closed_on_invalid_storage_handoff"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

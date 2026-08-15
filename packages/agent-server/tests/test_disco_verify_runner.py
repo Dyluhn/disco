@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 import pytest
+from disco.agent_server.preview_bootstrap import preview_storage_reset_document
 from disco.agent_server.verify.runner import (
     AbstractVerifyClient,
     HttpVerifyClient,
@@ -256,6 +257,119 @@ async def test_http_verify_client_fetches_selected_preview_through_clean_capabil
         bootstrap_path,
         "/",
     ]
+
+
+async def test_http_verify_client_completes_preview_storage_reset_handoff() -> None:
+    seen: list[bytes] = []
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+    reset_body, reset_headers = preview_storage_reset_document("handoff-proof")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/conversations/{cid}/preview/capability":
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 5173,
+                    "transport": "canonical",
+                    "preview_authority": "live:proof",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            seen.append(request.content)
+            if request.content == b"intent=one-use-intent":
+                return httpx.Response(200, content=reset_body, headers=reset_headers)
+            assert request.content == b"handoff=handoff-proof"
+            return httpx.Response(
+                200,
+                json={"target": "/"},
+                headers={
+                    "set-cookie": (
+                        "disco_local_preview_19120=cap-proof; Path=/; HttpOnly; SameSite=Strict"
+                    )
+                },
+            )
+        if request.url.path == "/":
+            assert "disco_local_preview_19120=cap-proof" in request.headers["cookie"]
+            return httpx.Response(200, content=b"<h1>RESET APP</h1>")
+        return httpx.Response(404)
+
+    client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
+    client.auth._csrf_token = "csrf-proof"
+    client.auth._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
+
+    assert await client.fetch_preview(cid) == (200, b"<h1>RESET APP</h1>")
+    assert seen == [b"intent=one-use-intent", b"handoff=handoff-proof"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("malformed_document", None),
+        ("premature_cookie", None),
+        ("failed_handoff", (409, b"preview authority changed")),
+        ("wrong_target", None),
+        ("session_cookie", None),
+    ],
+)
+async def test_http_verify_client_fails_closed_on_invalid_storage_handoff(
+    mode: str,
+    expected: tuple[int, bytes] | None,
+) -> None:
+    cid = "conv_a1b2c3d4proof"
+    bootstrap_path = "/__disco/preview-auth"
+    reset_body, reset_headers = preview_storage_reset_document("handoff-proof")
+    bootstrap_posts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal bootstrap_posts
+        if request.url.path == f"/conversations/{cid}/preview/capability":
+            return httpx.Response(
+                200,
+                json={
+                    "bootstrap_url": f"http://127.0.0.2:19120{bootstrap_path}",
+                    "bootstrap_intent": "one-use-intent",
+                    "target_path": "/",
+                    "port": 5173,
+                    "transport": "canonical",
+                    "preview_authority": "live:proof",
+                },
+            )
+        if request.url.path == bootstrap_path:
+            bootstrap_posts += 1
+            if bootstrap_posts == 1:
+                body = b"not a reset document" if mode == "malformed_document" else reset_body
+                headers = dict(reset_headers)
+                if mode == "premature_cookie":
+                    headers["set-cookie"] = "unexpected=state; Path=/; HttpOnly"
+                return httpx.Response(200, content=body, headers=headers)
+            assert request.content == b"handoff=handoff-proof"
+            if mode == "failed_handoff":
+                return httpx.Response(409, content=b"preview authority changed")
+            target = "/wrong" if mode == "wrong_target" else "/"
+            cookie = (
+                "disco_session=must-not-cross; Path=/; HttpOnly"
+                if mode == "session_cookie"
+                else "disco_local_preview_19120=cap-proof; Path=/; HttpOnly"
+            )
+            return httpx.Response(
+                200,
+                json={"target": target},
+                headers={"set-cookie": cookie},
+            )
+        if request.url.path == "/":
+            raise AssertionError("invalid handoff must not reach generated content")
+        return httpx.Response(404)
+
+    client = HttpVerifyClient("http://127.0.0.1:8000", _transport=httpx.MockTransport(handler))
+    client.auth._csrf_token = "csrf-proof"
+    client.auth._cookies.set(SESSION_COOKIE, "session-proof", domain="127.0.0.1", path="/")
+
+    assert await client.fetch_preview(cid) == expected
+    assert bootstrap_posts == (1 if mode in {"malformed_document", "premature_cookie"} else 2)
 
 
 async def test_http_verify_client_refuses_bootstrap_that_installs_app_session() -> None:

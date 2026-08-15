@@ -267,7 +267,15 @@ def _phase_failure_cleanup(
         with contextlib.suppress(Exception):
             resolved = runner.run(
                 "resolve-failure-dossier-container",
-                [*compose, "ps", "-q", "agent-server"],
+                [
+                    engine.binary,
+                    "ps",
+                    "-aq",
+                    "--filter",
+                    f"label=com.docker.compose.project={project}",
+                    "--filter",
+                    "label=com.docker.compose.service=agent-server",
+                ],
                 cwd=checkout,
                 env=compose_env,
                 timeout=60,
