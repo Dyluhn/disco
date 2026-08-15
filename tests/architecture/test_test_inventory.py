@@ -610,8 +610,11 @@ class TestMappingStatic:
             # V51 adds three same-file fresh-device definitions: provider-chatter
             # filtering, native Docker/Podman dossier copies, and fail-closed
             # non-unique service resolution. No test file is added.
+            # V52 adds five same-file self-host lifecycle definitions for native
+            # Compose resource ownership and missing-volume restore. No test
+            # file is added.
             "python_test_file_count": 846,
-            "python_static_test_id_count": 10360,
+            "python_static_test_id_count": 10365,
             "typescript_test_file_count": 239,
             "typescript_static_test_id_count": 1214,
         }
@@ -994,7 +997,9 @@ class TestCollectedCounts:
             # V49 adds two non-parametrized verifier contract ids in that file.
             # V50 adds six collected verifier ids: one successful two-stage
             # handoff and five invalid-handoff parameter cases.
-            "packages": 10764,
+            # V52 adds six collected lifecycle ids from five static definitions;
+            # the native Docker/Podman discovery case expands twice.
+            "packages": 10770,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1122,7 +1127,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12597 == sum(expected.values())
+        assert collected["total"] == 12603 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1138,7 +1143,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12597}
+        assert result == {"collected_total": 12603}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1157,9 +1162,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10360,
+            "python_static_ids": 10365,
             "typescript_static_ids": 1214,
-            "collected_total": 12597,
+            "collected_total": 12603,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

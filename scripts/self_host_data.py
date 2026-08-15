@@ -9,6 +9,7 @@ import io
 import json
 import os
 import posixpath
+import re
 import shutil
 import sqlite3
 import stat
@@ -21,7 +22,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
+from typing import BinaryIO, Literal, overload
 
 _ARCHIVE_ROOT = "disco-backup-v1"
 _MANIFEST_NAME = f"{_ARCHIVE_ROOT}/manifest.json"
@@ -29,6 +30,9 @@ _DATA_PREFIX = f"{_ARCHIVE_ROOT}/data/"
 _DB_NAME = "disco.db"
 _DB_SIDECARS = frozenset({f"{_DB_NAME}-wal", f"{_DB_NAME}-shm"})
 _DESTRUCTIVE_CONFIRMATION = "DELETE_DISCO_DATA"
+_COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+_COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+_DATA_VOLUME = "disco-data"
 
 
 class DataLifecycleError(RuntimeError):
@@ -277,9 +281,7 @@ def _verify_restored_entries(extracted_data: Path, manifest: dict[str, object]) 
 
 
 def _verify_restored_database(extracted_data: Path) -> None:
-    with closing(
-        sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True)
-    ) as check:
+    with closing(sqlite3.connect(f"file:{extracted_data / _DB_NAME}?mode=ro", uri=True)) as check:
         result = check.execute("PRAGMA integrity_check").fetchone()
     if result != ("ok",):
         raise DataLifecycleError(f"restored SQLite integrity check failed: {result!r}")
@@ -321,6 +323,7 @@ def restore_archive(source: BinaryIO, data_dir: Path) -> dict[str, object]:
 class _Compose:
     def __init__(self, engine: str, compose_file: Path, project_name: str) -> None:
         self.engine = engine
+        self.project_name = project_name
         self.command = [engine, "compose", "-f", str(compose_file), "-p", project_name]
 
     def run(
@@ -328,12 +331,11 @@ class _Compose:
         *arguments: str,
         stdin: BinaryIO | None = None,
         stdout: BinaryIO | int | None = None,
-        capture: bool = False,
     ) -> subprocess.CompletedProcess:
         completed = subprocess.run(  # noqa: S603 - fixed engine + typed argv
             [*self.command, *arguments],
             stdin=stdin,
-            stdout=subprocess.PIPE if capture else stdout,
+            stdout=stdout,
             stderr=subprocess.PIPE,
             check=False,
         )
@@ -344,22 +346,87 @@ class _Compose:
             )
         return completed
 
-    def text(self, *arguments: str) -> str:
-        return self.run(*arguments, capture=True).stdout.decode("utf-8", errors="strict")
+    def _engine_text(self, *arguments: str) -> str:
+        completed = subprocess.run(  # noqa: S603 - fixed engine + typed argv
+            [self.engine, *arguments],
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode:
+            detail = completed.stderr.decode("utf-8", errors="replace").strip()
+            raise DataLifecycleError(
+                f"Container engine command failed ({' '.join(arguments)}): "
+                f"{detail or completed.returncode}"
+            )
+        return completed.stdout.decode("utf-8", errors="strict")
 
-    def volume_name(self) -> str:
-        config = json.loads(self.text("config", "--format", "json"))
-        try:
-            name = config["volumes"]["disco-data"]["name"]
-        except (KeyError, TypeError) as exc:
-            raise DataLifecycleError("Compose config has no named disco-data volume") from exc
-        if not isinstance(name, str) or not name:
-            raise DataLifecycleError("Compose resolved an invalid disco-data volume name")
-        return name
+    @staticmethod
+    def _resource_lines(output: str, *, kind: str) -> tuple[str, ...]:
+        lines = tuple(line.strip() for line in output.splitlines() if line.strip())
+        pattern = r"[0-9a-f]{12,64}" if kind == "container" else r"[A-Za-z0-9][A-Za-z0-9_.-]*"
+        if any(re.fullmatch(pattern, line) is None for line in lines):
+            raise DataLifecycleError(f"Container engine returned an invalid {kind} identity")
+        return lines
+
+    @overload
+    def volume_name(self, *, required: Literal[True] = True) -> str: ...
+
+    @overload
+    def volume_name(self, *, required: Literal[False]) -> str | None: ...
+
+    def volume_name(self, *, required: bool = True) -> str | None:
+        default_name = f"{self.project_name}_{_DATA_VOLUME}"
+        names = self._resource_lines(
+            self._engine_text(
+                "volume",
+                "ls",
+                "--quiet",
+                "--filter",
+                f"label={_COMPOSE_PROJECT_LABEL}={self.project_name}",
+            ),
+            kind="volume",
+        )
+        if len(names) == 1:
+            if names[0] != default_name:
+                raise DataLifecycleError(
+                    f"Compose project owns unexpected volume {names[0]!r}; "
+                    f"expected {default_name!r}"
+                )
+            return names[0]
+        if len(names) > 1:
+            raise DataLifecycleError(
+                f"Compose project has {len(names)} data-volume candidates; expected one"
+            )
+        if _volume_exists(self.engine, default_name):
+            raise DataLifecycleError(
+                f"data volume exists without Compose project ownership: {default_name}"
+            )
+        if required:
+            raise DataLifecycleError("Compose project has no data volume")
+        return None
 
     def running_data_services(self) -> tuple[str, ...]:
-        running = set(self.text("ps", "--status", "running", "--services").splitlines())
-        return tuple(name for name in ("app-server", "agent-server") if name in running)
+        running: list[str] = []
+        for service in ("app-server", "agent-server"):
+            container_ids = self._resource_lines(
+                self._engine_text(
+                    "ps",
+                    "--quiet",
+                    "--filter",
+                    f"label={_COMPOSE_PROJECT_LABEL}={self.project_name}",
+                    "--filter",
+                    f"label={_COMPOSE_SERVICE_LABEL}={service}",
+                ),
+                kind="container",
+            )
+            if len(container_ids) > 1:
+                raise DataLifecycleError(
+                    f"Compose service {service!r} has {len(container_ids)} running containers; "
+                    "expected at most one"
+                )
+            if container_ids:
+                running.append(service)
+        return tuple(running)
 
 
 def _engine(name: str) -> str:
@@ -444,17 +511,19 @@ def _host_backup(compose: _Compose, engine: str, output: Path) -> None:
     print(f"Backup created: {output} (source volume: {volume})")
 
 
-def _host_restore(compose: _Compose, engine: str, archive: Path) -> None:
+def _host_restore(compose: _Compose, archive: Path) -> None:
     archive = archive.expanduser().resolve()
     if not archive.is_file() or archive.is_symlink():
         raise DataLifecycleError(f"backup is not a regular file: {archive}")
-    volume = compose.volume_name()
-    if not _volume_exists(engine, volume):
-        subprocess.run([engine, "volume", "create", volume], check=True)  # noqa: S603
+    volume = compose.volume_name(required=False)
     running = _stop_for_snapshot(compose)
     try:
         with archive.open("rb") as handle:
             _container_helper(compose, "_archive-restore", stdin=handle)
+        resolved_volume = compose.volume_name()
+        if volume is not None and resolved_volume != volume:
+            raise DataLifecycleError("Compose data-volume identity changed during restore")
+        volume = resolved_volume
         compose.run("up", "-d", "app-server", "agent-server", "frontend")
     except BaseException:
         _restart_snapshot_services(compose, running)
@@ -531,7 +600,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "backup":
         _host_backup(compose, engine, args.output)
     elif args.command == "restore":
-        _host_restore(compose, engine, args.archive)
+        _host_restore(compose, args.archive)
     elif args.command == "upgrade":
         _host_backup(compose, engine, args.backup)
         compose.run("build", "--pull", "app-server", "frontend", "sandbox-image")

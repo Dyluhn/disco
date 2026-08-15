@@ -6,6 +6,7 @@ import io
 import json
 import sqlite3
 import stat
+import subprocess
 import tarfile
 from contextlib import closing
 from pathlib import Path
@@ -160,6 +161,108 @@ class _FakeCompose:
 
     def run(self, *arguments: str) -> None:
         self.calls.append(arguments)
+
+
+@pytest.mark.parametrize("engine", ["docker", "podman"])
+def test_compose_resource_discovery_uses_native_project_labels(monkeypatch, engine) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        calls.append(command)
+        if command[1:3] == ["volume", "ls"]:
+            stdout = b"campaign_disco-data\n"
+        elif command[-1] == "label=com.docker.compose.service=app-server":
+            stdout = b"aaaaaaaaaaaa\n"
+        else:
+            stdout = b""
+        return subprocess.CompletedProcess(command, 0, stdout, b"")
+
+    monkeypatch.setattr(lifecycle.subprocess, "run", fake_run)
+    compose = lifecycle._Compose(engine, Path("/repo/compose.yaml"), "campaign")
+
+    assert compose.volume_name() == "campaign_disco-data"
+    assert compose.running_data_services() == ("app-server",)
+    assert all(command[0] == engine and command[1] != "compose" for command in calls)
+    assert calls[0] == [
+        engine,
+        "volume",
+        "ls",
+        "--quiet",
+        "--filter",
+        "label=com.docker.compose.project=campaign",
+    ]
+
+
+def test_compose_volume_discovery_fails_closed_on_wrong_or_ambiguous_ownership(
+    monkeypatch,
+) -> None:
+    compose = lifecycle._Compose("podman", Path("/repo/compose.yaml"), "campaign")
+    monkeypatch.setattr(compose, "_engine_text", lambda *_args: "campaign_other-data\n")
+    with pytest.raises(lifecycle.DataLifecycleError, match="owns unexpected volume"):
+        compose.volume_name()
+
+    monkeypatch.setattr(
+        compose,
+        "_engine_text",
+        lambda *_args: "campaign_disco-data\ncampaign_other-data\n",
+    )
+
+    with pytest.raises(lifecycle.DataLifecycleError, match="2 data-volume candidates"):
+        compose.volume_name()
+
+
+def test_compose_missing_volume_distinguishes_new_from_unowned(monkeypatch) -> None:
+    compose = lifecycle._Compose("podman", Path("/repo/compose.yaml"), "campaign")
+    monkeypatch.setattr(compose, "_engine_text", lambda *_args: "")
+    monkeypatch.setattr(lifecycle, "_volume_exists", lambda *_args: False)
+    assert compose.volume_name(required=False) is None
+
+    monkeypatch.setattr(lifecycle, "_volume_exists", lambda *_args: True)
+    with pytest.raises(lifecycle.DataLifecycleError, match="without Compose project ownership"):
+        compose.volume_name(required=False)
+
+
+def test_compose_running_service_discovery_rejects_multiple_owners(monkeypatch) -> None:
+    compose = lifecycle._Compose("podman", Path("/repo/compose.yaml"), "campaign")
+    monkeypatch.setattr(compose, "_engine_text", lambda *_args: "a" * 12 + "\n" + "b" * 12)
+
+    with pytest.raises(lifecycle.DataLifecycleError, match="2 running containers"):
+        compose.running_data_services()
+
+
+def test_restore_lets_compose_create_and_then_binds_a_missing_volume(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class _RestoreCompose:
+        def __init__(self) -> None:
+            self.volume_names = iter((None, "campaign_disco-data"))
+            self.calls: list[tuple[str, ...]] = []
+
+        def volume_name(self, *, required: bool = True) -> str | None:
+            value = next(self.volume_names)
+            assert not required or value is not None
+            return value
+
+        def running_data_services(self) -> tuple[str, ...]:
+            return ()
+
+        def run(self, *arguments: str) -> None:
+            self.calls.append(arguments)
+
+    compose = _RestoreCompose()
+    helpers: list[str] = []
+    monkeypatch.setattr(
+        lifecycle,
+        "_container_helper",
+        lambda _compose, command, **_kwargs: helpers.append(command),
+    )
+    archive = tmp_path / "backup.tar.gz"
+    archive.write_bytes(b"backup")
+
+    lifecycle._host_restore(compose, archive)
+
+    assert helpers == ["_archive-restore"]
+    assert compose.calls == [("up", "-d", "app-server", "agent-server", "frontend")]
 
 
 def test_uninstall_retains_data_unless_exact_confirmation_is_present(monkeypatch) -> None:
