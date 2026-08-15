@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from . import ApiSession
-from .fresh_device_host import CommandRunner, Engine, ProductError, _canonical_image_id
+from .fresh_device_host import (
+    CommandRunner,
+    Engine,
+    ProductError,
+    _canonical_image_id,
+    _copy_compose_service_path,
+)
 
 
 def phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
@@ -57,18 +63,18 @@ def phase_build_search_export(
     """Copy dossiers, verify projects, and bind every exported ZIP."""
     from .. import fresh_device as fd
 
-    runner.run(
-        "copy-initial-dossiers",
-        fd._compose_command(
-            engine,
-            project,
-            "cp",
-            "agent-server:/app/test-record/disco-verify",
-            str(out / "initial-dossiers"),
-        ),
-        cwd=checkout,
-        env=compose_env,
-        timeout=300,
+    _copy_compose_service_path(
+        runner,
+        engine,
+        project,
+        "agent-server",
+        "/app/test-record/disco-verify",
+        out / "initial-dossiers",
+        checkout=checkout,
+        compose_env=compose_env,
+        resolve_name="resolve-initial-dossier-container",
+        copy_name="copy-initial-dossiers",
+        required=True,
     )
     projects_before = fd._project_ids(api.json("GET", api.agent_base, "/api/projects"))
     if not projects_before:

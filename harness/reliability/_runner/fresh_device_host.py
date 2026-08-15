@@ -85,7 +85,11 @@ def _utc_now() -> str:
 
 def _canonical_image_id(value: str) -> str:
     """Normalize Compose and engine inventory forms to one removable image ID."""
-    return f"sha256:{value.strip().removeprefix('sha256:')}"
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value).strip()
+    digest = clean.removeprefix("sha256:")
+    if re.fullmatch(r"[0-9a-f]{12,64}", digest) is None:
+        raise ValueError(f"invalid image ID: {value!r}")
+    return f"sha256:{digest}"
 
 
 @dataclass(frozen=True)
@@ -129,6 +133,59 @@ class CommandRunner:
             tail = (result.stdout or "")[-2_000:].strip()
             raise ProductError(f"{name} exited {result.returncode}: {tail}")
         return result
+
+
+def _copy_compose_service_path(
+    runner: CommandRunner,
+    engine: Engine,
+    project: str,
+    service: str,
+    source: str,
+    destination: Path,
+    *,
+    checkout: Path,
+    compose_env: dict[str, str],
+    resolve_name: str,
+    copy_name: str,
+    required: bool,
+) -> bool:
+    """Copy from one Compose service without relying on optional Compose commands."""
+    resolved = runner.run(
+        resolve_name,
+        [
+            engine.binary,
+            "ps",
+            "-aq",
+            "--filter",
+            f"label=com.docker.compose.project={project}",
+            "--filter",
+            f"label=com.docker.compose.service={service}",
+        ],
+        cwd=checkout,
+        env=compose_env,
+        timeout=60,
+        check=False,
+    )
+    container_ids = [
+        line.strip()
+        for line in resolved.stdout.splitlines()
+        if re.fullmatch(r"[0-9a-f]{12,64}", line.strip())
+    ]
+    if len(container_ids) != 1:
+        if required:
+            raise InfraError(
+                f"{resolve_name} expected one {service} container, found {len(container_ids)}"
+            )
+        return False
+    copied = runner.run(
+        copy_name,
+        [engine.binary, "cp", f"{container_ids[0]}:{source}", str(destination)],
+        cwd=checkout,
+        env=compose_env,
+        timeout=300,
+        check=required,
+    )
+    return copied.returncode == 0
 
 
 def _detect_engine(runner: CommandRunner) -> Engine:
@@ -265,41 +322,19 @@ def _phase_failure_cleanup(
     compose = [*engine.compose, "-p", project]
     if status != PASS:
         with contextlib.suppress(Exception):
-            resolved = runner.run(
-                "resolve-failure-dossier-container",
-                [
-                    engine.binary,
-                    "ps",
-                    "-aq",
-                    "--filter",
-                    f"label=com.docker.compose.project={project}",
-                    "--filter",
-                    "label=com.docker.compose.service=agent-server",
-                ],
-                cwd=checkout,
-                env=compose_env,
-                timeout=60,
-                check=False,
+            _copy_compose_service_path(
+                runner,
+                engine,
+                project,
+                "agent-server",
+                "/app/test-record/disco-verify",
+                runner.out / "failure-dossiers",
+                checkout=checkout,
+                compose_env=compose_env,
+                resolve_name="resolve-failure-dossier-container",
+                copy_name="copy-failure-dossiers",
+                required=False,
             )
-            container_ids = [
-                line.strip()
-                for line in resolved.stdout.splitlines()
-                if re.fullmatch(r"[0-9a-f]{12,64}", line.strip())
-            ]
-            if len(container_ids) == 1:
-                runner.run(
-                    "copy-failure-dossiers",
-                    [
-                        engine.binary,
-                        "cp",
-                        f"{container_ids[0]}:/app/test-record/disco-verify",
-                        str(runner.out / "failure-dossiers"),
-                    ],
-                    cwd=checkout,
-                    env=compose_env,
-                    timeout=300,
-                    check=False,
-                )
     with contextlib.suppress(Exception):
         runner.run(
             "failure-compose-logs",

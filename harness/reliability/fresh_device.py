@@ -95,9 +95,13 @@ def _compose_image_ids(
         env=compose_env,
         timeout=300,
     )
-    return sorted(
-        {_canonical_image_id(line) for line in result.stdout.splitlines() if line.strip()}
-    )
+    image_ids: set[str] = set()
+    for line in result.stdout.splitlines():
+        try:
+            image_ids.add(_canonical_image_id(line))
+        except ValueError:
+            continue
+    return sorted(image_ids)
 
 
 def _assert_verify_output(output: str, *, grounding: bool) -> None:

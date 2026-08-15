@@ -19,7 +19,12 @@ from disco.core.llm.secret_refs import is_legacy_env_name
 from harness.reliability import fresh_device as fresh_device_module
 from harness.reliability._runner import fresh_device_phases
 from harness.reliability._runner.api_session import ApiSession, _configure_driver
-from harness.reliability._runner.fresh_device_host import CommandRunner, Engine
+from harness.reliability._runner.fresh_device_host import (
+    CommandRunner,
+    Engine,
+    InfraError,
+    _copy_compose_service_path,
+)
 from harness.reliability._runner.fresh_device_journey import (
     FreshDeviceJourneyBindings,
     run_device_journey,
@@ -86,6 +91,27 @@ def test_verify_requires_real_grounding_pass() -> None:
     with pytest.raises(ProductError, match="SKIP never counts"):
         _assert_verify_output(base + "SKIP grounding\n", grounding=True)
     _assert_verify_output(base + "PASS grounding\n", grounding=True)
+
+
+def test_compose_image_ids_ignore_provider_chatter(tmp_path: Path) -> None:
+    class ImageRunner(CommandRunner):
+        def run(self, *args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            del args, kwargs
+            return subprocess.CompletedProcess(
+                (),
+                0,
+                stdout=(
+                    '\x1b[4m>>>> Executing external compose provider "/usr/bin/podman-compose"'
+                    ". <<<<\n\x1b[0m"
+                    "sha256:0123456789abcdef\n"
+                    "abcdef123456\n"
+                ),
+            )
+
+    engine = Engine("podman", ("podman", "compose"), "/run/podman/podman.sock")
+    assert fresh_device_module._compose_image_ids(
+        ImageRunner(tmp_path), engine, "project", tmp_path, {}, "images"
+    ) == ["sha256:0123456789abcdef", "sha256:abcdef123456"]
 
 
 def test_project_ids_reject_bad_shape_and_missing_workspaces() -> None:
@@ -864,7 +890,7 @@ class _UninstallRunner(CommandRunner):
         self.calls.append((name, tuple(command)))
         output = ""
         if name == "pre-uninstall-compose-images":
-            output = "sha256:candidate-image\n"
+            output = "sha256:deadbeefcafe\n"
         elif name in {"post-uninstall-all-image-ids", "post-uninstall-final-image-ids"}:
             output = self.all_images
         elif name == "post-uninstall-images":
@@ -875,8 +901,9 @@ class _UninstallRunner(CommandRunner):
 
 
 class _FailureCleanupRunner(CommandRunner):
-    def __init__(self, out: Path) -> None:
+    def __init__(self, out: Path, resolution: str = "abcdef1234567890\n") -> None:
         self.out = out
+        self.resolution = resolution
         self.calls: list[tuple[str, tuple[str, ...], bool]] = []
 
     def run(
@@ -891,8 +918,86 @@ class _FailureCleanupRunner(CommandRunner):
     ) -> subprocess.CompletedProcess[str]:
         del cwd, env, timeout
         self.calls.append((name, tuple(command), check))
-        output = "abcdef1234567890\n" if name == "resolve-failure-dossier-container" else ""
+        output = self.resolution if name.startswith("resolve-") else ""
         return subprocess.CompletedProcess(command, 0, stdout=output)
+
+
+@pytest.mark.parametrize("binary", ["docker", "podman"])
+def test_build_search_uses_native_engine_copy_for_dossiers(tmp_path: Path, binary: str) -> None:
+    runner = _FailureCleanupRunner(tmp_path)
+    engine = Engine(
+        binary=binary,
+        compose=(binary, "compose"),
+        sandbox_socket="/var/run/container-engine.sock",
+    )
+
+    class ProjectApi:
+        agent_base = "http://agent"
+
+        def json(self, *_args: Any) -> dict[str, Any]:
+            return {"projects": [{"id": "project-a", "files_missing": False}]}
+
+        def bytes(self, *_args: Any) -> bytes:
+            return _zip_bytes({"index.html": b"ok"})
+
+    projects, _digests = fresh_device_phases.phase_build_search_export(
+        runner,
+        engine,
+        "project",
+        tmp_path,
+        {},
+        tmp_path,
+        ProjectApi(),  # type: ignore[arg-type]
+        "http://agent",
+    )
+
+    assert projects == ["project-a"]
+    assert [name for name, _command, _check in runner.calls[:2]] == [
+        "resolve-initial-dossier-container",
+        "copy-initial-dossiers",
+    ]
+    assert runner.calls[0][1] == (
+        binary,
+        "ps",
+        "-aq",
+        "--filter",
+        "label=com.docker.compose.project=project",
+        "--filter",
+        "label=com.docker.compose.service=agent-server",
+    )
+    assert runner.calls[1][1] == (
+        binary,
+        "cp",
+        "abcdef1234567890:/app/test-record/disco-verify",
+        str(tmp_path / "initial-dossiers"),
+    )
+    assert all(
+        not (command[:2] == (binary, "compose") and "cp" in command)
+        for _, command, _ in runner.calls
+    )
+
+
+@pytest.mark.parametrize("resolution", ["", "abcdef123456\n123456abcdef\n"])
+def test_required_service_copy_refuses_nonunique_container(tmp_path: Path, resolution: str) -> None:
+    runner = _FailureCleanupRunner(tmp_path, resolution)
+    engine = Engine("podman", ("podman", "compose"), "/run/podman/podman.sock")
+
+    with pytest.raises(InfraError, match="expected one agent-server container"):
+        _copy_compose_service_path(
+            runner,
+            engine,
+            "project",
+            "agent-server",
+            "/source",
+            tmp_path / "destination",
+            checkout=tmp_path,
+            compose_env={},
+            resolve_name="resolve-required",
+            copy_name="copy-required",
+            required=True,
+        )
+
+    assert [name for name, _command, _check in runner.calls] == ["resolve-required"]
 
 
 def _assert_failure_cleanup_preserves_verifier_dossiers_before_teardown(
@@ -965,7 +1070,7 @@ def test_uninstall_binds_known_compose_images_and_removes_clone(tmp_path: Path) 
         sandbox_socket="/var/run/docker.sock",
     )
 
-    _phase_uninstall(runner, engine, "project", checkout, {}, tmp_path, ["sha256:candidate-image"])
+    _phase_uninstall(runner, engine, "project", checkout, {}, tmp_path, ["sha256:deadbeefcafe"])
 
     assert not checkout.exists()
     uninstall = dict(runner.calls)["uninstall"]
@@ -976,17 +1081,15 @@ def test_uninstall_binds_known_compose_images_and_removes_clone(tmp_path: Path) 
 def test_uninstall_rejects_a_known_compose_image_that_survives(tmp_path: Path) -> None:
     checkout = tmp_path / "clone"
     checkout.mkdir()
-    runner = _UninstallRunner(all_images="sha256:candidate-image\n")
+    runner = _UninstallRunner(all_images="sha256:deadbeefcafe\n")
     engine = Engine(
         binary="docker",
         compose=("docker", "compose"),
         sandbox_socket="/var/run/docker.sock",
     )
 
-    with pytest.raises(ProductError, match="known_images=.*candidate-image"):
-        _phase_uninstall(
-            runner, engine, "project", checkout, {}, tmp_path, ["sha256:candidate-image"]
-        )
+    with pytest.raises(ProductError, match="known_images=.*deadbeefcafe"):
+        _phase_uninstall(runner, engine, "project", checkout, {}, tmp_path, ["sha256:deadbeefcafe"])
     assert checkout.exists()
 
 
@@ -994,7 +1097,7 @@ def test_uninstall_inventory_is_taken_after_exact_retired_image_removal(tmp_path
     checkout = tmp_path / "clone"
     checkout.mkdir()
     runner = _UninstallRunner(
-        all_images="sha256:candidate-image\n",
+        all_images="sha256:deadbeefcafe\n",
         removal_succeeds=True,
     )
     engine = Engine(
@@ -1003,7 +1106,7 @@ def test_uninstall_inventory_is_taken_after_exact_retired_image_removal(tmp_path
         sandbox_socket="/var/run/docker.sock",
     )
 
-    _phase_uninstall(runner, engine, "project", checkout, {}, tmp_path, ["sha256:candidate-image"])
+    _phase_uninstall(runner, engine, "project", checkout, {}, tmp_path, ["sha256:deadbeefcafe"])
 
     names = [name for name, _command in runner.calls]
     assert names.index("uninstall-retired-images") < names.index("post-uninstall-images")
