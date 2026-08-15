@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
+  "source_identity": "9bfb4373e2545524766f6d939d478f79bd01209e",
   "collected": {
     "counts": {
       "packages": 10764,
-      "harness": 1423,
+      "harness": 1428,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12592,
+    "total": 12597,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -12011,7 +12011,10 @@
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[unsafe-member-type]",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[unsafe-symlink-target]",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[wrong-shape]",
+        "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers[docker]",
+        "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers[podman]",
         "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use",
+        "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images0-upgrade_images0-install]",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images1-upgrade_images1-upgrade]",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
@@ -12025,6 +12028,8 @@
         "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
         "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
         "harness/reliability/tests/test_fresh_device.py::test_project_zip_must_be_nonempty_and_uncorrupt",
+        "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container[]",
+        "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container[abcdef123456\\n123456abcdef\\n]",
         "harness/reliability/tests/test_fresh_device.py::test_uninstall_binds_known_compose_images_and_removes_clone",
         "harness/reliability/tests/test_fresh_device.py::test_uninstall_inventory_is_taken_after_exact_retired_image_removal",
         "harness/reliability/tests/test_fresh_device.py::test_uninstall_matches_bare_compose_id_to_full_dangling_inventory",
@@ -12613,9 +12618,9 @@
     }
   },
   "mapping_static": {
-    "identity": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
+    "identity": "9bfb4373e2545524766f6d939d478f79bd01209e",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10357,
+    "python_static_test_id_count": 10360,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14411,7 +14416,9 @@
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_digest_is_timestamp_neutral_and_database_selective",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_recomputes_exact_archive_members",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes",
+      "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers",
       "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use",
+      "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure",
@@ -14424,6 +14431,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
       "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
       "harness/reliability/tests/test_fresh_device.py::test_project_zip_must_be_nonempty_and_uncorrupt",
+      "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container",
       "harness/reliability/tests/test_fresh_device.py::test_uninstall_binds_known_compose_images_and_removes_clone",
       "harness/reliability/tests/test_fresh_device.py::test_uninstall_inventory_is_taken_after_exact_retired_image_removal",
       "harness/reliability/tests/test_fresh_device.py::test_uninstall_matches_bare_compose_id_to_full_dangling_inventory",
@@ -29921,6 +29929,36 @@
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V51-PORTABLE-EVIDENCE-COPY",
+      "root": "harness",
+      "source_identity_before": "dce4634fc10d6b24a335bfe9cc0719357d2ed313",
+      "source_identity_after": "9bfb4373e2545524766f6d939d478f79bd01209e",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1423,
+          "after_count": 1428,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers[docker]",
+            "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers[podman]",
+            "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
+            "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container[]",
+            "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container[abcdef123456\\n123456abcdef\\n]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers",
+          "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
+          "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
