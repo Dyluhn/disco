@@ -12,12 +12,18 @@ from .fresh_device_host import CommandRunner, Engine, ProductError, _canonical_i
 
 
 def phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
-    """Pair a fresh session and configure the driver."""
+    """Pair through the packaged front door and configure the driver."""
     import os
 
     from .. import fresh_device as fd
 
-    api = fd.ApiSession(app_base=app, agent_base=agent, origin=front)
+    del app, agent
+    front = front.rstrip("/")
+    api = fd.ApiSession(
+        app_base=f"{front}/svc/app",
+        agent_base=f"{front}/svc/agent",
+        origin=front,
+    )
     api.pair()
     fd._configure_driver(
         api,
@@ -25,7 +31,7 @@ def phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
         model=os.environ["DISCO_FRESH_DRIVER_MODEL"].strip(),
         api_key=os.environ.get("DISCO_FRESH_DRIVER_API_KEY", "").strip(),
     )
-    assignments = api.json("GET", app, "/api/models/assignments")
+    assignments = api.json("GET", api.app_base, "/api/models/assignments")
     if assignments.get("default_model") != "fresh-device-driver":
         raise ProductError("driver assignment did not round-trip through Settings API")
     return api
@@ -57,11 +63,11 @@ def phase_build_search_export(
         env=compose_env,
         timeout=300,
     )
-    projects_before = fd._project_ids(api.json("GET", agent, "/api/projects"))
+    projects_before = fd._project_ids(api.json("GET", api.agent_base, "/api/projects"))
     if not projects_before:
         raise ProductError("Build scenario produced no persisted project")
     return projects_before, fd._export_project_digests(
-        api, agent, projects_before, out, "before-upgrade"
+        api, api.agent_base, projects_before, out, "before-upgrade"
     )
 
 
@@ -98,10 +104,10 @@ def phase_cold_restart(
     fd._wait_url(f"{app}/api/health", timeout=600)
     fd._wait_url(f"{front}/env.js", timeout=600)
     readiness_seconds = fd._assert_duration("restart", started, 900)
-    if fd._project_ids(api.json("GET", agent, "/api/projects")) != projects_before:
+    if fd._project_ids(api.json("GET", api.agent_base, "/api/projects")) != projects_before:
         raise ProductError("project identity changed across a full stack restart")
     current_project_digests = fd._export_project_digests(
-        api, agent, projects_before, out, "after-restart"
+        api, api.agent_base, projects_before, out, "after-restart"
     )
     if current_project_digests != project_digests:
         raise ProductError("project bytes changed across a full stack restart")
@@ -185,13 +191,13 @@ def _assert_upgrade_persistence(
 ) -> tuple[dict[str, str], str]:
     from .. import fresh_device as fd
 
-    if fd._project_ids(api.json("GET", agent, "/api/projects")) != projects_before:
+    if fd._project_ids(api.json("GET", api.agent_base, "/api/projects")) != projects_before:
         raise ProductError("upgrade lost or rewrote persisted projects")
-    assignments = api.json("GET", app, "/api/models/assignments")
+    assignments = api.json("GET", api.app_base, "/api/models/assignments")
     if assignments.get("default_model") != "fresh-device-driver":
         raise ProductError("upgrade lost the configured driver assignment")
     current_project_digests = fd._export_project_digests(
-        api, agent, projects_before, out, "after-upgrade"
+        api, api.agent_base, projects_before, out, "after-upgrade"
     )
     if current_project_digests != project_digests:
         raise ProductError("upgrade changed committed project bytes")
@@ -334,7 +340,7 @@ def phase_backup_restore(
     """Destroy the data volume, restore a selected backup, and prove RPO 0."""
     from .. import fresh_device as fd
 
-    projects_at_snapshot = fd._project_ids(api.json("GET", agent, "/api/projects"))
+    projects_at_snapshot = fd._project_ids(api.json("GET", api.agent_base, "/api/projects"))
     if projects_at_snapshot != original_project_ids:
         raise ProductError("backup snapshot contains an unbound project identity")
     selected_archive, selected_manifest = fd._create_backup(
@@ -453,13 +459,13 @@ def _assert_restored_api_state(
 ) -> dict[str, str]:
     from .. import fresh_device as fd
 
-    if fd._project_ids(api.json("GET", agent, "/api/projects")) != projects_at_snapshot:
+    if fd._project_ids(api.json("GET", api.agent_base, "/api/projects")) != projects_at_snapshot:
         raise ProductError("backup restore lost or rewrote persisted projects")
-    assignments = api.json("GET", app, "/api/models/assignments")
+    assignments = api.json("GET", api.app_base, "/api/models/assignments")
     if assignments.get("default_model") != "fresh-device-driver":
         raise ProductError("backup restore lost the configured driver assignment")
     restored = fd._export_project_digests(
-        api, agent, original_project_ids, out, "after-restore"
+        api, api.agent_base, original_project_ids, out, "after-restore"
     )
     if restored != original_project_digests:
         raise ProductError("backup restore changed committed project bytes")

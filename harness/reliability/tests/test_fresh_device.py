@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.cookiejar
 import io
 import json
 import sqlite3
@@ -14,6 +15,7 @@ from typing import Any
 import pytest
 
 from harness.reliability import fresh_device as fresh_device_module
+from harness.reliability._runner.api_session import ApiSession
 from harness.reliability._runner.fresh_device_host import CommandRunner, Engine
 from harness.reliability._runner.fresh_device_journey import (
     FreshDeviceJourneyBindings,
@@ -41,6 +43,30 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
         for name, data in files.items():
             archive.writestr(name, data)
     return output.getvalue()
+
+
+def _add_session_cookie(api: ApiSession) -> None:
+    api.jar.set_cookie(
+        http.cookiejar.Cookie(
+            version=0,
+            name="disco_session",
+            value="session",
+            port=None,
+            port_specified=False,
+            domain="front",
+            domain_specified=False,
+            domain_initial_dot=False,
+            path="/",
+            path_specified=True,
+            secure=False,
+            expires=None,
+            discard=True,
+            comment=None,
+            comment_url=None,
+            rest={},
+            rfc2109=False,
+        )
+    )
 
 
 def test_device_label_is_only_safe_human_metadata() -> None:
@@ -604,6 +630,8 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
 
     class FakeApi:
         def __init__(self, *, app_base: str, agent_base: str, origin: str) -> None:
+            self.app_base = app_base
+            self.agent_base = agent_base
             calls.append(("init", (app_base, agent_base, origin)))
 
         def pair(self) -> None:
@@ -625,7 +653,10 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
     api = fresh_device_module._phase_pair_and_config("app", "front", "agent")
 
     assert isinstance(api, FakeApi)
-    assert calls[0:2] == [("init", ("app", "agent", "front")), ("pair", None)]
+    assert calls[0:2] == [
+        ("init", ("front/svc/app", "front/svc/agent", "front")),
+        ("pair", None),
+    ]
     assert calls[2][0] == "configure"
     assert calls[2][1][0] is api
     assert calls[2][1][1] == {
@@ -633,7 +664,98 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
         "model": "driver-model",
         "api_key": "driver-secret",
     }
-    assert calls[3] == ("json", ("GET", "app", "/api/models/assignments"))
+    assert calls[3] == (
+        "json",
+        ("GET", "front/svc/app", "/api/models/assignments"),
+    )
+
+
+def test_api_session_pair_uses_tokenless_mint_without_fetching_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = ApiSession(
+        app_base="http://front/svc/app", agent_base="http://front/svc/agent", origin="http://front"
+    )
+    calls: list[tuple[str, str, Any]] = []
+
+    def request(
+        method: str,
+        url: str,
+        *,
+        data: Any | None = None,
+        timeout: float = 60,
+    ) -> tuple[int, bytes, dict[str, str]]:
+        del timeout
+        calls.append((method, url, data))
+        return 200, b'{"csrf_token":"csrf"}', {}
+
+    monkeypatch.setattr(api, "_request", request)
+    _add_session_cookie(api)
+
+    api.pair()
+
+    assert calls == [("POST", "http://front/svc/app/api/auth/mint", {})]
+    assert api.csrf == "csrf"
+
+
+def test_api_session_pair_fetches_token_only_after_pairing_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = ApiSession(
+        app_base="http://front/svc/app", agent_base="http://front/svc/agent", origin="http://front"
+    )
+    calls: list[tuple[str, str, Any]] = []
+    responses = iter(
+        [
+            (401, b'{"detail":{"reason":"pairing_required"}}', {}),
+            (200, b'{"pairing_token":"from-loopback"}', {}),
+            (200, b'{"csrf_token":"csrf"}', {}),
+        ]
+    )
+
+    def request(
+        method: str,
+        url: str,
+        *,
+        data: Any | None = None,
+        timeout: float = 60,
+    ) -> tuple[int, bytes, dict[str, str]]:
+        del timeout
+        calls.append((method, url, data))
+        return next(responses)
+
+    monkeypatch.setattr(api, "_request", request)
+    _add_session_cookie(api)
+
+    api.pair()
+
+    assert calls == [
+        ("POST", "http://front/svc/app/api/auth/mint", {}),
+        ("GET", "http://front/svc/app/api/auth/pairing-token", None),
+        (
+            "POST",
+            "http://front/svc/app/api/auth/mint",
+            {"pairing_token": "from-loopback"},
+        ),
+    ]
+
+
+def test_api_session_pair_raises_the_shared_product_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    api = ApiSession(
+        app_base="http://front/svc/app", agent_base="http://front/svc/agent", origin="http://front"
+    )
+    responses = iter(
+        [
+            (401, b'{"detail":{"reason":"pairing_required"}}', {}),
+            (403, b'{"detail":{"reason":"loopback_required"}}', {}),
+        ]
+    )
+    monkeypatch.setattr(api, "_request", lambda *_args, **_kwargs: next(responses))
+
+    with pytest.raises(ProductError, match="pairing is required.*HTTP 403"):
+        api.pair()
 
 
 class _UninstallRunner(CommandRunner):
