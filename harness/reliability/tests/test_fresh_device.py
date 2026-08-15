@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from disco.core.llm.secret_refs import is_legacy_env_name
 
 from harness.reliability import fresh_device as fresh_device_module
 from harness.reliability._runner import fresh_device_phases
-from harness.reliability._runner.api_session import ApiSession
+from harness.reliability._runner.api_session import ApiSession, _configure_driver
 from harness.reliability._runner.fresh_device_host import CommandRunner, Engine
 from harness.reliability._runner.fresh_device_journey import (
     FreshDeviceJourneyBindings,
@@ -638,15 +639,32 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
         def pair(self) -> None:
             calls.append(("pair", None))
 
-        def json(self, method: str, base: str, path: str) -> dict[str, str]:
-            calls.append(("json", (method, base, path)))
-            return {"default_model": "fresh-device-driver"}
+        def json(
+            self,
+            method: str,
+            base: str,
+            path: str,
+            *,
+            data: Any | None = None,
+        ) -> dict[str, str]:
+            calls.append(("json", (method, base, path, data)))
+            if method == "GET":
+                return {"default_model": "fresh-device-driver"}
+            return {}
 
-    def configure(api: Any, **settings: str) -> None:
-        calls.append(("configure", (api, settings)))
+        def _request(
+            self,
+            method: str,
+            url: str,
+            *,
+            data: Any | None = None,
+            timeout: float = 60,
+        ) -> tuple[int, bytes, dict[str, str]]:
+            calls.append(("request", (method, url, data, timeout)))
+            return 201, b"{}", {}
 
     monkeypatch.setattr(fresh_device_module, "ApiSession", FakeApi)
-    monkeypatch.setattr(fresh_device_module, "_configure_driver", configure)
+    monkeypatch.setattr(fresh_device_module, "_configure_driver", _configure_driver)
     monkeypatch.setenv("DISCO_FRESH_DRIVER_BASE_URL", "https://driver.invalid/v1")
     monkeypatch.setenv("DISCO_FRESH_DRIVER_MODEL", "driver-model")
     monkeypatch.setenv("DISCO_FRESH_DRIVER_API_KEY", "driver-secret")
@@ -658,16 +676,26 @@ def test_pair_phase_resolves_parent_api_and_driver_seams(
         ("init", ("app", "agent", "app")),
         ("pair", None),
     ]
-    assert calls[2][0] == "configure"
-    assert calls[2][1][0] is api
-    assert calls[2][1][1] == {
-        "base_url": "https://driver.invalid/v1",
-        "model": "driver-model",
-        "api_key": "driver-secret",
-    }
-    assert calls[3] == (
+    assert calls[2] == (
         "json",
-        ("GET", "app", "/api/models/assignments"),
+        (
+            "PUT",
+            "app",
+            "/api/secrets/fresh-device-driver",
+            {"value": "driver-secret"},
+        ),
+    )
+    assert calls[3][0] == "request"
+    model_request = calls[3][1]
+    assert model_request[0:2] == ("POST", "app/api/models")
+    assert model_request[2]["id"] == "fresh-device-driver"
+    assert model_request[2]["api_key_env"] == "fresh-device-driver"
+    assert not is_legacy_env_name(model_request[2]["api_key_env"])
+    assert calls[4][0:1] == ("json",)
+    assert calls[4][1][0:3] == ("PUT", "app", "/api/models/assignments")
+    assert calls[5] == (
+        "json",
+        ("GET", "app", "/api/models/assignments", None),
     )
 
 

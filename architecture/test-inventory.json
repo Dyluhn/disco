@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
+  "source_identity": "e37ecf09f49e9fb12ea9af8d12a2ed619b3d599a",
   "collected": {
     "counts": {
       "packages": 10754,
@@ -12601,7 +12601,7 @@
     }
   },
   "mapping_static": {
-    "identity": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
+    "identity": "e37ecf09f49e9fb12ea9af8d12a2ed619b3d599a",
     "python_test_file_count": 846,
     "python_static_test_id_count": 10349,
     "python_test_files": [
@@ -30695,6 +30695,41 @@
         "harness": {
           "before_count": 1415,
           "after_count": 1415,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V46-FRESH-DEVICE-SECRET-REF",
+      "root": "multiple",
+      "source_identity_before": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
+      "source_identity_after": "e37ecf09f49e9fb12ea9af8d12a2ed619b3d599a",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10754,
+          "after_count": 10754,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1421,
+          "after_count": 1421,
           "added_ids": []
         },
         "integrations": {
