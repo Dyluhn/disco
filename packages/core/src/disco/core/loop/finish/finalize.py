@@ -19,11 +19,17 @@ from .common import (
     ToolCall,
     VerifierVerdictEvent,
     _app_verify_command,
+    _appkit_scope_active,
     _FinishGateComponent,
     _static_verify_command,
     signals,
 )
 from .finalize_parts import finish_step, seal_gate
+from .verify_gate_parts.host_claims import (
+    governed_verification_contract,
+    handoff_precondition_missing,
+    strict_appkit_contract,
+)
 
 
 @dataclass(frozen=True)
@@ -58,8 +64,7 @@ def _unverified_release_final_message(events: list[Event]) -> str:
     else:
         verdict = (latest.verdict or "none").strip() or "none"
         observed = (
-            f"The last host verifier verdict on record is {verdict!r} "
-            f"(verified={latest.verified})."
+            f"The last host verifier verdict on record is {verdict!r} (verified={latest.verified})."
         )
     return (
         "⚠ UNVERIFIED FINAL RESULT: Required host/browser verification did not pass "
@@ -145,7 +150,20 @@ class _FinalizeService(_FinishGateComponent):
         # it veto completion or reopen build. External DoD and host-owned
         # verification remain authoritative below.
         assert step.tool_call is not None  # caller (engine loop) enters only on the finish tool
-        resolved = await self.resolve_verify_command(step.tool_call.arguments)
+        handoff_missing = False
+        if step.tool_call.arguments.get("verify"):
+            contract = governed_verification_contract(events)
+            handoff_missing = handoff_precondition_missing(
+                events,
+                contract,
+                strict_appkit=strict_appkit_contract(contract),
+                appkit_scope_active=lambda: _appkit_scope_active(self._loop),
+            )
+        resolved = (
+            _ResolvedVerify(command="")
+            if handoff_missing
+            else await self.resolve_verify_command(step.tool_call.arguments)
+        )
 
         # E4a: malformed structured static directive — emit reminder, skip optional verifier.
         if resolved.ignored_reason:
@@ -231,9 +249,7 @@ class _FinalizeService(_FinishGateComponent):
                 return Disp.CONTINUE
             unverified_release = _unverified_release_active(events)
             final_content = (
-                _unverified_release_final_message(events)
-                if unverified_release
-                else step.thought
+                _unverified_release_final_message(events) if unverified_release else step.thought
             )
             # Record the agent's final message (the answer) before
             # finishing — the deliverable text belongs on the log, not

@@ -63,6 +63,34 @@ _W39_ESCALATION_CLAUSE = (
 )
 _W39_SCRIPT_ESCALATION_CLAUSE = " Asking it again is counted: " + _W39_CAP_CONSEQUENCE + "."
 
+_W39_REMINDER_TEMPLATE = (
+    "<system-reminder>\n"
+    "{sentinel} {subject} `{command}` earlier (step {step}) and it "
+    "passed, and this run's record shows no change since then. Re-run it "
+    "only if you have changed something relevant — otherwise act on the "
+    "result you already have instead of re-verifying.{escalation}{result}\n"
+    "</system-reminder>"
+)
+_W39_SCRIPT_REMINDER_TEMPLATE = (
+    "<system-reminder>\n"
+    "{sentinel} You already ran `{script}` at step {step} (as `{command}`) and it "
+    "passed, and this run's record shows no change since then. Spelling the command "
+    "differently asks the same question. Re-run it only if you have changed "
+    "something relevant — otherwise act on the result you already have instead of "
+    "re-verifying.{escalation}{result}\n"
+    "</system-reminder>"
+)
+
+
+def _w39_exact_subject(event: ActionEvent) -> str:
+    """Attribute an automatic verification probe to the host that ran it."""
+
+    return (
+        "The host verification probe already ran"
+        if isinstance(event.meta, dict) and event.meta.get("verify_probe") is True
+        else "You already ran"
+    )
+
 
 def _w39_identical_call_count(events: list[Event], fingerprint: str) -> int:
     """How many times this exact call has already been issued, plus this one.

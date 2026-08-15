@@ -18,6 +18,7 @@ from ..events import (
     ObservationEvent,
     StatusEvent,
 )
+from ..receipt_currency import _APPKIT_MUTATION_TOOLS, _appkit_receipt_is_exact
 
 F6_FILE_MUTATING_TOOLS = frozenset(
     {
@@ -53,15 +54,6 @@ DEBUG_PROBE_BUDGET_DETAIL = "debug_probe_budget_exhausted"
 BROWSER_INTERACTION_BUDGET_DETAIL = "browser_interaction_budget_exhausted"
 _BROWSER_STATE_ACTIONS = frozenset({"navigate", "back", "click", "press", "fill", "submit"})
 _VERIFIER_FILE_RECEIPT_TOOLS = F6_FILE_MUTATING_TOOLS
-_VERIFIER_APPKIT_RECEIPT_TOOLS = frozenset(
-    {
-        "app_create",
-        "app_add_section",
-        "app_update_content",
-        "app_set_design",
-        "app_add_primitive",
-    }
-)
 _SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 _RECOVERY_BOUNDARY_DETAILS = frozenset(
     {"plan_approved", "harvested_revision_plan", "alternative_picked:manual"}
@@ -176,9 +168,8 @@ def successful_mutation_with_receipt(
     if tool_name == "run_project_script":
         applied = structured.get("applied")
         return isinstance(applied, list) and bool(applied)
-    if tool_name in _VERIFIER_APPKIT_RECEIPT_TOOLS:
-        written = structured.get("files_written")
-        return isinstance(written, list) and bool(written)
+    if tool_name in _APPKIT_MUTATION_TOOLS:
+        return _appkit_receipt_is_exact(structured)
     if tool_name not in _VERIFIER_FILE_RECEIPT_TOOLS:
         return False
     path = structured.get("path")

@@ -376,6 +376,7 @@ async def prepare_typed_host_verdict(
             deliverable,
             f"verification could not run: {typed_host_mismatch(host_verdict, deliverable)}.",
         )
+        typed_result = typed_host_result(host_verdict, deliverable)
     if typed_result is not None:
         host_verdict["passed"] = typed_result.passed
         host_verdict["verdict"] = typed_result.status.value

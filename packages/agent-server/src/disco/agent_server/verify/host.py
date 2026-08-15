@@ -18,6 +18,7 @@ from disco.core.verification import (
     VerificationClaimKind,
     preview_binding_failure_result,
     structured_web_verification_result,
+    unavailable_verification_result,
 )
 from disco.tools.builtin.browser import BrowserTool
 from disco.tools.builtin.preview import PreviewStatusArgs, PreviewStatusTool
@@ -57,9 +58,7 @@ def _verification_target_url(deliverable: HostVerificationDeliverable) -> str | 
     return selected.verification_target_url(deliverable.artifact_path)
 
 
-def _game_steps_exact(
-    steps: Any, expected_profile: tuple[tuple[str, str | None], ...]
-) -> bool:
+def _game_steps_exact(steps: Any, expected_profile: tuple[tuple[str, str | None], ...]) -> bool:
     """Return whether observed steps match the declared profile exactly."""
     if not isinstance(steps, list) or len(steps) != len(expected_profile):
         return False
@@ -71,6 +70,7 @@ def _game_steps_exact(
         and not step.get("error")
         for step, (action, key) in zip(steps, expected_profile, strict=True)
     )
+
 
 def _game_interaction_claims(
     deliverable: HostVerificationDeliverable,
@@ -154,9 +154,7 @@ class HostWebAppVerifier:
             return await self._verify_via_evidence(deliverable)
         return self._unavailable_verdict(deliverable, "no host verifier context available")
 
-    def _admission_refusal(
-        self, deliverable: HostVerificationDeliverable
-    ) -> dict[str, Any] | None:
+    def _admission_refusal(self, deliverable: HostVerificationDeliverable) -> dict[str, Any] | None:
         """Refuse any admitted check no registered host verifier adapter owns.
 
         Returns the refusal verdict, or ``None`` when this verifier owns the
@@ -313,9 +311,7 @@ class HostWebAppVerifier:
             deliverable=deliverable,
             observed_url=str(verdict.get("url") or ""),
             reason=str(verdict["summary"]),
-            verifier_id=(
-                check.issuer_id if check is not None else "host.preview_binding@1"
-            ),
+            verifier_id=(check.issuer_id if check is not None else "host.preview_binding@1"),
             tool_id=(
                 check.operation
                 if check is not None
@@ -387,7 +383,7 @@ class HostWebAppVerifier:
         )
 
     @staticmethod
-    def _with_typed_result(
+    def _with_artifact_identity(
         deliverable: HostVerificationDeliverable,
         verdict: dict[str, Any],
         *,
@@ -396,13 +392,6 @@ class HostWebAppVerifier:
         out = dict(verdict)
         if preview_live_match is None:
             preview_live_match = not deliverable.preview_binding_required
-        game_interaction = out.get("game_interaction")
-        if deliverable.verification_medium == "game" and isinstance(game_interaction, dict):
-            interaction_claims = _game_interaction_claims(
-                deliverable, game_interaction
-            )
-            if interaction_claims:
-                out["interaction_claims"] = interaction_claims
         out["artifact_identity"] = {
             "conversation_id": deliverable.conversation_id,
             "artifact_path": deliverable.artifact_path,
@@ -416,6 +405,25 @@ class HostWebAppVerifier:
             ),
             "preview_live_match": preview_live_match,
         }
+        return out
+
+    @staticmethod
+    def _with_typed_result(
+        deliverable: HostVerificationDeliverable,
+        verdict: dict[str, Any],
+        *,
+        preview_live_match: bool | None = None,
+    ) -> dict[str, Any]:
+        out = HostWebAppVerifier._with_artifact_identity(
+            deliverable,
+            verdict,
+            preview_live_match=preview_live_match,
+        )
+        game_interaction = out.get("game_interaction")
+        if deliverable.verification_medium == "game" and isinstance(game_interaction, dict):
+            interaction_claims = _game_interaction_claims(deliverable, game_interaction)
+            if interaction_claims:
+                out["interaction_claims"] = interaction_claims
         out["verification_result"] = structured_web_verification_result(
             deliverable=deliverable,
             verdict=out,
@@ -427,7 +435,7 @@ class HostWebAppVerifier:
         deliverable: HostVerificationDeliverable, detail: str
     ) -> dict[str, Any]:
         verdict = verify_app_compute_verdict(
-            url=deliverable.deployment_url or "",
+            url="",
             reachable=False,
             http_status=0,
             structured=None,
@@ -438,11 +446,25 @@ class HostWebAppVerifier:
         verdict["summary"] = f"host verifier unavailable: {detail}"
         verdict["next_action"] = ""
         verdict["failure_fingerprint"] = "host_verifier_unavailable"
-        return HostWebAppVerifier._with_typed_result(
+        preview_live_match = not deliverable.preview_binding_required
+        if not deliverable.required_claims:
+            # Legacy/uncontracted requests have no exact claims from which the
+            # authority-preserving unavailable receipt can be minted.
+            return HostWebAppVerifier._with_typed_result(
+                deliverable,
+                verdict,
+                preview_live_match=preview_live_match,
+            )
+        out = HostWebAppVerifier._with_artifact_identity(
             deliverable,
             verdict,
-            preview_live_match=False if deliverable.preview_binding_required else True,
+            preview_live_match=preview_live_match,
         )
+        out["verification_result"] = unavailable_verification_result(
+            deliverable=deliverable,
+            reason=str(verdict["summary"]),
+        ).model_dump(mode="json")
+        return out
 
 
 __all__ = ["HostWebAppVerifier"]

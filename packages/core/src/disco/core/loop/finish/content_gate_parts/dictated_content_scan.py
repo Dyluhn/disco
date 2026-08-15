@@ -11,9 +11,104 @@ from __future__ import annotations
 import logging
 import posixpath
 from collections.abc import Awaitable, Callable
+from html.parser import HTMLParser
 
 from ...plan_conditions import DictatedContentCondition
 from .errors import _DictatedContentInspectionIncomplete
+
+_MARKUP_SUFFIXES = frozenset({".htm", ".html", ".svg"})
+_NONVISIBLE_ELEMENTS = frozenset({"noscript", "script", "style", "template"})
+_TEXT_BREAK_ELEMENTS = frozenset(
+    {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+)
+
+
+class _VisibleTextParser(HTMLParser):
+    """Small source-order text projection for the pre-render content gate."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._nonvisible_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        normalized = tag.lower()
+        if normalized in _NONVISIBLE_ELEMENTS:
+            self._nonvisible_depth += 1
+        elif not self._nonvisible_depth and normalized in _TEXT_BREAK_ELEMENTS:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized = tag.lower()
+        if normalized in _NONVISIBLE_ELEMENTS and self._nonvisible_depth:
+            self._nonvisible_depth -= 1
+        elif not self._nonvisible_depth and normalized in _TEXT_BREAK_ELEMENTS:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self._nonvisible_depth:
+            self.parts.append(data)
+
+
+def _normalized_visible_text(path: str, text: str) -> str:
+    if posixpath.splitext(path)[1].lower() in _MARKUP_SUFFIXES:
+        parser = _VisibleTextParser()
+        parser.feed(text)
+        parser.close()
+        text = "".join(parser.parts)
+    return " ".join(text.split())
+
+
+def _condition_present(
+    condition: DictatedContentCondition,
+    *,
+    path: str,
+    data: bytes,
+    decoded: str,
+) -> bool:
+    if condition.content_surface == "source_text":
+        return condition.literal.encode("utf-8", "surrogatepass") in data
+    expected = " ".join(condition.literal.split())
+    return expected in _normalized_visible_text(path, decoded)
 
 
 def is_text_candidate(path: str, data: bytes, *, binary_suffixes: frozenset[str]) -> bool:
@@ -75,10 +170,11 @@ async def first_dictated_content_miss(
         if not is_text_candidate(path, data, binary_suffixes=binary_suffixes):
             continue
         checked.append(path)
+        decoded = data.decode("utf-8", "strict")
         unresolved = [
             condition
             for condition in unresolved
-            if condition.literal.encode("utf-8", "surrogatepass") not in data
+            if not _condition_present(condition, path=path, data=data, decoded=decoded)
         ]
         if not unresolved:
             return None

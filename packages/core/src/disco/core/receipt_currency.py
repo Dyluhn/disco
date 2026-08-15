@@ -88,7 +88,6 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-
 # --- the canonical boundary vocabulary -------------------------------------
 # Every kind of event that ends the currency of an earlier successful result.
 # This tuple IS the contract between the two consumers: a kind added here must
@@ -126,6 +125,19 @@ CURRENCY_BOUNDARY_KINDS: frozenset[str] = frozenset(
 # NOT the same list as `loop/dedup.py::_WORKSPACE_MUTATING_TOOLS`, which is the
 # A8 snapshot working set and answers a different question (which files does the
 # agent's deliverable consist of). That list is untouched by this module.
+# AppKit publishes an exact batch receipt after it lands changes.  Keep these
+# receipt-owned tools out of the action-only set below: an empty successful
+# AppKit call is a proven no-op and must not launder a later repeated check.
+_APPKIT_MUTATION_TOOLS: frozenset[str] = frozenset(
+    {
+        "app_add_primitive",
+        "app_add_section",
+        "app_create",
+        "app_set_design",
+        "app_update_content",
+    }
+)
+
 WORKSPACE_MUTATION_TOOLS: frozenset[str] = frozenset(
     {
         "exact_replace",
@@ -186,6 +198,15 @@ def _file_receipt_is_exact(structured: Mapping[str, Any]) -> bool:
     )
 
 
+def _appkit_receipt_is_exact(structured: Mapping[str, Any]) -> bool:
+    files_written = structured.get("files_written")
+    return (
+        isinstance(files_written, list)
+        and bool(files_written)
+        and all(isinstance(path, str) and bool(path.strip()) for path in files_written)
+    )
+
+
 def trusted_mutation_receipt_outcome(
     event: Mapping[str, Any], *, action_ids: frozenset[str] | None = None
 ) -> bool:
@@ -208,6 +229,8 @@ def trusted_mutation_receipt_outcome(
     tool_name = result.get("tool_name")
     if tool_name in _RECEIPT_APPLIED_TOOLS:
         return _applied_paths_are_exact(structured)
+    if tool_name in _APPKIT_MUTATION_TOOLS:
+        return _appkit_receipt_is_exact(structured)
     if tool_name in WORKSPACE_MUTATION_TOOLS:
         return _file_receipt_is_exact(structured)
     return False
@@ -349,9 +372,7 @@ def workspace_mutation_ends_currency(
 #   immediately*, because a failed prior occurrence IS its own notice. No
 #   currency question arises, so no notice is owed, and widening the epoch would
 #   let a hollow edit launder a repeated tool error.
-PROGRESS_BOUNDARY_KINDS: frozenset[str] = CURRENCY_BOUNDARY_KINDS - {
-    BOUNDARY_WORKSPACE_MUTATION
-}
+PROGRESS_BOUNDARY_KINDS: frozenset[str] = CURRENCY_BOUNDARY_KINDS - {BOUNDARY_WORKSPACE_MUTATION}
 
 
 class CurrencyBoundaries:
@@ -375,9 +396,7 @@ class CurrencyBoundaries:
         """The boundary kinds this instance can report. Lets a consumer prove its
         coverage rather than asserting it in a comment."""
         return (
-            CURRENCY_BOUNDARY_KINDS
-            if self._include_workspace_mutation
-            else PROGRESS_BOUNDARY_KINDS
+            CURRENCY_BOUNDARY_KINDS if self._include_workspace_mutation else PROGRESS_BOUNDARY_KINDS
         )
 
     def crossing(
