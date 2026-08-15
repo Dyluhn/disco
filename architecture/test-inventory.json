@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b382551571892e87a4932443ac9511b9c184c025",
+  "source_identity": "8288fd5979a3054665581f4ecb8d40617694fb16",
   "collected": {
     "counts": {
       "packages": 10754,
-      "harness": 1418,
+      "harness": 1420,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12577,
+    "total": 12579,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11982,6 +11982,7 @@
         "harness/reliability/tests/test_entrypoint.py::test_documented_direct_script_list_entrypoint",
         "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run[hermetic]",
         "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run[live]",
+        "harness/reliability/tests/test_fresh_device.py::test_api_session_handoff_preserves_credentials_on_packaged_front_door",
         "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
         "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
         "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token",
@@ -12000,6 +12001,7 @@
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[unsafe-member-type]",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[unsafe-symlink-target]",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes[wrong-shape]",
+        "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images0-upgrade_images0-install]",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images1-upgrade_images1-upgrade]",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
@@ -12598,9 +12600,9 @@
     }
   },
   "mapping_static": {
-    "identity": "b382551571892e87a4932443ac9511b9c184c025",
+    "identity": "8288fd5979a3054665581f4ecb8d40617694fb16",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10347,
+    "python_static_test_id_count": 10349,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14387,6 +14389,7 @@
       "harness/reliability/tests/test_build_soak_summary_identity.py::test_two_summaries_are_REFUSED_rather_than_guessed",
       "harness/reliability/tests/test_entrypoint.py::test_documented_direct_script_list_entrypoint",
       "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run",
+      "harness/reliability/tests/test_fresh_device.py::test_api_session_handoff_preserves_credentials_on_packaged_front_door",
       "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
       "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
       "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token",
@@ -14395,6 +14398,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_digest_is_timestamp_neutral_and_database_selective",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_recomputes_exact_archive_members",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_rejects_untrusted_archive_shapes",
+      "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure",
@@ -29842,6 +29846,32 @@
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V44-FRESH-DEVICE-MIGRATION-TRANSPORT",
+      "root": "harness",
+      "source_identity_before": "b382551571892e87a4932443ac9511b9c184c025",
+      "source_identity_after": "8288fd5979a3054665581f4ecb8d40617694fb16",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1418,
+          "after_count": 1420,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_api_session_handoff_preserves_credentials_on_packaged_front_door",
+            "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_api_session_handoff_preserves_credentials_on_packaged_front_door",
+          "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

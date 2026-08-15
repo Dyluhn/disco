@@ -12,18 +12,16 @@ from .fresh_device_host import CommandRunner, Engine, ProductError, _canonical_i
 
 
 def phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
-    """Pair through the packaged front door and configure the driver."""
+    """Seed the historical migration fixture through its loopback APIs."""
     import os
 
     from .. import fresh_device as fd
 
-    del app, agent
-    front = front.rstrip("/")
-    api = fd.ApiSession(
-        app_base=f"{front}/svc/app",
-        agent_base=f"{front}/svc/agent",
-        origin=front,
-    )
+    # This session exists only to seed the historical pre-upgrade fixture. That
+    # revision predates portable Podman DNS; the candidate boundary below moves
+    # the retained session to the packaged front door before candidate checks.
+    del front
+    api = fd.ApiSession(app_base=app, agent_base=agent, origin=app)
     api.pair()
     fd._configure_driver(
         api,
@@ -35,6 +33,15 @@ def phase_pair_and_config(app: str, front: str, agent: str) -> ApiSession:
     if assignments.get("default_model") != "fresh-device-driver":
         raise ProductError("driver assignment did not round-trip through Settings API")
     return api
+
+
+def _activate_candidate_front_door(api: ApiSession, front: str) -> dict[str, str]:
+    """Move the retained session onto the upgraded candidate's browser path."""
+    api.use_packaged_front_door(front)
+    session = api.json("GET", api.app_base, "/api/auth/session")
+    if not session.get("authenticated") or not session.get("admin"):
+        raise ProductError("upgrade did not retain the authenticated admin session")
+    return {"app": api.app_base, "agent": api.agent_base}
 
 
 def phase_build_search_export(
@@ -181,8 +188,7 @@ def _assert_upgrade_persistence(
     project: str,
     checkout: Path,
     compose_env: dict[str, str],
-    app: str,
-    agent: str,
+    front: str,
     api: ApiSession,
     projects_before: list[str],
     project_digests: dict[str, str],
@@ -191,6 +197,7 @@ def _assert_upgrade_persistence(
 ) -> tuple[dict[str, str], str]:
     from .. import fresh_device as fd
 
+    _activate_candidate_front_door(api, front)
     if fd._project_ids(api.json("GET", api.agent_base, "/api/projects")) != projects_before:
         raise ProductError("upgrade lost or rewrote persisted projects")
     assignments = api.json("GET", api.app_base, "/api/models/assignments")
@@ -304,8 +311,7 @@ def phase_upgrade(
         project,
         checkout,
         compose_env,
-        app,
-        agent,
+        front,
         api,
         projects_before,
         project_digests,
@@ -319,6 +325,7 @@ def phase_upgrade(
         "project_digests": current_project_digests,
         "base_commit": base_commit,
         "upgrade_commit": upgrade_commit,
+        "candidate_front_door": {"app": api.app_base, "agent": api.agent_base},
         "image_ids": sorted(set(known_image_ids) | set(current_image_ids)),
     }
 

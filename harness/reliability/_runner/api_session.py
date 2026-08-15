@@ -21,6 +21,13 @@ class ApiSession:
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         self.csrf = ""
 
+    def use_packaged_front_door(self, front: str) -> None:
+        """Retarget an established host-only session after the source upgrade."""
+        front = front.rstrip("/")
+        self.app_base = f"{front}/svc/app"
+        self.agent_base = f"{front}/svc/agent"
+        self.origin = front
+
     def _request(
         self,
         method: str,
