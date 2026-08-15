@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "8288fd5979a3054665581f4ecb8d40617694fb16",
+  "source_identity": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
   "collected": {
     "counts": {
       "packages": 10754,
-      "harness": 1420,
+      "harness": 1421,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12579,
+    "total": 12580,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -12052,6 +12052,7 @@
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[changed-project]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[excessive-readiness]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[extra-evidence]",
+        "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[invalid-candidate-front-door]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[malformed-check]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[missing-phase]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[wrong-order]",
@@ -12600,7 +12601,7 @@
     }
   },
   "mapping_static": {
-    "identity": "8288fd5979a3054665581f4ecb8d40617694fb16",
+    "identity": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
     "python_test_file_count": 846,
     "python_static_test_id_count": 10349,
     "python_test_files": [
@@ -29901,6 +29902,28 @@
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
           "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token"
         ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V45-FRESH-DEVICE-EVIDENCE-CONTRACT",
+      "root": "harness",
+      "source_identity_before": "8288fd5979a3054665581f4ecb8d40617694fb16",
+      "source_identity_after": "ed946d15eb54fcea922fbddd5c9811a7dee68894",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1420,
+          "after_count": 1421,
+          "added_ids": [
+            "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[invalid-candidate-front-door]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []

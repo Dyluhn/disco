@@ -1045,7 +1045,9 @@ class TestCollectedCounts:
             # one parametrized provider-pair test owns the collected/static gap.
             # V42 adds the same three non-parametrized fresh-device harness ids.
             # V44 adds two non-parametrized migration-transport harness ids.
-            "harness": 1420,
+            # V45 adds one collected parameter case proving that candidate route
+            # evidence must describe one shared packaged front door.
+            "harness": 1421,
             # 1320 UNCHANGED at PKG-19-CONSTRAINT4-CONFIRMED-REPAIR: all 18 of that
             # seal's ids are product bytes under `packages`. The repair is at four
             # `disco.core.loop` emitting seams and the oracles were deliberately not
@@ -1099,7 +1101,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12579 == sum(expected.values())
+        assert collected["total"] == 12580 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1115,7 +1117,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12579}
+        assert result == {"collected_total": 12580}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1136,7 +1138,7 @@ class TestBaselineValidation:
             "problems": [],
             "python_static_ids": 10349,
             "typescript_static_ids": 1214,
-            "collected_total": 12579,
+            "collected_total": 12580,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
