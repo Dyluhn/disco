@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "50bea28dda968a4363047d593cbe96586ac441fa",
+  "source_identity": "b382551571892e87a4932443ac9511b9c184c025",
   "collected": {
     "counts": {
-      "packages": 10753,
+      "packages": 10754,
       "harness": 1418,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12576,
+    "total": 12577,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1367,6 +1367,7 @@
         "packages/agent-server/tests/test_host_proxy.py::test_canonical_live_proxy_preserves_real_http_and_rejects_stale_authority",
         "packages/agent-server/tests/test_host_proxy.py::test_canonical_redirect_rewrites_only_the_exact_managed_upstream_origin",
         "packages/agent-server/tests/test_host_proxy.py::test_connect_retry_never_replays_mutations",
+        "packages/agent-server/tests/test_host_proxy.py::test_front_door_derives_dynamic_resolver_from_the_container_runtime",
         "packages/agent-server/tests/test_host_proxy.py::test_front_door_routes_versioned_preview_hosts_to_agent_server",
         "packages/agent-server/tests/test_host_proxy.py::test_get_passthrough",
         "packages/agent-server/tests/test_host_proxy.py::test_host_header_not_matching",
@@ -12597,9 +12598,9 @@
     }
   },
   "mapping_static": {
-    "identity": "50bea28dda968a4363047d593cbe96586ac441fa",
+    "identity": "b382551571892e87a4932443ac9511b9c184c025",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10346,
+    "python_static_test_id_count": 10347,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15552,6 +15553,7 @@
       "packages/agent-server/tests/test_host_proxy.py::test_canonical_live_proxy_preserves_real_http_and_rejects_stale_authority",
       "packages/agent-server/tests/test_host_proxy.py::test_canonical_redirect_rewrites_only_the_exact_managed_upstream_origin",
       "packages/agent-server/tests/test_host_proxy.py::test_connect_retry_never_replays_mutations",
+      "packages/agent-server/tests/test_host_proxy.py::test_front_door_derives_dynamic_resolver_from_the_container_runtime",
       "packages/agent-server/tests/test_host_proxy.py::test_front_door_routes_versioned_preview_hosts_to_agent_server",
       "packages/agent-server/tests/test_host_proxy.py::test_get_passthrough",
       "packages/agent-server/tests/test_host_proxy.py::test_host_header_not_matching",
@@ -25672,7 +25674,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_host_proxy.py",
-        "line": 1165,
+        "line": 1232,
         "fixture": "capability_proxy_app_server",
         "scope": "pytest.fixture"
       },
@@ -25990,13 +25992,13 @@
       },
       {
         "path": "packages/agent-server/tests/test_host_proxy.py",
-        "line": 126,
+        "line": 128,
         "fixture": "mock_app",
         "scope": "pytest.fixture"
       },
       {
         "path": "packages/agent-server/tests/test_host_proxy.py",
-        "line": 1104,
+        "line": 1171,
         "fixture": "proxy_app_server",
         "scope": "pytest.fixture"
       },
@@ -26008,7 +26010,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_host_proxy.py",
-        "line": 1074,
+        "line": 1141,
         "fixture": "real_ws_server",
         "scope": "pytest.fixture"
       },
@@ -26314,7 +26316,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_host_proxy.py",
-        "line": 114,
+        "line": 116,
         "fixture": "upstream_http",
         "scope": "pytest.fixture(scope='module')"
       },
@@ -32115,6 +32117,30 @@
           "packages/core/tests/test_receipt_currency_shared.py::test_appkit_noop_or_failed_observation_is_not_a_trusted_receipt",
           "packages/core/tests/test_target_neutral_verification.py::test_invalid_host_receipt_replacement_returns_its_typed_result",
           "packages/core/tests/test_target_neutral_verification.py::test_optional_finish_probe_waits_for_governed_handoff"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V43-PODMAN-FRONTDOOR-RESOLVER",
+      "root": "packages",
+      "source_identity_before": "50bea28dda968a4363047d593cbe96586ac441fa",
+      "source_identity_after": "b382551571892e87a4932443ac9511b9c184c025",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10753,
+          "after_count": 10754,
+          "added_ids": [
+            "packages/agent-server/tests/test_host_proxy.py::test_front_door_derives_dynamic_resolver_from_the_container_runtime"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_host_proxy.py::test_front_door_derives_dynamic_resolver_from_the_container_runtime"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

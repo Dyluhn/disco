@@ -1,0 +1,20 @@
+#!/bin/sh
+# Sourced by the official nginx entrypoint before it renders *.template files.
+# Container engines publish their service-name resolver through /etc/resolv.conf:
+# Docker commonly uses 127.0.0.11, while rootless Podman/netavark uses a network
+# address. Deriving it here keeps one image correct for both engines.
+
+if ! disco_nginx_resolver="$(
+    awk '/^[[:space:]]*nameserver[[:space:]]+/ { print $2; exit }' /etc/resolv.conf 2>/dev/null
+)" || [ -z "$disco_nginx_resolver" ]; then
+    echo "10-disco-resolver: no runtime nameserver in /etc/resolv.conf" >&2
+    return 1
+fi
+
+# nginx requires IPv6 resolver literals in brackets.
+case "$disco_nginx_resolver" in
+    *:*) disco_nginx_resolver="[$disco_nginx_resolver]" ;;
+esac
+
+export DISCO_NGINX_RESOLVER="$disco_nginx_resolver"
+unset disco_nginx_resolver

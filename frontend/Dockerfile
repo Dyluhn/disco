@@ -27,12 +27,19 @@ FROM nginx:alpine AS serve
 # Static SPA assets.
 COPY --from=build /app/frontend/dist /usr/share/nginx/html
 
-# SPA-aware server block (client-side routing + /env.js no-store).
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+# SPA-aware server block (client-side routing + /env.js no-store). The official
+# nginx entrypoint renders this after 10-disco-resolver.envsh discovers the
+# running container network's DNS server. That keeps request-time service-name
+# re-resolution portable across Docker and Podman.
+COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template
+COPY frontend/docker-entrypoint.d/10-disco-resolver.envsh /docker-entrypoint.d/10-disco-resolver.envsh
+ENV NGINX_ENVSUBST_FILTER=^DISCO_NGINX_RESOLVER$
 
 # Runtime env injection: nginx:alpine runs /docker-entrypoint.d/*.sh before
 # starting nginx. This writes /env.js from container env on every start.
 COPY frontend/docker-entrypoint.d/40-disco-env.sh /docker-entrypoint.d/40-disco-env.sh
-RUN chmod +x /docker-entrypoint.d/40-disco-env.sh
+RUN chmod +x \
+    /docker-entrypoint.d/10-disco-resolver.envsh \
+    /docker-entrypoint.d/40-disco-env.sh
 
 EXPOSE 80

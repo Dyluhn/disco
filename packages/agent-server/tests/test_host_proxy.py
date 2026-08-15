@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -607,6 +609,71 @@ def test_front_door_routes_versioned_preview_hosts_to_agent_server() -> None:
 
     assert "location ^~ /api/" not in default_server
     assert "location ^~ /conversations/" not in default_server
+
+
+def test_front_door_derives_dynamic_resolver_from_the_container_runtime(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).parents[3]
+    nginx = (root / "frontend" / "nginx.conf").read_text()
+    dockerfile = (root / "frontend" / "Dockerfile").read_text()
+    resolver_envsh = (
+        root / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
+    ).read_text()
+
+    assert "resolver ${DISCO_NGINX_RESOLVER} valid=10s ipv6=off;" in nginx
+    assert "resolver 127.0.0.11" not in nginx
+    assert "set $app_upstream app-server;" in nginx
+    assert "set $agent_upstream agent-server;" in nginx
+
+    assert (
+        "COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template"
+        in dockerfile
+    )
+    assert "10-disco-resolver.envsh" in dockerfile
+    assert "NGINX_ENVSUBST_FILTER=^DISCO_NGINX_RESOLVER$" in dockerfile
+    assert "/etc/resolv.conf" in resolver_envsh
+    assert 'export DISCO_NGINX_RESOLVER="$disco_nginx_resolver"' in resolver_envsh
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_awk = fake_bin / "awk"
+    fake_awk.write_text("#!/bin/sh\nprintf '%s\\n' \"$DISCO_TEST_RESOLVER\"\n")
+    fake_awk.chmod(0o755)
+    script = root / "frontend" / "docker-entrypoint.d" / "10-disco-resolver.envsh"
+    command = f'set -e; . "{script}"; printf "%s" "$DISCO_NGINX_RESOLVER"'
+
+    for supplied, rendered in (
+        ("10.89.0.1", "10.89.0.1"),
+        ("fd00::53", "[fd00::53]"),
+    ):
+        result = subprocess.run(
+            ["sh", "-c", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "DISCO_TEST_RESOLVER": supplied,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            },
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == rendered
+
+    missing = subprocess.run(
+        ["sh", "-c", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "DISCO_TEST_RESOLVER": "",
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+    assert missing.returncode != 0
+    assert "no runtime nameserver" in missing.stderr
 
 
 def test_unversioned_preview_host_is_no_longer_served() -> None:
