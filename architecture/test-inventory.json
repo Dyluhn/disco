@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "1b2507a21c26b0dcc1778dfac6fda328eff37902",
+  "source_identity": "50bea28dda968a4363047d593cbe96586ac441fa",
   "collected": {
     "counts": {
       "packages": 10753,
-      "harness": 1415,
+      "harness": 1418,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12573,
+    "total": 12576,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -11981,6 +11981,9 @@
         "harness/reliability/tests/test_entrypoint.py::test_documented_direct_script_list_entrypoint",
         "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run[hermetic]",
         "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run[live]",
+        "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
+        "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
+        "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_accepts_bound_directories_and_safe_symlinks",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_adds_logical_database_evidence",
         "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_digest_is_timestamp_neutral_and_database_selective",
@@ -12594,9 +12597,9 @@
     }
   },
   "mapping_static": {
-    "identity": "1b2507a21c26b0dcc1778dfac6fda328eff37902",
+    "identity": "50bea28dda968a4363047d593cbe96586ac441fa",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10343,
+    "python_static_test_id_count": 10346,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14383,6 +14386,9 @@
       "harness/reliability/tests/test_build_soak_summary_identity.py::test_two_summaries_are_REFUSED_rather_than_guessed",
       "harness/reliability/tests/test_entrypoint.py::test_documented_direct_script_list_entrypoint",
       "harness/reliability/tests/test_entrypoint.py::test_surface_all_is_a_wildcard_for_dry_run",
+      "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
+      "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
+      "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_accepts_bound_directories_and_safe_symlinks",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_adds_logical_database_evidence",
       "harness/reliability/tests/test_fresh_device.py::test_backup_manifest_digest_is_timestamp_neutral_and_database_selective",
@@ -29834,6 +29840,34 @@
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_old_facade_delegates_once_with_exact_arguments",
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_sink_preserves_dossier_bytes_and_all_outcome_paths",
           "harness/build_soak/tests/test_transport_facade_transcript.py::test_typed_ports_are_bounded_and_match_the_existing_client"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V42B-FRESH-DEVICE-FRONTDOOR",
+      "root": "harness",
+      "source_identity_before": "1b2507a21c26b0dcc1778dfac6fda328eff37902",
+      "source_identity_after": "50bea28dda968a4363047d593cbe96586ac441fa",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1415,
+          "after_count": 1418,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
+            "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
+            "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_fetches_token_only_after_pairing_required",
+          "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_raises_the_shared_product_error",
+          "harness/reliability/tests/test_fresh_device.py::test_api_session_pair_uses_tokenless_mint_without_fetching_token"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
