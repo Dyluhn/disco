@@ -14,11 +14,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
+from disco.agent_server.preview_bootstrap import (
+    MAX_PREVIEW_REDEMPTION_BODY_BYTES,
+    parse_preview_storage_handoff,
+)
 from disco.core.auth import (
     CSRF_HEADER,
     SESSION_COOKIE,
@@ -37,6 +42,7 @@ _MAX_AUTO_ANSWERS = 3  # cap auto-answers to a question-asking live model (no in
 
 # Seconds between HTTP state polls.
 _POLL_INTERVAL: float = 2.0
+_PREVIEW_STORAGE_RESET_BODY_RE = re.compile(rb'\bbody:("(?:\\.|[^"\\])*")')
 
 
 # ---------------------------------------------------------------------------
@@ -613,6 +619,17 @@ async def _redeem_preview(
         )
         if redeemed.status_code != 200:
             return redeemed.status_code, redeemed.content
+        if "cookies" in redeemed.headers.get("clear-site-data", "").lower():
+            completed = await _complete_preview_storage_reset(
+                preview,
+                redeemed,
+                bootstrap_url=bootstrap_url,
+                origin=origin,
+            )
+            if completed is None:
+                return None
+            if completed.status_code != 200:
+                return completed.status_code, completed.content
         if any(cookie.name == SESSION_COOKIE for cookie in preview.cookies.jar):
             # A path bootstrap must install only its scoped preview cookies.
             # Fail closed if a route regression ever tries to smuggle a full
@@ -620,6 +637,55 @@ async def _redeem_preview(
             return None
         resp = await preview.get(canonical_url)
         return resp.status_code, resp.content
+
+
+async def _complete_preview_storage_reset(
+    preview: httpx.AsyncClient,
+    redeemed: httpx.Response,
+    *,
+    bootstrap_url: str,
+    origin: Origin,
+) -> httpx.Response | None:
+    """Complete the browser document's bounded second POST without executing JS."""
+
+    if tuple(preview.cookies.jar):
+        return None
+    handoff = _preview_storage_handoff(redeemed.content)
+    if handoff is None:
+        return None
+    completed = await preview.post(
+        bootstrap_url,
+        data={"handoff": handoff},
+        headers={"Origin": origin},
+    )
+    if any(cookie.name == SESSION_COOKIE for cookie in preview.cookies.jar):
+        return None
+    if completed.status_code != 200:
+        return completed
+    try:
+        payload = completed.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or payload.get("target") != "/":
+        return None
+    return completed
+
+
+def _preview_storage_handoff(document: bytes) -> str | None:
+    """Extract one bounded handoff from the product's locked reset document."""
+
+    if not document or len(document) > MAX_PREVIEW_REDEMPTION_BODY_BYTES:
+        return None
+    matches = _PREVIEW_STORAGE_RESET_BODY_RE.findall(document)
+    if len(matches) != 1:
+        return None
+    try:
+        encoded = json.loads(matches[0])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(encoded, str):
+        return None
+    return parse_preview_storage_handoff(encoded.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------

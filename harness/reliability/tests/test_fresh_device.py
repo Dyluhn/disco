@@ -926,7 +926,15 @@ def _assert_failure_cleanup_preserves_verifier_dossiers_before_teardown(
         "failure-cleanup",
     ]
     resolve_command = runner.calls[0][1]
-    assert resolve_command[-3:] == ("ps", "-q", "agent-server")
+    assert resolve_command == (
+        binary,
+        "ps",
+        "-aq",
+        "--filter",
+        "label=com.docker.compose.project=project",
+        "--filter",
+        "label=com.docker.compose.service=agent-server",
+    )
     copy_command = runner.calls[1][1]
     assert copy_command[:2] == (binary, "cp")
     assert copy_command[-2:] == (
