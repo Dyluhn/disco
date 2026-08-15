@@ -467,6 +467,8 @@ def _volume_exists(engine: str, name: str) -> bool:
 
 
 def _container_helper(compose: _Compose, command: str, *, stdin=None, stdout=None) -> None:
+    # Upgrade backups can run against an older service image; keep one controller authority.
+    controller = Path(__file__).read_text(encoding="utf-8")
     compose.run(
         "run",
         "--rm",
@@ -475,7 +477,8 @@ def _container_helper(compose: _Compose, command: str, *, stdin=None, stdout=Non
         "--entrypoint",
         "python",
         "app-server",
-        "/app/scripts/self_host_data.py",
+        "-c",
+        controller,
         command,
         "--data-dir",
         "/data",

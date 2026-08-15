@@ -235,6 +235,43 @@ def test_compose_missing_volume_distinguishes_new_from_unowned(monkeypatch) -> N
         compose.volume_name(required=False)
 
 
+def test_container_helper_executes_the_invoking_controller_not_the_service_image(
+    monkeypatch,
+) -> None:
+    compose = lifecycle._Compose("podman", Path("/repo/compose.yaml"), "campaign")
+    calls = []
+    monkeypatch.setattr(
+        compose,
+        "run",
+        lambda *arguments, **options: calls.append((arguments, options)),
+    )
+    stdin = object()
+    stdout = object()
+
+    lifecycle._container_helper(
+        compose,
+        "_archive-restore",
+        stdin=stdin,
+        stdout=stdout,
+    )
+
+    assert len(calls) == 1
+    arguments, options = calls[0]
+    assert arguments[:8] == (
+        "run",
+        "--rm",
+        "--no-deps",
+        "-T",
+        "--entrypoint",
+        "python",
+        "app-server",
+        "-c",
+    )
+    assert arguments[8] == Path(lifecycle.__file__).read_text(encoding="utf-8")
+    assert arguments[9:] == ("_archive-restore", "--data-dir", "/data")
+    assert options == {"stdin": stdin, "stdout": stdout}
+
+
 def test_compose_running_service_discovery_rejects_multiple_owners(monkeypatch) -> None:
     compose = lifecycle._Compose("podman", Path("/repo/compose.yaml"), "campaign")
     monkeypatch.setattr(compose, "_engine_text", lambda *_args: "a" * 12 + "\n" + "b" * 12)
