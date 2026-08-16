@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "92970f1a18f0c13f94f6fc423bb754c56446b0ac",
+  "source_identity": "638a27741411d93eb5338f8db68b694d6a3e22b5",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -4267,6 +4267,7 @@
         "PrimitiveDefinition",
         "RECIPES",
         "RECORDS_PRIMITIVE_ID",
+        "RecordPolicy",
         "SECTION_VARIANTS",
         "SEO_PRIMITIVE_ID",
         "STATIC_CF_EXPORT_FILES",
@@ -4309,6 +4310,7 @@
         "prepare_records_app_spec",
         "primitive_ids",
         "recipe_ids",
+        "records_verify",
         "resolve_lead_entity",
         "resolve_primitive",
         "save_app_spec",
@@ -4369,6 +4371,7 @@
         "PrimitiveDefinition",
         "RECIPES",
         "RECORDS_PRIMITIVE_ID",
+        "RecordPolicy",
         "SECTION_VARIANTS",
         "SEO_PRIMITIVE_ID",
         "STATIC_CF_EXPORT_FILES",
@@ -4411,6 +4414,7 @@
         "prepare_records_app_spec",
         "primitive_ids",
         "recipe_ids",
+        "records_verify",
         "resolve_lead_entity",
         "resolve_primitive",
         "save_app_spec",
@@ -4916,6 +4920,14 @@
           "kind": "from"
         },
         {
+          "public_name": "records_verify",
+          "name": "records_verify",
+          "module": "records_primitive",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
           "public_name": "COVERED_KINDS",
           "name": "COVERED_KINDS",
           "module": "section_catalog",
@@ -5094,6 +5106,14 @@
         {
           "public_name": "Palette",
           "name": "Palette",
+          "module": "spec",
+          "level": 1,
+          "alias": null,
+          "kind": "from"
+        },
+        {
+          "public_name": "RecordPolicy",
+          "name": "RecordPolicy",
           "module": "spec",
           "level": 1,
           "alias": null,
@@ -5406,6 +5426,7 @@
             "id: _IdStr",
             "name: _NameStr",
             "read_roles: tuple[_IdStr, ...]",
+            "record_policy: RecordPolicy | None",
             "write_roles: tuple[_IdStr, ...]"
           ]
         },
@@ -5503,6 +5524,19 @@
         "RECORDS_PRIMITIVE_ID": {
           "kind": "value",
           "signature": "RECORDS_PRIMITIVE_ID='records'"
+        },
+        "RecordPolicy": {
+          "kind": "class",
+          "signature": "class RecordPolicy(BaseModel)",
+          "members": [],
+          "fields": [
+            "create_roles: tuple[_IdStr, ...]",
+            "lock_roles: tuple[_IdStr, ...]",
+            "manage_roles: tuple[_IdStr, ...]",
+            "owner_managed: bool",
+            "parent_lock_field: _IdStr | None",
+            "public_read: bool"
+          ]
         },
         "SECTION_VARIANTS": {
           "kind": "annotated_value",
@@ -5738,6 +5772,10 @@
         "recipe_ids": {
           "kind": "function",
           "signature": "def recipe_ids() -> frozenset[str]"
+        },
+        "records_verify": {
+          "kind": "function",
+          "signature": "def records_verify(app: AppSpec | None, design: DesignSpec | None, tree: Mapping[str, str]) -> PrimitiveVerifyResult"
         },
         "resolve_lead_entity": {
           "kind": "function",
@@ -29541,6 +29579,30 @@
       "reason": "Agent surface framing becomes explicit while every Build call site retains its compatible default behavior."
     },
     {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "Entity",
+      "target_sha256": "e1181381a7cd491c1990a4d579377adba9aa2b7bdb38a1841f377a0cde08b166",
+      "owner_package": "PKG-19-APPKIT-RECORD-POLICY",
+      "reason": "Accept the additive, fixed-shape records policy field used by the trusted AppKit records generator."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "RecordPolicy",
+      "target_sha256": "0e36dbd149fa59d2670c6f265a90131dbba7781e2e2fbd7d5d730f6293f0ddcf",
+      "owner_package": "PKG-19-APPKIT-RECORD-POLICY",
+      "reason": "Publish the fixed-shape AppKit records authorization contract for generated persistent applications."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "records_verify",
+      "target_sha256": "e5d6c934efdcbcec56367434b9f020057bfc22961a774a6cb06485a0df33b80b",
+      "owner_package": "PKG-19-APPKIT-RECORD-POLICY",
+      "reason": "Publish the records-specific artifact-derived verifier and remove the unrelated lead-generation fallback."
+    },
+    {
       "surface": "frontend",
       "path": "frontend/src/components/settings/SandboxRuntimeSection.tsx",
       "public_name": "SandboxRuntimeSection",
@@ -29912,6 +29974,21 @@
       "owner_package": "PKG-10-EXECUTOR",
       "accepting_commit": "3501df9bcee672c0d6cb8d7a8cc186cec03719e9",
       "accepting_receipt": "2026-07-31/PKG-10-EPIC/EPIC-10A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/appkit/__init__.py",
+      "public_name": "Entity",
+      "origin": "disco.core.appkit.spec.Entity",
+      "removed_members": [],
+      "added_members": [
+        "record_policy: RecordPolicy | None"
+      ],
+      "old_signature_sha256": "247c85600f68443575d5a4ed12b755a1107fd6ec5f6b7ba1b4f3ad3f2ccc440e",
+      "new_signature_sha256": "97963f1dcc80f83f144d9e9946970434ec229e6492ff4b1503f4d05de0da60af",
+      "owner_package": "PKG-19-APPKIT-RECORD-POLICY",
+      "accepting_commit": "3fb227b1c8ba98faca9b41100a9c7bf81e05e8ed",
+      "accepting_receipt": "automation/runtime/post-campaign-ux-acceptance-20260816/evidence/appkit-record-policy/ACCEPTANCE-RECEIPT.md"
     },
     {
       "surface": "python",
