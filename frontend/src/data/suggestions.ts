@@ -94,7 +94,7 @@ const BUILD_PROMPTS = [
   "a kanban board with drag and drop",
   "a landing page for a coffee roastery",
   "a 2048 clone",
-  "an invoice PDF generator",
+  "an invoice tracker with searchable customers and payment status",
   "a habit tracker with weekly streak charts",
   "a markdown notes app with local search",
   "a personal finance dashboard from CSV uploads",
@@ -107,7 +107,7 @@ const BUILD_PROMPTS = [
   "a workout planner with printable routines",
   "a color palette generator with exportable CSS variables",
   "a tiny CRM for freelance leads",
-  "a meeting agenda builder that exports Markdown",
+  "a meeting agenda app with timers and reusable templates",
   "a real-time typing speed test",
   "a weather dashboard using a public API",
   "a launch checklist app with reusable templates",
@@ -122,7 +122,7 @@ const BUILD_PROMPTS = [
   "a docs site with search and dark mode",
   "a drag-and-drop image gallery organizer",
   "a simple inventory scanner UI",
-  "a PDF certificate generator",
+  "a certificate designer with live preview and printable layouts",
 ] as const;
 
 const AGENT_PROMPTS = [

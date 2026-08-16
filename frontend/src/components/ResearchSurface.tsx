@@ -7,9 +7,12 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { AnswerDocument } from "./AnswerDocument";
 import { FollowUps } from "./FollowUps";
 import { QueryInput } from "./QueryInput";
+import { ModelLeaderPill } from "./ModelLeaderPill";
+import { ScopeControl } from "./ScopeControl";
 import { SourcePanel } from "./SourcePanel";
 import { SourcePicker } from "./SourcePicker";
 import { SuggestionChips } from "./SuggestionChips";
+import { ThinkToggle } from "./ThinkToggle";
 import { TtftIndicator } from "./TtftIndicator";
 import { DeepResearchSurface } from "./research/DeepResearchSurface";
 import { EmptyState, ErrorState } from "./states";
@@ -111,23 +114,32 @@ export function ResearchSurface() {
       {!started ? (
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
-          <div className="w-full max-w-measure">
+          <div className="flex w-full max-w-measure flex-col gap-inline">
+            <div className="flex items-center justify-between gap-inline px-hair">
+              <span className="font-ui text-[0.76rem] font-medium text-text-faint">
+                Search type
+              </span>
+              <ScopeControl value={scope} onChange={setScope} />
+            </div>
             <QueryInput
               onSubmit={submit}
               busy={r.submitting}
               autoFocus
               value={draft}
               onValueChange={setDraft}
-              {...clusterProps}
-              extraControls={
-                <>
-                  {/* runthru-v2 #9: UploadComposer is now INLINE in the pill row (like
-                     the DR surface), not a `footer` block BELOW the cards. Always
-                     rendered (UploadComposer self-disables when cid is null) so it
-                     doesn't flicker out during the brief pre-create window. */}
-                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
-                  <SourcePicker selected={sources} onChange={setSources} />
-                </>
+              showControls={false}
+              footer={
+                <details className="border-t border-hairline pt-inline">
+                  <summary className="cursor-pointer font-ui text-[0.78rem] font-medium text-text-muted hover:text-text">
+                    Search options
+                  </summary>
+                  <div className="mt-inline flex flex-wrap items-center gap-inline">
+                    <ModelLeaderPill value={effectiveLeaderId} onChange={setLeaderId} />
+                    <ThinkToggle value={think} onChange={setThink} />
+                    <SourcePicker selected={sources} onChange={setSources} />
+                    <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                  </div>
+                </details>
               }
             />
             {r.submitError && (

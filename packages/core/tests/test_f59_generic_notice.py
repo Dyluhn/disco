@@ -265,6 +265,73 @@ def test_generic_notice_requires_successful_prior():
     assert should2 is False
 
 
+def test_stateful_browser_toggle_is_not_described_as_an_unchanged_repeat():
+    navigate = _tool_call("browser", "n1", {"action": "navigate", "url": "http://x"})
+    pause = _tool_call("browser", "p1", {"action": "press", "key": "p"})
+    resume = _tool_call("browser", "p2", {"action": "press", "key": "p"})
+    events = with_seqs(
+        [
+            user_msg("go"),
+            navigate,
+            _obs(
+                navigate,
+                structured={"url": "http://x", "text": "PLAYING", "elements": []},
+            ),
+            pause,
+            _obs(
+                pause,
+                structured={"url": "http://x", "text": "PAUSED", "elements": ["RESUME"]},
+            ),
+            resume,
+        ]
+    )
+
+    should, _prior, _text = _generic_remind(events)
+
+    assert should is False
+
+
+def test_observation_only_browser_probe_remains_bounded():
+    first = _tool_call("browser", "c1", {"action": "console_view"})
+    second = _tool_call("browser", "c2", {"action": "console_view"})
+    events = with_seqs([user_msg("go"), first, _obs(first, structured={}), second])
+
+    should, _prior, text = _generic_remind(events)
+
+    assert should is True
+    assert "2 times" in text
+
+
+def test_contextual_browser_identity_breaks_toggle_streak_but_not_noop_streak():
+    from harness.build_soak.oracles.thrash import ThrashOracle
+
+    def browser_observation(seq: int, action_seq: int, text: str) -> dict:
+        event = _harness_obs(seq, action_seq, tool="browser", success=True)
+        event["tool_result"]["structured"] = {
+            "url": "http://x",
+            "text": text,
+            "elements": [],
+        }
+        return event
+
+    toggles: list[dict] = []
+    states = ("PLAYING", "PAUSED", "PLAYING", "PAUSED")
+    navigate = _harness_action(1, "browser", {"action": "navigate", "url": "http://x"})
+    toggles.extend([navigate, browser_observation(2, 1, states[0])])
+    for index, action_seq in enumerate((3, 5, 7), start=1):
+        toggles.append(_harness_action(action_seq, "browser", {"action": "press", "key": "p"}))
+        toggles.append(browser_observation(action_seq + 1, action_seq, states[index]))
+    toggle_result = ThrashOracle().check(toggles, scenario=_scenario_allows_two())[0]
+    assert toggle_result.passed is True
+
+    noops: list[dict] = [navigate, browser_observation(2, 1, "PLAYING")]
+    for action_seq in (3, 5, 7):
+        noops.append(_harness_action(action_seq, "browser", {"action": "press", "key": "p"}))
+        noops.append(browser_observation(action_seq + 1, action_seq, "PLAYING"))
+    noop_result = ThrashOracle().check(noops, scenario=_scenario_allows_two())[0]
+    assert noop_result.code == "TOOL_CALL_THRASH_IDENTICAL_STREAK"
+
+
 def test_no_observation_streak_is_action_no_observation_not_thrash():
     """F59 sub-case: CTL-p4_ff_python_pause@91802 seq 77 has no observation;
     the streak 77/81/84 must be classified as ACTION_NO_OBSERVATION, not as

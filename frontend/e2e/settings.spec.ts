@@ -10,7 +10,9 @@ test.describe("Settings", () => {
       page.getByRole("heading", { name: /^settings$/i }),
     ).toBeVisible();
 
-    // The model catalogue is present (the default local driver model).
+    // The model library is intentionally collapsed until the user asks to edit it.
+    await page.getByText("Model library", { exact: true }).click();
+    // The default local driver is present inside it.
     await expect(page.getByText(/qwen/i).first()).toBeVisible();
 
     // The Skills configuration section renders (its contents are user/local

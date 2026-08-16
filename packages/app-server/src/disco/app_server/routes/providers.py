@@ -91,6 +91,14 @@ PROVIDER_PRESETS: tuple[ProviderPresetDTO, ...] = (
         kind="openai-compat",
     ),
     ProviderPresetDTO(
+        id="ollama",
+        label="Ollama (local)",
+        base_url="http://host.docker.internal:11434/v1",
+        kind="openai-compat",
+        requires_base_url=True,
+        requires_api_key=False,
+    ),
+    ProviderPresetDTO(
         id="custom-openai-compatible",
         label="Custom (OpenAI-compatible)",
         base_url="",
@@ -291,17 +299,17 @@ def _normalize_catalogue(kind: str, payload: dict) -> list[ProviderCatalogueMode
 
 async def _fetch_provider_catalogue(
     provider: ProviderDTO,
-    api_key: str,
+    api_key: str | None,
 ) -> list[ProviderCatalogueModelDTO]:
     url = _models_url(provider.base_url)
     headers: dict[str, str] = {}
     params: dict[str, str] = {}
-    if provider.kind == "openai-compat":
+    if provider.kind == "openai-compat" and api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    elif provider.kind == "anthropic":
+    elif provider.kind == "anthropic" and api_key:
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = _ANTHROPIC_VERSION
-    elif provider.kind == "gemini":
+    elif provider.kind == "gemini" and api_key:
         params["key"] = api_key
     async with httpx.AsyncClient(
         timeout=20.0,
@@ -345,7 +353,7 @@ class _ProviderCatalogue:
             return hit[1]
         return None
 
-    async def probe(self, provider: ProviderDTO, api_key: str) -> tuple[bool, str | None]:
+    async def probe(self, provider: ProviderDTO, api_key: str | None) -> tuple[bool, str | None]:
         if not self._state.providers.provider_origin_approved(provider):
             return False, "provider key is not approved for this origin"
         try:
@@ -372,7 +380,7 @@ class _ProviderCatalogue:
             if hit is not None:
                 return hit
             key = self._state.providers._resolve_secret_value(provider.secret_name)
-            if not key:
+            if provider.requires_api_key and not key:
                 raise HTTPException(
                     status_code=400,
                     detail=f"No decryptable key stored for {provider.label}.",
@@ -402,7 +410,7 @@ async def _create_provider(
         provider = state.providers.create_provider(body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    ok, error = await catalogue.probe(provider, body.api_key.strip())
+    ok, error = await catalogue.probe(provider, body.api_key.strip() or None)
     catalogue.invalidate(provider.id)
     return ProviderMutationResult(provider=provider, catalogue_ok=ok, catalogue_error=error)
 
@@ -421,7 +429,7 @@ async def _update_provider(
         if body.api_key
         else state.providers._resolve_secret_value(provider.secret_name)
     )
-    if key:
+    if key or not provider.requires_api_key:
         ok, error = await catalogue.probe(provider, key)
     else:
         ok, error = False, f"No decryptable key stored for {provider.label}."

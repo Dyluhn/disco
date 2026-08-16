@@ -29,11 +29,13 @@ class ModelDTO(BaseModel):
     # Manual capability pin: null = auto-detect, true/false = operator override.
     # This is distinct from ``capabilities``, which is the currently-resolved view.
     vision: bool | None = None
+    vision_status: Literal["vision", "text-only", "unknown"] = "unknown"
     note: str | None = None
     # raw editable fields (so the edit form prefills the real config, not a view):
     model_id: str
     base_url: str | None = None
     api_key_env: str | None = None
+    requires_api_key: bool = True
     context_window: int
     max_output_tokens: int | None = None
     quantization: str | None = None
@@ -55,6 +57,7 @@ class ModelUpsert(BaseModel):
     # Omitted preserves an existing pin for older clients; explicit null returns
     # the model to auto-detection.
     vision: bool | None = None
+    requires_api_key: bool = True
     price_in_per_m: float = 0.0
     price_out_per_m: float = 0.0
     # W-05: how the user pays — threaded so an edited/added subscription model keeps
@@ -102,6 +105,7 @@ class ProviderDTO(BaseModel):
     kind: ProviderKind
     secret_name: str
     has_key: bool
+    requires_api_key: bool = True
 
 
 class ProviderPresetDTO(BaseModel):
@@ -110,13 +114,15 @@ class ProviderPresetDTO(BaseModel):
     base_url: str
     kind: ProviderKind
     requires_base_url: bool = False
+    requires_api_key: bool = True
 
 
 class ProviderCreate(BaseModel):
     label: str
     base_url: str
     kind: ProviderKind
-    api_key: str
+    api_key: str = ""
+    requires_api_key: bool = True
 
 
 class ProviderPatch(BaseModel):
@@ -124,6 +130,7 @@ class ProviderPatch(BaseModel):
     base_url: str | None = None
     kind: ProviderKind | None = None
     api_key: str | None = None
+    requires_api_key: bool | None = None
 
 
 class ProviderMutationResult(BaseModel):

@@ -55,6 +55,47 @@ def _resolve_slot_index(
     return 0
 
 
+def _complete_json_object(raw: str) -> bool:
+    """Whether ``raw`` is exactly one complete JSON object.
+
+    Some compatible providers omit both ``index`` and ``id`` even when starting
+    another tool call. A completed object followed by a fresh call header is the
+    only safe boundary available in that dialect.
+    """
+    if not raw.strip():
+        return False
+    try:
+        value, end = json.JSONDecoder().raw_decode(raw)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return isinstance(value, dict) and not raw[end:].strip()
+
+
+def _starts_indexless_call(
+    tc: dict,
+    *,
+    tool_buf: dict[int, dict],
+    id_to_idx: dict[str, int],
+    last_idx: int | None,
+) -> bool:
+    """Detect a new call header from providers that omit call identity.
+
+    Continuation fragments have neither a new id nor a function name. A fresh
+    id/name arriving after the current slot already contains one complete JSON
+    object is therefore a new call, even when the provider forgot its index.
+    """
+    if tc.get("index") is not None or last_idx is None:
+        return False
+    tc_id = tc.get("id")
+    if tc_id and tc_id in id_to_idx:
+        return False
+    fn = tc.get("function") or {}
+    if not tc_id and not fn.get("name"):
+        return False
+    current = tool_buf.get(last_idx)
+    return bool(current and current.get("name") and _complete_json_object(current.get("args", "")))
+
+
 def _accumulate_tool_call_fragment(
     tc: dict,
     *,
@@ -69,7 +110,15 @@ def _accumulate_tool_call_fragment(
     """
     raw_idx = tc.get("index")
     tc_id = tc.get("id")
-    idx = _resolve_slot_index(raw_idx, tc_id, id_to_idx, last_idx)
+    if _starts_indexless_call(
+        tc,
+        tool_buf=tool_buf,
+        id_to_idx=id_to_idx,
+        last_idx=last_idx,
+    ):
+        idx = max(tool_buf, default=-1) + 1
+    else:
+        idx = _resolve_slot_index(raw_idx, tc_id, id_to_idx, last_idx)
     slot = tool_buf.setdefault(idx, {"id": None, "name": "", "args": ""})
     if tc_id:
         slot["id"] = tc_id

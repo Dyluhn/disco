@@ -22,8 +22,8 @@ describe("Settings — model-assignment matrix", () => {
         name: /Choose optional visual inspection model/i,
       }),
     ).toBeInTheDocument();
-    // The absolute, no-automatic-routing story is stated.
-    expect(screen.getByText(/no automatic routing/i)).toBeInTheDocument();
+    // The manual-assignment story is stated without competing catalogue language.
+    expect(screen.getByText(/Assignments are manual/i)).toBeInTheDocument();
     // Specialist roles do not crowd the normal setup path.
     const specialistSummary = screen.getByText(/Specialist role overrides/i, {
       selector: "summary",
@@ -74,12 +74,18 @@ describe("Settings — model-assignment matrix", () => {
     );
   });
 
-  it("recommends a visual model for a text-only primary and can assign one", async () => {
+  it("reports unverified vision honestly, points to configuration, and can assign one", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
     expect(
-      await screen.findByText(/Your primary is text-only/i),
+      await screen.findByText(/Vision hasn't been verified for Driver Local/i),
     ).toBeInTheDocument();
+    const configureVision = screen.getByRole("link", {
+      name: /Model library.*Image understanding/i,
+    });
+    expect(configureVision).toHaveAttribute("href", "#model-library");
+    await user.click(configureVision);
+    expect(document.querySelector("#model-library details")).toHaveAttribute("open");
 
     const trigger = screen.getByRole("button", {
       name: /Choose optional visual inspection model/i,
@@ -89,6 +95,9 @@ describe("Settings — model-assignment matrix", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByText(/Driver Overflow/i));
     await waitFor(() => expect(trigger).toHaveTextContent(/Driver Overflow/i));
+    expect(
+      screen.queryByText(/Vision hasn't been verified/i),
+    ).not.toBeInTheDocument();
 
     await user.click(trigger);
     await user.click(
@@ -97,6 +106,50 @@ describe("Settings — model-assignment matrix", () => {
     await waitFor(() =>
       expect(trigger).toHaveTextContent(/Use main model when capable/i),
     );
+  });
+
+  it("recommends a visual model for a text-only primary and can assign one", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+
+    const library = await screen.findByText("Model library", {
+      selector: "summary *",
+    });
+    await user.click(library);
+    await user.click(
+      await screen.findByRole("button", { name: /Edit driver-local/i }),
+    );
+
+    const editDialog = await screen.findByRole("dialog");
+    await user.click(
+      within(editDialog).getByText(/Advanced model metadata/i, {
+        selector: "summary",
+      }),
+    );
+    await user.selectOptions(
+      within(editDialog).getByRole("combobox", {
+        name: /Image understanding/i,
+      }),
+      "false",
+    );
+    await user.click(
+      within(editDialog).getByRole("button", { name: /Save changes/i }),
+    );
+
+    expect(
+      await screen.findByText(/Driver Local .* is marked text-only/i),
+    ).toBeInTheDocument();
+    const trigger = screen.getByRole("button", {
+      name: /Choose optional visual inspection model/i,
+    });
+    await user.click(trigger);
+    await user.click(
+      within(screen.getByRole("dialog")).getByText(/Driver Overflow/i),
+    );
+    await waitFor(() => expect(trigger).toHaveTextContent(/Driver Overflow/i));
+    expect(
+      screen.queryByText(/Driver Local .* is marked text-only/i),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -123,11 +176,32 @@ describe("Settings — Encoders (bundled-local vs remote)", () => {
   });
 });
 
+describe("Settings — Audio overview", () => {
+  it("uses the same current-state plus Configure pattern as other media settings", async () => {
+    const user = userEvent.setup();
+    withQuery(<SettingsView />);
+
+    expect(
+      await screen.findByText(/Current: Bundled \(in-process\)/i),
+    ).toBeInTheDocument();
+    const configure = screen.getByText(/Configure audio overview/i, {
+      selector: "summary",
+    });
+    expect(configure.closest("details")).not.toHaveAttribute("open");
+    await user.click(configure);
+    expect(configure.closest("details")).toHaveAttribute("open");
+    expect(
+      screen.getByRole("button", { name: /Self-hosted endpoint/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("Settings — model catalogue (CRUD)", () => {
   it("adds a new model via the form and it appears in the catalogue", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
-    await screen.findByText("Catalogue");
+    const library = await screen.findByText("Model library", { selector: "summary *" });
+    await user.click(library);
 
     await user.click(screen.getByRole("button", { name: /Add model/i }));
     const dialog = await screen.findByRole("dialog");
@@ -156,7 +230,8 @@ describe("Settings — model catalogue (CRUD)", () => {
   it("lets the user explicitly mark a model as image-capable", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
-    await screen.findByText("Catalogue");
+    const library = await screen.findByText("Model library", { selector: "summary *" });
+    await user.click(library);
 
     await user.click(screen.getByRole("button", { name: /Add model/i }));
     const dialog = await screen.findByRole("dialog");
@@ -252,7 +327,10 @@ describe("Settings — OpenRouter", () => {
   it("saves the key and adds an OpenRouter model to the catalogue", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
-    await screen.findByText("OpenRouter");
+    const openRouter = await screen.findByText("OpenRouter", { selector: "summary" });
+    expect(openRouter.closest("details")).not.toHaveAttribute("open");
+    await user.click(openRouter);
+    expect(openRouter.closest("details")).toHaveAttribute("open");
 
     // save the (encrypted) key (the input appears once the key-status query resolves)
     await user.type(await screen.findByLabelText(/OpenRouter API key/i), "sk-or-v1-test");

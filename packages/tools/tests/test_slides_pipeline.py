@@ -2,8 +2,10 @@
 
 Proves:
   - A mocked-LLM AuthoredDeck parses → lowers → renders to PPTX + HTML.
-  - Malformed JSON → one retry → Marp fallback (no crash, success may be False).
-  - The fill stage parse failure falls back to Marp using the outline.
+  - Malformed authored JSON gets one correction attempt and is not delivered as
+    a successful plain substitute.
+  - The internal fill stage retains diagnostic outline markdown without the public
+    tool rendering it under a goal-based request.
   - Weak-model path gets the worked-example prompt (WEAK_SYSTEM).
   - image_prompt slides invoke the image backend once each.
   - generate_deck returns (Deck, None, None) on success.
@@ -23,6 +25,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from disco.core.llm.config_approvals import ConfigOriginApprovals
 from disco.tools.anatomy import ToolContext
@@ -281,6 +284,40 @@ def test_parse_authored_deck_wrong_schema():
     assert err
 
 
+def test_parse_authored_deck_drops_layout_names_from_optional_chart_only():
+    data = json.loads(json.dumps(_SAMPLE_DECK_JSON))
+    for slide, kind in zip(data["slides"], ("flow", "two_by_two", "system_map"), strict=False):
+        slide["chart"] = {
+            "kind": kind,
+            "title": "Not actually a chart",
+            "labels": ["A"],
+            "series": [{"name": "Value", "data": [1]}],
+        }
+    data["slides"][3]["chart"] = {
+        "kind": "bar",
+        "title": "Real values",
+        "labels": ["A", "B"],
+        "series": [{"name": "Value", "data": [1, 2]}],
+    }
+
+    deck, err = _parse_authored_deck(json.dumps(data))
+
+    assert deck is not None, err
+    assert [slide.chart for slide in deck.slides[:3]] == [None, None, None]
+    assert deck.slides[3].chart is not None
+    assert deck.slides[3].chart.kind == "bar"
+
+
+def test_parse_authored_deck_retries_unknown_chart_typos():
+    data = json.loads(json.dumps(_SAMPLE_DECK_JSON))
+    data["slides"][1]["chart"] = {"kind": "banana"}
+
+    deck, err = _parse_authored_deck(json.dumps(data))
+
+    assert deck is None
+    assert "chart.kind" in err or "chart" in err
+
+
 # ---------------------------------------------------------------------------
 # _stage_outline (mocked LLM)
 # ---------------------------------------------------------------------------
@@ -523,7 +560,8 @@ async def test_generate_deck_success(tmp_workspace):
 
 @pytest.mark.asyncio
 async def test_generate_deck_fill_failure_returns_fallback(tmp_workspace):
-    """Fill stage failure → (None, fallback_markdown, error_msg)."""
+    """Retain the historical inventory ID while proving fallback is internal-only."""
+    """The internal pipeline retains outline text, but the public tool never ships it."""
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
 
@@ -839,7 +877,8 @@ async def test_c2_pptx_carries_editable_source(tmp_workspace):
 
 @pytest.mark.asyncio
 async def test_slides_tool_c2_fill_failure_marp_fallback(tmp_workspace):
-    """C2 fill failure → Marp fallback path triggered (no crash)."""
+    """Retain the historical inventory ID while proving C2 cannot emit Marp."""
+    """A goal-based authored failure is a failure, never a successful plain deck."""
     tool = SlidesTool()
     sbx = _jailed_sandbox(tmp_workspace)
     ctx = _ctx(sbx)
@@ -851,7 +890,6 @@ async def test_slides_tool_c2_fill_failure_marp_fallback(tmp_workspace):
     with (
         patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm,
         patch("disco.tools.builtin.slides.select_image_backend", return_value=mock_backend),
-        patch("disco.tools.builtin.slides._marp_available", return_value=False),
     ):
         mock_llm.side_effect = [outline_raw, "BAD JSON", "ALSO BAD"]
         outcome = await tool.run(
@@ -863,11 +901,16 @@ async def test_slides_tool_c2_fill_failure_marp_fallback(tmp_workspace):
             ctx,
         )
 
-    # The fallback HTML should have been written (Marp absent → _fallback_html path)
-    # The outcome may succeed (fallback rendered) or fail (no markdown) — must not crash
-    assert outcome is not None, "Tool must never crash"
-    # Content should mention the fallback
-    assert outcome.content  # non-empty content regardless of success/failure
+    assert outcome.success is False
+    assert outcome.artifacts == []
+    assert outcome.error is not None
+    assert "Authored slide generation failed before delivery" in outcome.content
+    assert outcome.structured == {
+        "degraded": False,
+        "renderer": "authored",
+        "stage": "authoring",
+    }
+    assert list(tmp_workspace.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -1067,6 +1110,7 @@ async def test_call_llm_sends_bearer_when_api_key_present():
         async def _post(url, json=None, headers=None):
             captured["headers"] = headers
             resp = MagicMock()
+            resp.status_code = 200
             resp.raise_for_status = MagicMock()
             resp.json = MagicMock(return_value={"choices": [{"message": {"content": "{}"}}]})
             return resp
@@ -1086,6 +1130,74 @@ async def test_call_llm_sends_bearer_when_api_key_present():
         captured.clear()
         await _call_llm([{"role": "user", "content": "hi"}], "http://localhost:18080/v1", "m")
         assert "Authorization" not in captured["headers"]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_retries_one_transient_500_then_succeeds():
+    from disco.tools.builtin._slides_pipeline import _call_llm
+
+    statuses = [500, 200]
+    calls = 0
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            nonlocal calls
+            status = statuses[calls]
+            calls += 1
+            return httpx.Response(
+                status,
+                request=httpx.Request("POST", url),
+                json={"choices": [{"message": {"content": "{}"}}]},
+            )
+
+    with patch("disco.tools.builtin._slides_pipeline.httpx.AsyncClient", lambda **_: _Client()):
+        result = await _call_llm(
+            [{"role": "user", "content": "hi"}],
+            "https://provider.example/v1",
+            "model",
+        )
+
+    assert result.content == "{}"
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("statuses", "expected_calls"), [([500, 500], 2), ([400], 1)])
+async def test_call_llm_bounds_retries(statuses, expected_calls):
+    from disco.tools.builtin._slides_pipeline import _call_llm
+
+    calls = 0
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, **_kwargs):
+            nonlocal calls
+            status = statuses[min(calls, len(statuses) - 1)]
+            calls += 1
+            return httpx.Response(status, request=httpx.Request("POST", url))
+
+    with (
+        patch("disco.tools.builtin._slides_pipeline.httpx.AsyncClient", lambda **_: _Client()),
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        await _call_llm(
+            [{"role": "user", "content": "hi"}],
+            "https://provider.example/v1",
+            "model",
+        )
+
+    assert calls == expected_calls
 
 
 def test_resolve_slides_llm_resolves_remote_key(monkeypatch, tmp_path):

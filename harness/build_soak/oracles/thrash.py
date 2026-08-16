@@ -21,10 +21,12 @@ from disco.core.receipt_currency import (
 from disco.core.receipt_currency import (
     preview_generation_of as preview_generation_of,
 )
+from disco.core.tool_fingerprint import contextual_tool_calls
 
 from .. import failure_codes as fc
 from ..events import KIND_ACTION, kind_of, seq_of
 from ._thrash_checks import (
+    _fingerprint,
     action_outcomes,
     build_passing_facts,
     check_actionless_pauses,
@@ -186,12 +188,11 @@ def _longest_identical_streak(
     97601 negative control, which stays red because nothing in fact changed
     between its three repeats.
     """
-    from ._thrash_checks import _fingerprint
-
     best_count, best_fp, best_seqs = 0, "", []
     current_fp, current_seqs = "", []
     approved_scope: tuple[str, ...] | None = None
     boundaries = CurrencyBoundaries()
+    contextual_fingerprints, _browser_boundary_seq = contextual_tool_calls(events)
     for event in events:
         next_scope = approved_plan_predicate_scope(event)
         if next_scope is not None:
@@ -211,7 +212,10 @@ def _longest_identical_streak(
             continue
         if kind_of(event) != KIND_ACTION:
             continue
-        fp = _fingerprint(event)
+        action_id = event.get("id")
+        fp = contextual_fingerprints.get(str(action_id or ""))
+        if fp is None:
+            fp = _fingerprint(event)
         if fp == current_fp:
             current_seqs.append(seq_of(event))
         else:

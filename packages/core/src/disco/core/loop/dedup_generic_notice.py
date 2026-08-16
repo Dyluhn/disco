@@ -11,7 +11,8 @@ This module closes the gap: a generic notice that fires for any tool not
 already covered by the shell/script or plan classes. It reuses the same three
 shared mechanisms, never reimplemented:
 
-* identity — `tool_call_fingerprint`, the owner the oracle grades with;
+* identity — the contextual fingerprint stream in `tool_fingerprint`, the
+  owner the oracle grades with;
 * currency — `_w39_freshness_boundary_seq`, the shared predicate
   (`disco.core.receipt_currency`), so echo and cap read one rule;
 * anti-spam — `_w39_reminder_emitted_after`, pivoting on the OCCURRENCE.
@@ -36,15 +37,20 @@ to reflect the new covered set; no parallel silent list remains.
 from __future__ import annotations
 
 from ..events import ActionEvent, Event
-from ..tool_fingerprint import tool_call_fingerprint
+from ..tool_fingerprint import (
+    BROWSER_STATEFUL_ACTIONS,
+    contextual_tool_calls,
+    tool_call_fingerprint,
+)
 from .dedup import (
     _W39_RESULT_BLOCK,
+    _currency_view,
     _f9_has_successful_observation,
     _w39_freshness_boundary_seq,
     _w39_prior_result_excerpt,
     _w39_reminder_emitted_after,
 )
-from .dedup_notice_common import _W39_CAP_CONSEQUENCE, _w39_identical_call_count
+from .dedup_notice_common import _W39_CAP_CONSEQUENCE
 
 _W39_GENERIC_REMINDER_SENTINEL = "[W-39 verify-dedup:generic]"
 
@@ -76,12 +82,13 @@ def _generic_prior_event(
     prior_events: list[Event],
     events: list[Event],
     boundary_seq: int,
+    fingerprints: dict[str, str],
 ) -> ActionEvent | None:
     """Find the success-backed prior that still carries currency."""
     for e in reversed(prior_events):
         if not isinstance(e, ActionEvent) or e.tool_call is None:
             continue
-        if tool_call_fingerprint(e.tool_call.tool_name, e.tool_call.arguments) != fingerprint:
+        if fingerprints.get(e.id) != fingerprint:
             continue
         if not _f9_has_successful_observation(events, e.id):
             continue
@@ -94,6 +101,41 @@ def _generic_prior_event(
             return None
         return e
     return None
+
+
+def _generic_call_context(
+    current_tool: str,
+    current_args: dict,
+    events: list[Event],
+) -> tuple[list[Event], int, dict[str, str], str]:
+    """Build the shared identity/currency view for the call about to execute."""
+
+    prior_events = events[:-1] if events else []
+    boundary_seq = _w39_freshness_boundary_seq(prior_events)
+    views = [_currency_view(event) for event in events]
+    fingerprints, browser_boundary_seq = contextual_tool_calls(views)
+    if current_tool == "browser" and current_args.get("action") in BROWSER_STATEFUL_ACTIONS:
+        boundary_seq = max(boundary_seq, browser_boundary_seq)
+    current = events[-1] if events else None
+    fingerprint = fingerprints.get(current.id) if isinstance(current, ActionEvent) else None
+    return (
+        prior_events,
+        boundary_seq,
+        fingerprints,
+        fingerprint or tool_call_fingerprint(current_tool, current_args),
+    )
+
+
+def _generic_call_count(
+    prior_events: list[Event], fingerprints: dict[str, str], fingerprint: str
+) -> int:
+    """Occurrences of this contextual identity, including the current call."""
+
+    return 1 + sum(
+        1
+        for event in prior_events
+        if isinstance(event, ActionEvent) and fingerprints.get(event.id) == fingerprint
+    )
 
 
 def _w39_generic_reminder(
@@ -116,10 +158,16 @@ def _w39_generic_reminder(
 
     if current_tool in _W39_SHELL_TOOLS or current_tool in _W39_PLAN_TOOLS:
         return (False, 0, "")
-    prior_events = events[:-1] if events else []
-    boundary_seq = _w39_freshness_boundary_seq(prior_events)
-    fingerprint = tool_call_fingerprint(current_tool, current_args)
-    prior = _generic_prior_event(fingerprint, prior_events, events, boundary_seq)
+    prior_events, boundary_seq, fingerprints, fingerprint = _generic_call_context(
+        current_tool, current_args, events
+    )
+    prior = _generic_prior_event(
+        fingerprint,
+        prior_events,
+        events,
+        boundary_seq,
+        fingerprints,
+    )
     if prior is None:
         return (False, 0, "")
     prior_seq = prior.seq or 0
@@ -130,7 +178,7 @@ def _w39_generic_reminder(
         _W39_GENERIC_REMINDER_TEMPLATE.format(
             sentinel=_W39_GENERIC_REMINDER_SENTINEL,
             tool=current_tool,
-            count=_w39_identical_call_count(prior_events, fingerprint),
+            count=_generic_call_count(prior_events, fingerprints, fingerprint),
             step=prior_seq,
             result=_W39_RESULT_BLOCK.format(result=prior_result) if prior_result else "",
         ),

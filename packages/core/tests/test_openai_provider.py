@@ -500,6 +500,73 @@ async def test_streaming_parallel_calls_with_index_dropped_on_continuations():
     assert by_name == {"toolA": {"x": 1}, "toolB": {"y": 2}}
 
 
+async def test_streaming_new_call_headers_without_index_or_id_stay_separate():
+    """OpenCode-compatible live shape: each call is complete but the provider
+    supplies neither index nor id. Fresh function headers must start fresh slots
+    instead of producing ``{"path": ...}{"query": ...}`` under one ``_raw``.
+    """
+    content = _sse(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "workspace_list",
+                                    "arguments": '{"path":"."}',
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "search",
+                                    "arguments": '{"query":"three.js","limit":5}',
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "file_read",
+                                    "arguments": '{"path":"index.html"}',
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+
+    _, final, _ = await _collect(_stream_provider(content))
+
+    assert final is not None
+    assert [(call.tool_name, call.arguments) for call in final.tool_calls] == [
+        ("workspace_list", {"path": "."}),
+        ("search", {"query": "three.js", "limit": 5}),
+        ("file_read", {"path": "index.html"}),
+    ]
+
+
 async def test_streaming_interleaved_continuations_keyed_by_id_without_index():
     # Hardest shape: interleaved parallel continuations that drop `index` but
     # re-send the call `id`. Routing must follow the id, not last-touched or 0.

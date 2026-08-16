@@ -40,6 +40,7 @@
  *   - DeepResearchReportView       — report/sources/follow-ups/need-more/footer
  */
 
+import { useNavigate } from "react-router-dom";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
 import type { ScopeId } from "@/shell/mode";
 import { useDeepResearchSurfaceState } from "./deepResearchSurfaceParts/useDeepResearchSurfaceState";
@@ -76,6 +77,7 @@ export function DeepResearchSurface({
   onDraftChange,
   initialSources,
 }: Props) {
+  const navigate = useNavigate();
   const r = useDeepResearch(resumeCid, initialLeaderId, initialSources);
   const started = r.started;
   const {
@@ -126,6 +128,10 @@ export function DeepResearchSurface({
       <main className="mx-auto flex w-full max-w-doc flex-1 flex-col gap-section px-body pb-major">
         <DeepResearchTopBar
           r={r}
+          onStandardSearch={() => {
+            if (onScopeChange) onScopeChange("standard");
+            else navigate("/");
+          }}
           handleNewResearch={handleNewResearch}
           exportCaps={exportCaps}
           doneNotify={doneNotify}
