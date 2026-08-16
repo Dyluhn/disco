@@ -255,15 +255,13 @@ def _validate_records_policies(app: AppSpec) -> None:
     """Keep the row-policy surface explicit and free of ambiguous legacy gates."""
     if not records_policy_enabled(app):
         return
-    from .form_primitive import form_submission_entities_for
-
     if not app.roles:
         raise ValueError("records policies require session roles")
     if app.stripe is not None or app.webhooks is not None:
         raise ValueError("records policies cannot currently be combined with Stripe or webhooks")
     if app.blog is not None:
         raise ValueError("records policies cannot currently be combined with blog routing")
-    form_ids = {entity.id for entity in form_submission_entities_for(app)}
+    form_ids = {entity.id for entity in _records_form_submission_entities(app)}
     for entity in app.entities:
         if entity.id in form_ids:
             continue
@@ -277,6 +275,21 @@ def _validate_records_policies(app: AppSpec) -> None:
                 f"entity {entity.id!r} record_policy owns write authorization; "
                 "remove write_roles and use create_roles/manage_roles"
             )
+
+
+def _records_form_submission_entities(app: AppSpec) -> tuple[Entity, ...]:
+    """Return only add-on submission forms, never policy-owned records.
+
+    A records UI may naturally use a ``form`` section to author a persistent
+    entity.  ``content_ref`` alone therefore cannot transfer that entity to the
+    generic form add-on.  An explicit record policy is the stronger ownership
+    signal and keeps the entity, its foreign keys, and its CRUD routes on the
+    trusted records path.
+    """
+    from .form_primitive import form_submission_entities_for
+
+    policy_entities = tuple(entity for entity in app.entities if entity.record_policy is not None)
+    return form_submission_entities_for(app, reserved_entities=policy_entities)
 
 
 def prepare_records_app_spec(app: AppSpec) -> AppSpec:
@@ -300,9 +313,9 @@ def _records_split_form_entities(
     """Partition `app.entities` into form-submission entities (folded by the form
     add-on) and record entities, and compute each form's public POST route.
     Returns (form_entities, record_entities, records_app, form_routes)."""
-    from .form_primitive import form_route_for, form_submission_entities_for
+    from .form_primitive import form_route_for
 
-    form_entities = form_submission_entities_for(app)
+    form_entities = _records_form_submission_entities(app)
     form_entity_ids = {entity.id for entity in form_entities}
     record_entities = tuple(entity for entity in app.entities if entity.id not in form_entity_ids)
     if not record_entities:
@@ -422,6 +435,18 @@ def _records_component_files(
     files: dict[str, str] = {}
     for page, section in _iter_sections(app):
         comp = _comp_name(names, page, section)
+        policy_entity = (
+            next(
+                (
+                    entity
+                    for entity in app.entities
+                    if entity.id == section.content_ref and entity.record_policy is not None
+                ),
+                None,
+            )
+            if section.kind == "form" and section.content_ref is not None
+            else None
+        )
         form_entity = (
             next((entity for entity in form_entities if entity.id == section.content_ref), None)
             if section.kind == "form" and section.content_ref is not None
@@ -438,8 +463,13 @@ def _records_component_files(
 
             files[f"src/components/{comp}.tsx"] = emit_stripe_pricing_component(comp, section)
         else:
+            target_entity = policy_entity or db_entity
             files[f"src/components/{comp}.tsx"] = _emit_component(
-                comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
+                comp,
+                page,
+                section,
+                target_entity,
+                f"/api/{_records_table_name(target_entity)}",
             )
     return files
 

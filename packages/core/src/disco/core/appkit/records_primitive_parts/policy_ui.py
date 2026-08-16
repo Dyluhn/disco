@@ -45,7 +45,11 @@ def emit_records_policy_app_tsx(app: AppSpec, names: dict[tuple[str, str], str])
 def _entity_payload(app: AppSpec) -> list[dict[str, object]]:
     from ..form_primitive import form_submission_entities_for
 
-    form_ids = {entity.id for entity in form_submission_entities_for(app)}
+    policy_entities = tuple(entity for entity in app.entities if entity.record_policy is not None)
+    form_ids = {
+        entity.id
+        for entity in form_submission_entities_for(app, reserved_entities=policy_entities)
+    }
     payload: list[dict[str, object]] = []
     for entity in app.entities:
         if entity.id in form_ids:

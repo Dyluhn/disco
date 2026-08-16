@@ -153,6 +153,33 @@ def test_policy_records_generate_server_owned_schema_worker_and_real_ui() -> Non
     assert "contact_request" not in folded["src/components/RecordsWorkspace.tsx"]
 
 
+def test_policy_record_referenced_by_form_section_stays_on_records_path() -> None:
+    data = _forum_app().model_dump(mode="json")
+    data["pages"][0]["sections"].append(
+        {
+            "id": "author",
+            "kind": "form",
+            "content_ref": "thread",
+            "content": {
+                "heading": "Start a thread",
+                "cta_label": "Post thread",
+                "success_message": "Thread posted.",
+            },
+        }
+    )
+
+    tree = generate(AppSpec.model_validate(data), _recipe().to_design_spec())
+
+    assert 'CREATE TABLE IF NOT EXISTS "thread"' in tree["schema.sql"]
+    assert 'FOREIGN KEY("thread_id") REFERENCES "thread"("id")' in tree["schema.sql"]
+    assert '"/api/forms/thread"' not in tree["worker/index.ts"]
+    assert '"id": "thread"' in tree["src/components/RecordsWorkspace.tsx"]
+    author = tree["src/components/HomeAuthorSection.tsx"]
+    assert 'useSubmit("/api/thread")' in author
+    assert 'name="title"' in author
+    assert 'name="category_id"' in author
+
+
 def test_policy_records_schema_executes_with_owned_relations() -> None:
     connection = sqlite3.connect(":memory:")
     try:
