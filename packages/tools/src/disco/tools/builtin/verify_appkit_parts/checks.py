@@ -68,9 +68,8 @@ def dispatch_primitive_checks(
 ) -> list[dict[str, Any]]:
     """Resolve `app`'s primitive and run its verify hook (WO-A3 dispatch): a
     missing/unreadable app resolves to no primitive, and a primitive WITHOUT a
-    verify hook (records — on purpose) falls back to `lead_gen_verify`, so those
-    verdicts fail cleanly with the usual "run app_create first" evidence,
-    byte-identical to before."""
+    verify hook falls back to `lead_gen_verify`. Records owns its own artifact-
+    derived verifier and therefore never inherits lead-generation assumptions."""
     prim = resolve_primitive(app.app_kind) if app is not None else None
     verify_fn = prim.verify if (prim is not None and prim.verify is not None) else lead_gen_verify
     result = verify_fn(app, design, tree)

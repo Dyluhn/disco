@@ -69,13 +69,9 @@ def test_existing_primitive_carries_wo_a0_defaults(prim_id: str) -> None:
     assert prim.tier == "fillable"
     assert prim.host_contract == ()
     assert prim.spec_schema is None
-    # WO-A3 wired the base primitives' verify hooks: lead_gen/directory carry the
-    # pure ports of their tool check bundles; records stays None ON PURPOSE (its
-    # apps keep falling through to the lead-gen bundle via the dispatch fallback).
-    if prim_id == RECORDS_PRIMITIVE_ID:
-        assert prim.verify is None
-    else:
-        assert prim.verify is not None
+    # Every owned base primitive now has an artifact-derived verifier. Records
+    # must not fall through to the unrelated lead-generation bundle.
+    assert prim.verify is not None
     assert prim.apply_spec is None  # WO-A1 default: base scaffolds are not addable
 
 

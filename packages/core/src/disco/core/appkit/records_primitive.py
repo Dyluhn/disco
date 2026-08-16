@@ -26,11 +26,22 @@ from .records_primitive_parts.naming import (
 from .records_primitive_parts.owner_guide import (
     _emit_records_auth_owner_guide_md,
     _emit_records_owner_guide_md,
+    _emit_records_policy_owner_guide_md,
+)
+from .records_primitive_parts.policy_ui import (
+    emit_records_policy_app_tsx,
+    emit_records_workspace_tsx,
+    records_policy_css,
+)
+from .records_primitive_parts.policy_worker import (
+    emit_records_policy_worker_ts,
+    records_policy_enabled,
 )
 from .records_primitive_parts.schema_sql import (
     _emit_records_auth_schema_sql,
     _emit_records_schema_sql,
 )
+from .records_primitive_parts.verify import records_verify
 from .records_primitive_parts.worker_ts import _emit_records_worker_ts
 from .spec import (
     Action,
@@ -216,10 +227,7 @@ def _validate_records_stripe(app: AppSpec) -> None:
     if not any(role != app.stripe.entitlement_flag for role in app.roles):
         raise ValueError("Stripe requires at least one non-payment records role")
     stripe_sections = tuple(
-        section
-        for page in app.pages
-        for section in page.sections
-        if section.id == "stripe_pricing"
+        section for page in app.pages for section in page.sections if section.id == "stripe_pricing"
     )
     if len(stripe_sections) != 1 or stripe_sections[0].kind != "pricing":
         raise ValueError("Stripe records app requires one stripe_pricing section")
@@ -243,6 +251,34 @@ def _validate_records_webhooks(app: AppSpec) -> None:
         raise ValueError("Webhook metadata must exactly match the declared webhook sections")
 
 
+def _validate_records_policies(app: AppSpec) -> None:
+    """Keep the row-policy surface explicit and free of ambiguous legacy gates."""
+    if not records_policy_enabled(app):
+        return
+    from .form_primitive import form_submission_entities_for
+
+    if not app.roles:
+        raise ValueError("records policies require session roles")
+    if app.stripe is not None or app.webhooks is not None:
+        raise ValueError("records policies cannot currently be combined with Stripe or webhooks")
+    if app.blog is not None:
+        raise ValueError("records policies cannot currently be combined with blog routing")
+    form_ids = {entity.id for entity in form_submission_entities_for(app)}
+    for entity in app.entities:
+        if entity.id in form_ids:
+            continue
+        if entity.record_policy is None:
+            raise ValueError(
+                "records policy mode requires record_policy on every persistent entity; "
+                f"entity {entity.id!r} is ungoverned"
+            )
+        if entity.record_policy is not None and entity.write_roles:
+            raise ValueError(
+                f"entity {entity.id!r} record_policy owns write authorization; "
+                "remove write_roles and use create_roles/manage_roles"
+            )
+
+
 def prepare_records_app_spec(app: AppSpec) -> AppSpec:
     """Validate a records app and persist it verbatim when it is already complete."""
     if app.app_kind != RECORDS_PRIMITIVE_ID:
@@ -254,6 +290,7 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
     _validate_records_role_tables(app)
     _validate_records_stripe(app)
     _validate_records_webhooks(app)
+    _validate_records_policies(app)
     return AppSpec.model_validate(app.model_dump(mode="json"))
 
 
@@ -327,7 +364,9 @@ def _records_worker_ts(
     from .form_primitive import lower_form_records_worker_ts
 
     worker_ts = (
-        _emit_records_auth_worker_ts(records_app, form_entities)
+        emit_records_policy_worker_ts(records_app, form_entities)
+        if auth_enabled and records_policy_enabled(records_app)
+        else _emit_records_auth_worker_ts(records_app, form_entities)
         if auth_enabled
         else _emit_records_worker_ts(record_entities, form_entities)
     )
@@ -439,7 +478,8 @@ def _records_base_files(
         _emit_wrangler_toml,
     )
 
-    return {
+    policy_enabled = records_policy_enabled(app)
+    files = {
         "index.html": _emit_index_html(app, design),
         "package.json": _emit_package_json(app, db_name),
         "package-lock.json": _emit_package_lock_json(app),
@@ -456,13 +496,16 @@ def _records_base_files(
         "worker/index.ts": worker_ts,
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": (
-            emit_app_tsx_with_blog_routes(app, names)
+            emit_records_policy_app_tsx(app, names)
+            if policy_enabled
+            else emit_app_tsx_with_blog_routes(app, names)
             if has_blog(app)
             else _emit_index_app_tsx(app, names)
         ),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
-        "src/styles.css": _emit_styles_css(design),
+        "src/styles.css": _emit_styles_css(design)
+        + (records_policy_css() if policy_enabled else ""),
         "src/db/schema.ts": drizzle_ts,
         "src/generated/content.ts": _emit_content_ts(app, names),
         "src/generated/manifest.ts": manifest_ts,
@@ -470,6 +513,9 @@ def _records_base_files(
         ".dev.vars.example": _emit_dev_vars_example(),
         ".gitignore": _emit_gitignore(),
     }
+    if policy_enabled:
+        files["src/components/RecordsWorkspace.tsx"] = emit_records_workspace_tsx(app)
+    return files
 
 
 def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
@@ -506,7 +552,9 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         webhook_enabled=webhook_enabled,
     )
     owner_guide = (
-        _emit_records_auth_owner_guide_md(app, db_name)
+        _emit_records_policy_owner_guide_md(app, db_name)
+        if records_policy_enabled(app)
+        else _emit_records_auth_owner_guide_md(app, db_name)
         if auth_enabled
         else _emit_records_owner_guide_md(app, db_name)
     )
@@ -551,11 +599,7 @@ register_primitive(
         default_app_spec=default_records_app_spec,
         prepare_app_spec=prepare_records_app_spec,
         generate=generate_records,
-        # verify=None ON PURPOSE (WO-A3): records apps have ALWAYS fallen through to
-        # the verifier's lead-gen check bundle (the pre-dispatch else-branch), and the
-        # tool's dispatch fallback (`verify is None -> lead_gen_verify`) preserves that
-        # exactly. Give records its own verify only with its own contract checks.
-        verify=None,
+        verify=records_verify,
     )
 )
 
@@ -566,4 +610,5 @@ __all__ = [
     "default_records_app_spec",
     "generate_records",
     "prepare_records_app_spec",
+    "records_verify",
 ]

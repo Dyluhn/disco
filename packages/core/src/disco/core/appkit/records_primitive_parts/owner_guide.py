@@ -90,3 +90,37 @@ def _emit_records_auth_owner_guide_md(app: AppSpec, db_name: str) -> str:
         "npx wrangler deploy\n"
         "```\n"
     )
+
+
+def _emit_records_policy_owner_guide_md(app: AppSpec, db_name: str) -> str:
+    from ..generator import _html_text
+
+    app_name = _html_text(app.name)
+    return (
+        f"# Deploy guide - {app_name}\n\n"
+        "This Cloudflare-ready records app uses signed per-user sessions and a\n"
+        "generated, server-enforced records policy. Public reads, creation roles,\n"
+        "session-derived ownership, elevated moderation, parent locks, and role\n"
+        "administration come only from `.disco/appspec.json`; client owner/role\n"
+        "claims are not trusted.\n\n"
+        "## Verify locally\n\n"
+        "```sh\n"
+        "cp .dev.vars.example .dev.vars\n"
+        "npm install\n"
+        "npm run build\n"
+        "npm run db:local\n"
+        "npm run cf:dev\n"
+        "```\n\n"
+        "Bootstrap users through `POST /api/register` with `Authorization: Bearer\n"
+        "<ADMIN_TOKEN>`, then use the generated UI to sign in. Lockable records use\n"
+        "`POST /api/<table>/<id>/lock` and `/unlock`; row edits use PATCH and\n"
+        "deletes use DELETE. Role administrators use `PATCH /api/users/<id>/role`.\n\n"
+        "## Deploy\n\n"
+        "```sh\n"
+        f"npx wrangler d1 create {db_name}\n"
+        f"npx wrangler d1 execute {db_name} --remote --file=./schema.sql\n"
+        "npx wrangler secret put ADMIN_TOKEN\n"
+        "npm run build\n"
+        "npx wrangler deploy\n"
+        "```\n"
+    )

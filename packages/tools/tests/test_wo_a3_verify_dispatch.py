@@ -255,6 +255,53 @@ async def _form_workspace() -> dict[str, bytes]:
     return dict(sbx._fs)
 
 
+async def _records_policy_workspace() -> dict[str, bytes]:
+    sbx = FakeSandboxInstance()
+    created = await AppCreateTool().run(
+        AppCreateArgs(
+            recipe_id="editorial-ledger",
+            app_spec={
+                "schema_version": 1,
+                "app_kind": "records",
+                "name": "Common Ground",
+                "roles": ["member", "moderator", "administrator"],
+                "role_admin_roles": ["administrator"],
+                "pages": [
+                    {
+                        "id": "home",
+                        "route": "/",
+                        "title": "Common Ground",
+                        "sections": [
+                            {
+                                "id": "hero",
+                                "kind": "hero",
+                                "content": {"heading": "Common Ground"},
+                            }
+                        ],
+                    }
+                ],
+                "entities": [
+                    {
+                        "id": "topic",
+                        "name": "Topic",
+                        "fields": [{"name": "title", "type": "str", "required": True}],
+                        "record_policy": {
+                            "public_read": True,
+                            "create_roles": ["member", "moderator", "administrator"],
+                            "owner_managed": True,
+                            "manage_roles": ["moderator", "administrator"],
+                            "lock_roles": ["moderator", "administrator"],
+                        },
+                    }
+                ],
+            },
+        ),
+        _ctx(sbx),
+    )
+    assert created.success, created.content
+    return dict(sbx._fs)
+
+
 async def _verify(files: dict[str, bytes]) -> dict:
     out = await VerifyAppKitAppTool().run(
         VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(_VerifySandbox(files))
@@ -305,6 +352,24 @@ async def test_applied_form_record_runs_form_verify_hook(stub_browser):
     assert checks["primitive_verify:form"]["passed"] is True
     assert checks["primitive_verify:form"]["evidence"] == "4 passed / 0 failed"
     assert v["passed"] is True, v["summary"]
+
+
+async def test_records_policy_dispatches_records_contract_not_lead_gen(stub_browser):
+    files = await _records_policy_workspace()
+    v = await _verify(files)
+    checks = _checks_by_name(v)
+    names = set(checks)
+    assert v["passed"] is True, v["summary"]
+    assert {
+        "records_schema",
+        "records_drizzle_contract",
+        "records_worker_contract",
+        "records_policy_ui",
+        "records_policy_shell",
+    } <= names
+    assert "schema_sql_valid" not in names
+    assert "worker_contract" not in names
+    assert "lead_form_posts" not in names
 
 
 async def test_broken_hello_tree_fails_dispatch_and_record_check(stub_browser):

@@ -85,7 +85,16 @@ class AppCreateArgs(BaseModel):
         "be snake_case identifiers and must "
         "NOT use reserved names like 'id' or 'created_at' (implicit columns); pages "
         "carry sections (each with id/kind/content) — a page has NO direct 'content' "
-        "key of its own; a 'records' spec needs at least one NON-form entity.",
+        "key of its own; a 'records' spec needs at least one NON-form entity. "
+        "For trusted records authorization, declare top-level roles and put a "
+        "record_policy on each governed entity: public_read gives anonymous/guest "
+        "read access; create_roles controls posting; owner_managed derives "
+        "owner_user_id from the signed session; manage_roles may edit/delete any "
+        "row; lock_roles enables server-enforced lock/unlock; parent_lock_field "
+        "names a declared FK whose locked parent blocks child writes. "
+        "role_admin_roles enables the built-in user-role administration route/UI. "
+        "Do not declare a separate user entity or owner_user_id/locked fields—the "
+        "trusted generator owns those.",
     )
     overwrite: bool = Field(
         default=False,
@@ -212,8 +221,7 @@ def _build_create_outcome(
         for section in page.sections
     ]
     target_summary = ", ".join(
-        f"{target['page_id']}/{target['section_id']} "
-        f"(generated key {target['generated_key']})"
+        f"{target['page_id']}/{target['section_id']} (generated key {target['generated_key']})"
         for target in content_targets
     )
     return ToolOutcome(
