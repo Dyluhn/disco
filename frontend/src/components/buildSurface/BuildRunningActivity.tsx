@@ -14,6 +14,7 @@ import { LiveSignalBar } from "@/components/build/LiveSignalBar";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import type { ActivityItem, LiveSignal } from "@/lib/buildTrace";
 import type { BuildController } from "./types";
+import type { BuildFraming } from "@/components/BuildSurface";
 
 export function BuildRunningActivity({
   b,
@@ -22,6 +23,7 @@ export function BuildRunningActivity({
   finalMessage,
   draftingPlan,
   collapseFeed,
+  framing,
 }: {
   b: BuildController;
   activity: ActivityItem[];
@@ -29,6 +31,7 @@ export function BuildRunningActivity({
   finalMessage: string | null;
   draftingPlan: boolean;
   collapseFeed: boolean;
+  framing: BuildFraming;
 }) {
   return (
     <>
@@ -75,6 +78,7 @@ export function BuildRunningActivity({
           status={b.status}
           activity={activity}
           conversationId={b.cid ?? undefined}
+          surface={framing}
         />
       ) : (
         <>

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
+  "source_identity": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -11566,7 +11566,7 @@
             "async def run(self) -> ConversationState",
             "async def send_message(self, text: str, *, steer: bool=False) -> ConversationState",
             "async def steer(self, text: str) -> ConversationState",
-            "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
+            "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, require_productive_action_before_finish: bool=True, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
           ],
           "fields": []
         },
@@ -19868,7 +19868,7 @@
         {
           "kind": "function",
           "name": "AgentStageCard",
-          "signature": "export function AgentStageCard({ events, status, activity, conversationId, }: { events: AgentEvent[]; status: ConversationStatus; /** The full derived activity \u2014 rendered inline when the card is expanded. */ activity: ActivityItem[]; conversationId?: string; })"
+          "signature": "export function AgentStageCard({ events, status, activity, conversationId, surface = \"build\", }: { events: AgentEvent[]; status: ConversationStatus; /** The full derived activity \u2014 rendered inline when the card is expanded. */ activity: ActivityItem[]; conversationId?: string; surface?: \"build\" | \"agent\"; })"
         }
       ]
     },
@@ -19878,7 +19878,7 @@
         {
           "kind": "function",
           "name": "AgentStatusBar",
-          "signature": "export function AgentStatusBar({ status, isolation, sandboxState, connectionState = \"connected\", autonomous, assist, onKill, onStop, onResume, events = [], modelId, seq, }: { status: ConversationStatus; /** BP-15: null until the first state frame \u2014 renders muted '\u2026'. */ isolation: IsolationInfo | null; /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */ sandboxState?: \"active\" | \"suspended\"; /** Live stream health. Degraded means the socket is retrying past the normal window. */ connectionState?: \"connected\" | \"degraded\"; /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */ autonomous?: boolean; /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */ assist?: boolean; onKill: () => void; /** Cluster 6: graceful stop (cooperative cancel \u2014 no sandbox teardown). */ onStop?: () => void; /** Resume a PAUSED build (stopped, or interrupted by a server restart). */ onResume?: () => void; /** RP-14: cumulative cost from usage in events. */ events?: AgentEvent[]; /** RP-14: the currently selected model id for rate lookup. */ modelId?: string | null; /** Highest observed event seq (stream maxSeq) \u2014 exposed as data-seq so the * live gauntlet judges finish-freshness by state VERSION, not by having * witnessed the transitions on a possibly-dead stream. */ seq?: number; })"
+          "signature": "export function AgentStatusBar({ status, isolation, sandboxState, connectionState = \"connected\", autonomous, assist, onKill, onStop, onResume, events = [], modelId, seq, surface = \"build\", }: { status: ConversationStatus; /** BP-15: null until the first state frame \u2014 renders muted '\u2026'. */ isolation: IsolationInfo | null; /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */ sandboxState?: \"active\" | \"suspended\"; /** Live stream health. Degraded means the socket is retrying past the normal window. */ connectionState?: \"connected\" | \"degraded\"; /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */ autonomous?: boolean; /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */ assist?: boolean; onKill: () => void; /** Cluster 6: graceful stop (cooperative cancel \u2014 no sandbox teardown). */ onStop?: () => void; /** Resume a PAUSED build (stopped, or interrupted by a server restart). */ onResume?: () => void; /** RP-14: cumulative cost from usage in events. */ events?: AgentEvent[]; /** RP-14: the currently selected model id for rate lookup. */ modelId?: string | null; /** Highest observed event seq (stream maxSeq) \u2014 exposed as data-seq so the * live gauntlet judges finish-freshness by state VERSION, not by having * witnessed the transitions on a possibly-dead stream. */ seq?: number; surface?: \"build\" | \"agent\"; })"
         }
       ]
     },
@@ -19918,7 +19918,7 @@
         {
           "kind": "function",
           "name": "BuildModelPicker",
-          "signature": "export function BuildModelPicker({ value, onChange, disabled, }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; })"
+          "signature": "export function BuildModelPicker({ value, onChange, disabled, surface = \"build\", }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; surface?: \"build\" | \"agent\"; })"
         }
       ]
     },
@@ -20778,7 +20778,7 @@
         {
           "kind": "function",
           "name": "BuildActivityFeedContent",
-          "signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })"
+          "signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, framing, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; framing: BuildFraming; })"
         }
       ]
     },
@@ -20798,7 +20798,7 @@
         {
           "kind": "function",
           "name": "BuildComposerSection",
-          "signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; })"
+          "signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })"
         }
       ]
     },
@@ -20838,7 +20838,7 @@
         {
           "kind": "function",
           "name": "BuildRunningActivity",
-          "signature": "export function BuildRunningActivity({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })"
+          "signature": "export function BuildRunningActivity({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, framing, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; framing: BuildFraming; })"
         }
       ]
     },
@@ -20848,7 +20848,7 @@
         {
           "kind": "function",
           "name": "BuildSurfaceHeader",
-          "signature": "export function BuildSurfaceHeader({ b, isolation, taskLabel, download, onDownloadClick, }: { b: BuildController; isolation: ReturnType<typeof isolationForBackend>; taskLabel: string | null; download: ReturnType<typeof useDownloadProject>; onDownloadClick: () => void; })"
+          "signature": "export function BuildSurfaceHeader({ b, isolation, taskLabel, download, onDownloadClick, framing, }: { b: BuildController; isolation: ReturnType<typeof isolationForBackend>; taskLabel: string | null; download: ReturnType<typeof useDownloadProject>; onDownloadClick: () => void; framing: BuildFraming; })"
         }
       ]
     },
@@ -22903,7 +22903,7 @@
         {
           "kind": "function",
           "name": "useBuildStream",
-          "signature": "export function useBuildStream( session: BuildSession | null, options?: { /** Inject a deterministic id factory for optimistic message ids (tests). * Omitted in production \u2192 the default Date.now()/Math.random() suffix. */ idFactory?: OptimisticIdFactory; }, ): BuildStream"
+          "signature": "export function useBuildStream( session: BuildSession | null, options?: { /** Inject a deterministic id factory for optimistic message ids (tests). * Omitted in production \u2192 the default Date.now()/Math.random() suffix. */ idFactory?: OptimisticIdFactory; /** Build declares a build contract on first send. The standalone Agent * surface is artifact-neutral and must not inherit that marker. */ surface?: \"build\" | \"agent\"; }, ): BuildStream"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -26710,7 +26710,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildActivityFeedContent.tsx",
       "public_name": "BuildActivityFeedContent",
-      "target_sha256": "fa3459bab5f1b801a988d6158f396001d0dbbd5796b18532314d5f8fd0db7f34",
+      "target_sha256": "c0c9c7d0ce5161a98c468287f93819bbb516a0ce3def0efbcf079328b4dde395",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -26726,7 +26726,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
       "public_name": "BuildComposerSection",
-      "target_sha256": "63ab4ddfa870501a086a9a0f10bb49f971e4170c1c980548cb230d45cfe613bd",
+      "target_sha256": "d84e284632fe3a9838ecf8cd98c619bcf96d67cb907f503217b702d4876979cc",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -26758,7 +26758,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildRunningActivity.tsx",
       "public_name": "BuildRunningActivity",
-      "target_sha256": "cc5a63729c92842d8e435813b6c176efc0aa2ec1cc11611305aff114981a8421",
+      "target_sha256": "8e17b516db6c55fb7d0393fc563e3d24a040b3b05a9f8de2ac1df623902ca356",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -26766,7 +26766,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/buildSurface/BuildSurfaceHeader.tsx",
       "public_name": "BuildSurfaceHeader",
-      "target_sha256": "d26f8ec6aaa21696a116040005a929584ca254f7c42b20a2f5f14df0727a4e22",
+      "target_sha256": "a52c41efa55964218dfc4872ff5eeac461ce4b8ca6ce3cb0ba2734b097973e40",
       "owner_package": "PKG-12-FE-BUILD",
       "reason": "Epic 12-B (PKG-12-FE-BUILD): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -29516,6 +29516,38 @@
     },
     {
       "surface": "frontend",
+      "path": "frontend/src/components/build/AgentStageCard.tsx",
+      "public_name": "AgentStageCard",
+      "target_sha256": "a957e97044d28c8b567ba63e0373fcefcc9dd826f921765c9ad48cdba19199d5",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "reason": "Agent surface framing becomes explicit while every Build call site retains its compatible default behavior."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/AgentStatusBar.tsx",
+      "public_name": "AgentStatusBar",
+      "target_sha256": "6088b9c61bbf74003cb3497116d0e973c4446895a37b4dea09504b61f82d9440",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "reason": "Agent surface framing becomes explicit while every Build call site retains its compatible default behavior."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/BuildModelPicker.tsx",
+      "public_name": "BuildModelPicker",
+      "target_sha256": "c0a55bf7cc1ead981bcaa36d9a7078d3834484d844333766e6ab6b61c531eda0",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "reason": "Agent surface framing becomes explicit while every Build call site retains its compatible default behavior."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useBuildStream.ts",
+      "public_name": "useBuildStream",
+      "target_sha256": "f126052f891bcdc8a900fdd0df8a0695a022d51470b0ba236d84804ccc5427f7",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "reason": "Agent surface framing becomes explicit while every Build call site retains its compatible default behavior."
+    },
+    {
+      "surface": "frontend",
       "path": "frontend/src/components/settings/SandboxRuntimeSection.tsx",
       "public_name": "SandboxRuntimeSection",
       "target_sha256": "52a1d6156bd25ebf0a66a32dd6927e6603c1eba8e10541aa505c23fc057e95f3",
@@ -29702,7 +29734,7 @@
       "surface": "python",
       "path": "packages/core/src/disco/core/loop/__init__.py",
       "public_name": "AgentLoop",
-      "target_sha256": "30365586d59d2b0e40ed765d1da7ef5aa62b7aa67bac9c7accd3f9df923671eb",
+      "target_sha256": "2a249128505164e6cfe39b886d816828392a6517cd073cdba8fe3331c3d67af6",
       "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
       "reason": "PKG-19 v31 derives the delivery target from host artifact evidence and binds that exact target before handoff."
     },
@@ -29789,23 +29821,6 @@
   ],
   "compatibility_bridges": [],
   "member_transitions": [
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/loop/__init__.py",
-      "public_name": "AgentLoop",
-      "origin": "disco.core.loop.engine.AgentLoop",
-      "removed_members": [
-        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None) -> None"
-      ],
-      "added_members": [
-        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
-      ],
-      "old_signature_sha256": "af36b0cab89e5242217b23ece03dc7fd02266327c6b9ef557c0b1edd10ffec74",
-      "new_signature_sha256": "a0d9565421f7fd3e83ca46c62ca94074dc6edb3dc6e8af5082a40f0a143f8f91",
-      "owner_package": "PKG-19-V31-ARTIFACT-DELIVERY",
-      "accepting_commit": "0866b79a29a2987d393a075e8bafc111705d7427",
-      "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v31-artifact-delivery/BOUNDARY-RECEIPT.md"
-    },
     {
       "surface": "python",
       "path": "packages/core/src/disco/core/__init__.py",
@@ -30018,6 +30033,23 @@
       "owner_package": "PKG-08-VERIFY",
       "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
       "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/loop/__init__.py",
+      "public_name": "AgentLoop",
+      "origin": "disco.core.loop.engine.AgentLoop",
+      "removed_members": [
+        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, conversation_id: str, store: EventStore, agent: Agent, executor: ToolExecutor, router: LLMRouter, analyzer: SecurityAnalyzer, policy: ConfirmationPolicy, condenser: Condenser, summarizer: Summarizer, *, mode: OperatingMode, max_iterations: int=500, stop_hooks: list[StopHook] | None=None, stuck_thresholds: StuckThresholds | None=None, veto_feedback: str=_DEFAULT_VETO_FEEDBACK, planning_tools: frozenset[str]=frozenset(), plan_tool: str='submit_plan', execution_mode: OperatingMode=OperatingMode.LONG_HORIZON, require_productive_action_before_finish: bool=True, autonomous: bool=False, model_policy: ModelExecutionPolicy=_DEFAULT_MODEL_POLICY, driver_context_window: int | None=None, finish_alias: str | None=None, recitation_cadence: int=_RECITATION_CADENCE_DEFAULT, reground_cadence: int=_HS03_REGROUND_INTERVAL, dod_evaluator_factory: Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None=None, host_verifier: HostVerifier | None=None, host_verify_timeout_s: float=30.0, host_verifier_verdict_hook: Callable[[VerifierVerdictEvent], Awaitable[None]] | None=None, host_verify_authoritative: bool | None=None, verifier_judge: VerifierJudge | None=None, verifier_judge_timeout_s: float=30.0, finish_sealability_probe: SealabilityProbe | None=None, finish_seal_timeout_s: float=150.0, workflow_run: WorkflowRun | None=None, terminal_commit_hook: TerminalCommitHook=None, control_fence: ControlFenceFactory=None, quiet: bool=False, strict_appkit_active: Callable[[], bool] | None=None, declared_delivery_kind: Literal['app', 'files'] | None=None, delivery_contract_resolver: Callable[[str], Awaitable[None]] | None=None) -> None"
+      ],
+      "old_signature_sha256": "a0d9565421f7fd3e83ca46c62ca94074dc6edb3dc6e8af5082a40f0a143f8f91",
+      "new_signature_sha256": "44d45503479be1aebb342a36298da96c21365870b5f960f3c9500452d615bcdf",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -30307,6 +30339,110 @@
       "owner_package": "PKG-03-EDIT-EVIDENCE",
       "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
       "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/AgentStageCard.tsx",
+      "public_name": "AgentStageCard",
+      "declaration_kind": "function",
+      "old_signature": "export function AgentStageCard({ events, status, activity, conversationId, }: { events: AgentEvent[]; status: ConversationStatus; /** The full derived activity \u2014 rendered inline when the card is expanded. */ activity: ActivityItem[]; conversationId?: string; })",
+      "new_signature": "export function AgentStageCard({ events, status, activity, conversationId, surface = \"build\", }: { events: AgentEvent[]; status: ConversationStatus; /** The full derived activity \u2014 rendered inline when the card is expanded. */ activity: ActivityItem[]; conversationId?: string; surface?: \"build\" | \"agent\"; })",
+      "old_target_sha256": "386ab8d6837d5ba07b3fd13afd7b6b729b1e59d09857a350f076ce1b867e132a",
+      "new_target_sha256": "a957e97044d28c8b567ba63e0373fcefcc9dd826f921765c9ad48cdba19199d5",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/AgentStatusBar.tsx",
+      "public_name": "AgentStatusBar",
+      "declaration_kind": "function",
+      "old_signature": "export function AgentStatusBar({ status, isolation, sandboxState, connectionState = \"connected\", autonomous, assist, onKill, onStop, onResume, events = [], modelId, seq, }: { status: ConversationStatus; /** BP-15: null until the first state frame \u2014 renders muted '\u2026'. */ isolation: IsolationInfo | null; /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */ sandboxState?: \"active\" | \"suspended\"; /** Live stream health. Degraded means the socket is retrying past the normal window. */ connectionState?: \"connected\" | \"degraded\"; /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */ autonomous?: boolean; /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */ assist?: boolean; onKill: () => void; /** Cluster 6: graceful stop (cooperative cancel \u2014 no sandbox teardown). */ onStop?: () => void; /** Resume a PAUSED build (stopped, or interrupted by a server restart). */ onResume?: () => void; /** RP-14: cumulative cost from usage in events. */ events?: AgentEvent[]; /** RP-14: the currently selected model id for rate lookup. */ modelId?: string | null; /** Highest observed event seq (stream maxSeq) \u2014 exposed as data-seq so the * live gauntlet judges finish-freshness by state VERSION, not by having * witnessed the transitions on a possibly-dead stream. */ seq?: number; })",
+      "new_signature": "export function AgentStatusBar({ status, isolation, sandboxState, connectionState = \"connected\", autonomous, assist, onKill, onStop, onResume, events = [], modelId, seq, surface = \"build\", }: { status: ConversationStatus; /** BP-15: null until the first state frame \u2014 renders muted '\u2026'. */ isolation: IsolationInfo | null; /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */ sandboxState?: \"active\" | \"suspended\"; /** Live stream health. Degraded means the socket is retrying past the normal window. */ connectionState?: \"connected\" | \"degraded\"; /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */ autonomous?: boolean; /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */ assist?: boolean; onKill: () => void; /** Cluster 6: graceful stop (cooperative cancel \u2014 no sandbox teardown). */ onStop?: () => void; /** Resume a PAUSED build (stopped, or interrupted by a server restart). */ onResume?: () => void; /** RP-14: cumulative cost from usage in events. */ events?: AgentEvent[]; /** RP-14: the currently selected model id for rate lookup. */ modelId?: string | null; /** Highest observed event seq (stream maxSeq) \u2014 exposed as data-seq so the * live gauntlet judges finish-freshness by state VERSION, not by having * witnessed the transitions on a possibly-dead stream. */ seq?: number; surface?: \"build\" | \"agent\"; })",
+      "old_target_sha256": "937aa6d7f10ed8ef18c722c62c8b2ba6596755b22ed3e87a6762ea340e307b05",
+      "new_target_sha256": "6088b9c61bbf74003cb3497116d0e973c4446895a37b4dea09504b61f82d9440",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildActivityFeedContent.tsx",
+      "public_name": "BuildActivityFeedContent",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })",
+      "new_signature": "export function BuildActivityFeedContent({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, framing, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; framing: BuildFraming; })",
+      "old_target_sha256": "fa3459bab5f1b801a988d6158f396001d0dbbd5796b18532314d5f8fd0db7f34",
+      "new_target_sha256": "c0c9c7d0ce5161a98c468287f93819bbb516a0ce3def0efbcf079328b4dde395",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildComposerSection.tsx",
+      "public_name": "BuildComposerSection",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; })",
+      "new_signature": "export function BuildComposerSection({ b, copy, steerable, settled, terminalIncomplete, steerWithMention, requestPlanWithMention, elementMentionChip, framing, }: { b: BuildController; copy: FramingCopy; steerable: boolean; settled: boolean; terminalIncomplete: boolean; steerWithMention: (text: string) => void; requestPlanWithMention: (text: string) => void; elementMentionChip: ReactNode; framing: BuildFraming; })",
+      "old_target_sha256": "63ab4ddfa870501a086a9a0f10bb49f971e4170c1c980548cb230d45cfe613bd",
+      "new_target_sha256": "d84e284632fe3a9838ecf8cd98c619bcf96d67cb907f503217b702d4876979cc",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/build/BuildModelPicker.tsx",
+      "public_name": "BuildModelPicker",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildModelPicker({ value, onChange, disabled, }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; })",
+      "new_signature": "export function BuildModelPicker({ value, onChange, disabled, surface = \"build\", }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; surface?: \"build\" | \"agent\"; })",
+      "old_target_sha256": "42b4e5164e043942b504b93a059fb734499836b6be694bdc48469bfc1061c550",
+      "new_target_sha256": "c0a55bf7cc1ead981bcaa36d9a7078d3834484d844333766e6ab6b61c531eda0",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildRunningActivity.tsx",
+      "public_name": "BuildRunningActivity",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildRunningActivity({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; })",
+      "new_signature": "export function BuildRunningActivity({ b, activity, liveSignal, finalMessage, draftingPlan, collapseFeed, framing, }: { b: BuildController; activity: ActivityItem[]; liveSignal: LiveSignal; finalMessage: string | null; draftingPlan: boolean; collapseFeed: boolean; framing: BuildFraming; })",
+      "old_target_sha256": "cc5a63729c92842d8e435813b6c176efc0aa2ec1cc11611305aff114981a8421",
+      "new_target_sha256": "8e17b516db6c55fb7d0393fc563e3d24a040b3b05a9f8de2ac1df623902ca356",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/buildSurface/BuildSurfaceHeader.tsx",
+      "public_name": "BuildSurfaceHeader",
+      "declaration_kind": "function",
+      "old_signature": "export function BuildSurfaceHeader({ b, isolation, taskLabel, download, onDownloadClick, }: { b: BuildController; isolation: ReturnType<typeof isolationForBackend>; taskLabel: string | null; download: ReturnType<typeof useDownloadProject>; onDownloadClick: () => void; })",
+      "new_signature": "export function BuildSurfaceHeader({ b, isolation, taskLabel, download, onDownloadClick, framing, }: { b: BuildController; isolation: ReturnType<typeof isolationForBackend>; taskLabel: string | null; download: ReturnType<typeof useDownloadProject>; onDownloadClick: () => void; framing: BuildFraming; })",
+      "old_target_sha256": "d26f8ec6aaa21696a116040005a929584ca254f7c42b20a2f5f14df0727a4e22",
+      "new_target_sha256": "a52c41efa55964218dfc4872ff5eeac461ce4b8ca6ce3cb0ba2734b097973e40",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useBuildStream.ts",
+      "public_name": "useBuildStream",
+      "declaration_kind": "function",
+      "old_signature": "export function useBuildStream( session: BuildSession | null, options?: { /** Inject a deterministic id factory for optimistic message ids (tests). * Omitted in production \u2192 the default Date.now()/Math.random() suffix. */ idFactory?: OptimisticIdFactory; }, ): BuildStream",
+      "new_signature": "export function useBuildStream( session: BuildSession | null, options?: { /** Inject a deterministic id factory for optimistic message ids (tests). * Omitted in production \u2192 the default Date.now()/Math.random() suffix. */ idFactory?: OptimisticIdFactory; /** Build declares a build contract on first send. The standalone Agent * surface is artifact-neutral and must not inherit that marker. */ surface?: \"build\" | \"agent\"; }, ): BuildStream",
+      "old_target_sha256": "0229785f1ba22882d444b7f3491ff59b49c8f82dd5b4d46be51d2c24ab89bffb",
+      "new_target_sha256": "f126052f891bcdc8a900fdd0df8a0695a022d51470b0ba236d84804ccc5427f7",
+      "owner_package": "PKG-19-AGENT-SURFACE",
+      "accepting_commit": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "frontend",

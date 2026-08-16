@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
+  "source_identity": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
   "collected": {
     "counts": {
-      "packages": 10775,
+      "packages": 10786,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12613,
+    "total": 12624,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -516,7 +516,12 @@
         "packages/agent-server/tests/test_activity.py::test_activity_lists_running_tasks_and_count",
         "packages/agent-server/tests/test_activity.py::test_list_recent_schedule_runs_owner_scoped_and_joined",
         "packages/agent-server/tests/test_agent_surface.py::test_agent_composes_the_same_loop_as_build",
+        "packages/agent-server/tests/test_agent_surface.py::test_agent_ingress_drops_legacy_build_contract_marker",
+        "packages/agent-server/tests/test_agent_surface.py::test_build_ingress_retains_explicit_contract_marker",
+        "packages/agent-server/tests/test_agent_surface.py::test_plain_agent_has_no_provisional_web_admission",
         "packages/agent-server/tests/test_agent_surface.py::test_set_surface_accepts_agent",
+        "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_keeps_productive_action_finish_gate",
+        "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_retains_classified_contract_marker",
         "packages/agent-server/tests/test_agent_surface.py::test_surface_of_db_rung_beats_manifest_downgrade",
         "packages/agent-server/tests/test_agent_surface.py::test_surface_of_reads_db_column",
         "packages/agent-server/tests/test_agent_surface.py::test_surface_of_recovers_agent_across_restart",
@@ -1061,6 +1066,7 @@
         "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_records_appkit_shadow_and_keeps_strict_executor",
         "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_records_freeform_shadow_without_routing_it",
         "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_shadows_declared_files_delivery_as_artifact",
+        "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_skips_build_platform_shadow_for_plain_agent",
         "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_shadow_disabled_has_zero_runtime_observation",
         "packages/agent-server/tests/test_build_surface.py::test_build_loop_advertises_exact_replace_to_anchored_edit_driver",
         "packages/agent-server/tests/test_build_surface.py::test_build_loop_withholds_exact_replace_from_non_anchored_driver",
@@ -3371,6 +3377,10 @@
         "packages/core/tests/test_agent_isolation.py::test_resolved_driver_context_is_preserved_in_request_and_step_span",
         "packages/core/tests/test_agent_isolation.py::test_truncated_prose_step_is_flagged_and_not_finished",
         "packages/core/tests/test_agent_isolation.py::test_unclosed_think_prose_is_flagged_truncated_despite_stop",
+        "packages/core/tests/test_agent_task_prompts.py::test_agent_assist_variant_is_distinct_and_autonomous_contract_still_leads",
+        "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_keeps_artifact_and_preview_use_proportional",
+        "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_preserves_critical_loop_and_file_truths",
+        "packages/core/tests/test_agent_task_prompts.py::test_agent_planning_is_task_shaped_not_build_prompt_with_renamed_identity",
         "packages/core/tests/test_alternatives_from_args.py::test_label_only_option_without_tool_name_is_kept",
         "packages/core/tests/test_alternatives_from_args.py::test_never_falls_back_to_content_free_option_n",
         "packages/core/tests/test_alternatives_from_args.py::test_plain_string_options_become_labels",
@@ -7886,6 +7896,7 @@
         "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_dod_command_predicate_routes_through_exec_shell",
         "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_dod_command_uses_sandbox_verdict_not_host",
         "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_plan_step_command_predicate_applies_hard_deny_floor",
+        "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_can_be_disabled_for_plain_agent_answers",
         "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_release_is_loud",
         "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_releases_after_cap",
         "packages/core/tests/test_w5_execution_nudge_cap.py::test_genuinely_unexecuted_finish_only_plan_still_stucks",
@@ -12634,9 +12645,9 @@
     }
   },
   "mapping_static": {
-    "identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
-    "python_test_file_count": 846,
-    "python_static_test_id_count": 10373,
+    "identity": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+    "python_test_file_count": 847,
+    "python_static_test_id_count": 10384,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12964,6 +12975,7 @@
       "packages/core/tests/test_actionless_completion.py",
       "packages/core/tests/test_agent_error_detail.py",
       "packages/core/tests/test_agent_isolation.py",
+      "packages/core/tests/test_agent_task_prompts.py",
       "packages/core/tests/test_alternatives_from_args.py",
       "packages/core/tests/test_appkit_directory.py",
       "packages/core/tests/test_appkit_driver_prompts.py",
@@ -14888,7 +14900,12 @@
       "packages/agent-server/tests/test_activity.py::test_activity_lists_running_tasks_and_count",
       "packages/agent-server/tests/test_activity.py::test_list_recent_schedule_runs_owner_scoped_and_joined",
       "packages/agent-server/tests/test_agent_surface.py::test_agent_composes_the_same_loop_as_build",
+      "packages/agent-server/tests/test_agent_surface.py::test_agent_ingress_drops_legacy_build_contract_marker",
+      "packages/agent-server/tests/test_agent_surface.py::test_build_ingress_retains_explicit_contract_marker",
+      "packages/agent-server/tests/test_agent_surface.py::test_plain_agent_has_no_provisional_web_admission",
       "packages/agent-server/tests/test_agent_surface.py::test_set_surface_accepts_agent",
+      "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_keeps_productive_action_finish_gate",
+      "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_retains_classified_contract_marker",
       "packages/agent-server/tests/test_agent_surface.py::test_surface_of_db_rung_beats_manifest_downgrade",
       "packages/agent-server/tests/test_agent_surface.py::test_surface_of_reads_db_column",
       "packages/agent-server/tests/test_agent_surface.py::test_surface_of_recovers_agent_across_restart",
@@ -15335,6 +15352,7 @@
       "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_records_appkit_shadow_and_keeps_strict_executor",
       "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_records_freeform_shadow_without_routing_it",
       "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_shadows_declared_files_delivery_as_artifact",
+      "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_skips_build_platform_shadow_for_plain_agent",
       "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_shadow_disabled_has_zero_runtime_observation",
       "packages/agent-server/tests/test_build_surface.py::test_build_loop_advertises_exact_replace_to_anchored_edit_driver",
       "packages/agent-server/tests/test_build_surface.py::test_build_loop_withholds_exact_replace_from_non_anchored_driver",
@@ -17207,6 +17225,10 @@
       "packages/core/tests/test_agent_isolation.py::test_resolved_driver_context_is_preserved_in_request_and_step_span",
       "packages/core/tests/test_agent_isolation.py::test_truncated_prose_step_is_flagged_and_not_finished",
       "packages/core/tests/test_agent_isolation.py::test_unclosed_think_prose_is_flagged_truncated_despite_stop",
+      "packages/core/tests/test_agent_task_prompts.py::test_agent_assist_variant_is_distinct_and_autonomous_contract_still_leads",
+      "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_keeps_artifact_and_preview_use_proportional",
+      "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_preserves_critical_loop_and_file_truths",
+      "packages/core/tests/test_agent_task_prompts.py::test_agent_planning_is_task_shaped_not_build_prompt_with_renamed_identity",
       "packages/core/tests/test_alternatives_from_args.py::test_label_only_option_without_tool_name_is_kept",
       "packages/core/tests/test_alternatives_from_args.py::test_never_falls_back_to_content_free_option_n",
       "packages/core/tests/test_alternatives_from_args.py::test_plain_string_options_become_labels",
@@ -21034,6 +21056,7 @@
       "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_dod_command_predicate_routes_through_exec_shell",
       "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_dod_command_uses_sandbox_verdict_not_host",
       "packages/core/tests/test_w3_c2_dod_in_sandbox.py::test_plan_step_command_predicate_applies_hard_deny_floor",
+      "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_can_be_disabled_for_plain_agent_answers",
       "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_release_is_loud",
       "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_releases_after_cap",
       "packages/core/tests/test_w5_execution_nudge_cap.py::test_genuinely_unexecuted_finish_only_plan_still_stucks",
@@ -23860,8 +23883,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 244,
-    "typescript_static_test_id_count": 1227,
+    "typescript_test_file_count": 245,
+    "typescript_static_test_id_count": 1232,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24043,6 +24066,7 @@
       "frontend/src/hooks/useBuild.lazy.test.tsx",
       "frontend/src/hooks/useBuild.modelswitch.test.tsx",
       "frontend/src/hooks/useBuildNotifications.test.ts",
+      "frontend/src/hooks/useBuildStream.agent.test.ts",
       "frontend/src/hooks/useBuildStream.askgate.test.ts",
       "frontend/src/hooks/useBuildStream.driverOutage.test.ts",
       "frontend/src/hooks/useBuildStream.idfactory.test.ts",
@@ -24218,6 +24242,8 @@
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::W-05 status bar shows Subscription and never Free or a per-token price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::W-05 treats a zero-price subscription as subscription, not free or metered",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::recommends and assigns a bounded visual model after a text-only driver pick",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::uses task copy when Agent selects a paid driver",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::uses task copy when resuming the Agent surface",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-06 keeps typed draft text when toggling standard search to Deep Research and back",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-07 Attach is usable before a cid exists and uploads through the lazy cid pipeline",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::W-13/W-24 Build Slides handoff creates an autonomous agent run and flips the surface toggle to Agent",
@@ -24446,6 +24472,7 @@
       "frontend/src/components/build/AgentStageCard.test.tsx::a running shell \u2192 building",
       "frontend/src/components/build/AgentStageCard.test.tsx::click-to-expand reveals the full activity feed (artifacts preserved)",
       "frontend/src/components/build/AgentStageCard.test.tsx::shows the stage label and is collapsed by default (feed not shown)",
+      "frontend/src/components/build/AgentStageCard.test.tsx::uses task-neutral working copy on the Agent surface",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::calculates cumulative cost from events",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::shows 'Free' for a free model",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::shows 'Subscription' (never 'Free', never a price) for a subscription model",
@@ -24883,6 +24910,8 @@
       "frontend/src/hooks/useBuildNotifications.test.ts::does not request permission outside a user gesture",
       "frontend/src/hooks/useBuildNotifications.test.ts::fires an OS Notification when permission is granted and the tab is hidden",
       "frontend/src/hooks/useBuildNotifications.test.ts::restores the pristine title when the tab refocuses",
+      "frontend/src/hooks/useBuildStream.agent.test.ts::keeps standalone Agent ingress artifact-neutral",
+      "frontend/src/hooks/useBuildStream.agent.test.ts::retains explicit contract activation for Build",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::clears the question gate when the loop resumes RUNNING",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::resolves a questions_v2 status detail into the structured intake gate",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::surfaces the question and answers via a steer frame",
@@ -27084,8 +27113,8 @@
         ]
       }
     },
-    "vitest_ids": 1176,
-    "vitest_files": 181,
+    "vitest_ids": 1181,
+    "vitest_files": 182,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -27105,6 +27134,8 @@
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > W-05 status bar shows Subscription and never Free or a per-token price",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > W-05 treats a zero-price subscription as subscription, not free or metered",
       "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > recommends and assigns a bounded visual model after a text-only driver pick",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > uses task copy when Agent selects a paid driver",
+      "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::AuthorB unbiased gate \u2014 W-04/W-05 model display > uses task copy when resuming the Agent surface",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-06 keeps typed draft text when toggling standard search to Deep Research and back",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-07 Attach is usable before a cid exists and uploads through the lazy cid pipeline",
       "frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx::AuthorB unbiased gate \u2014 W-06/W-07/W-13/W-24 research UI > W-13/W-24 Build Slides handoff creates an autonomous agent run and flips the surface toggle to Agent",
@@ -27326,6 +27357,7 @@
       "frontend/src/components/build/AgentCanvas.test.tsx::AgentCanvas \u2014 the operator inspector > renders Browser / Artifacts / Console tabs (not the build IDE's Files/Terminal/Preview)",
       "frontend/src/components/build/AgentStageCard.test.tsx::AgentStageCard > click-to-expand reveals the full activity feed (artifacts preserved)",
       "frontend/src/components/build/AgentStageCard.test.tsx::AgentStageCard > shows the stage label and is collapsed by default (feed not shown)",
+      "frontend/src/components/build/AgentStageCard.test.tsx::AgentStageCard > uses task-neutral working copy on the Agent surface",
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > FINISHED \u2192 done",
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > IDLE \u2192 idle",
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > STUCK / ERROR \u2192 stalled",
@@ -27775,6 +27807,8 @@
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > does not request permission outside a user gesture",
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > fires an OS Notification when permission is granted and the tab is hidden",
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > restores the pristine title when the tab refocuses",
+      "frontend/src/hooks/useBuildStream.agent.test.ts::useBuildStream \u2014 surface-specific first send > keeps standalone Agent ingress artifact-neutral",
+      "frontend/src/hooks/useBuildStream.agent.test.ts::useBuildStream \u2014 surface-specific first send > retains explicit contract activation for Build",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::useBuildStream \u2014 Ask-gate > clears the question gate when the loop resumes RUNNING",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::useBuildStream \u2014 Ask-gate > resolves a questions_v2 status detail into the structured intake gate",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::useBuildStream \u2014 Ask-gate > surfaces the question and answers via a steer frame",
@@ -28382,6 +28416,7 @@
       "frontend/src/hooks/useBuild.lazy.test.tsx",
       "frontend/src/hooks/useBuild.modelswitch.test.tsx",
       "frontend/src/hooks/useBuildNotifications.test.ts",
+      "frontend/src/hooks/useBuildStream.agent.test.ts",
       "frontend/src/hooks/useBuildStream.askgate.test.ts",
       "frontend/src/hooks/useBuildStream.driverOutage.test.ts",
       "frontend/src/hooks/useBuildStream.idfactory.test.ts",
@@ -31087,6 +31122,60 @@
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-AGENT-SURFACE",
+      "root": "packages",
+      "source_identity_before": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
+      "source_identity_after": "8e91ceb62d2b5a81df49f3207710feaf1c8dcf58",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10775,
+          "after_count": 10786,
+          "added_ids": [
+            "packages/agent-server/tests/test_agent_surface.py::test_agent_ingress_drops_legacy_build_contract_marker",
+            "packages/agent-server/tests/test_agent_surface.py::test_build_ingress_retains_explicit_contract_marker",
+            "packages/agent-server/tests/test_agent_surface.py::test_plain_agent_has_no_provisional_web_admission",
+            "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_keeps_productive_action_finish_gate",
+            "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_retains_classified_contract_marker",
+            "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_skips_build_platform_shadow_for_plain_agent",
+            "packages/core/tests/test_agent_task_prompts.py::test_agent_assist_variant_is_distinct_and_autonomous_contract_still_leads",
+            "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_keeps_artifact_and_preview_use_proportional",
+            "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_preserves_critical_loop_and_file_truths",
+            "packages/core/tests/test_agent_task_prompts.py::test_agent_planning_is_task_shaped_not_build_prompt_with_renamed_identity",
+            "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_can_be_disabled_for_plain_agent_answers"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_agent_task_prompts.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_agent_surface.py::test_agent_ingress_drops_legacy_build_contract_marker",
+          "packages/agent-server/tests/test_agent_surface.py::test_build_ingress_retains_explicit_contract_marker",
+          "packages/agent-server/tests/test_agent_surface.py::test_plain_agent_has_no_provisional_web_admission",
+          "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_keeps_productive_action_finish_gate",
+          "packages/agent-server/tests/test_agent_surface.py::test_strict_appkit_agent_retains_classified_contract_marker",
+          "packages/agent-server/tests/test_build_platform_shadow_runtime.py::test_runtime_skips_build_platform_shadow_for_plain_agent",
+          "packages/core/tests/test_agent_task_prompts.py::test_agent_assist_variant_is_distinct_and_autonomous_contract_still_leads",
+          "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_keeps_artifact_and_preview_use_proportional",
+          "packages/core/tests/test_agent_task_prompts.py::test_agent_execution_preserves_critical_loop_and_file_truths",
+          "packages/core/tests/test_agent_task_prompts.py::test_agent_planning_is_task_shaped_not_build_prompt_with_renamed_identity",
+          "packages/core/tests/test_w5_execution_nudge_cap.py::test_execution_nudge_can_be_disabled_for_plain_agent_answers"
+        ],
+        "typescript_test_files": [
+          "frontend/src/hooks/useBuildStream.agent.test.ts"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::uses task copy when Agent selects a paid driver",
+          "frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx::uses task copy when resuming the Agent surface",
+          "frontend/src/components/build/AgentStageCard.test.tsx::uses task-neutral working copy on the Agent surface",
+          "frontend/src/hooks/useBuildStream.agent.test.ts::keeps standalone Agent ingress artifact-neutral",
+          "frontend/src/hooks/useBuildStream.agent.test.ts::retains explicit contract activation for Build"
+        ],
         "fixtures": []
       }
     },

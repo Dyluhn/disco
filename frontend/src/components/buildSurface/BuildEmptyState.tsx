@@ -37,7 +37,7 @@ export function BuildEmptyState({
         <EmptyState title={copy.heroTitle} subtitle={copy.heroSubtitle} />
         <div className="w-full max-w-measure">
           <div className="mb-inline flex items-center justify-between gap-inline">
-            <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+            <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
             <div className="flex items-center gap-hair">
               <button
                 type="button"

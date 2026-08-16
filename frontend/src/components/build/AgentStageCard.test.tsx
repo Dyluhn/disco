@@ -60,4 +60,17 @@ describe("AgentStageCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /expand agent history/i }));
     expect(screen.getByText("Wrote report.html")).toBeInTheDocument();
   });
+
+  it("uses task-neutral working copy on the Agent surface", () => {
+    render(
+      <AgentStageCard
+        events={[action("file_write", { path: "notes.md" })]}
+        status="RUNNING"
+        activity={activity}
+        surface="agent"
+      />,
+    );
+    expect(screen.getByText("Working")).toBeInTheDocument();
+    expect(screen.queryByText("Building")).toBeNull();
+  });
 });

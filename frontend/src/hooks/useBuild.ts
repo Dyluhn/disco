@@ -168,7 +168,7 @@ function usePrecreatedUploadCid(surface: "build" | "agent", quietChoice: boolean
 }
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
- * "agent" (general-task framing) — identical machinery. If `resumeCid` is given
+ * "agent" (general-task framing) — shared transport and workspace machinery. If `resumeCid` is given
  * (the /build/:cid or /agent/:cid route), skip the create call and connect to the
  * existing conversation — the WebSocket replays history-then-live, so prior events
  * restore (the stored surface is authoritative; resume never re-sets it). */
@@ -197,7 +197,7 @@ export function useBuild(
   const quietChoice = !verboseChat;
 
   const precreated = usePrecreatedUploadCid(surface, quietChoice);
-  const stream = useBuildStream(session);
+  const stream = useBuildStream(session, { surface });
   const { resume, requestPlan, steer } = useModelAwareContinuations(
     session,
     stream,

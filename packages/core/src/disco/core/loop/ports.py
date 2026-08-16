@@ -252,6 +252,8 @@ class GateCounterPort(Protocol):
 
     _execution_nudges: int
 
+    _require_productive_action_before_finish: bool
+
     _invisible_steps: int
 
     _dod_refusals: int

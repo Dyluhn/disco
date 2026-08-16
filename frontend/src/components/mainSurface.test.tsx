@@ -70,6 +70,10 @@ describe("Main surface — empty state + reactive provider errors", () => {
         { timeout: SURFACE_LOAD_TIMEOUT },
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByPlaceholderText("Describe a task for the agent to carry out…"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import project" })).toBeNull();
 
     await user.click(screen.getByRole("radio", { name: "search" }));
     await user.click(
