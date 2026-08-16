@@ -135,10 +135,10 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
   // but the plan-progress strip must stay calm — only the follow-up indicator
   // (WALK-12, separate lane) shows activity.
   const planActive = status === "RUNNING" && followUpStatus !== "follow_up";
-  const [collapsedManually, setCollapsedManually] = useState(false);
-  // when finished, default collapsed unless the user expands; while running,
-  // always expanded.
-  const collapsed = isFinished && collapsedManually;
+  const [expandedWhenFinished, setExpandedWhenFinished] = useState(false);
+  // Finished reports begin compact. A user can expand the trace explicitly;
+  // active runs stay expanded regardless of the finished-view preference.
+  const collapsed = isFinished && !expandedWhenFinished;
 
   // Cast our DeepPlanView shape to Build's PlanView (structurally compatible:
   // both have id/summary/steps/revision/context fields). The PlanPanel just
@@ -158,7 +158,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
       <section className="rounded-card border border-hairline bg-surface-1 px-body py-inline">
         <button
           type="button"
-          onClick={() => setCollapsedManually(false)}
+          onClick={() => setExpandedWhenFinished(true)}
           className="group flex w-full items-center gap-inline text-left"
         >
           <ChevronRight className="size-3.5 text-text-faint transition-colors group-hover:text-text" aria-hidden />
@@ -179,7 +179,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
         {isFinished && (
           <button
             type="button"
-            onClick={() => setCollapsedManually(true)}
+            onClick={() => setExpandedWhenFinished(false)}
             className="grid size-7 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text"
             aria-label="Collapse progress"
           >

@@ -11,7 +11,7 @@ function withQuery(ui: ReactElement) {
 }
 
 describe("Settings — model-assignment matrix", () => {
-  it("keeps primary and vision visible while specialist roles stay advanced", async () => {
+  it("shows the absolute/manual story with a default primary + every role, cost-legible", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
     await waitFor(() =>
@@ -101,7 +101,7 @@ describe("Settings — model-assignment matrix", () => {
 });
 
 describe("Settings — Encoders (bundled-local vs remote)", () => {
-  it("shows the current encoder compactly and reveals the wired alternatives on request", async () => {
+  it("shows the encoder mode as an honest, wired toggle (default bundled-local)", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
     await screen.findByRole("heading", { name: /Encoders/i });
@@ -333,7 +333,7 @@ describe("Settings — sandbox", () => {
     expect(screen.getByText(/leans TIGHTER/i)).toBeInTheDocument();
   });
 
-  it("reveals the nested live-browser controls after gVisor is saved", async () => {
+  it("saves a backend change (round-trips through the data layer)", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
     const gvisor = await screen.findByRole("radio", { name: /gVisor sandbox backend/i });

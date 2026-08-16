@@ -100,7 +100,7 @@ export function DeepResearchReportView({ r }: Props) {
             report={r.report}
             cid={r.cid}
             onFollowUp={(question) => r.followUp(question)}
-            followUpBusy={false}
+            followUpBusy={r.followUpStatus === "follow_up"}
             followUps={r.followUps}
           />
         </div>

@@ -97,13 +97,16 @@ def _bounded_excerpt(body: str, budget: int) -> str:
 
 
 def _build_grounding_block(passages: list[dict[str, Any]]) -> str:
-    """Build a bounded, fairly apportioned block from every cited passage."""
+    """Build a bounded, fairly apportioned block from the saved corpus."""
     blocks = []
     for passage in passages:
         pid = str(passage.get("id", ""))[:128]
         source = str(passage.get("source_title") or passage.get("source_url") or "")[:240]
         blocks.append((f"[[{pid}]] ({source})", str(passage.get("text", ""))))
-    return _bounded_context_blocks(blocks, _FOLLOW_UP_SOURCE_CHARS)
+    corpus_header = f"Saved source corpus: {len(blocks)} passages."
+    body_budget = max(0, _FOLLOW_UP_SOURCE_CHARS - len(corpus_header) - 1)
+    body = _bounded_context_blocks(blocks, body_budget)
+    return f"{corpus_header}\n{body}"[:_FOLLOW_UP_SOURCE_CHARS]
 
 
 def _build_report_block(report: ReportEvent) -> str:

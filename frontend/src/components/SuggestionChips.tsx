@@ -14,9 +14,8 @@ const CONTROL_BY_SURFACE: Record<SuggestionSurface, string> = {
   agent: "agent.suggestion",
 };
 
-/** Quiet, uniform prompt pills under the composer. No icons, no heavy borders —
- * a single centered row (wrapping to a second at narrow widths) of ghost pills
- * that read as whispers, not buttons competing with the composer. Capped at 4. */
+/** Quiet prompt pills under a composer. Deep Research uses three because its
+ * splash carries an extra depth selector; the other surfaces keep four. */
 export function SuggestionChips({
   surface,
   onPick,
@@ -24,6 +23,7 @@ export function SuggestionChips({
   surface: SuggestionSurface;
   onPick: (text: string) => void;
 }) {
+  const limit = surface === "deep_research" ? 3 : 4;
   const fallbackSuggestions = useMemo(() => getSuggestions(surface), [surface]);
   const [generated, setGenerated] = useState<{
     surface: SuggestionSurface;
@@ -38,7 +38,7 @@ export function SuggestionChips({
           id: `${surface}-generated-${index + 1}`,
           text,
         }));
-        if (payload.source === "generated" && suggestions.length >= 4) {
+        if (payload.source === "generated" && suggestions.length >= limit) {
           setGenerated({
             surface,
             suggestions: sampleSuggestions(suggestions, suggestions.length),
@@ -49,11 +49,11 @@ export function SuggestionChips({
         // The curated pool is already rendered; generation is opportunistic.
       });
     return () => controller.abort();
-  }, [surface]);
+  }, [surface, limit]);
 
   const suggestions = (
     generated?.surface === surface ? generated.suggestions : fallbackSuggestions
-  ).slice(0, 4);
+  ).slice(0, limit);
 
   if (suggestions.length === 0) return null;
 

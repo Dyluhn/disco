@@ -57,6 +57,42 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("button", { name: /Depth tier: Standard-deep/i })).toBeInTheDocument();
   });
 
+  it("keeps secondary research controls behind one disclosure and quiets suggestions after typing", async () => {
+    const user = userEvent.setup();
+    renderSurface();
+
+    const options = screen.getByRole("button", { name: /Research options/i });
+    expect(options).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: /Scope: Deep Research/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Recency filter/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Attach files/i })).not.toBeInTheDocument();
+
+    const suggestions = document.querySelector('[data-suggestion-surface="deep_research"]');
+    expect(suggestions).not.toBeNull();
+    expect(within(suggestions as HTMLElement).getAllByRole("button")).toHaveLength(3);
+
+    await user.click(options);
+    expect(options).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /Scope: Deep Research/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Recency filter: Any time/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Attach files/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^(Web|News|arXiv|Semantic Scholar)$/i })).toHaveLength(4);
+
+    await user.type(screen.getByPlaceholderText(/ask a research question/i), "battery policy");
+    expect(document.querySelector('[data-suggestion-surface="deep_research"]')).toBeNull();
+  });
+
+  it("summarizes configured and per-query sources without exposing all source chips", async () => {
+    const user = userEvent.setup();
+    renderSurface();
+
+    const options = screen.getByRole("button", { name: /Research options/i });
+    expect(options).toHaveTextContent(/Configured sources/i);
+    await user.click(options);
+    await user.click(screen.getByRole("button", { name: /^News$/i }));
+    expect(options).toHaveTextContent(/1 added source/i);
+  });
+
   it("does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)", () => {
     renderSurface();
     // Iterative grounding takes 30+ minutes and burns tokens — the control was

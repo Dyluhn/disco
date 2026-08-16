@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "80f24403c1f90d591de7435cab0426884c24b82e",
+  "source_identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -21628,6 +21628,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/SandboxRuntimeSection.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SandboxRuntimeSection",
+          "signature": "export function SandboxRuntimeSection()"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/SandboxSection.tsx",
       "public_declarations": [
         {
@@ -21659,6 +21669,16 @@
           "kind": "function",
           "name": "SkillsSection",
           "signature": "export function SkillsSection()"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/settings/StoredCredentialField.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "StoredCredentialField",
+          "signature": "export function StoredCredentialField({ label, value, onChange, placeholder, optional = true, className, inputClassName, }: { label: string; value: string; onChange: (value: string) => void; placeholder: string; optional?: boolean; className?: string; inputClassName?: string; })"
         }
       ]
     },
@@ -29493,6 +29513,22 @@
       "target_sha256": "3fc95ecee6760bccc1e70ca465ac74c51c0cd7976e6de56b17962f365a3e86fc",
       "owner_package": "PKG-13-FACADES",
       "reason": "Epic 13-C: explicit typed finish collaborators replace inherited mixin surface; package-owned helper exports are made explicit."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/SandboxRuntimeSection.tsx",
+      "public_name": "SandboxRuntimeSection",
+      "target_sha256": "52a1d6156bd25ebf0a66a32dd6927e6603c1eba8e10541aa505c23fc057e95f3",
+      "owner_package": "PKG-19-DEEP-RESEARCH-SURFACE",
+      "reason": "Adds the compact runtime settings owner for sandbox-specific controls."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/StoredCredentialField.tsx",
+      "public_name": "StoredCredentialField",
+      "target_sha256": "55659b5c9e6f6f8ecd64c365262cf10bc58153086903eb72b1b2bdef0f05a7f2",
+      "owner_package": "PKG-19-DEEP-RESEARCH-SURFACE",
+      "reason": "Adds one reusable stored-credential selector for settings surfaces."
     },
     {
       "surface": "frontend",

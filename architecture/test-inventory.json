@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "80f24403c1f90d591de7435cab0426884c24b82e",
+  "source_identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
   "collected": {
     "counts": {
-      "packages": 10774,
+      "packages": 10775,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12612,
+    "total": 12613,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -2217,6 +2217,7 @@
         "packages/agent-server/tests/test_report_export_pdf_fixes.py::test_report_table_preserves_ragged_three_column_header",
         "packages/agent-server/tests/test_report_export_pdf_fixes.py::test_unknown_citation_does_not_leak_raw_id",
         "packages/agent-server/tests/test_report_followup.py::test_followup_context_keeps_later_sources_after_oversized_passage",
+        "packages/agent-server/tests/test_report_followup.py::test_followup_context_names_the_full_saved_source_corpus",
         "packages/agent-server/tests/test_report_followup.py::test_followup_context_preserves_head_and_tail_of_long_evidence",
         "packages/agent-server/tests/test_report_followup.py::test_followup_requires_existing_report",
         "packages/agent-server/tests/test_report_followup.py::test_followup_triggered_by_new_user_message",
@@ -12633,9 +12634,9 @@
     }
   },
   "mapping_static": {
-    "identity": "80f24403c1f90d591de7435cab0426884c24b82e",
+    "identity": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10372,
+    "python_static_test_id_count": 10373,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -16345,6 +16346,7 @@
       "packages/agent-server/tests/test_report_export_pdf_fixes.py::test_report_table_preserves_ragged_three_column_header",
       "packages/agent-server/tests/test_report_export_pdf_fixes.py::test_unknown_citation_does_not_leak_raw_id",
       "packages/agent-server/tests/test_report_followup.py::test_followup_context_keeps_later_sources_after_oversized_passage",
+      "packages/agent-server/tests/test_report_followup.py::test_followup_context_names_the_full_saved_source_corpus",
       "packages/agent-server/tests/test_report_followup.py::test_followup_context_preserves_head_and_tail_of_long_evidence",
       "packages/agent-server/tests/test_report_followup.py::test_followup_requires_existing_report",
       "packages/agent-server/tests/test_report_followup.py::test_followup_triggered_by_new_user_message",
@@ -23858,8 +23860,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 239,
-    "typescript_static_test_id_count": 1214,
+    "typescript_test_file_count": 244,
+    "typescript_static_test_id_count": 1227,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24008,6 +24010,7 @@
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
       "frontend/src/components/research/ClaimVerdicts.test.tsx",
+      "frontend/src/components/research/DeepProgressStrip.test.tsx",
       "frontend/src/components/research/DeepReportView.table.test.tsx",
       "frontend/src/components/research/DeepReportView.variance.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.attach.test.tsx",
@@ -24017,6 +24020,8 @@
       "frontend/src/components/research/IncludeFollowUpsModal.test.tsx",
       "frontend/src/components/research/NeedMoreCard.test.tsx",
       "frontend/src/components/research/SupportMeter.test.tsx",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx",
+      "frontend/src/components/research/groundedAnswer.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
@@ -24027,9 +24032,11 @@
       "frontend/src/components/settings/ProjectStorageSection.test.tsx",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx",
       "frontend/src/components/settings/ProvidersSection.test.tsx",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx",
       "frontend/src/components/settings/SandboxSection.test.tsx",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx",
+      "frontend/src/components/settings/StoredCredentialField.test.tsx",
       "frontend/src/components/states.test.tsx",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx",
       "frontend/src/data/suggestions.test.ts",
@@ -24190,6 +24197,7 @@
       "frontend/e2e/schedule-section.spec.ts::the schedule section is reachable and shows the next-3-runs confirm card",
       "frontend/e2e/settings.spec.ts::renders the model matrix, skills, and connections from config",
       "frontend/e2e/sheet-block.spec.ts::renders an honest preview card with no false-affordance download",
+      "frontend/e2e/visual.spec.ts::deep research splash \u2014 both themes",
       "frontend/e2e/visual.spec.ts::research answer \u2014 both themes",
       "frontend/e2e/visual.spec.ts::settings \u2014 both themes",
       "frontend/src/App.moderesume.test.tsx::/agent/:cid \u2192 the slider reflects Agent",
@@ -24712,6 +24720,7 @@
       "frontend/src/components/research/ClaimVerdicts.test.tsx::shows entailment scores as percentages",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::shows links to best passage source",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::shows verdict chips",
+      "frontend/src/components/research/DeepProgressStrip.test.tsx::collapses completed research by default while preserving an explicit expansion",
       "frontend/src/components/research/DeepReportView.table.test.tsx::F3: renders cleanly when cid is provided (prop accepted, no error)",
       "frontend/src/components/research/DeepReportView.table.test.tsx::F3: renders identically when cid is undefined (backward-compat, no false affordance)",
       "frontend/src/components/research/DeepReportView.table.test.tsx::WALK-03: [[passage_id]] in disputed_notes renders as a citation chip, not raw text",
@@ -24739,7 +24748,9 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::deriveSourceTiers splits cited / reviewed / discovered",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::deriveStats counts sources from observation events",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps secondary research controls behind one disclosure and quiets suggestions after typing",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with a depth tier selector",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::the fixture report carries the honest signals",
       "frontend/src/components/research/FollowUpStatus.test.tsx::renders a spinner element when follow-up is in-flight",
       "frontend/src/components/research/FollowUpStatus.test.tsx::renders nothing when followUpStatus is follow_up_complete",
@@ -24787,7 +24798,10 @@
       "frontend/src/components/research/SupportMeter.test.tsx::renders only unsupported segment when only unsupported claims exist",
       "frontend/src/components/research/SupportMeter.test.tsx::returns null when total is 0 and no emptyLabel",
       "frontend/src/components/research/SupportMeter.test.tsx::shows all segments when all counts positive",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::locks follow-up submission for exactly the active follow-up phase",
+      "frontend/src/components/research/groundedAnswer.test.ts::makes cited and reviewed report passages resolvable, cited-first and deduplicated",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::WALK-05: shows 'Bundled \u2014 ddgs' (not 'Bundled \u2014 DuckDuckGo') for the bundled search option",
+      "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
       "frontend/src/components/settings/ImageGenSection.test.tsx::PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::renders the three real tiers from the live config with the configured tier active",
       "frontend/src/components/settings/ImageGenSection.test.tsx::shows a priced picker of image-output models and PUTs the chosen model",
@@ -24823,10 +24837,14 @@
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::edits a stored key in place (PUT with the new value)",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::excludes the reserved OpenRouter env from the cross-reference",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::flags a provider-referenced key that isn't stored, and prefills it",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::includes an enabled resilience credential in the missing-key check",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::names the SPECIFIC keys that can't be decrypted (not 'one or more')",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::rejects an invalid key name inline without hitting the network",
       "frontend/src/components/settings/ProvidersSection.test.tsx::adds a provider, opens browse, and toggles a model into the catalogue",
+      "frontend/src/components/settings/ProvidersSection.test.tsx::offers OpenRouter only through its canonical dedicated surface",
       "frontend/src/components/settings/ProvidersSection.test.tsx::renders the failed-/models manual-add path and uses the same enable route",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::keeps the gVisor-only control out of an unsupported runtime",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::reveals live-browser controls under a compatible sandbox",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::DEFENSIVE: no connections map at all \u2192 switch to Local still gets a clean socket",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::old-flat bad-gvisor config \u2192 switch to Local \u2192 Local gets a CLEAN socket (no ssh)",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::switching back to gVisor still shows the (invalid) gvisor socket to fix",
@@ -24838,6 +24856,7 @@
       "frontend/src/components/settings/SandboxSection.test.tsx::local: shows NO connection field up front, folds the rest under Advanced",
       "frontend/src/components/settings/SandboxSection.test.tsx::podman is temporarily NOT offered in the picker (commented out \u2014 no live host here)",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx::preserves a preset's human label and browser timezone through preview and save",
+      "frontend/src/components/settings/StoredCredentialField.test.tsx::suggests stored names while preserving custom environment names",
       "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry with surface subchips",
       "frontend/src/components/states.test.tsx::error state shows the message and retries",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::keeps detailed authoring behind the advanced affordance",
@@ -25312,6 +25331,7 @@
       "frontend/src/views/settings.test.tsx::recommends a visual model for a text-only primary and can assign one",
       "frontend/src/views/settings.test.tsx::saves a backend change (round-trips through the data layer)",
       "frontend/src/views/settings.test.tsx::saves the key and adds an OpenRouter model to the catalogue",
+      "frontend/src/views/settings.test.tsx::separates interface, models, research, runtime, and extensions",
       "frontend/src/views/settings.test.tsx::shows the absolute/manual story with a default primary + every role, cost-legible",
       "frontend/src/views/settings.test.tsx::shows the encoder mode as an honest, wired toggle (default bundled-local)",
       "frontend/src/views/settings.test.tsx::skills are a real, persistent subsystem with a working create editor",
@@ -27064,8 +27084,8 @@
         ]
       }
     },
-    "vitest_ids": 1164,
-    "vitest_files": 176,
+    "vitest_ids": 1176,
+    "vitest_files": 181,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -27592,6 +27612,7 @@
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > shows entailment scores as percentages",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > shows links to best passage source",
       "frontend/src/components/research/ClaimVerdicts.test.tsx::ClaimVerdicts > shows verdict chips",
+      "frontend/src/components/research/DeepProgressStrip.test.tsx::DeepProgressStrip > collapses completed research by default while preserving an explicit expansion",
       "frontend/src/components/research/DeepReportView.table.test.tsx::DeepReportView table rendering > renders a GFM table in a report section",
       "frontend/src/components/research/DeepReportView.table.test.tsx::DeepReportView table rendering > renders citation chips in prose and table cells",
       "frontend/src/components/research/DeepReportView.table.test.tsx::DeepReportView table rendering > renders multiple paragraphs including a table",
@@ -27618,7 +27639,9 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > after approve, streams the progress + assembles the report without a false rounds notice",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > after submit, shows the plan gate with editable sub-questions",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > keeps secondary research controls behind one disclosure and quiets suggestions after typing",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > opens the empty state with a depth tier selector",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-02 planning loader > WALK-02: the empty-state surface does not show a planning loader (no session)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-08 stale follow-up guard > WALK-08: the follow-up panel is invisible until the run is FINISHED with a report",
       "frontend/src/components/research/FollowUpStatus.test.tsx::FollowUpStatus > renders a spinner element when follow-up is in-flight",
@@ -27667,7 +27690,10 @@
       "frontend/src/components/research/SupportMeter.test.tsx::SupportMeter > renders only unsupported segment when only unsupported claims exist",
       "frontend/src/components/research/SupportMeter.test.tsx::SupportMeter > returns null when total is 0 and no emptyLabel",
       "frontend/src/components/research/SupportMeter.test.tsx::SupportMeter > shows all segments when all counts positive",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::DeepResearchReportView > locks follow-up submission for exactly the active follow-up phase",
+      "frontend/src/components/research/groundedAnswer.test.ts::asGroundedAnswer > makes cited and reviewed report passages resolvable, cited-first and deduplicated",
       "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 WALK-05 label > WALK-05: shows 'Bundled \u2014 ddgs' (not 'Bundled \u2014 DuckDuckGo') for the bundled search option",
+      "frontend/src/components/settings/DataSourcesSection.test.tsx::DataSourcesSection \u2014 WALK-05 label > persists Brave with a selected stored credential name",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > renders the three real tiers from the live config with the configured tier active",
       "frontend/src/components/settings/ImageGenSection.test.tsx::ImageGenSection \u2014 A3 image-gen provider settings > shows the ComfyUI custom-workflow textarea and PUTs workflow_json on save",
@@ -27703,10 +27729,14 @@
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > edits a stored key in place (PUT with the new value)",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > excludes the reserved OpenRouter env from the cross-reference",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > flags a provider-referenced key that isn't stored, and prefills it",
+      "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > includes an enabled resilience credential in the missing-key check",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > names the SPECIFIC keys that can't be decrypted (not 'one or more')",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx::ProviderKeysSection \u2014 store any provider key encrypted by name > rejects an invalid key name inline without hitting the network",
       "frontend/src/components/settings/ProvidersSection.test.tsx::ProvidersSection \u2014 generic provider objects > adds a provider, opens browse, and toggles a model into the catalogue",
+      "frontend/src/components/settings/ProvidersSection.test.tsx::ProvidersSection \u2014 generic provider objects > offers OpenRouter only through its canonical dedicated surface",
       "frontend/src/components/settings/ProvidersSection.test.tsx::ProvidersSection \u2014 generic provider objects > renders the failed-/models manual-add path and uses the same enable route",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::SandboxRuntimeSection > keeps the gVisor-only control out of an unsupported runtime",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::SandboxRuntimeSection > reveals live-browser controls under a compatible sandbox",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::SandboxSection \u2014 backend switch does not bleed sockets > DEFENSIVE: no connections map at all \u2192 switch to Local still gets a clean socket",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::SandboxSection \u2014 backend switch does not bleed sockets > old-flat bad-gvisor config \u2192 switch to Local \u2192 Local gets a CLEAN socket (no ssh)",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx::SandboxSection \u2014 backend switch does not bleed sockets > switching back to gVisor still shows the (invalid) gvisor socket to fix",
@@ -27718,6 +27748,7 @@
       "frontend/src/components/settings/SandboxSection.test.tsx::SandboxSection \u2014 W-49 progressive disclosure > local: shows NO connection field up front, folds the rest under Advanced",
       "frontend/src/components/settings/SandboxSection.test.tsx::SandboxSection \u2014 W-49 progressive disclosure > podman is temporarily NOT offered in the picker (commented out \u2014 no live host here)",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx::ScheduleSection local-time contract > preserves a preset's human label and browser timezone through preview and save",
+      "frontend/src/components/settings/StoredCredentialField.test.tsx::StoredCredentialField > suggests stored names while preserving custom environment names",
       "frontend/src/components/states.test.tsx::states > empty state carries the brand + Latin entry with surface subchips",
       "frontend/src/components/states.test.tsx::states > error state shows the message and retries",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::WorkflowAuthorForm > keeps detailed authoring behind the advanced affordance",
@@ -28221,6 +28252,7 @@
       "frontend/src/views/history.test.tsx::History \u2014 conversation library > shows a calm empty state when there are no conversations",
       "frontend/src/views/settings.test.tsx::Settings \u2014 Encoders (bundled-local vs remote) > shows the encoder mode as an honest, wired toggle (default bundled-local)",
       "frontend/src/views/settings.test.tsx::Settings \u2014 OpenRouter > saves the key and adds an OpenRouter model to the catalogue",
+      "frontend/src/views/settings.test.tsx::Settings \u2014 information architecture > separates interface, models, research, runtime, and extensions",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model catalogue (CRUD) > adds a new model via the form and it appears in the catalogue",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model catalogue (CRUD) > lets the user explicitly mark a model as image-capable",
       "frontend/src/views/settings.test.tsx::Settings \u2014 model-assignment matrix > changes a role assignment (the picker is enabled and the row reflects it)",
@@ -28317,6 +28349,7 @@
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
       "frontend/src/components/research/ClaimVerdicts.test.tsx",
+      "frontend/src/components/research/DeepProgressStrip.test.tsx",
       "frontend/src/components/research/DeepReportView.table.test.tsx",
       "frontend/src/components/research/DeepReportView.variance.test.tsx",
       "frontend/src/components/research/DeepResearchSurface.attach.test.tsx",
@@ -28326,6 +28359,8 @@
       "frontend/src/components/research/IncludeFollowUpsModal.test.tsx",
       "frontend/src/components/research/NeedMoreCard.test.tsx",
       "frontend/src/components/research/SupportMeter.test.tsx",
+      "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx",
+      "frontend/src/components/research/groundedAnswer.test.ts",
       "frontend/src/components/settings/DataSourcesSection.test.tsx",
       "frontend/src/components/settings/ImageGenSection.test.tsx",
       "frontend/src/components/settings/LiveBrowserSection.test.tsx",
@@ -28336,9 +28371,11 @@
       "frontend/src/components/settings/ProjectStorageSection.test.tsx",
       "frontend/src/components/settings/ProviderKeysSection.test.tsx",
       "frontend/src/components/settings/ProvidersSection.test.tsx",
+      "frontend/src/components/settings/SandboxRuntimeSection.test.tsx",
       "frontend/src/components/settings/SandboxSection.switch.test.tsx",
       "frontend/src/components/settings/SandboxSection.test.tsx",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx",
+      "frontend/src/components/settings/StoredCredentialField.test.tsx",
       "frontend/src/components/states.test.tsx",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx",
       "frontend/src/data/suggestions.test.ts",
@@ -28412,7 +28449,7 @@
     ],
     "playwright_configs": {
       "playwright.config.ts": {
-        "id_count": 30,
+        "id_count": 31,
         "file_count": 21,
         "ids": [
           "frontend/e2e/ask-gate.spec.ts::Build \u2192 free-form Ask-gate \u203a the agent's question pauses with an AskPanel; answering resumes",
@@ -28443,6 +28480,7 @@
           "frontend/e2e/schedule-section.spec.ts::Build \u2192 schedule a re-run \u203a the schedule section is reachable and shows the next-3-runs confirm card",
           "frontend/e2e/settings.spec.ts::Settings \u203a renders the model matrix, skills, and connections from config",
           "frontend/e2e/sheet-block.spec.ts::Research \u2192 sheet block \u203a renders an honest preview card with no false-affordance download",
+          "frontend/e2e/visual.spec.ts::visual regression \u203a deep research splash \u2014 both themes",
           "frontend/e2e/visual.spec.ts::visual regression \u203a research answer \u2014 both themes",
           "frontend/e2e/visual.spec.ts::visual regression \u203a settings \u2014 both themes"
         ],
@@ -28669,7 +28707,7 @@
         ]
       }
     },
-    "playwright_hermetic_ids": 30,
+    "playwright_hermetic_ids": 31,
     "playwright_hermetic_files": 21,
     "playwright_live_ids": 38,
     "playwright_live_files": 36,
@@ -32622,6 +32660,50 @@
             "scope": "pytest.fixture(autouse=True)"
           }
         ]
+      }
+    },
+    {
+      "package": "PKG-19-DEEP-RESEARCH-SURFACE",
+      "root": "packages",
+      "source_identity_before": "80f24403c1f90d591de7435cab0426884c24b82e",
+      "source_identity_after": "7d3c0fe80cae986d8fc2d6dafb697fa55c9a42da",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10774,
+          "after_count": 10775,
+          "added_ids": [
+            "packages/agent-server/tests/test_report_followup.py::test_followup_context_names_the_full_saved_source_corpus"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_report_followup.py::test_followup_context_names_the_full_saved_source_corpus"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/research/DeepProgressStrip.test.tsx",
+          "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx",
+          "frontend/src/components/research/groundedAnswer.test.ts",
+          "frontend/src/components/settings/SandboxRuntimeSection.test.tsx",
+          "frontend/src/components/settings/StoredCredentialField.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/e2e/visual.spec.ts::deep research splash \u2014 both themes",
+          "frontend/src/components/research/DeepProgressStrip.test.tsx::collapses completed research by default while preserving an explicit expansion",
+          "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps secondary research controls behind one disclosure and quiets suggestions after typing",
+          "frontend/src/components/research/DeepResearchSurface.test.tsx::summarizes configured and per-query sources without exposing all source chips",
+          "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::locks follow-up submission for exactly the active follow-up phase",
+          "frontend/src/components/research/groundedAnswer.test.ts::makes cited and reviewed report passages resolvable, cited-first and deduplicated",
+          "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
+          "frontend/src/components/settings/ProviderKeysSection.test.tsx::includes an enabled resilience credential in the missing-key check",
+          "frontend/src/components/settings/ProvidersSection.test.tsx::offers OpenRouter only through its canonical dedicated surface",
+          "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::keeps the gVisor-only control out of an unsupported runtime",
+          "frontend/src/components/settings/SandboxRuntimeSection.test.tsx::reveals live-browser controls under a compatible sandbox",
+          "frontend/src/components/settings/StoredCredentialField.test.tsx::suggests stored names while preserving custom environment names",
+          "frontend/src/views/settings.test.tsx::separates interface, models, research, runtime, and extensions"
+        ],
+        "fixtures": []
       }
     },
     {

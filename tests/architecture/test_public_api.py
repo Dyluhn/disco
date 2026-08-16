@@ -868,7 +868,9 @@ class TestFrontendPublicApi:
         # identities. `api/preview.ts` gains ONE declaration and is the only
         # pre-existing module whose row moves — an addition, not a change to any
         # existing declaration's signature.
-        assert len(live["frontend_modules"]) == 399
+        # 401 after the Settings simplification extracted `SandboxRuntimeSection`
+        # and `StoredCredentialField` as independently owned public components.
+        assert len(live["frontend_modules"]) == 401
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

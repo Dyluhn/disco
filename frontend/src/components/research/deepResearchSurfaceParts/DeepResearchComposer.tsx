@@ -1,14 +1,14 @@
-/**
- * DeepResearchComposer — the pre-run composer cluster (empty state): QueryInput
- * + SuggestionChips + SourcePicker + DepthTierSelector + RecencySelector.
- * Relocated verbatim from DeepResearchSurface.tsx's `!started` branch. See
- * that file's header for the surface map.
- */
+/** Deep Research's pre-run question box and its secondary options. */
+import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { useState } from "react";
 import { UploadComposer } from "@/components/build/BuildSurface";
+import { ModelLeaderPill } from "@/components/ModelLeaderPill";
 import { QueryInput } from "@/components/QueryInput";
+import { ScopeControl } from "@/components/ScopeControl";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SourcePicker } from "@/components/SourcePicker";
 import { EmptyState } from "@/components/states";
+import { cn } from "@/lib/cn";
 import type { ScopeId } from "@/shell/mode";
 import type { useDeepResearch } from "@/hooks/useDeepResearch";
 import { DepthTierSelector, type Tier } from "../DepthTierSelector";
@@ -22,6 +22,18 @@ interface Props {
 }
 
 export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChange }: Props) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const recencyLabel =
+    r.recencyWindow === "week"
+      ? "Past week"
+      : r.recencyWindow === "month"
+        ? "Past month"
+        : "Any time";
+  const sourceLabel =
+    r.selectedSources.length === 0
+      ? "Configured sources"
+      : `${r.selectedSources.length} added source${r.selectedSources.length === 1 ? "" : "s"}`;
+
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
       <EmptyState title="Deep Research" subtitle="Multi-step reports with cited evidence." />
@@ -33,35 +45,61 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
           value={draftValue}
           onValueChange={setDraftValue}
           placeholder="Ask a research question that deserves a multi-page report…"
-          leaderId={r.leaderId}
-          onLeaderChange={r.setLeaderId}
-          scope={"deep_research" as ScopeId}
-          onScopeChange={onScopeChange ?? (() => {})}
-          // BW-04: Deep Research does not honor a per-run reasoning-effort
-          // flag (its create frame carries depth/recency/iterative, not
-          // `think`), so the Think toggle is OMITTED rather than rendered
-          // inert (always-off, no-op) — no false affordance. Omitting
-          // onThinkChange drops only the toggle; model/scope still render.
+          showControls={false}
+          // Deep Research has no per-run reasoning-effort flag, so there is no
+          // Think toggle. Model, scope, recency, sources, and uploads live in
+          // the disclosure below rather than crowding this primary row.
           extraControls={
-            // R10: Depth/Recency/Iterative now sit INLINE in the same pill row
-            // as the model/scope cluster (via QueryInput's `extraControls`),
-            // not a full-width footer block that grew the card and reflowed the
-            // centered layout. The hint paragraph is dropped (it was layout bulk;
-            // the leader pill already names the driver model).
             <>
               <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
-              <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
-              {/* IterativeToggle removed 2026-07-07 — backend stub stays default-off */}
-              <SourcePicker
-                selected={r.selectedSources}
-                onChange={r.setSelectedSources}
-              />
-              {/* G1/DR-4 + runthru-v2 #9: UploadComposer always rendered (it
-                  self-disables when cid is null) so the attach affordance does
-                  NOT vanish during the brief preCid re-create window on a
-                  settings change — it just dims until the new cid resolves. */}
-              <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+              <button
+                type="button"
+                aria-expanded={optionsOpen}
+                aria-controls="deep-research-options-panel"
+                data-disco-control="dr.options"
+                onClick={() => setOptionsOpen((open) => !open)}
+                className="flex min-w-0 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+              >
+                <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+                <span className="shrink-0">Research options</span>
+                <span className="hidden truncate text-text-faint sm:inline">
+                  · {recencyLabel} · {sourceLabel}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "size-3 shrink-0 text-text-faint transition-transform",
+                    optionsOpen && "rotate-180",
+                  )}
+                  aria-hidden
+                />
+              </button>
             </>
+          }
+          footer={
+            optionsOpen ? (
+              <div
+                id="deep-research-options-panel"
+                className="flex flex-col gap-inline border-t border-hairline pt-inline"
+              >
+                <div className="flex flex-wrap items-center gap-inline">
+                  <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
+                  <ScopeControl
+                    value={"deep_research" as ScopeId}
+                    onChange={onScopeChange ?? (() => {})}
+                  />
+                  <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-inline">
+                  <SourcePicker
+                    selected={r.selectedSources}
+                    onChange={r.setSelectedSources}
+                  />
+                  {/* G1/DR-4: opening options mounts the upload affordance. It
+                      creates a conversation only after a real file selection. */}
+                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                </div>
+              </div>
+            ) : null
           }
         />
         {r.submitError && (
@@ -72,7 +110,9 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
           </p>
         )}
       </div>
-      <SuggestionChips surface="deep_research" onPick={setDraftValue} />
+      {!draftValue.trim() && (
+        <SuggestionChips surface="deep_research" onPick={setDraftValue} />
+      )}
     </main>
   );
 }
