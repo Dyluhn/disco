@@ -655,7 +655,8 @@ class _ContentGateService(_FinishGateComponent):
         # parity with the other finish-path gates — after cap the gate
         # RELEASES with a visible warning rather than running forever.
         if (
-            self._loop._planning_tools  # plan-first lifecycle is configured
+            self._loop._require_productive_action_before_finish
+            and self._loop._planning_tools  # plan-first lifecycle is configured
             and self._loop.mode != OperatingMode.PLANNING  # we're executing
             and not signals.productive_action_since_approval(events)
             and not signals.finish_intent_replan_after_prior_productive_work(events)

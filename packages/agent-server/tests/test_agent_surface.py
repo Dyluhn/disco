@@ -1,5 +1,5 @@
-"""The "agent" surface — a framing copy of "build" (identical loop / tools / sandbox
-/ workspace persistence; only the frontend framing + entry differ). These guard:
+"""The "agent" surface — Build-capable tools and workspace persistence with
+proportional Agent framing and finish policy. These guard:
 
 1. "agent" is a first-class accepted surface (set_surface does not coerce it away).
 2. The `_surface_of` recovery ladder reads the AUTHORITATIVE `conversations.surface`
@@ -12,8 +12,11 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 from disco.agent_server import ConversationRuntime
-from disco.core import SqliteEventStore
+from disco.core import BuildPlatformAdmissionEvent, SqliteEventStore, WorkspaceMutationEvent
+from disco.core.appkit import BuildBrief
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from disco.tools.projects import StorageStatus
 
@@ -77,8 +80,7 @@ def test_surface_of_recovers_agent_across_restart(tmp_path, monkeypatch):
 
 
 def test_agent_composes_the_same_loop_as_build(tmp_path, monkeypatch):
-    """The behavioral copy: composing the loop for an 'agent' conversation yields the
-    SAME agent class + tool executor as 'build', and a DIFFERENT one from 'research'."""
+    """Agent keeps Build's tools but permits a direct answer with no fake action."""
     rt, store = _rt(tmp_path, monkeypatch)
     for cid, surface in (("a", "agent"), ("b", "build"), ("r", "research")):
         store.create_conversation(cid, owner_id="local", surface=surface)
@@ -93,3 +95,90 @@ def test_agent_composes_the_same_loop_as_build(tmp_path, monkeypatch):
     assert type(loop_agent.executor) is type(loop_build.executor)
     assert type(loop_agent.agent) is not type(loop_research.agent)
     assert type(loop_agent.executor) is not type(loop_research.executor)
+    assert loop_agent._require_productive_action_before_finish is False
+    assert loop_build._require_productive_action_before_finish is True
+    assert loop_agent._delivery_contract_resolver is None
+    assert loop_build._delivery_contract_resolver is not None
+    assert "a" not in rt._build_platform.selected_profiles
+
+
+async def test_plain_agent_has_no_provisional_web_admission(tmp_path, monkeypatch):
+    rt, store = _rt(tmp_path, monkeypatch)
+    for cid, surface in (("a", "agent"), ("b", "build")):
+        store.create_conversation(cid, owner_id="local", surface=surface)
+        rt.settings._set_surface(cid, surface)
+        rt._loop_for(cid)
+        await store.append(
+            cid,
+            WorkspaceMutationEvent(
+                operation="agent.run-intent.message",
+                run_protocol_version=1,
+            ),
+        )
+        await rt._build_platform.record_route_locked(cid)
+
+    agent_admissions = [
+        event
+        for event in await store.get_events("a")
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ]
+    build_admissions = [
+        event
+        for event in await store.get_events("b")
+        if isinstance(event, BuildPlatformAdmissionEvent)
+    ]
+    assert agent_admissions == []
+    assert [event.profile_id for event in build_admissions] == ["disco.freeform_web@1"]
+
+
+def test_strict_appkit_agent_keeps_productive_action_finish_gate(tmp_path, monkeypatch):
+    rt, store = _rt(tmp_path, monkeypatch)
+    store.create_conversation("strict", owner_id="local", surface="agent", appkit_mode=True)
+    rt.settings._set_surface("strict", "agent")
+
+    loop = rt._loop_for("strict")
+
+    assert loop._require_productive_action_before_finish is True
+
+
+async def test_agent_ingress_drops_legacy_build_contract_marker(tmp_path, monkeypatch):
+    """A stale UI/client cannot pre-classify an ordinary Agent task as an app."""
+    rt, store = _rt(tmp_path, monkeypatch)
+    store.create_conversation("agent-neutral", owner_id="local", surface="agent")
+    rt.settings._set_surface("agent-neutral", "agent")
+    send = AsyncMock(return_value=object())
+    monkeypatch.setattr(rt.conversation_control, "send_user_turn", send)
+
+    await rt.send_user_turn(
+        "agent-neutral",
+        "summarize these notes",
+        build_brief=BuildBrief(app_kind="web_app", primary_goal="summarize these notes"),
+    )
+
+    assert send.await_args.kwargs["build_brief"] is None
+
+
+async def test_build_ingress_retains_explicit_contract_marker(tmp_path, monkeypatch):
+    rt, store = _rt(tmp_path, monkeypatch)
+    store.create_conversation("build-contract", owner_id="local", surface="build")
+    rt.settings._set_surface("build-contract", "build")
+    send = AsyncMock(return_value=object())
+    monkeypatch.setattr(rt.conversation_control, "send_user_turn", send)
+    brief = BuildBrief(app_kind="web_app", primary_goal="build a site")
+
+    await rt.send_user_turn("build-contract", "build a site", build_brief=brief)
+
+    assert send.await_args.kwargs["build_brief"] is brief
+
+
+async def test_strict_appkit_agent_retains_classified_contract_marker(tmp_path, monkeypatch):
+    rt, store = _rt(tmp_path, monkeypatch)
+    store.create_conversation("strict-appkit", owner_id="local", surface="agent", appkit_mode=True)
+    rt.settings._set_surface("strict-appkit", "agent")
+    send = AsyncMock(return_value=object())
+    monkeypatch.setattr(rt.conversation_control, "send_user_turn", send)
+    brief = BuildBrief(app_kind="web_app", primary_goal="create an AppKit app")
+
+    await rt.send_user_turn("strict-appkit", "create an AppKit app", build_brief=brief)
+
+    assert send.await_args.kwargs["build_brief"] is brief

@@ -84,6 +84,7 @@ class AgentLoop:
     _revision_force_submit_enabled: bool
     _plan_explore_reads: int
     _execution_nudges: int
+    _require_productive_action_before_finish: bool
     _browser_verify_refusals: int
     _identical_plan_revisions: int
     _finish_verify_refusals: int
@@ -162,6 +163,7 @@ class AgentLoop:
         planning_tools: frozenset[str] = frozenset(),
         plan_tool: str = "submit_plan",
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
+        require_productive_action_before_finish: bool = True,
         autonomous: bool = False,
         model_policy: ModelExecutionPolicy = _DEFAULT_MODEL_POLICY,
         # The already-resolved context window of this loop's effective driver.
@@ -239,7 +241,7 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         # fmt: off
-        _initialize_agent_loop(cast(_AgentLoopCompatibility, self), conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, veto_feedback=veto_feedback, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, recitation_cadence=recitation_cadence, reground_cadence=reground_cadence, dod_evaluator_factory=dod_evaluator_factory, host_verifier=host_verifier, host_verify_timeout_s=host_verify_timeout_s, host_verifier_verdict_hook=host_verifier_verdict_hook, host_verify_authoritative=host_verify_authoritative, verifier_judge=verifier_judge, verifier_judge_timeout_s=verifier_judge_timeout_s, finish_sealability_probe=finish_sealability_probe, finish_seal_timeout_s=finish_seal_timeout_s, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active, declared_delivery_kind=declared_delivery_kind, delivery_contract_resolver=delivery_contract_resolver)
+        _initialize_agent_loop(cast(_AgentLoopCompatibility, self), conversation_id, store, agent, executor, router, analyzer, policy, condenser, summarizer, mode=mode, max_iterations=max_iterations, stop_hooks=stop_hooks, stuck_thresholds=stuck_thresholds, veto_feedback=veto_feedback, planning_tools=planning_tools, plan_tool=plan_tool, execution_mode=execution_mode, require_productive_action_before_finish=require_productive_action_before_finish, autonomous=autonomous, model_policy=model_policy, driver_context_window=driver_context_window, finish_alias=finish_alias, recitation_cadence=recitation_cadence, reground_cadence=reground_cadence, dod_evaluator_factory=dod_evaluator_factory, host_verifier=host_verifier, host_verify_timeout_s=host_verify_timeout_s, host_verifier_verdict_hook=host_verifier_verdict_hook, host_verify_authoritative=host_verify_authoritative, verifier_judge=verifier_judge, verifier_judge_timeout_s=verifier_judge_timeout_s, finish_sealability_probe=finish_sealability_probe, finish_seal_timeout_s=finish_seal_timeout_s, workflow_run=workflow_run, terminal_commit_hook=terminal_commit_hook, control_fence=control_fence, quiet=quiet, strict_appkit_active=strict_appkit_active, declared_delivery_kind=declared_delivery_kind, delivery_contract_resolver=delivery_contract_resolver)
         # fmt: on
 
     _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file", "file_edit")

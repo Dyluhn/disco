@@ -14,6 +14,7 @@ import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 import { QueryInput } from "@/components/QueryInput";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
 import type { BuildController, FramingCopy } from "./types";
+import type { BuildFraming } from "@/components/BuildSurface";
 
 export function BuildComposerSection({
   b,
@@ -24,6 +25,7 @@ export function BuildComposerSection({
   steerWithMention,
   requestPlanWithMention,
   elementMentionChip,
+  framing,
 }: {
   b: BuildController;
   copy: FramingCopy;
@@ -33,6 +35,7 @@ export function BuildComposerSection({
   steerWithMention: (text: string) => void;
   requestPlanWithMention: (text: string) => void;
   elementMentionChip: ReactNode;
+  framing: BuildFraming;
 }) {
   return (
     <>
@@ -59,7 +62,7 @@ export function BuildComposerSection({
       )}
       {settled && (
         <div className="flex flex-col gap-hair">
-          <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+          <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
           {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
           <QueryInput
             onSubmit={requestPlanWithMention}

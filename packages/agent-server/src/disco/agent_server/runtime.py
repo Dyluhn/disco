@@ -427,6 +427,17 @@ class ConversationRuntime:
         verification_requirements: VerificationRequirementsDirective | None = None,
         steer: bool = False,
     ) -> MessageEvent:
+        # Build briefs are an explicit Build-contract activation signal, not a
+        # generic task hint. Older clients sent the marker for Agent because the
+        # two surfaces share a stream hook; fail neutral at the server boundary
+        # so an ordinary Agent task can never acquire web-app completion gates.
+        # Strict AppKit conversations retain their own classified contract.
+        if (
+            build_brief is not None
+            and self._surface_of(conversation_id) == "agent"
+            and not self.settings._effective_appkit_mode(conversation_id)
+        ):
+            build_brief = None
         return await self.conversation_control.send_user_turn(
             conversation_id,
             text,

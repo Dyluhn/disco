@@ -18,6 +18,7 @@ import {
   startMcpFixture,
   stopMcpFixture,
 } from "./mcp-reliability-helpers";
+import { runAgentGeneralTaskCells } from "./agent-general-task-cells";
 
 const TOOL = "reliability_echo";
 const TOKEN = "DISCO_MCP_LIVE_PROOF";
@@ -47,6 +48,7 @@ test("approved MCP hot-reloads, seals into a workflow, executes, and produces ou
     "this suite mutates MCP configuration and must target an isolated reliability stack",
   ).toBe(true);
   await requireReliabilityStack(request);
+  await runAgentGeneralTaskCells(request, testInfo);
 
   const fixture = await startMcpFixture(testInfo);
   const suffix = `${process.pid}_${testInfo.workerIndex}_${testInfo.repeatEachIndex}_${Date.now()}`;

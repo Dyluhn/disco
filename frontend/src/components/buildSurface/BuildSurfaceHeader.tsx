@@ -11,6 +11,7 @@ import { DriverOutageBanner } from "@/components/build/DriverOutageBanner";
 import type { isolationForBackend } from "@/lib/isolation";
 import type { useDownloadProject } from "@/hooks/useProjects";
 import type { BuildController } from "./types";
+import type { BuildFraming } from "@/components/BuildSurface";
 
 export function BuildSurfaceHeader({
   b,
@@ -18,12 +19,14 @@ export function BuildSurfaceHeader({
   taskLabel,
   download,
   onDownloadClick,
+  framing,
 }: {
   b: BuildController;
   isolation: ReturnType<typeof isolationForBackend>;
   taskLabel: string | null;
   download: ReturnType<typeof useDownloadProject>;
   onDownloadClick: () => void;
+  framing: BuildFraming;
 }) {
   return (
     <div className="flex flex-col gap-inline px-body pt-section">
@@ -40,6 +43,7 @@ export function BuildSurfaceHeader({
         events={b.events}
         modelId={b.modelId}
         seq={b.maxSeq}
+        surface={framing}
       />
       {/* Honest provider-outage label for the autonomous flavor: the run
           CONCLUDED at PAUSED (no ask gate), so the WHY renders here next to

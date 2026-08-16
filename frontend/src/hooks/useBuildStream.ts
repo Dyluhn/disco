@@ -192,11 +192,15 @@ export function useBuildStream(
     /** Inject a deterministic id factory for optimistic message ids (tests).
      *  Omitted in production → the default Date.now()/Math.random() suffix. */
     idFactory?: OptimisticIdFactory;
+    /** Build declares a build contract on first send. The standalone Agent
+     * surface is artifact-neutral and must not inherit that marker. */
+    surface?: "build" | "agent";
   },
 ): BuildStream {
   const [state, dispatch] = useReducer(reducer, initial);
   const handle = useRef<AgentHandle | null>(null);
   const makeId = options?.idFactory ?? defaultOptimisticIdFactory;
+  const surface = options?.surface ?? "build";
   const sessionCid = session?.cid ?? null;
   const sessionRef = useRef(session);
   sessionRef.current = session;
@@ -214,17 +218,17 @@ export function useBuildStream(
       h.send({
         type: "send_message",
         content: current.task,
-        // CONTRACT-ACTIVATE: presence of build_brief asks the server to classify
-        // the request and declare the build contract for this run (codex found
-        // the shipped UI never sent it, so activation only fired for API callers).
-        build_brief: {},
+        // CONTRACT-ACTIVATE belongs to Build only. Agent is a general task
+        // surface; its output kind is derived from any artifact it actually
+        // produces instead of being pre-classified as an application.
+        ...(surface === "build" ? { build_brief: {} } : {}),
         ...(current.context ? { context: current.context } : {}),
       });
     return () => {
       h.cancel();
       if (handle.current === h) handle.current = null;
     };
-  }, [sessionCid]);
+  }, [sessionCid, surface]);
 
   const confirm = useCallback(() => handle.current?.send({ type: "confirm" }), []);
   const reject = useCallback(() => handle.current?.send({ type: "reject" }), []);

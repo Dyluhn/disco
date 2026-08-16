@@ -50,11 +50,10 @@ import { useElementMentionRelay } from "./buildSurface/useElementMentionRelay";
 import { useBuildSurfaceFlags } from "./buildSurface/useBuildSurfaceFlags";
 import type { FramingCopy } from "./buildSurface/types";
 
-/** This surface backs two framings of the SAME agent machinery: "build" (software)
- * and "agent" (general tasks). Only presentational strings differ; everything else
- * — loop, gate, sandbox, persistence — is identical, so the agent surface reuses
- * this component via a thin wrapper rather than a forked copy. The default is
- * "build", so every existing call site renders byte-identically. */
+/** This component backs two surfaces over shared UI/runtime machinery: "build"
+ * (software) and "agent" (general tasks). Their backend prompts and completion
+ * policy differ, while the gate, sandbox, persistence, and UI state model remain
+ * shared. The default is "build", so existing Build call sites stay unchanged. */
 export type BuildFraming = "build" | "agent";
 
 const FRAMING: Record<BuildFraming, FramingCopy> = {
@@ -168,6 +167,7 @@ export function BuildSurface({
         taskLabel={taskLabel}
         download={download}
         onDownloadClick={() => b.cid && download.mutate({ id: b.cid, binding: null })}
+        framing={framing}
       />
       <BuildActivityFeed
         isReplaying={isReplaying}
@@ -185,6 +185,7 @@ export function BuildSurface({
           finalMessage={finalMessage}
           draftingPlan={draftingPlan}
           collapseFeed={collapseFeed}
+          framing={framing}
         />
       </BuildActivityFeed>
 
@@ -208,6 +209,7 @@ export function BuildSurface({
           steerWithMention={steerWithMention}
           requestPlanWithMention={requestPlanWithMention}
           elementMentionChip={elementMentionChip}
+          framing={framing}
         />
       </div>
     </>
