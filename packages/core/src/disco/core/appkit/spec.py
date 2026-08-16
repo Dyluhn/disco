@@ -73,6 +73,12 @@ from .spec_parts.io import save_app_spec as save_app_spec
 from .spec_parts.io import save_design_spec as save_design_spec
 from .spec_parts.io import serialize_app_spec as serialize_app_spec
 from .spec_parts.io import serialize_design_spec as serialize_design_spec
+from .spec_parts.record_policy import RecordPolicy as RecordPolicy
+from .spec_parts.record_policy import (
+    _validate_record_managed_fields,
+    _validate_record_parent_locks,
+    _validate_record_policy_roles,
+)
 
 # ---- shared config ------------------------------------------------------------
 
@@ -442,10 +448,15 @@ class Entity(BaseModel):
     fields: tuple[EntityField, ...] = Field(default_factory=tuple, max_length=_MAX_FIELDS)
     write_roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     read_roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
+    record_policy: RecordPolicy | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @model_validator(mode="after")
     def _field_names_unique(self) -> Entity:
         _require_unique((f.name for f in self.fields), what=f"field name on entity {self.id!r}")
+        _validate_record_managed_fields(self)
         return self
 
     @field_validator("write_roles", "read_roles")
@@ -774,6 +785,10 @@ class AppSpec(BaseModel):
     app_kind: _ShortStr
     name: _NameStr
     roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
+    role_admin_roles: tuple[_IdStr, ...] = Field(
+        default=(),
+        exclude_if=lambda value: not value,
+    )
     pages: tuple[Page, ...] = Field(default_factory=tuple, max_length=_MAX_PAGES)
     entities: tuple[Entity, ...] = Field(default_factory=tuple, max_length=_MAX_ENTITIES)
     primary_actions: tuple[Action, ...] = Field(default_factory=tuple, max_length=_MAX_ACTIONS)
@@ -795,7 +810,7 @@ class AppSpec(BaseModel):
     # signing keys remain in host-owned configuration/secret stores.
     webhooks: WebhookMeta | None = Field(default=None, exclude_if=lambda value: value is None)
 
-    @field_validator("roles")
+    @field_validator("roles", "role_admin_roles")
     @classmethod
     def _roles_are_safe_identifiers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         for role in value:
@@ -842,6 +857,7 @@ class AppSpec(BaseModel):
     @model_validator(mode="after")
     def _entity_roles_valid(self) -> AppSpec:
         declared = set(self.roles)
+        _validate_record_policy_roles(self)
         for entity in self.entities:
             for role in (*entity.write_roles, *entity.read_roles):
                 if not declared:
@@ -853,6 +869,11 @@ class AppSpec(BaseModel):
                         f"entity {entity.id!r} declares unknown role {role!r}; "
                         f"known roles: {sorted(declared)}"
                     )
+        return self
+
+    @model_validator(mode="after")
+    def _record_parent_locks_valid(self) -> AppSpec:
+        _validate_record_parent_locks(self)
         return self
 
 

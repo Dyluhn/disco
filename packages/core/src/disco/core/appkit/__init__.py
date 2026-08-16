@@ -88,6 +88,7 @@ from .records_primitive import (
     default_records_auth_app_spec,
     generate_records,
     prepare_records_app_spec,
+    records_verify,
 )
 from .section_catalog import (
     COVERED_KINDS,
@@ -117,6 +118,7 @@ from .spec import (
     Justification,
     Page,
     Palette,
+    RecordPolicy,
     Section,
     SectionContent,
     SectionKind,
@@ -186,6 +188,7 @@ __all__ = [
     "Section",
     "SectionContent",
     "SectionKind",
+    "RecordPolicy",
     "SectionVariant",
     "SectionVariantPreference",
     "SeoMeta",
@@ -215,6 +218,7 @@ __all__ = [
     "get_variant",
     "primitive_ids",
     "prepare_records_app_spec",
+    "records_verify",
     "prepare_local_list_app_spec",
     "resolve_primitive",
     "local_list_verify",

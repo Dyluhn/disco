@@ -26,6 +26,12 @@ def _emit_records_schema_sql(entities: tuple[Entity, ...]) -> str:
             if field.references is not None:
                 target = tables[field.references]
                 constraints.append(f'  FOREIGN KEY("{field.name}") REFERENCES "{target}"("id")')
+        policy = entity.record_policy
+        if policy is not None and policy.owner_managed:
+            cols.append('  "owner_user_id" INTEGER NOT NULL')
+            constraints.append('  FOREIGN KEY("owner_user_id") REFERENCES "users"("id")')
+        if policy is not None and policy.lock_roles:
+            cols.append('  "locked" INTEGER NOT NULL DEFAULT 0 CHECK ("locked" IN (0, 1))')
         cols.append("  \"created_at\" TEXT NOT NULL DEFAULT (datetime('now'))")
         cols.extend(constraints)
         body = ",\n".join(cols)

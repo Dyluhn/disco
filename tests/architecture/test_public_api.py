@@ -972,7 +972,7 @@ class TestFrontendPublicApi:
         # v32 adds SectionContent's generated eyebrow slot; v36 adds the
         # bounded visual-inspection route on DefaultLLMRouter; the settings
         # correction adds the explicit capability fields on ProviderSettings
-        # and ModelEntry.
+        # and ModelEntry; the records policy correction adds Entity.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
             "HttpVerifyClient",
             "DefaultToolExecutor",
@@ -984,7 +984,7 @@ class TestFrontendPublicApi:
             "AgentErrorEvent",
             "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent", "Passage",
             "DefaultLLMRouter", "LLMSummarizingCondenser", "ReportEvent", "ReportFromRun",
-            "ProviderSettings", "ModelEntry",
+            "ProviderSettings", "ModelEntry", "Entity",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

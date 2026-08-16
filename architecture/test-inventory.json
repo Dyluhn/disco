@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "92970f1a18f0c13f94f6fc423bb754c56446b0ac",
+  "source_identity": "3fb227b1c8ba98faca9b41100a9c7bf81e05e8ed",
   "collected": {
     "counts": {
-      "packages": 10814,
+      "packages": 10820,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12652,
+    "total": 12658,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6469,6 +6469,11 @@
         "packages/core/tests/test_records_auth.py::test_no_auth_records_app_is_byte_identical_to_bw2_default",
         "packages/core/tests/test_records_auth.py::test_rbac_approver_only_and_survives_restart",
         "packages/core/tests/test_records_auth.py::test_records_role_validators_require_declared_roles",
+        "packages/core/tests/test_records_policy.py::test_policy_records_generate_server_owned_schema_worker_and_real_ui",
+        "packages/core/tests/test_records_policy.py::test_policy_records_role_matrix_locking_and_persistence",
+        "packages/core/tests/test_records_policy.py::test_policy_records_schema_executes_with_owned_relations",
+        "packages/core/tests/test_records_policy.py::test_policy_validation_rejects_ambiguous_or_unenforceable_specs",
+        "packages/core/tests/test_records_policy.py::test_records_verifier_is_artifact_derived_and_fails_tampering",
         "packages/core/tests/test_records_primitive.py::test_records_app_spec_rejects_missing_fk_target_and_cycle",
         "packages/core/tests/test_records_primitive.py::test_records_drizzle_declares_referenced_table_first",
         "packages/core/tests/test_records_primitive.py::test_records_fk_survives_cold_restart",
@@ -10758,6 +10763,7 @@
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_broken_hello_tree_fails_dispatch_and_record_check",
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_hello_app_dispatches_hello_verify_and_passes",
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_hello_app_without_applied_records_has_no_record_checks",
+        "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_records_policy_dispatches_records_contract_not_lead_gen",
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_stale_unknown_primitive_record_fails_closed",
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_template_only_with_passing_verify_passes",
         "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_template_only_without_verify_fails_closed",
@@ -12673,9 +12679,9 @@
     }
   },
   "mapping_static": {
-    "identity": "92970f1a18f0c13f94f6fc423bb754c56446b0ac",
-    "python_test_file_count": 847,
-    "python_static_test_id_count": 10411,
+    "identity": "3fb227b1c8ba98faca9b41100a9c7bf81e05e8ed",
+    "python_test_file_count": 848,
+    "python_static_test_id_count": 10417,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -13206,6 +13212,7 @@
       "packages/core/tests/test_questions_v2_intake.py",
       "packages/core/tests/test_receipt_currency_shared.py",
       "packages/core/tests/test_records_auth.py",
+      "packages/core/tests/test_records_policy.py",
       "packages/core/tests/test_records_primitive.py",
       "packages/core/tests/test_recoverable_excerpts.py",
       "packages/core/tests/test_release_appkit_local.py",
@@ -19896,6 +19903,11 @@
       "packages/core/tests/test_records_auth.py::test_no_auth_records_app_is_byte_identical_to_bw2_default",
       "packages/core/tests/test_records_auth.py::test_rbac_approver_only_and_survives_restart",
       "packages/core/tests/test_records_auth.py::test_records_role_validators_require_declared_roles",
+      "packages/core/tests/test_records_policy.py::test_policy_records_generate_server_owned_schema_worker_and_real_ui",
+      "packages/core/tests/test_records_policy.py::test_policy_records_role_matrix_locking_and_persistence",
+      "packages/core/tests/test_records_policy.py::test_policy_records_schema_executes_with_owned_relations",
+      "packages/core/tests/test_records_policy.py::test_policy_validation_rejects_ambiguous_or_unenforceable_specs",
+      "packages/core/tests/test_records_policy.py::test_records_verifier_is_artifact_derived_and_fails_tampering",
       "packages/core/tests/test_records_primitive.py::test_records_app_spec_rejects_missing_fk_target_and_cycle",
       "packages/core/tests/test_records_primitive.py::test_records_drizzle_declares_referenced_table_first",
       "packages/core/tests/test_records_primitive.py::test_records_fk_survives_cold_restart",
@@ -23509,6 +23521,7 @@
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_broken_hello_tree_fails_dispatch_and_record_check",
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_hello_app_dispatches_hello_verify_and_passes",
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_hello_app_without_applied_records_has_no_record_checks",
+      "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_records_policy_dispatches_records_contract_not_lead_gen",
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_stale_unknown_primitive_record_fails_closed",
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_template_only_with_passing_verify_passes",
       "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_template_only_without_verify_fails_closed",
@@ -34424,6 +34437,42 @@
           "packages/core/tests/test_serve_duplicate_escalation.py::test_it_names_finish_only_when_the_record_shows_nothing_outstanding",
           "packages/core/tests/test_serve_duplicate_escalation.py::test_the_message_never_delegates_the_done_determination",
           "packages/core/tests/test_serve_duplicate_escalation.py::test_the_next_move_is_a_projection_of_the_same_state_the_loop_grades_with"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-APPKIT-RECORD-POLICY",
+      "root": "packages",
+      "source_identity_before": "92970f1a18f0c13f94f6fc423bb754c56446b0ac",
+      "source_identity_after": "3fb227b1c8ba98faca9b41100a9c7bf81e05e8ed",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10814,
+          "after_count": 10820,
+          "added_ids": [
+            "packages/core/tests/test_records_policy.py::test_policy_records_generate_server_owned_schema_worker_and_real_ui",
+            "packages/core/tests/test_records_policy.py::test_policy_records_role_matrix_locking_and_persistence",
+            "packages/core/tests/test_records_policy.py::test_policy_records_schema_executes_with_owned_relations",
+            "packages/core/tests/test_records_policy.py::test_policy_validation_rejects_ambiguous_or_unenforceable_specs",
+            "packages/core/tests/test_records_policy.py::test_records_verifier_is_artifact_derived_and_fails_tampering",
+            "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_records_policy_dispatches_records_contract_not_lead_gen"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/core/tests/test_records_policy.py"
+        ],
+        "python_static_test_ids": [
+          "packages/core/tests/test_records_policy.py::test_policy_records_generate_server_owned_schema_worker_and_real_ui",
+          "packages/core/tests/test_records_policy.py::test_policy_records_role_matrix_locking_and_persistence",
+          "packages/core/tests/test_records_policy.py::test_policy_records_schema_executes_with_owned_relations",
+          "packages/core/tests/test_records_policy.py::test_policy_validation_rejects_ambiguous_or_unenforceable_specs",
+          "packages/core/tests/test_records_policy.py::test_records_verifier_is_artifact_derived_and_fails_tampering",
+          "packages/tools/tests/test_wo_a3_verify_dispatch.py::test_records_policy_dispatches_records_contract_not_lead_gen"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

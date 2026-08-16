@@ -378,13 +378,13 @@ class TestFrontendDeclarationAuthorized:
         """The live authority still carries its Python member transitions.
 
         Twenty as of PKG-19 v32, twenty-one after V36 added the bounded
-        visual-route method, and twenty-three after the settings correction
-        added explicit provider/model capability fields. The frontend
+        visual-route method, twenty-three after settings, and twenty-four after
+        the records policy correction added Entity.record_policy. The frontend
         declaration authority must stay disjoint from the Python member
         authority however many rows the latter carries.
         """
         baseline = public_api.load_public_api(REPO_ROOT)
-        assert len(baseline["member_transitions"]) == 23
+        assert len(baseline["member_transitions"]) == 24
         assert all(row["surface"] == "python" for row in baseline["member_transitions"])
         for row in baseline.get("frontend_declaration_transitions", []):
             assert row["surface"] == "frontend"

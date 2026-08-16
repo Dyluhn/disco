@@ -29,6 +29,13 @@ def _emit_records_drizzle_ts(entities: tuple[Entity, ...]) -> str:
             if field.required:
                 chain += ".notNull()"
             cols.append(f"  {field.name}: {factory}({_ts(field.name)}){chain},")
+        policy = entity.record_policy
+        if policy is not None and policy.owner_managed:
+            cols.append(
+                '  owner_user_id: integer("owner_user_id").notNull().references(() => users.id),'
+            )
+        if policy is not None and policy.lock_roles:
+            cols.append('  locked: integer("locked").notNull().default(0),')
         cols.append("  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),")
         blocks.append(
             f"export const {consts[entity.id]} = sqliteTable({_ts(tables[entity.id])}, {{\n"

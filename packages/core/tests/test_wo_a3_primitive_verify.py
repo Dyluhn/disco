@@ -10,9 +10,8 @@ Covers, pure (no sandbox, no browser):
   * `hello_verify` — pass, wrong-headline fail, missing index.html fail, and the
     folded-HelloSpec subtitle contract;
   * `VerifyCheck` / `PrimitiveVerifyResult.checks` defaults (backward compatible);
-  * the registry wiring: lead_gen/directory/hello carry their verify hooks,
-    records stays verify=None ON PURPOSE (the lead-gen fallback preserves its
-    pre-dispatch verdicts).
+  * the registry wiring: each owned primitive, including records, carries its
+    own artifact-derived verify hook.
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ from disco.core.appkit import (
     generate,
     get_primitive,
     get_recipe,
+    records_verify,
 )
 from disco.core.appkit.blog_primitive import blog_verify
 from disco.core.appkit.collection_primitive import CollectionSpec, apply_collection_spec
@@ -410,6 +410,8 @@ def test_verify_check_is_frozen_and_holds_fields():
 # ---- registry wiring ----------------------------------------------------------------
 
 
+# Historical node ID is retained for the additive inventory; the assertion now
+# proves records owns its verifier instead of preserving the old fallback.
 def test_registry_verify_hooks_wired_and_records_stays_none():
     lead = get_primitive("lead_gen")
     directory = get_primitive("directory")
@@ -426,6 +428,4 @@ def test_registry_verify_hooks_wired_and_records_stays_none():
     assert form is not None and form.verify is form_verify
     assert seo is not None and seo.verify is seo_verify
     assert collection is not None and collection.verify is collection_verify
-    # records stays verify=None ON PURPOSE: its apps fall through to the lead-gen
-    # bundle exactly as they did before the dispatch existed.
-    assert records is not None and records.verify is None
+    assert records is not None and records.verify is records_verify
