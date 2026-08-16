@@ -218,6 +218,21 @@ def requires_user_after_terminal_response(base_url: str) -> bool:
     )
 
 
+def host_requires_serial_tool_calls(base_url: str) -> bool:
+    """Whether a compatibility relay drops identity from parallel call deltas."""
+    return requires_user_after_terminal_response(base_url)
+
+
+def _tool_payload(tools: list[ToolSpec], sanitize_fn: Callable[[str], str], base_url: str) -> dict:
+    """Build tool fields, including compatibility routing policy."""
+    result: dict = {"tools": _tool_wire_list(tools, sanitize_fn)}
+    if host_requires_serial_tool_calls(base_url):
+        # OpenCode Go has emitted multiple streamed calls without either index
+        # or id. One call per turn removes that provider-side ambiguity.
+        result["parallel_tool_calls"] = False
+    return result
+
+
 def sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
@@ -370,11 +385,7 @@ def _externalize_elided_tool_results(msgs: list[dict], call_ids: set[str]) -> li
     out: list[dict] = []
     for message in msgs:
         call_id = message.get("tool_call_id")
-        if (
-            message.get("role") != "tool"
-            or call_id not in call_ids
-            or call_id in externalized
-        ):
+        if message.get("role") != "tool" or call_id not in call_ids or call_id in externalized:
             out.append(message)
             continue
         content = message.get("content")
@@ -507,7 +518,7 @@ def build_payload(
     if req.response_format == "json":
         body["response_format"] = {"type": "json_object"}
     if req.tools:
-        body["tools"] = _tool_wire_list(req.tools, sanitize_fn)
+        body.update(_tool_payload(req.tools, sanitize_fn, base_url))
     is_openrouter = "openrouter" in base_url.lower() or "openrouter" in name.lower()
     if is_openrouter:
         body["provider"] = {

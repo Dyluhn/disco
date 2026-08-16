@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProvidersSection } from "./ProvidersSection";
@@ -35,6 +36,14 @@ const presets = [
     kind: "openai-compat",
   },
   {
+    id: "ollama",
+    label: "Ollama (local)",
+    base_url: "http://host.docker.internal:11434/v1",
+    kind: "openai-compat",
+    requires_base_url: true,
+    requires_api_key: false,
+  },
+  {
     id: "custom-openai-compatible",
     label: "Custom (OpenAI-compatible)",
     base_url: "",
@@ -50,6 +59,7 @@ type Provider = {
   kind: string;
   secret_name: string;
   has_key: boolean;
+  requires_api_key?: boolean;
 };
 
 let providers: Provider[];
@@ -69,6 +79,7 @@ let models: Array<{
 let catalogueFails = false;
 let createCatalogueOk = true;
 let lastEnableBody: unknown = null;
+let lastCreateBody: Record<string, unknown> | null = null;
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -95,13 +106,17 @@ function installFetch() {
     }
     if (method === "POST" && url === "/api/providers") {
       const body = JSON.parse(String(init?.body));
+      lastCreateBody = body;
+      const keyless = body.requires_api_key === false;
+      const id = keyless ? "ollama" : "openai";
       const provider: Provider = {
-        id: "openai",
+        id,
         label: body.label,
         base_url: body.base_url,
         kind: body.kind,
-        secret_name: "provider_openai",
-        has_key: true,
+        secret_name: `provider_${id}`,
+        has_key: !!body.api_key,
+        requires_api_key: !keyless,
       };
       providers = [provider];
       return jsonResponse(
@@ -112,6 +127,9 @@ function installFetch() {
         },
         201,
       );
+    }
+    if (method === "GET" && url === "/api/providers/ollama/models") {
+      return jsonResponse([]);
     }
     if (method === "GET" && url === "/api/providers/openai/models") {
       if (catalogueFails) {
@@ -178,6 +196,7 @@ beforeEach(() => {
   catalogueFails = false;
   createCatalogueOk = true;
   lastEnableBody = null;
+  lastCreateBody = null;
   isLiveMock.mockReturnValue(true);
   installFetch();
 });
@@ -195,7 +214,36 @@ describe("ProvidersSection — generic provider objects", () => {
     expect(
       preset.querySelector('option[value="openrouter"]'),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByText("OpenRouter")).toHaveLength(1);
+    const openRouter = screen.getByText("OpenRouter", { selector: "summary" });
+    expect(openRouter.closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("adds Ollama without inventing a key and exposes the Compose-safe URL", async () => {
+    const user = userEvent.setup();
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    await screen.findByRole("option", { name: /Ollama \(local\)/i });
+    await user.selectOptions(screen.getByLabelText("Provider preset"), "ollama");
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Provider API key")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Custom provider base URL")).toHaveValue(
+      "http://host.docker.internal:11434/v1",
+    );
+    expect(screen.getByRole("button", { name: /Add provider/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Add provider/i }));
+
+    await waitFor(() =>
+      expect(lastCreateBody).toMatchObject({
+        label: "Ollama (local)",
+        base_url: "http://host.docker.internal:11434/v1",
+        api_key: "",
+        requires_api_key: false,
+      }),
+    );
+    expect(await screen.findByText("No key needed")).toBeInTheDocument();
   });
 
   it("adds a provider, opens browse, and toggles a model into the catalogue", async () => {

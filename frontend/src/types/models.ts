@@ -33,6 +33,8 @@ export interface ModelInfo {
   capabilities: Capability[];
   /** Manual vision pin: null/undefined = auto-detect, true/false = override. */
   vision?: boolean | null;
+  /** Truthful effective UI state; absence is treated as unknown for older servers. */
+  vision_status?: "vision" | "text-only" | "unknown";
   /** optional provenance note (e.g. quantization) shown as a quiet caption. */
   note?: string;
   // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the
@@ -40,6 +42,7 @@ export interface ModelInfo {
   model_id: string;
   base_url?: string | null;
   api_key_env?: string | null;
+  requires_api_key?: boolean;
   context_window: number;
   max_output_tokens?: number | null;
   quantization?: string | null;
@@ -85,6 +88,7 @@ export interface ProviderInfo {
   kind: ProviderKind;
   secret_name: string;
   has_key: boolean;
+  requires_api_key?: boolean;
 }
 
 export interface ProviderPreset {
@@ -93,6 +97,7 @@ export interface ProviderPreset {
   base_url: string;
   kind: ProviderKind;
   requires_base_url?: boolean;
+  requires_api_key?: boolean;
 }
 
 export interface ProviderCreate {
@@ -100,6 +105,7 @@ export interface ProviderCreate {
   base_url: string;
   kind: ProviderKind;
   api_key: string;
+  requires_api_key?: boolean;
 }
 
 export interface ProviderPatch {
@@ -107,6 +113,7 @@ export interface ProviderPatch {
   base_url?: string;
   kind?: ProviderKind;
   api_key?: string;
+  requires_api_key?: boolean;
 }
 
 export interface ProviderMutationResult {
@@ -145,6 +152,7 @@ export interface ModelUpsert {
   capabilities: Capability[];
   /** null = auto-detect; true/false explicitly overrides detection. */
   vision?: boolean | null;
+  requires_api_key?: boolean;
   price_in_per_m: number;
   price_out_per_m: number;
   pricing_mode?: PricingMode;

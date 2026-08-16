@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -19,6 +20,7 @@ const ELEMENT_MENTION_PICKER_JS = resolve(
 );
 const RELIABILITY_APP_PROXY = process.env.DISCO_VITE_APP_PROXY_TARGET?.trim();
 const RELIABILITY_AGENT_PROXY = process.env.DISCO_VITE_AGENT_PROXY_TARGET?.trim();
+const DEPENDENCY_ROOT = realpathSync(resolve(__dirname, "node_modules"));
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -39,7 +41,7 @@ export default defineConfig({
     ],
   },
   server: {
-    fs: { allow: [resolve(__dirname, ".."), __dirname] },
+    fs: { allow: [resolve(__dirname, ".."), __dirname, DEPENDENCY_ROOT] },
     ...(RELIABILITY_APP_PROXY && RELIABILITY_AGENT_PROXY
       ? {
           // Live reliability uses the same single-front-door shape as the

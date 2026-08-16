@@ -90,6 +90,22 @@ def _resolved_prices(
     )
 
 
+def _validated_provider_base_url(raw: str) -> str:
+    """Normalize and validate a provider endpoint once for create and update."""
+    base_url = raw.strip().rstrip("/")
+    if not base_url:
+        raise ValueError("base_url is empty")
+    from disco.core.host_egress import origin_for_url
+
+    try:
+        valid_origin = origin_for_url(base_url)
+    except ValueError as exc:
+        raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
+    if valid_origin is None:
+        raise ValueError("base_url must be an absolute HTTP(S) URL")
+    return base_url
+
+
 class ProviderInUseError(Exception):
     """Raised when deleting a provider would strand catalogue models."""
 
@@ -122,6 +138,7 @@ class ProviderConfigService:
             kind=provider.kind,
             secret_name=provider.secret_name,
             has_key=bool(self._resolve_secret_value(provider.secret_name)),
+            requires_api_key=provider.requires_api_key,
         )
 
     def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
@@ -154,28 +171,19 @@ class ProviderConfigService:
 
     def create_provider(self, body: ProviderCreate) -> ProviderDTO:
         label = body.label.strip()
-        base_url = body.base_url.strip().rstrip("/")
         api_key = body.api_key.strip()
         if not label:
             raise ValueError("label is empty")
-        if not base_url:
-            raise ValueError("base_url is empty")
-        from disco.core.host_egress import origin_for_url
-
-        try:
-            valid_origin = origin_for_url(base_url)
-        except ValueError as exc:
-            raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
-        if valid_origin is None:
-            raise ValueError("base_url must be an absolute HTTP(S) URL")
-        if not api_key:
+        base_url = _validated_provider_base_url(body.base_url)
+        if body.requires_api_key and not api_key:
             raise ValueError("api_key is empty")
         provider_id = self._unique_provider_id(label)
         secret_name = f"provider_{provider_id}"
-        try:
-            self._secrets.set_secret(secret_name, api_key)
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from exc
+        if api_key:
+            try:
+                self._secrets.set_secret(secret_name, api_key)
+            except RuntimeError as exc:
+                raise ValueError(str(exc)) from exc
         cfg = self._store.load()
         provider = ProviderSettings(
             id=provider_id,
@@ -183,6 +191,7 @@ class ProviderConfigService:
             base_url=base_url,
             kind=body.kind,
             secret_name=secret_name,
+            requires_api_key=body.requires_api_key,
         )
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: provider}})
@@ -202,20 +211,11 @@ class ProviderConfigService:
                 raise ValueError("label is empty")
             updates["label"] = label
         if patch.base_url is not None:
-            base_url = patch.base_url.strip().rstrip("/")
-            if not base_url:
-                raise ValueError("base_url is empty")
-            from disco.core.host_egress import origin_for_url
-
-            try:
-                valid_origin = origin_for_url(base_url)
-            except ValueError as exc:
-                raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
-            if valid_origin is None:
-                raise ValueError("base_url must be an absolute HTTP(S) URL")
-            updates["base_url"] = base_url
+            updates["base_url"] = _validated_provider_base_url(patch.base_url)
         if patch.kind is not None:
             updates["kind"] = patch.kind
+        if patch.requires_api_key is not None:
+            updates["requires_api_key"] = patch.requires_api_key
         if patch.api_key is not None:
             api_key = patch.api_key.strip()
             if not api_key:
@@ -225,6 +225,10 @@ class ProviderConfigService:
             except RuntimeError as exc:
                 raise ValueError(str(exc)) from exc
         updated = provider.model_copy(update=updates)
+        if updated.requires_api_key and not (
+            patch.api_key or self._resolve_secret_value(provider.secret_name)
+        ):
+            raise ValueError("api_key is empty")
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
         )
@@ -305,6 +309,7 @@ class ProviderConfigService:
             # the operator's manual override. Keep the pin unset so a live probe
             # can correct stale provider metadata; only Settings may force it.
             vision=None,
+            requires_api_key=provider.requires_api_key,
             price_in_per_m=price_in,
             price_out_per_m=price_out,
             pricing_mode="metered" if prices_known else "unknown",

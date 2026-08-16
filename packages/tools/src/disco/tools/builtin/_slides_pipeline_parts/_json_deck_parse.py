@@ -13,7 +13,10 @@ import re
 from disco.tools.builtin._deck_schema import AuthoredDeck
 from pydantic import ValidationError
 
+from ._constants import _ARCHETYPES
 from ._craft import _coerce_known_theme_aliases, _null_invalid_layout_hints
+
+_NON_CHART_KINDS = frozenset((*_ARCHETYPES, "flow", "system_map"))
 
 
 def _extract_json_object(text: str) -> str:
@@ -60,6 +63,17 @@ def _parse_authored_deck(raw: str) -> tuple[AuthoredDeck | None, str]:
         return None, f"JSON parse error: {e}"
     data = _coerce_known_theme_aliases(data)
     data = _null_invalid_layout_hints(data)
+    # A chart is optional decoration; a model occasionally puts an archetype or
+    # layout name in chart.kind. Dropping only that invalid optional object keeps
+    # the authored slide and full C3 design pipeline intact instead of degrading
+    # the entire deck to a plain renderer. Real chart kinds still validate fully.
+    if isinstance(data, dict) and isinstance(data.get("slides"), list):
+        for slide in data["slides"]:
+            if not isinstance(slide, dict):
+                continue
+            chart = slide.get("chart")
+            if isinstance(chart, dict) and chart.get("kind") in _NON_CHART_KINDS:
+                slide["chart"] = None
     try:
         deck = AuthoredDeck.model_validate(data)
     except (ValidationError, Exception) as e:

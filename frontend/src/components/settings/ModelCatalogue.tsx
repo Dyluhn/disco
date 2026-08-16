@@ -57,6 +57,7 @@ function toUpsert(m: ModelInfo): ModelUpsert {
     quantization: m.quantization ?? "",
     capabilities: m.capabilities.filter((capability) => capability !== "vision"),
     vision: m.vision ?? null,
+    requires_api_key: m.requires_api_key ?? true,
     price_in_per_m: m.price_in_per_m,
     price_out_per_m: m.price_out_per_m,
     // W-05: preserve the pay model on edit; derive a sensible default when unset.
@@ -385,105 +386,114 @@ export function ModelCatalogue() {
   } | null>(null);
 
   return (
-    <section
-      aria-labelledby="catalogue-heading"
-      className="flex flex-col gap-inline"
-    >
-      <div className="flex items-center justify-between">
-        <h3
-          id="catalogue-heading"
-          className="font-ui text-[0.95rem] font-semibold text-text"
-        >
-          Catalogue
-        </h3>
-        <button
-          type="button"
-          data-disco-control="settings.model-add"
-          onClick={() => setDialog({ mode: "add", initial: BLANK })}
-          className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
-        >
-          <Plus className="size-3.5" aria-hidden /> Add model
-        </button>
-      </div>
+    <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
+      <summary className="cursor-pointer list-none">
+        <span className="flex items-center justify-between gap-inline">
+          <span className="flex min-w-0 flex-col gap-hair">
+            <span className="font-ui text-[0.9rem] font-semibold text-text">
+              Model library
+            </span>
+            <span className="font-ui text-[0.76rem] font-normal leading-snug text-text-faint">
+              Add or edit the models that can be selected in Role assignments.
+            </span>
+          </span>
+          <span className="shrink-0 font-ui text-[0.76rem] text-text-muted">
+            {(models ?? []).length} models
+          </span>
+        </span>
+      </summary>
 
-      <ul className="overflow-hidden rounded-card border border-hairline bg-surface-1">
-        {(models ?? []).map((m) => (
-          <li
-            key={m.id}
-            className="flex items-center justify-between gap-section border-b border-hairline px-body py-inline last:border-b-0"
+      <div className="mt-inline flex flex-col gap-inline border-t border-hairline pt-inline">
+        <div className="flex justify-end">
+          <button
+            type="button"
+            data-disco-control="settings.model-add"
+            onClick={() => setDialog({ mode: "add", initial: BLANK })}
+            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
           >
-            <div className="min-w-0">
-              <div className="font-ui text-[0.86rem] font-medium text-text">
-                {m.label}
-              </div>
-              <p className="truncate font-mono text-[0.72rem] text-text-faint">
-                {m.id} · {m.note}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-inline">
-              {/* W-05: the row shows its pricing via the SAME formatter every other cost
-                  surface uses — a subscription model reads "Subscription" here too (never
-                  "Free", never a $/Mtok rate); free/metered show "Free"/the price. */}
-              <span
-                data-disco-flag="catalogue-cost"
-                className={cn(
-                  "shrink-0 font-ui text-[0.72rem]",
-                  isMetered(m) ? "text-accent" : "text-text-muted",
-                )}
-              >
-                {costLabel(m)}
-              </span>
-              <button
-                type="button"
-                data-disco-control="settings.model-edit"
-                data-model-id={m.id}
-                aria-label={`Edit ${m.id}`}
-                onClick={() =>
-                  setDialog({ mode: "edit", initial: toUpsert(m) })
-                }
-                className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
-              >
-                <Pencil className="size-3.5" aria-hidden />
-              </button>
-              {/* Driveable confirm (replaces native confirm(), which Playwright/the
-                  harness cannot address) — the in-app ConfirmDialog gate. */}
-              <ConfirmDialog
-                title={`Remove ${m.id}?`}
-                description={`This removes ${m.id} from the catalogue. It will no longer be assignable or callable at runtime.`}
-                confirmLabel="Remove model"
-                onConfirm={() => del.mutate(m.id)}
-                trigger={
-                  <button
-                    type="button"
-                    data-disco-control="settings.model-delete"
-                    data-model-id={m.id}
-                    aria-label={`Remove ${m.id}`}
-                    className="rounded-control p-hair text-text-faint transition-colors hover:text-unsupported"
-                  >
-                    <Trash2 className="size-3.5" aria-hidden />
-                  </button>
-                }
-              />
-            </div>
-          </li>
-        ))}
-      </ul>
-      {del.error && (
-        <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {isApiFailure(del.error)
-            ? del.error.message
-            : "Couldn't remove the model."}
-        </p>
-      )}
+            <Plus className="size-3.5" aria-hidden /> Add model
+          </button>
+        </div>
 
-      {dialog && (
-        <FormDialog
-          open
-          onOpenChange={(o) => !o && setDialog(null)}
-          mode={dialog.mode}
-          initial={dialog.initial}
-        />
-      )}
-    </section>
+        <ul className="overflow-hidden rounded-card border border-hairline bg-surface-1">
+          {(models ?? []).map((m) => (
+            <li
+              key={m.id}
+              className="flex items-center justify-between gap-section border-b border-hairline px-body py-inline last:border-b-0"
+            >
+              <div className="min-w-0">
+                <div className="font-ui text-[0.86rem] font-medium text-text">
+                  {m.label}
+                </div>
+                <p className="truncate font-mono text-[0.72rem] text-text-faint">
+                  {m.id} · {m.note}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-inline">
+                {/* W-05: the row shows its pricing via the SAME formatter every other cost
+                    surface uses — a subscription model reads "Subscription" here too (never
+                    "Free", never a $/Mtok rate); free/metered show "Free"/the price. */}
+                <span
+                  data-disco-flag="catalogue-cost"
+                  className={cn(
+                    "shrink-0 font-ui text-[0.72rem]",
+                    isMetered(m) ? "text-accent" : "text-text-muted",
+                  )}
+                >
+                  {costLabel(m)}
+                </span>
+                <button
+                  type="button"
+                  data-disco-control="settings.model-edit"
+                  data-model-id={m.id}
+                  aria-label={`Edit ${m.id}`}
+                  onClick={() =>
+                    setDialog({ mode: "edit", initial: toUpsert(m) })
+                  }
+                  className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+                >
+                  <Pencil className="size-3.5" aria-hidden />
+                </button>
+                {/* Driveable confirm (replaces native confirm(), which Playwright/the
+                    harness cannot address) — the in-app ConfirmDialog gate. */}
+                <ConfirmDialog
+                  title={`Remove ${m.id}?`}
+                  description={`This removes ${m.id} from the catalogue. It will no longer be assignable or callable at runtime.`}
+                  confirmLabel="Remove model"
+                  onConfirm={() => del.mutate(m.id)}
+                  trigger={
+                    <button
+                      type="button"
+                      data-disco-control="settings.model-delete"
+                      data-model-id={m.id}
+                      aria-label={`Remove ${m.id}`}
+                      className="rounded-control p-hair text-text-faint transition-colors hover:text-unsupported"
+                    >
+                      <Trash2 className="size-3.5" aria-hidden />
+                    </button>
+                  }
+                />
+              </div>
+            </li>
+          ))}
+        </ul>
+        {del.error && (
+          <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
+            {isApiFailure(del.error)
+              ? del.error.message
+              : "Couldn't remove the model."}
+          </p>
+        )}
+
+        {dialog && (
+          <FormDialog
+            open
+            onOpenChange={(o) => !o && setDialog(null)}
+            mode={dialog.mode}
+            initial={dialog.initial}
+          />
+        )}
+      </div>
+    </details>
   );
 }

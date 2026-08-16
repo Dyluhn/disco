@@ -27,6 +27,12 @@ let fixtureAssignments: ModelAssignments = {
 };
 let fixtureCatalogue: ModelInfo[] = MODEL_CATALOGUE.map((m) => ({ ...m }));
 
+function visionStatus(u: ModelUpsert): ModelInfo["vision_status"] {
+  if (u.vision === true || u.capabilities.includes("vision")) return "vision";
+  if (u.vision === false) return "text-only";
+  return "unknown";
+}
+
 /** Derive the display fields for a fixture-path upsert, mirroring the backend. */
 export function toModelInfo(u: ModelUpsert): ModelInfo {
   // W-04: drop the `or-` OpenRouter prefix BEFORE humanizing so the label doesn't
@@ -51,10 +57,12 @@ export function toModelInfo(u: ModelUpsert): ModelInfo {
     pricing_mode: u.pricing_mode ?? (paid ? "metered" : "free"),
     capabilities: [...u.capabilities],
     vision: u.vision ?? null,
+    vision_status: visionStatus(u),
     note,
     model_id: u.model_id,
     base_url: u.base_url ?? null,
     api_key_env: u.api_key_env ?? null,
+    requires_api_key: u.requires_api_key ?? true,
     context_window: u.context_window,
     max_output_tokens: u.max_output_tokens ?? null,
     quantization: u.quantization ?? null,

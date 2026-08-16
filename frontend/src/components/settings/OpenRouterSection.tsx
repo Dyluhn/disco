@@ -306,7 +306,7 @@ function BrowseDialog({
   );
 }
 
-export function OpenRouterSection() {
+export function OpenRouterSection({ embedded = false }: { embedded?: boolean }) {
   const { data: models } = useModels();
   const { data: keyStatus } = useOpenRouterKey();
   // Browsing the live catalogue needs a key that's actually usable (stored AND
@@ -332,17 +332,26 @@ export function OpenRouterSection() {
 
   return (
     <section
-      aria-labelledby="openrouter-heading"
-      className="flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/50 p-body"
+      aria-labelledby={embedded ? undefined : "openrouter-heading"}
+      aria-label={embedded ? "OpenRouter configuration" : undefined}
+      className={
+        embedded
+          ? "flex flex-col gap-inline"
+          : "flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/50 p-body"
+      }
     >
       <div className="flex flex-wrap items-center justify-between gap-inline">
-        <h4
-          id="openrouter-heading"
-          className="font-ui text-[0.9rem] font-semibold text-text"
-        >
-          OpenRouter
-        </h4>
-        <BrowseDialog addedSlugs={addedSlugs} keyReady={keyReady} />
+        {!embedded && (
+          <h4
+            id="openrouter-heading"
+            className="font-ui text-[0.9rem] font-semibold text-text"
+          >
+            OpenRouter
+          </h4>
+        )}
+        <span className={embedded ? "ml-auto" : undefined}>
+          <BrowseDialog addedSlugs={addedSlugs} keyReady={keyReady} />
+        </span>
       </div>
       <p className="font-ui text-[0.82rem] text-text-muted">
         One API key, any model hosted on OpenRouter. Added models share this key

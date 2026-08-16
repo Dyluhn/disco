@@ -214,9 +214,7 @@ class _ReleaseNLI:
     def entail(self, premise: str, hypothesis: str) -> str:
         if "release" in premise.lower() and "release" in hypothesis.lower():
             return (
-                "contradict"
-                if self._negative(premise) != self._negative(hypothesis)
-                else "entail"
+                "contradict" if self._negative(premise) != self._negative(hypothesis) else "entail"
             )
         overlap = set(premise.lower().split()) & set(hypothesis.lower().split())
         return "entail" if overlap else "neutral"
@@ -358,6 +356,62 @@ async def test_coherence_fallback_retains_dated_history_without_recency_scope():
     assert "[[old]]" in summary
     assert "Muse Glimmer was released" in summary
     assert "[[new]]" in summary
+    assert "\n\n" in summary
+
+
+def test_fallback_summary_keeps_markdown_markers_out_of_the_paragraph_body():
+    from disco.retrieval.deep_research._summary import (
+        _fallback_findings,
+        _SupportedFinding,
+    )
+
+    findings = [
+        _SupportedFinding(
+            text="> **As of August 16, 2026**, the release is public",
+            cited_ids=("release",),
+            section_index=0,
+            published_at=datetime.date(2026, 8, 16),
+        ),
+        _SupportedFinding(
+            text="The repository includes model weights",
+            cited_ids=("weights",),
+            section_index=1,
+            published_at=datetime.date(2026, 8, 16),
+        ),
+    ]
+
+    summary = _fallback_findings(findings, _ReleaseNLI(), None)
+
+    assert summary.startswith("**As of August 16, 2026**")
+    assert not summary.startswith(">")
+    assert "\n\n" in summary
+
+
+def test_successful_summary_is_split_when_provider_ignores_paragraph_contract():
+    from disco.retrieval.deep_research._summary import _readable_summary
+
+    summary = _readable_summary(
+        "First supported finding [[one]]. Second supported finding [[two]]. "
+        "Third supported finding [[three]]. Fourth supported finding [[four]]."
+    )
+
+    assert summary.count("\n\n") == 3
+    assert "[[one]]" in summary
+    assert "[[four]]" in summary
+
+
+def test_successful_summary_preserves_existing_markdown_paragraphs():
+    from disco.retrieval.deep_research._summary import _readable_summary
+
+    summary = _readable_summary(
+        "**Bottom line.** The first finding is supported [[one]].\n\n"
+        "The qualification is also supported [[two]]."
+    )
+
+    assert summary == (
+        "**Bottom line.** The first finding is supported [[one]].\n\n"
+        "The qualification is also supported [[two]]."
+    )
 
 
 def test_fallback_conflict_checks_are_bounded_without_dropping_unchecked_findings():
@@ -377,11 +431,7 @@ def test_fallback_conflict_checks_are_bounded_without_dropping_unchecked_finding
 
     findings = [
         _SupportedFinding(
-            text=(
-                "Muse Glimmer was not released"
-                if index % 2
-                else "Muse Glimmer was released"
-            ),
+            text=("Muse Glimmer was not released" if index % 2 else "Muse Glimmer was released"),
             cited_ids=(f"p{index}",),
             section_index=index % 12,
             published_at=datetime.date(2026, 1, 1) + datetime.timedelta(days=index),

@@ -23,7 +23,12 @@ import { agentIsLive } from "@/api/liveness";
 import { useTtsConfig, useUpdateTtsConfig } from "@/hooks/useModels";
 import { ContextualFieldsPanel } from "./audioSectionParts/ContextualFieldsPanel";
 import { computeAudioFieldsDirty } from "./audioSectionParts/fieldsDirty";
-import { type Mode, modeOf, type Provider } from "./audioSectionParts/modeOptions";
+import {
+  type Mode,
+  modeOf,
+  OPTIONS,
+  type Provider,
+} from "./audioSectionParts/modeOptions";
 import { ModeOptionList } from "./audioSectionParts/ModeOptionList";
 
 export function AudioSection() {
@@ -47,6 +52,7 @@ export function AudioSection() {
   }, [data]);
 
   const active: Mode | null = data ? modeOf(data.enabled, data.provider) : null;
+  const activeOption = OPTIONS.find((option) => option.mode === active);
 
   // The provider chosen when a mode is selected (off keeps the prior provider so
   // re-enabling lands back where it was; bundled/speaches/openai set it).
@@ -109,36 +115,63 @@ export function AudioSection() {
         <p className="font-ui text-[0.86rem] text-text-faint">Loading…</p>
       ) : (
         <div className="flex flex-col gap-inline">
-          <ModeOptionList
-            active={active}
-            pending={save.isPending}
-            onSelect={selectMode}
-          />
+          <div
+            data-audio-current={active ?? "loading"}
+            className="flex items-start gap-inline rounded-control border border-hairline bg-surface-1/40 px-body py-inline"
+          >
+            {activeOption && (
+              <activeOption.Icon
+                className="mt-px size-4 shrink-0 text-accent"
+                aria-hidden
+              />
+            )}
+            <span className="flex min-w-0 flex-col gap-hair">
+              <span className="font-ui text-[0.86rem] font-medium text-text">
+                Current: {activeOption?.label}
+              </span>
+              <span className="font-ui text-[0.78rem] leading-snug text-text-faint">
+                {activeOption?.help}
+              </span>
+            </span>
+          </div>
 
-          <ContextualFieldsPanel
-            enabled={data.enabled}
-            showUrl={showUrl}
-            showPaid={showPaid}
-            baseUrl={baseUrl}
-            setBaseUrl={setBaseUrl}
-            apiKeyEnv={apiKeyEnv}
-            setApiKeyEnv={setApiKeyEnv}
-            model={model}
-            setModel={setModel}
-            voiceA={voiceA}
-            setVoiceA={setVoiceA}
-            voiceB={voiceB}
-            setVoiceB={setVoiceB}
-            fieldsDirty={fieldsDirty}
-            savePending={save.isPending}
-            onSave={saveFields}
-            agentIsLive={agentIsLive()}
-          />
-          {save.error && (
-            <p className="font-ui text-[0.8rem] text-warn">
-              Couldn't save: {(save.error as Error).message}
-            </p>
-          )}
+          <details className="rounded-control border border-hairline px-body py-inline">
+            <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+              Configure audio overview
+            </summary>
+            <div className="mt-inline flex flex-col gap-inline">
+              <ModeOptionList
+                active={active}
+                pending={save.isPending}
+                onSelect={selectMode}
+              />
+
+              <ContextualFieldsPanel
+                enabled={data.enabled}
+                showUrl={showUrl}
+                showPaid={showPaid}
+                baseUrl={baseUrl}
+                setBaseUrl={setBaseUrl}
+                apiKeyEnv={apiKeyEnv}
+                setApiKeyEnv={setApiKeyEnv}
+                model={model}
+                setModel={setModel}
+                voiceA={voiceA}
+                setVoiceA={setVoiceA}
+                voiceB={voiceB}
+                setVoiceB={setVoiceB}
+                fieldsDirty={fieldsDirty}
+                savePending={save.isPending}
+                onSave={saveFields}
+                agentIsLive={agentIsLive()}
+              />
+              {save.error && (
+                <p className="font-ui text-[0.8rem] text-warn">
+                  Couldn't save: {(save.error as Error).message}
+                </p>
+              )}
+            </div>
+          </details>
         </div>
       )}
     </section>

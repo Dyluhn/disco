@@ -215,6 +215,10 @@ Now fill in the complete content for each slide.  For each slide:
 - If image_prompt is set and the slide is visual, set layout_hint to "full_image" and \
   keep body at the visual-slide budget.
 - notes: optional 1–3 sentence speaker notes.
+- Keep chart null unless the slide contains real numeric chart data. If a chart
+  is warranted, chart.kind must be exactly bar, line, pie, or scatter. Never put
+  a layout or archetype such as flow, diagram, two_by_two, or system_map in
+  chart.kind.
 
 Return the COMPLETE AuthoredDeck JSON with ALL fields filled in.
 Output ONLY valid JSON.
