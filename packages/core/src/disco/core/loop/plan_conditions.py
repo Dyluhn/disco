@@ -242,7 +242,15 @@ def _emit_step_done_note(
     return MessageEvent(
         source=EventSource.ENVIRONMENT,
         message=LLMMessage(role="user", content=body),
-        meta={"advisory": "plan_step_done_condition", "passed": passed},
+        meta={
+            "advisory": "plan_step_done_condition",
+            "passed": passed,
+            # This is durable trace/UI telemetry, not a new instruction.  Projecting
+            # it into the driver as a role=user message made an agent rewrite a
+            # functionally complete app solely to satisfy filenames it had proposed
+            # during planning, despite C18 having no completion authority.
+            "model_visibility": "trace_only",
+        },
     )
 
 
@@ -253,7 +261,8 @@ class PlanStepConditions:
     async def maybe_emit_plan_step_done_condition_note(self, action: ActionEvent) -> None:
         """If `action` marks one or more plan steps DONE and a step has a stored
         `done_condition` predicate, evaluate it inline and emit a visible pass/fail
-        note in the trace. Handles BOTH progress channels:
+        note in the trace/UI (but not the driving model's view). Handles BOTH
+        progress channels:
 
           * `plan_step(idx, 'done')` — the single step `idx` (small models).
           * `update_plan_progress({steps:[...]})` — the declarative full-state snapshot
@@ -264,8 +273,8 @@ class PlanStepConditions:
 
         ADVISORY ONLY:
           * never blocks the run;
-          * never nudges the agent (no <system-reminder>, no auto-continue,
-            no speak-back to the model);
+          * never nudges the agent (the durable MessageEvent is explicitly
+            trace-only and excluded from model projection);
           * never duplicates the C1c finish gate (the C18 check uses a
             lightweight inline evaluator; the C1c gate uses the heavy
             fresh-context DoDEvaluator and gates `finish` itself).

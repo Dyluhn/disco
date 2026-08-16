@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "fd7e1f2d3623287fea2d4ed737afe4194b1ceed9",
+  "source_identity": "d3fede6c74917e3f27ccd1ab65559de2c3b71e10",
   "collected": {
     "counts": {
-      "packages": 10812,
+      "packages": 10814,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12650,
+    "total": 12652,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -7753,6 +7753,8 @@
         "packages/core/tests/test_view.py::test_noop_condenser_never_condenses",
         "packages/core/tests/test_view.py::test_recitation_scopes_plan_steps_to_the_current_plan",
         "packages/core/tests/test_view.py::test_tombstone_drops_span_and_inserts_summary_once",
+        "packages/core/tests/test_view.py::test_trace_only_host_message_is_auditable_but_not_model_visible",
+        "packages/core/tests/test_view.py::test_trace_only_metadata_cannot_hide_a_real_user_instruction",
         "packages/core/tests/test_view.py::test_view_is_deterministic",
         "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
         "packages/core/tests/test_view_kv_stability.py::test_image_flip_fingerprint_stability",
@@ -12671,9 +12673,9 @@
     }
   },
   "mapping_static": {
-    "identity": "fd7e1f2d3623287fea2d4ed737afe4194b1ceed9",
+    "identity": "d3fede6c74917e3f27ccd1ab65559de2c3b71e10",
     "python_test_file_count": 847,
-    "python_static_test_id_count": 10409,
+    "python_static_test_id_count": 10411,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20942,6 +20944,8 @@
       "packages/core/tests/test_view.py::test_noop_condenser_never_condenses",
       "packages/core/tests/test_view.py::test_recitation_scopes_plan_steps_to_the_current_plan",
       "packages/core/tests/test_view.py::test_tombstone_drops_span_and_inserts_summary_once",
+      "packages/core/tests/test_view.py::test_trace_only_host_message_is_auditable_but_not_model_visible",
+      "packages/core/tests/test_view.py::test_trace_only_metadata_cannot_hide_a_real_user_instruction",
       "packages/core/tests/test_view.py::test_view_is_deterministic",
       "packages/core/tests/test_view_kv_stability.py::test_exact_main_visual_delivery_attaches_without_process_global_env",
       "packages/core/tests/test_view_kv_stability.py::test_image_flip_fingerprint_stability",
@@ -34640,6 +34644,32 @@
           "packages/core/tests/test_store_schema_contract.py::test_tools_ensure_mcp_approval_tables_functional",
           "packages/core/tests/test_store_schema_contract.py::test_tools_mcp_migrations_imports_core_schema",
           "tests/architecture/test_public_api.py::test_type_checking_class_declarations_preserve_static_surface"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-C18-TRACE-ONLY",
+      "root": "packages",
+      "source_identity_before": "fd7e1f2d3623287fea2d4ed737afe4194b1ceed9",
+      "source_identity_after": "d3fede6c74917e3f27ccd1ab65559de2c3b71e10",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10812,
+          "after_count": 10814,
+          "added_ids": [
+            "packages/core/tests/test_view.py::test_trace_only_host_message_is_auditable_but_not_model_visible",
+            "packages/core/tests/test_view.py::test_trace_only_metadata_cannot_hide_a_real_user_instruction"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_view.py::test_trace_only_host_message_is_auditable_but_not_model_visible",
+          "packages/core/tests/test_view.py::test_trace_only_metadata_cannot_hide_a_real_user_instruction"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

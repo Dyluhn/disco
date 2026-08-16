@@ -48,6 +48,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    View,
 )
 from disco.core.llm import OperatingMode
 from disco.core.loop.plan_command_validation import (
@@ -280,8 +281,8 @@ async def test_c18_workspace_prefixed_file_exists_uses_process_jail(tmp_path, gu
 async def test_c18_unsatisfied_predicate_emits_not_met_note(tmp_path):
     """A plan step whose `done_condition` is NOT satisfied at the moment
     the agent marks it done → the C18 advisory note says `NOT met`. The
-    note is visible (no silent pass) AND the agent is NOT nudged (no
-    <system-reminder>, no auto-continue, no speak-back to the model)."""
+    note remains visible in the durable trace/UI (no silent pass) AND is
+    absent from the driving model's View."""
     workspace = tmp_path / "ws"
     workspace.mkdir()
     # No artifact.txt planted — the predicate will fail.
@@ -325,10 +326,14 @@ async def test_c18_unsatisfied_predicate_emits_not_met_note(tmp_path):
     assert "done-condition" in note.message.content
     assert "NOT met" in note.message.content
     assert note.meta.get("passed") is False
-    # And the note is NOT wrapped in <system-reminder> (no nudge, no
-    # speak-back to the model — the run proceeds as if the step were
-    # done, which is exactly the C18 "advisory, not a gate" contract).
+    assert note.meta.get("model_visibility") == "trace_only"
+    # The exact durable diagnostic remains available to the UI/audit log, but
+    # cannot become a role=user instruction that makes the executor reshape a
+    # working artifact around an advisory filename.
     assert "<system-reminder>" not in note.message.content
+    driver_view = View.of(events)
+    assert note.seq not in driver_view.visible_seqs
+    assert note.message.content not in {message.content for message in driver_view.messages}
     # The run still lands FINISHED (the plan is complete; the C18 note
     # is advisory only and does not duplicate the C1c finish gate).
     final_status = next(
