@@ -1099,6 +1099,10 @@ def test_structured_all_pass_counts_declared_units(tmp_path: Path) -> None:
 def _valid_fresh_device_report() -> dict:
     fingerprint = "0123456789abcdef01234567"
     project_digests = {"project-a": "a" * 64, "project-b": "b" * 64}
+    snapshot_project_digests = {
+        **project_digests,
+        "project-edge": "c" * 64,
+    }
     return {
         "status": PASS,
         "device_fingerprint": fingerprint,
@@ -1169,6 +1173,7 @@ def _valid_fresh_device_report() -> dict:
                     "readiness_seconds": 120.0,
                     "stable_data_digest": "d" * 64,
                     "project_digests": dict(project_digests),
+                    "snapshot_project_digests": dict(snapshot_project_digests),
                     "base_commit": "base",
                     "upgrade_commit": "upgrade",
                     "candidate_front_door": {
@@ -1185,8 +1190,8 @@ def _valid_fresh_device_report() -> dict:
                 "evidence": {
                     "readiness_seconds": 180.0,
                     "backup_digest": "e" * 64,
-                    "project_digests": dict(project_digests),
-                    "project_count": 2,
+                    "project_digests": dict(snapshot_project_digests),
+                    "project_count": 3,
                 },
             },
             {
@@ -1230,6 +1235,8 @@ def test_fresh_device_uses_harness_fingerprint_not_label(tmp_path: Path) -> None
         "extra-evidence",
         "bad-digest",
         "changed-project",
+        "missing-edge-project",
+        "extra-snapshot-project",
         "excessive-readiness",
         "invalid-candidate-front-door",
     ],
@@ -1251,6 +1258,10 @@ def test_fresh_device_refuses_incomplete_or_malformed_phase_evidence(
         checks[6]["evidence"]["data_digest"] = "not-a-digest"
     elif mutation == "changed-project":
         checks[8]["evidence"]["project_digests"]["project-b"] = "f" * 64
+    elif mutation == "missing-edge-project":
+        checks[7]["evidence"]["snapshot_project_digests"].pop("project-edge")
+    elif mutation == "extra-snapshot-project":
+        checks[7]["evidence"]["snapshot_project_digests"]["project-unbound"] = "f" * 64
     elif mutation == "invalid-candidate-front-door":
         checks[7]["evidence"]["candidate_front_door"]["agent"] = (
             "http://127.0.0.1:9099/svc/agent"
