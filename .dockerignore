@@ -6,7 +6,11 @@
 # --- heavy / irrelevant ---
 .git
 .venv
-node_modules
+# Dependency trees must never come from the host. The recursive form also
+# excludes workspace-local symlinks such as frontend/node_modules; otherwise
+# COPY can replace the lockfile-installed image dependencies with a dead host
+# path.
+**/node_modules
 **/__pycache__
 **/*.pyc
 .pytest_cache
