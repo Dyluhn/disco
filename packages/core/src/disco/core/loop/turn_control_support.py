@@ -85,12 +85,12 @@ _IDENTICAL_PLAN_NUDGE_TEXT = (
 _SERVE_HANDOFF_DIAGNOSTIC = "serve_handoff_recorded"
 _SERVE_DUPLICATE_DIAGNOSTIC = "serve_duplicate_ignored"
 
-# ATTESTATION-BINDING INVARIANT (F58, 2026-08-07m; enforced 2026-08-07r). The
-# first-firing sentence of the handoff reminder, extracted so the tests that
-# assert the first fire is UNCHANGED can derive it from here instead of carrying
-# a hand-copied duplicate that would keep passing after a reword. Verbatim: the
-# `repeats <= 1` branch below composes byte-identically to what it did inline.
-_SERVE_HANDOFF_OPENING = "Handoff recorded. `serve` does not complete the run."
+# Keep the first handoff reminder derived from one owner so every deliverable
+# kind receives the same neutral lifecycle fact.  ``serve`` is the handoff API;
+# it does not imply that a file or terminal script is a web server.
+_SERVE_HANDOFF_OPENING = (
+    "Handoff recorded. The deliverable is recorded, but the run is not finished yet."
+)
 
 
 def _serve_next_move(events: list[Event]) -> str:
@@ -160,7 +160,7 @@ def _serve_handoff_guidance(repeats: int, events: list[Event]) -> str:
     if repeats <= 1:
         return (
             "<system-reminder>\n"
-            f"{_SERVE_HANDOFF_OPENING} Do not serve this "
+            f"{_SERVE_HANDOFF_OPENING} Do not call `serve` for this "
             f"artifact again.\n{_serve_next_move(events)}\n"
             "</system-reminder>"
         )

@@ -170,6 +170,10 @@ async def test_serve_emits_a_deliverable_event_and_continues():
     ]
     assert len(guidance) == 1
     assert "Handoff recorded" in guidance[0].message.content
+    assert "The deliverable is recorded, but the run is not finished yet" in (
+        guidance[0].message.content
+    )
+    assert "Do not call `serve` for this artifact again" in guidance[0].message.content
     assert "call `finish`" in guidance[0].message.content
 
 
