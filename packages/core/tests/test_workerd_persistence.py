@@ -10,12 +10,10 @@ from disco.core.appkit import default_lead_gen_app_spec, generate, get_recipe
 
 pytestmark = pytest.mark.integration
 
-if not wrangler_available():
-    pytest.skip(
-        "wrangler is required for the local workerd persistence proof", allow_module_level=True
-    )
-
-
+@pytest.mark.skipif(
+    not wrangler_available(),
+    reason="wrangler is required for the local workerd persistence proof",
+)
 def test_lead_survives_worker_cold_restart() -> None:
     recipe = get_recipe("editorial-ledger")
     assert recipe is not None
