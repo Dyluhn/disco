@@ -13,9 +13,15 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from disco.tools.sandbox._container import ContainerInstance
+from disco.tools.sandbox._container_parts.guest_scripts import (
+    bounded_delete_result,
+    bounded_read_result,
+)
 from disco.tools.sandbox.base import (
     SandboxError,
     SandboxFileNotFoundError,
+    SandboxSpec,
     looks_like_not_found,
     raise_read_error,
 )
@@ -111,3 +117,61 @@ async def test_process_backend_path_escape_is_permission_error():
             await sbx.read_file("../../etc/passwd")
         with pytest.raises(SandboxPermissionError):
             await sbx.read_file("../../etc/passwd")
+
+
+def test_bounded_container_read_preserves_missing_file_type():
+    """The guest protocol parser executes under ``ContainerInstance._guarded``.
+
+    Its expected missing-file result must therefore also be a ``SandboxError``;
+    otherwise the guard mistakes it for a container-client failure and turns a
+    normal first write into an opaque ``sandbox op failed`` result.
+    """
+    with pytest.raises(SandboxFileNotFoundError) as caught:
+        bounded_read_result(
+            "index.html",
+            44,
+            b"",
+            b"DISCO_READ_MISSING:[Errno 2] No such file or directory: 'index.html'",
+        )
+    assert isinstance(caught.value, FileNotFoundError)
+    assert isinstance(caught.value, SandboxError)
+
+    with pytest.raises(SandboxFileNotFoundError) as deleted:
+        bounded_delete_result(
+            "index.html",
+            44,
+            b"DISCO_DELETE_MISSING:[Errno 2] No such file or directory: 'index.html'",
+        )
+    assert isinstance(deleted.value, FileNotFoundError)
+    assert isinstance(deleted.value, SandboxError)
+
+
+async def test_container_guard_does_not_reclassify_missing_file_as_backend_failure():
+    class MissingFileContainer:
+        status = "running"
+
+        def exec_run(self, argv, *, demux=False, workdir=None):
+            del demux, workdir
+            if argv[:3] == ["realpath", "-m", "--"]:
+                return (0, (f"{argv[3]}\n".encode(), b""))
+            return (
+                44,
+                (b"", b"DISCO_READ_MISSING:[Errno 2] No such file or directory: 'index.html'"),
+            )
+
+        def reload(self) -> None:
+            return None
+
+    instance = ContainerInstance(
+        id="missing-file-contract",
+        owner_id="local",
+        conversation_id="missing-file-contract",
+        spec=SandboxSpec(),
+        container=MissingFileContainer(),
+        container_workspace="/workspace",
+        stop_timeout_s=5,
+    )
+
+    with pytest.raises(SandboxFileNotFoundError) as caught:
+        await instance.read_file("index.html")
+    assert str(caught.value) == "read_file 'index.html': file does not exist"

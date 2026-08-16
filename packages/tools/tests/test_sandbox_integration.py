@@ -219,6 +219,14 @@ def test_guest_symlink_escape_refused_live(tmp_path):
         svc = service_from_config(cfg)
         inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c-itest")
         try:
+            # A clean workspace reports absence through the same dual-typed
+            # filesystem contract used by file_write before it creates a new
+            # artifact.  This is a real container crossing, not a process fake.
+            with pytest.raises(FileNotFoundError):
+                await inst.read_file("fresh.txt")
+            await inst.write_file("fresh.txt", b"container-round-trip")
+            assert await inst.read_file("fresh.txt") == b"container-round-trip"
+
             # Create the malicious symlink inside the guest workspace.
             await inst.exec_shell("ln -s /etc /workspace/out", timeout_s=20)
             # Reading through it must be refused (resolves to /etc, outside the jail).

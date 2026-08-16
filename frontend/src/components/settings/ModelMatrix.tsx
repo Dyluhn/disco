@@ -131,34 +131,55 @@ function VisualModelGuidance({
   visualId: string | null;
   visual: ModelInfo | null;
 }) {
-  if (!visualId && !primary?.capabilities.includes("vision")) {
-    return (
-      <div
-        role="status"
-        data-disco-flag="vision-model-recommendation"
-        className="rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted"
+  const stateOf = (model: ModelInfo | null) => {
+    // A placeholder/non-runnable entry is already covered by the driver setup
+    // warning. It has no capability verdict, so never call it text-only here.
+    if (!model?.base_url) {
+      return null;
+    }
+    if (model.vision === true) return "vision";
+    if (model.vision === false) return "text-only";
+    if (model.vision_status) return model.vision_status;
+    return model.capabilities.includes("vision") ? "vision" : "unknown";
+  };
+  const state = stateOf(visualId ? visual : primary);
+  if (state === null || state === "vision") return null;
+  const selected = visualId ? visual : primary;
+  const target = visualId ? "selected visual model" : "primary model";
+  const textOnly = state === "text-only";
+
+  return (
+    <div
+      role="status"
+      data-disco-flag={
+        textOnly ? "vision-model-text-only" : "vision-model-unverified"
+      }
+      className="grid gap-hair rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-body"
+    >
+      <span>
+        <span className="font-medium text-text">
+          {textOnly
+            ? `${selected?.label ?? target} is marked text-only.`
+            : `Vision hasn't been verified for ${selected?.label ?? target}.`}
+        </span>{" "}
+        {textOnly
+          ? "Choose an image-capable model or correct this model's capability."
+          : "If it accepts images, confirm that capability; otherwise choose a dedicated visual model."}
+      </span>
+      <a
+        href="#model-library"
+        onClick={() => {
+          const disclosure = document.querySelector<HTMLDetailsElement>(
+            "#model-library details",
+          );
+          if (disclosure) disclosure.open = true;
+        }}
+        className="font-medium text-accent hover:underline"
       >
-        <span className="font-medium text-text">Your primary is text-only.</span>{" "}
-        Add a dedicated image-capable model above for pixel questions. Leaving it
-        unset is supported: the agent keeps working from DOM, console, and other
-        text evidence and will say that it did not inspect pixels.
-      </div>
-    );
-  }
-  if (visualId && !visual?.capabilities.includes("vision")) {
-    return (
-      <div
-        role="status"
-        data-disco-flag="vision-model-text-only"
-        className="rounded-control border border-warn/40 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-text-muted"
-      >
-        The selected visual model is currently marked text-only. It remains a valid
-        selection, but pixel questions will use the honest DOM/text fallback until
-        its image capability is corrected or another model is chosen.
-      </div>
-    );
-  }
-  return null;
+        Model library → Edit → Image understanding
+      </a>
+    </div>
+  );
 }
 
 export function ModelMatrix() {
@@ -181,10 +202,9 @@ export function ModelMatrix() {
           Role assignments
         </h3>
         <p className="font-ui text-[0.84rem] text-text-muted">
-          Read live from the configured deployment. Assignments are absolute and
-          manual — the system uses exactly what you set, applied on the next
-          request (no automatic routing). Capabilities are advisory; a
-          mis-assignment fails loudly at runtime.
+          Choose which existing model handles each role. Add or edit the available
+          models in Model library below. Assignments are manual and apply on the
+          next request.
         </p>
       </div>
 

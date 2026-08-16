@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "94f9a155276ade4df52ee83cf250d0814366d296",
+  "source_identity": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -10708,6 +10708,7 @@
             "pricing_mode: Literal['metered', 'subscription', 'free', 'unknown'] | None",
             "provider: str",
             "quantization: str | None",
+            "requires_api_key: bool",
             "tier: Literal['standard', 'weak'] | None",
             "vision: bool | None"
           ]
@@ -10819,6 +10820,7 @@
             "id: str",
             "kind: Literal['openai-compat', 'anthropic', 'gemini']",
             "label: str",
+            "requires_api_key: bool",
             "secret_name: str"
           ]
         },
@@ -21143,7 +21145,7 @@
         {
           "kind": "function",
           "name": "DeepResearchTopBar",
-          "signature": "export function DeepResearchTopBar({ r, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)"
+          "signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)"
         }
       ]
     },
@@ -21553,7 +21555,7 @@
         {
           "kind": "function",
           "name": "OpenRouterSection",
-          "signature": "export function OpenRouterSection()"
+          "signature": "export function OpenRouterSection({ embedded = false }: { embedded?: boolean })"
         }
       ]
     },
@@ -25527,12 +25529,12 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelInfo",
-          "signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
+          "signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ModelUpsert",
-          "signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
+          "signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25552,7 +25554,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ProviderCreate",
-          "signature": "export interface ProviderCreate { label: string; base_url: string; kind: ProviderKind; api_key: string; }"
+          "signature": "export interface ProviderCreate { label: string; base_url: string; kind: ProviderKind; api_key: string; requires_api_key?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25562,7 +25564,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ProviderInfo",
-          "signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; }"
+          "signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25572,12 +25574,12 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "ProviderPatch",
-          "signature": "export interface ProviderPatch { label?: string; base_url?: string; kind?: ProviderKind; api_key?: string; }"
+          "signature": "export interface ProviderPatch { label?: string; base_url?: string; kind?: ProviderKind; api_key?: string; requires_api_key?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
           "name": "ProviderPreset",
-          "signature": "export interface ProviderPreset { id: string; label: string; base_url: string; kind: ProviderKind; requires_base_url?: boolean; }"
+          "signature": "export interface ProviderPreset { id: string; label: string; base_url: string; kind: ProviderKind; requires_base_url?: boolean; requires_api_key?: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -27876,14 +27878,6 @@
     },
     {
       "surface": "frontend",
-      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
-      "public_name": "DeepResearchTopBar",
-      "target_sha256": "dd9c1b0a2224bf4300a80aea3ea8941ea63f956d8641b4b461d8622ea57b7e88",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
       "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
       "public_name": "CTRL_BTN",
       "target_sha256": "4cdfa901c95ec93122dd121bb2c4669fdbaa13a18fa8bd7765a5620f53ac6225",
@@ -29795,28 +29789,92 @@
       "reason": "Reports the optional dedicated visual-model assignment."
     },
     {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelInfo",
-      "target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "reason": "Carries the operator vision-capability override state."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelUpsert",
-      "target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "reason": "Accepts the operator vision-capability override state."
-    },
-    {
       "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "DefaultLLMRouter",
       "target_sha256": "816f47133875e3839168008566b5b693994dec571663e340a05f61b8a7a22e09",
       "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
       "reason": "Adds bounded visual-observer route selection without transferring the agent loop."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_name": "DeepResearchTopBar",
+      "target_sha256": "2a7adbbbf1f785fd94d8482379ddc6606146e1a08e0f9e623c1b99691a7d564c",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/OpenRouterSection.tsx",
+      "public_name": "OpenRouterSection",
+      "target_sha256": "425ba24415195297b0b5d9a066303e6af6c118aa8489167a3ac3ad1a36263051",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "target_sha256": "613523903c2bcc3f04b1f696fb08d3a3e48e65cbff5fb5e665987b87dc210cfa",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "target_sha256": "be792570ccb90902b1ebd47ffbf677ba9995636cf9a67f5c073e04ad702e914a",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderCreate",
+      "target_sha256": "7876f2a9e7710f4d9f6e29849f38cf8cad1f07bfb0ec0d6a5551b1deb861eb01",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderInfo",
+      "target_sha256": "11698811afb3a68235af79f50e966e554aebb32c08a7036b729f11fd9d55c16c",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderPatch",
+      "target_sha256": "cc602642eb472dd057d22c66159989d19b2585cf1f56119ac7c68d692e2761a1",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderPreset",
+      "target_sha256": "663b0d2fe42c39a9638602c5d24c969984eedcf98bc5c9fb76c60d58749224bd",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ModelEntry",
+      "target_sha256": "df4e6e446dfef3a366ce819faa22d1a138151ce5634c2c51f3675f07be5e697b",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ProviderSettings",
+      "target_sha256": "3982cc8eba5f949b3ac0aa326e6c1398dda6a13aff4ab50195b98ca01ad53644",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
     }
   ],
   "compatibility_bridges": [],
@@ -30033,6 +30091,36 @@
       "owner_package": "PKG-08-VERIFY",
       "accepting_commit": "5c3785e75554e62ec12f2460c10559ca0d0a584c",
       "accepting_receipt": "2026-07-30/PKG-08-VERIFY/PKG-08-VERIFY-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ProviderSettings",
+      "origin": "disco.core.llm.config.ProviderSettings",
+      "removed_members": [],
+      "added_members": [
+        "requires_api_key: bool"
+      ],
+      "old_signature_sha256": "f6b08f396e4ebb38a0a7d9bd7dc5eb7c43a951c21281a1c012a47e042ce81202",
+      "new_signature_sha256": "c3d73d3005fe52550029bca60d7b0256ff2d2eec5bd64157d6c0ceb2aa877e38",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/llm/__init__.py",
+      "public_name": "ModelEntry",
+      "origin": "disco.core.llm.config.ModelEntry",
+      "removed_members": [],
+      "added_members": [
+        "requires_api_key: bool"
+      ],
+      "old_signature_sha256": "b565c4521a0c2d28a2b5ff9c36693a1fb76ae7bcdfa719a989a52f4a4cbc98ce",
+      "new_signature_sha256": "f2f828a8c70c16f8508026fd692ab8b1caff6fa1ec942eb3450c96374ead85b5",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
     },
     {
       "surface": "python",
@@ -30343,6 +30431,110 @@
     {
       "surface": "frontend",
       "path": "frontend/src/types/models.ts",
+      "public_name": "ModelInfo",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "new_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** Truthful effective UI state; absence is treated as unknown for older servers. */ vision_status?: \"vision\" | \"text-only\" | \"unknown\"; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; requires_api_key?: boolean; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
+      "old_target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
+      "new_target_sha256": "613523903c2bcc3f04b1f696fb08d3a3e48e65cbff5fb5e665987b87dc210cfa",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ModelUpsert",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "new_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; requires_api_key?: boolean; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
+      "old_target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
+      "new_target_sha256": "be792570ccb90902b1ebd47ffbf677ba9995636cf9a67f5c073e04ad702e914a",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderCreate",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProviderCreate { label: string; base_url: string; kind: ProviderKind; api_key: string; }",
+      "new_signature": "export interface ProviderCreate { label: string; base_url: string; kind: ProviderKind; api_key: string; requires_api_key?: boolean; }",
+      "old_target_sha256": "25f6a41c20541a30422855db1a85ebfd7dc18c971e6f61304f517c0b7f9c08ae",
+      "new_target_sha256": "7876f2a9e7710f4d9f6e29849f38cf8cad1f07bfb0ec0d6a5551b1deb861eb01",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderInfo",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; }",
+      "new_signature": "export interface ProviderInfo { id: string; label: string; base_url: string; kind: ProviderKind; secret_name: string; has_key: boolean; requires_api_key?: boolean; }",
+      "old_target_sha256": "1efdd0cfd87933cf36ee9b2b81a9839dff334c6cd98414f15c3fffe4539da770",
+      "new_target_sha256": "11698811afb3a68235af79f50e966e554aebb32c08a7036b729f11fd9d55c16c",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderPatch",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProviderPatch { label?: string; base_url?: string; kind?: ProviderKind; api_key?: string; }",
+      "new_signature": "export interface ProviderPatch { label?: string; base_url?: string; kind?: ProviderKind; api_key?: string; requires_api_key?: boolean; }",
+      "old_target_sha256": "a64e25dfa25fe14d54d81a71fe62565f6ae4f4124662e8c3d2b2323a588deda1",
+      "new_target_sha256": "cc602642eb472dd057d22c66159989d19b2585cf1f56119ac7c68d692e2761a1",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
+      "public_name": "ProviderPreset",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface ProviderPreset { id: string; label: string; base_url: string; kind: ProviderKind; requires_base_url?: boolean; }",
+      "new_signature": "export interface ProviderPreset { id: string; label: string; base_url: string; kind: ProviderKind; requires_base_url?: boolean; requires_api_key?: boolean; }",
+      "old_target_sha256": "19a1d4c2efc73e20e858d5f451b2a80735b3a5cbf1219a1946a82c81ad5922e0",
+      "new_target_sha256": "663b0d2fe42c39a9638602c5d24c969984eedcf98bc5c9fb76c60d58749224bd",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchTopBar.tsx",
+      "public_name": "DeepResearchTopBar",
+      "declaration_kind": "function",
+      "old_signature": "export function DeepResearchTopBar({ r, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)",
+      "new_signature": "export function DeepResearchTopBar({ r, onStandardSearch, handleNewResearch, exportCaps, doneNotify, topBarIncludeOpen, setTopBarIncludeOpen, handleTopBarExport, handleTopBarIncludeConfirm, }: Props)",
+      "old_target_sha256": "dd9c1b0a2224bf4300a80aea3ea8941ea63f956d8641b4b461d8622ea57b7e88",
+      "new_target_sha256": "2a7adbbbf1f785fd94d8482379ddc6606146e1a08e0f9e623c1b99691a7d564c",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/OpenRouterSection.tsx",
+      "public_name": "OpenRouterSection",
+      "declaration_kind": "function",
+      "old_signature": "export function OpenRouterSection()",
+      "new_signature": "export function OpenRouterSection({ embedded = false }: { embedded?: boolean })",
+      "old_target_sha256": "6cd54db8e216026d07399f16f2e55a1f2da2ee0ce72374e08c2616423faa5a81",
+      "new_target_sha256": "425ba24415195297b0b5d9a066303e6af6c118aa8489167a3ac3ad1a36263051",
+      "owner_package": "PKG-20-UX-RELIABILITY",
+      "accepting_commit": "6761fd10f0bc21ca96124c5a2dd5ac254894f371",
+      "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/models.ts",
       "public_name": "AssignmentsPatch",
       "declaration_kind": "InterfaceDeclaration",
       "old_signature": "export interface AssignmentsPatch { default_model?: string; roles?: Partial<Record<AssignableRole, string>>; }",
@@ -30375,32 +30567,6 @@
       "new_signature": "export interface ModelAssignments { default_model: string; // AGENT_DRIVER's model id roles: Record<AssignableRole, string>; /** null = use the main model when capable, otherwise honest text/DOM fallback. */ vision_model: string | null; }",
       "old_target_sha256": "c470e13b48e1a7a90836c2da3cadad951ce2d75f3a727d36fd0413c1973a37a3",
       "new_target_sha256": "b1027703adcebcf4f608dc00f05d074c56f0bc9b41c77c50185c760966a8c3e7",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelInfo",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
-      "new_signature": "export interface ModelInfo { id: string; // catalogue key, e.g. \"driver-local\" label: string; // human name shown in the UI provider: ModelProvider; // local (free) vs openrouter (paid overflow) /** per-million-token prices; both 0 for local. */ price_in_per_m: number; price_out_per_m: number; /** how the user pays; undefined \u2192 derived (price 0 \u2192 free, else metered). */ pricing_mode?: PricingMode; capabilities: Capability[]; /** Manual vision pin: null/undefined = auto-detect, true/false = override. */ vision?: boolean | null; /** optional provenance note (e.g. quantization) shown as a quiet caption. */ note?: string; // raw editable fields (mirror the backend ModelDTO) so an edit form prefills the // real config, not the display view. model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; }",
-      "old_target_sha256": "7df39daa8231b23207cc71fde6557373c7729da6e410d263e1090eb56b9c01ce",
-      "new_target_sha256": "3022672985420839ce33e70865b710ac971dd58648d023b4f4fb3ae88c010c34",
-      "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
-      "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/types/models.ts",
-      "public_name": "ModelUpsert",
-      "declaration_kind": "InterfaceDeclaration",
-      "old_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
-      "new_signature": "export interface ModelUpsert { id: string; model_id: string; base_url?: string | null; api_key_env?: string | null; context_window: number; max_output_tokens?: number | null; quantization?: string | null; capabilities: Capability[]; /** null = auto-detect; true/false explicitly overrides detection. */ vision?: boolean | null; price_in_per_m: number; price_out_per_m: number; pricing_mode?: PricingMode; }",
-      "old_target_sha256": "209385dbb1cce1b130ddfe1fc4fec4d2e1b9db82bad189e1b710a1063d2c939e",
-      "new_target_sha256": "659ae8538f1b1fb3ba6d6bfccc6d7df8099304fc349004dfe69cc1931138ec10",
       "owner_package": "PKG-19-V36-BROWSER-VERIFICATION-GUIDANCE",
       "accepting_commit": "90dd49022c88203dba5cd9674dd06e2872d8b06d",
       "accepting_receipt": "2026-07-28/STATUS.md"

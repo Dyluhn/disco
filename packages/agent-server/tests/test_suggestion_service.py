@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from typing import Any
 
 import pytest
@@ -119,7 +121,9 @@ async def test_service_generates_sanitizes_and_caches(tmp_path) -> None:
     assert first == second
     assert router.calls == 1
     assert router.requests[0].profile.role is ModelRole.SUMMARIZER
-    assert (tmp_path / ".disco" / "suggestions" / "research.json").exists()
+    cache = tmp_path / ".disco" / "suggestions" / "research.json"
+    assert cache.exists()
+    assert json.loads(cache.read_text())["schema_version"] == 2
 
 
 @pytest.mark.asyncio
@@ -127,6 +131,7 @@ async def test_service_inflight_guard_dedupes_parallel_loads(tmp_path) -> None:
     class _SlowRouter(_Router):
         async def complete(self, req: Any) -> _Resp:
             self.calls += 1
+            self.requests.append(req)
             await asyncio.sleep(0.01)
             return _Resp(self.text)
 
@@ -134,7 +139,7 @@ async def test_service_inflight_guard_dedupes_parallel_loads(tmp_path) -> None:
         "\n".join(
             [
                 "a kanban board with calendar sync",
-                "a spreadsheet budget checker",
+                "an invoice tracker with searchable payment status",
                 "a canvas maze game with score states",
                 "a support dashboard from CSV uploads",
             ]
@@ -146,6 +151,76 @@ async def test_service_inflight_guard_dedupes_parallel_loads(tmp_path) -> None:
 
     assert one == two
     assert router.calls == 1
+    prompt = router.requests[0].messages[-1].content
+    assert "interactive software" in prompt
+    assert "Never suggest a report" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_generation_drops_document_only_prompts_before_caching(tmp_path) -> None:
+    router = _Router(
+        "\n".join(
+            [
+                "write a market research report",
+                "create an investor slide deck",
+                "prepare a budget spreadsheet",
+                "draft a product requirements document",
+                "a collaborative kanban board",
+                "a browser-based trivia game",
+                "an inventory dashboard with CSV import",
+                "a report generator with editable templates",
+            ]
+        )
+    )
+    svc = SuggestionService(lambda: router, lambda: tmp_path)
+
+    suggestions = await svc.get_generated("build")
+
+    assert suggestions == [
+        "a collaborative kanban board",
+        "a browser-based trivia game",
+        "an inventory dashboard with CSV import",
+        "a report generator with editable templates",
+    ]
+    cached = json.loads((tmp_path / ".disco" / "suggestions" / "build.json").read_text())
+    assert cached["suggestions"] == suggestions
+
+
+@pytest.mark.asyncio
+async def test_old_build_cache_is_invalidated_after_surface_semantics_change(tmp_path) -> None:
+    cache = tmp_path / ".disco" / "suggestions" / "build.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(
+        json.dumps(
+            {
+                "surface": "build",
+                "schema_version": 1,
+                "created_at": time.time(),
+                "suggestions": [
+                    "Create a 10-slide investor deck",
+                    "Make a budget sheet",
+                    "Draft a project brief",
+                    "Write a research report",
+                ],
+            }
+        )
+    )
+    router = _Router(
+        "\n".join(
+            [
+                "a collaborative kanban board",
+                "a browser-based trivia game",
+                "an inventory dashboard with CSV import",
+                "a habit tracker with weekly charts",
+            ]
+        )
+    )
+
+    suggestions = await SuggestionService(lambda: router, lambda: tmp_path).get_generated("build")
+
+    assert router.calls == 1
+    assert suggestions[0] == "a collaborative kanban board"
+    assert not any("deck" in item or "budget sheet" in item for item in suggestions)
 
 
 class _FailingSuggestionService:

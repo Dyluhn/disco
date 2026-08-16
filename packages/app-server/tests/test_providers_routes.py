@@ -121,6 +121,98 @@ def test_provider_crud_roundtrip_and_secret_is_write_only(client, state, monkeyp
     assert state._secrets.get_secret("provider_openai") is None
 
 
+def test_required_provider_still_rejects_an_empty_key(client):
+    response = client.post(
+        "/api/providers",
+        json={
+            "label": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "kind": "openai-compat",
+            "api_key": "",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "api_key is empty"
+
+
+def test_ollama_preset_is_keyless_and_compose_safe(client):
+    presets = client.get("/api/providers/presets")
+    assert presets.status_code == 200
+    ollama = next(item for item in presets.json() if item["id"] == "ollama")
+    assert ollama["requires_api_key"] is False
+    assert ollama["requires_base_url"] is True
+    assert ollama["base_url"] == "http://host.docker.internal:11434/v1"
+
+
+def test_keyless_openai_compatible_provider_probes_without_authorization(client, state):
+    sink = _CatalogueSink()
+    try:
+        created = client.post(
+            "/api/providers",
+            json={
+                "label": "Ollama",
+                "base_url": sink.url,
+                "kind": "openai-compat",
+                "api_key": "",
+                "requires_api_key": False,
+            },
+        )
+
+        assert created.status_code == 201, created.text
+        provider = created.json()["provider"]
+        assert created.json()["catalogue_ok"] is True
+        assert provider["requires_api_key"] is False
+        assert provider["has_key"] is False
+        assert state._secrets.get_secret(provider["secret_name"]) is None
+        assert sink.authorization == [""]
+    finally:
+        sink.close()
+
+
+def test_keyless_provider_model_keeps_ownership_and_runtime_contract(client, monkeypatch):
+    catalogue = [
+        ProviderCatalogueModelDTO(
+            model_id="minimax-m2.5",
+            label="MiniMax M2.5",
+            context_window=196_608,
+            capabilities=["tool_calling", "long_context"],
+        )
+    ]
+
+    async def fake_fetch(provider, api_key):
+        assert api_key is None
+        return catalogue
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fake_fetch)
+    created = client.post(
+        "/api/providers",
+        json={
+            "label": "Ollama",
+            "base_url": "http://host.docker.internal:11434/v1",
+            "kind": "openai-compat",
+            "requires_api_key": False,
+        },
+    )
+    assert created.status_code == 201, created.text
+    listed = client.get("/api/providers/ollama/models")
+    assert listed.status_code == 200, listed.text
+
+    enabled = client.post(
+        "/api/providers/ollama/enable",
+        json={"model_id": "minimax-m2.5"},
+    )
+    assert enabled.status_code == 200, enabled.text
+    model = next(item for item in enabled.json() if item["api_key_env"] == "provider_ollama")
+    assert model["requires_api_key"] is False
+
+    refused = client.delete("/api/providers/ollama")
+    assert refused.status_code == 409
+    disabled = client.delete(f"/api/providers/ollama/enable/{model['id']}")
+    assert disabled.status_code == 200
+    assert client.delete("/api/providers/ollama").status_code == 204
+
+
 def test_probe_failure_still_saves_provider_and_key(client, state, monkeypatch):
     async def failing_fetch(provider, api_key):
         request = httpx.Request("GET", f"{provider.base_url}/models")

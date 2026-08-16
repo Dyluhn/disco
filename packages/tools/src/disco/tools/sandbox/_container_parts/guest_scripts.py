@@ -19,7 +19,7 @@ from __future__ import annotations
 import errno
 import json
 
-from ..base import SandboxPermissionError
+from ..base import SandboxFileNotFoundError, SandboxPermissionError
 
 # Exec-capture bounds: the in-guest helper streams arbitrary command output
 # into fixed-size head/tail buffers and a bounded workspace spill; only that
@@ -274,7 +274,13 @@ def bounded_read_result(path: str, rc: int, out: bytes, err: bytes) -> bytes:
     if rc == 0:
         return out
     if detail.startswith("DISCO_READ_MISSING:"):
-        raise FileNotFoundError(path)
+        # This parser runs inside ContainerInstance._guarded().  A native
+        # FileNotFoundError would be mistaken for a raw container-client
+        # failure and reclassified as a generic SandboxError.  Preserve the
+        # expected filesystem result with the dual-typed sandbox exception so
+        # callers can both recognize absence and distinguish it from transport
+        # failure.
+        raise SandboxFileNotFoundError(f"read_file {path!r}: file does not exist")
     if detail.startswith("DISCO_READ_DENIED:"):
         raise SandboxPermissionError(
             f"read_file {path!r}: only regular, non-symlink workspace files may be read"
@@ -342,7 +348,7 @@ def bounded_delete_result(path: str, rc: int, err: bytes) -> None:
     if rc == 0:
         return
     if detail.startswith("DISCO_DELETE_MISSING:"):
-        raise FileNotFoundError(path)
+        raise SandboxFileNotFoundError(f"delete_file {path!r}: file does not exist")
     if detail.startswith("DISCO_DELETE_DENIED:"):
         raise SandboxPermissionError(
             f"delete_file {path!r}: only regular, non-symlink workspace files may be deleted"

@@ -74,11 +74,17 @@ export function GenericProviders() {
                       <span
                         className={cn(
                           "flex items-center gap-hair font-ui text-[0.74rem]",
-                          provider.has_key ? "text-supported" : "text-unsupported",
+                          provider.has_key || provider.requires_api_key === false
+                            ? "text-supported"
+                            : "text-unsupported",
                         )}
                       >
                         <KeyRound className="size-3" aria-hidden />
-                        {provider.has_key ? "Key ready" : "No usable key"}
+                        {provider.requires_api_key === false
+                          ? "No key needed"
+                          : provider.has_key
+                            ? "Key ready"
+                            : "No usable key"}
                       </span>
                     </div>
                     <p className="truncate font-mono text-[0.72rem] text-text-faint">

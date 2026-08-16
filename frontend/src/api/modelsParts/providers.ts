@@ -41,6 +41,7 @@ const PROVIDER_PRESETS_FIXTURE: ProviderPreset[] = [
   { id: "mistral", label: "Mistral", base_url: "https://api.mistral.ai/v1", kind: "openai-compat" },
   { id: "xai", label: "xAI", base_url: "https://api.x.ai/v1", kind: "openai-compat" },
   { id: "opencode-go", label: "OpenCode Go", base_url: "https://opencode.ai/zen/go/v1", kind: "openai-compat" },
+  { id: "ollama", label: "Ollama (local)", base_url: "http://host.docker.internal:11434/v1", kind: "openai-compat", requires_base_url: true, requires_api_key: false },
   { id: "custom-openai-compatible", label: "Custom (OpenAI-compatible)", base_url: "", kind: "openai-compat", requires_base_url: true },
 ];
 
@@ -125,7 +126,9 @@ export async function createProvider(body: ProviderCreate): Promise<ProviderMuta
   await fixtureDelay();
   if (!body.label.trim()) throw new ApiError("label is empty", 400);
   if (!body.base_url.trim()) throw new ApiError("base_url is empty", 400);
-  if (!body.api_key.trim()) throw new ApiError("api_key is empty", 400);
+  if (body.requires_api_key !== false && !body.api_key.trim()) {
+    throw new ApiError("api_key is empty", 400);
+  }
   const id = uniqueProviderId(body.label);
   const provider: ProviderInfo = {
     id,
@@ -133,7 +136,8 @@ export async function createProvider(body: ProviderCreate): Promise<ProviderMuta
     base_url: body.base_url.trim().replace(/\/+$/, ""),
     kind: body.kind,
     secret_name: `provider_${id}`,
-    has_key: true,
+    has_key: !!body.api_key.trim(),
+    requires_api_key: body.requires_api_key !== false,
   };
   fixtureProviders = [...fixtureProviders, provider];
   return { provider: { ...provider }, catalogue_ok: true, catalogue_error: null };
@@ -154,6 +158,7 @@ export async function updateProvider(
     base_url: patch.base_url?.trim().replace(/\/+$/, "") || existing.base_url,
     kind: patch.kind ?? existing.kind,
     has_key: patch.api_key !== undefined ? !!patch.api_key.trim() : existing.has_key,
+    requires_api_key: patch.requires_api_key ?? existing.requires_api_key,
   };
   fixtureProviders = fixtureProviders.map((p) => (p.id === id ? next : p));
   return { provider: { ...next }, catalogue_ok: true, catalogue_error: null };
@@ -220,6 +225,7 @@ export async function enableProviderModel(
     // Provider metadata is advisory; only the explicit Settings control creates
     // a manual pin that can override later runtime detection.
     vision: null,
+    requires_api_key: provider.requires_api_key ?? true,
     price_in_per_m: live?.price_in_per_m ?? 0,
     price_out_per_m: live?.price_out_per_m ?? 0,
   };

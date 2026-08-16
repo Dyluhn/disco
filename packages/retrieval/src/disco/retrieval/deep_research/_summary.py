@@ -95,6 +95,7 @@ _STOPWORDS = frozenset(
 _CONFLICT_TERM_HISTORY = 32
 _CONFLICT_CANDIDATES_PER_FINDING = 4
 _MAX_FALLBACK_CONFLICT_CHECKS = 256
+_SUMMARY_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*_`])")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,28 @@ class _SupportedFinding:
     cited_ids: tuple[str, ...]
     section_index: int
     published_at: datetime.date | None
+
+
+def _paragraphize(sentences: list[str]) -> list[str]:
+    """Group ordered sentences into at most four balanced paragraphs."""
+    if not sentences:
+        return []
+    paragraph_count = min(4, len(sentences))
+    base_size, larger_count = divmod(len(sentences), paragraph_count)
+    paragraphs: list[str] = []
+    offset = 0
+    for index in range(paragraph_count):
+        size = base_size + (1 if index < larger_count else 0)
+        paragraphs.append(" ".join(sentences[offset : offset + size]))
+        offset += size
+    return paragraphs
+
+
+def _fallback_sentence(finding: _SupportedFinding) -> str:
+    """Render one grounded finding without leaking quote-block markers."""
+    cleaned = re.sub(r"(?m)^\s*>\s?", "", finding.text).rstrip(" .")
+    citations = " ".join(f"[[{passage_id}]]" for passage_id in finding.cited_ids)
+    return f"{cleaned}. {citations}"
 
 
 def _coherence_outline(sections: list[ReportSection]) -> str:
@@ -179,9 +202,7 @@ def _collect_supported_findings(
                 continue
             body = claim["claim"]
             cited_ids = tuple(
-                passage_id
-                for passage_id in body["cited_passage_ids"]
-                if passage_id in by_id
+                passage_id for passage_id in body["cited_passage_ids"] if passage_id in by_id
             )
             text = str(body["text"]).strip()
             key = (" ".join(text.lower().split()), cited_ids)
@@ -283,8 +304,7 @@ def _fallback_conflict_candidates(
             (
                 (overlap, left_index)
                 for left_index, overlap in candidate_overlap.items()
-                if overlap >= 2
-                or _has_negation(findings[left_index].text) != opposite_negation
+                if overlap >= 2 or _has_negation(findings[left_index].text) != opposite_negation
             ),
             key=lambda item: (-item[0], item[1]),
         )
@@ -355,13 +375,27 @@ def _fallback_findings(
         else:
             unresolved = True
     kept = [finding for index, finding in enumerate(findings) if index not in dropped]
-    prefix = "Sources disagree on some current-state findings. " if unresolved else ""
-    sentences = [
-        f"{finding.text.rstrip(' .')}. "
-        + " ".join(f"[[{passage_id}]]" for passage_id in finding.cited_ids)
-        for finding in kept
-    ]
-    return prefix + " ".join(sentences)
+    paragraphs = _paragraphize([_fallback_sentence(finding) for finding in kept])
+    if not paragraphs:
+        return ""
+    # Keep the mechanically grounded fallback readable without asking another
+    # model to rewrite it. Four contiguous paragraphs preserve finding order and
+    # prevent Markdown markers or a long claim ledger from becoming one wall.
+    if unresolved:
+        paragraphs[0] = "Sources disagree on some current-state findings. " + paragraphs[0]
+    return "\n\n".join(paragraphs)
+
+
+def _readable_summary(summary: str) -> str:
+    """Honor the 2–4 paragraph contract when a provider returns one prose wall."""
+    cleaned = re.sub(r"(?m)^\s*>\s?", "", summary).strip()
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", cleaned) if block.strip()]
+    if len(blocks) != 1 or "\n" in blocks[0]:
+        return "\n\n".join(blocks)
+    sentences = [part.strip() for part in _SUMMARY_SENTENCE_BREAK.split(blocks[0]) if part.strip()]
+    if len(sentences) < 2:
+        return blocks[0]
+    return "\n\n".join(_paragraphize(sentences))
 
 
 async def coherence_pass(
@@ -386,7 +420,7 @@ async def coherence_pass(
         )
         grounded = _retain_supported_claims(summary, claims)
         if grounded and not had_conflict:
-            return grounded
+            return _readable_summary(grounded)
     if findings:
         return await asyncio.to_thread(_fallback_findings, findings, nli, recency_window)
     return "The report did not contain a factual claim that passed grounding verification."

@@ -69,6 +69,49 @@ def test_models_catalogue_is_cost_and_capability_legible(client):
     assert by_id["driver-local"]["vision"] is None
 
 
+def test_model_view_reports_only_proven_vision_states():
+    from disco.app_server.config.mappers import _models_from
+    from disco.core.llm.config import ModelEntry, RouterConfig
+    from disco.core.llm.types import Requirement
+
+    models = {
+        "manual-vision": ModelEntry(
+            model_id="vendor/vision",
+            provider="vendor",
+            context_window=8192,
+            vision=True,
+        ),
+        "manual-text": ModelEntry(
+            model_id="vendor/text",
+            provider="vendor",
+            context_window=8192,
+            vision=False,
+        ),
+        "capability-vision": ModelEntry(
+            model_id="vendor/catalogue-vision",
+            provider="vendor",
+            context_window=8192,
+            capabilities=frozenset({Requirement.VISION}),
+        ),
+        "unknown": ModelEntry(
+            model_id="vendor/unprobed",
+            provider="vendor",
+            context_window=8192,
+        ),
+    }
+
+    by_id = {
+        item.id: item
+        for item in _models_from(RouterConfig(models=models, default_model="manual-vision"))
+    }
+
+    assert by_id["manual-vision"].vision_status == "vision"
+    assert by_id["manual-text"].vision_status == "text-only"
+    assert by_id["capability-vision"].vision_status == "vision"
+    assert by_id["unknown"].vision_status == "unknown"
+    assert by_id["unknown"].requires_api_key is True
+
+
 def test_provider_view_groups_subscription_as_paid_not_local():
     """W-05 P1: `_provider_view` must consider pricing_mode. A subscription model has a
     0 per-token price, so a price-only derivation would file it under 'local/free' (the

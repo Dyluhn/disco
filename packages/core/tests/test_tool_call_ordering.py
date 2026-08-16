@@ -20,7 +20,7 @@ from disco.core.llm.openai_provider import (
     OpenAIProvider,
     _normalize_tool_call_ordering,
 )
-from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole, ToolSpec
 
 
 def _asst(cid: str, name: str = "do_thing") -> dict:
@@ -173,6 +173,26 @@ def test_opencode_go_adds_neutral_user_continuation_after_tool_result() -> None:
     conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
     conforming_wire = conforming._payload(req, "m1", stream=False)["messages"]
     assert conforming_wire[-1]["role"] == "tool"
+
+
+def test_opencode_go_requests_serial_tool_calls_at_the_wire_boundary() -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[LLMMessage(role="user", content="inspect the workspace")],
+        tools=[
+            ToolSpec(
+                name="workspace_list",
+                description="List files",
+                parameters_schema={"type": "object", "properties": {}},
+            )
+        ],
+    )
+
+    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    assert go._payload(req, "gpt-5.6-luna", stream=True)["parallel_tool_calls"] is False
+
+    conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
+    assert "parallel_tool_calls" not in conforming._payload(req, "gpt-5", stream=True)
 
 
 def test_opencode_go_adds_neutral_user_continuation_after_assistant_response() -> None:
