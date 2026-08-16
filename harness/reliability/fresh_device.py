@@ -487,8 +487,8 @@ def _phase_backup_restore(
     app: str,
     agent: str,
     api: ApiSession,
-    original_project_ids: list[str],
-    original_project_digests: dict[str, str],
+    snapshot_project_ids: list[str],
+    snapshot_project_digests: dict[str, str],
     out: Path,
 ) -> dict[str, Any]:
     from ._runner.fresh_device_phases import phase_backup_restore
@@ -504,8 +504,8 @@ def _phase_backup_restore(
         app,
         agent,
         api,
-        original_project_ids,
-        original_project_digests,
+        snapshot_project_ids,
+        snapshot_project_digests,
         out,
     )
 

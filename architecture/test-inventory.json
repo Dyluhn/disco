@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
+  "source_identity": "5e7770da5c843f60901e9d97f3dfe52619245030",
   "collected": {
     "counts": {
       "packages": 10771,
-      "harness": 1429,
+      "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12605,
+    "total": 12609,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -12024,6 +12024,7 @@
         "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images0-upgrade_images0-install]",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory[install_images1-upgrade_images1-upgrade]",
+        "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_upgrade_snapshot_that_rewrites_baseline",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
         "harness/reliability/tests/test_fresh_device.py::test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure",
         "harness/reliability/tests/test_fresh_device.py::test_device_label_is_only_safe_human_metadata",
@@ -12034,6 +12035,7 @@
         "harness/reliability/tests/test_fresh_device.py::test_lifecycle_controller_is_independent_of_historical_stack_checkout",
         "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
         "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
+        "harness/reliability/tests/test_fresh_device.py::test_post_upgrade_checks_bind_exactly_one_edge_project",
         "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
         "harness/reliability/tests/test_fresh_device.py::test_project_zip_must_be_nonempty_and_uncorrupt",
         "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container[]",
@@ -12077,8 +12079,10 @@
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[changed-project]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[excessive-readiness]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[extra-evidence]",
+        "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[extra-snapshot-project]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[invalid-candidate-front-door]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[malformed-check]",
+        "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[missing-edge-project]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[missing-phase]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[wrong-order]",
         "harness/reliability/tests/test_run_results.py::test_fresh_device_uses_harness_fingerprint_not_label",
@@ -12626,9 +12630,9 @@
     }
   },
   "mapping_static": {
-    "identity": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
+    "identity": "5e7770da5c843f60901e9d97f3dfe52619245030",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10367,
+    "python_static_test_id_count": 10369,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -14428,6 +14432,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_candidate_front_door_handoff_authenticates_before_candidate_api_use",
       "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_empty_phase_image_inventory",
+      "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_upgrade_snapshot_that_rewrites_baseline",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_runs_each_bound_phase_once_in_governed_order",
       "harness/reliability/tests/test_fresh_device.py::test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure",
       "harness/reliability/tests/test_fresh_device.py::test_device_label_is_only_safe_human_metadata",
@@ -14438,6 +14443,7 @@
       "harness/reliability/tests/test_fresh_device.py::test_lifecycle_controller_is_independent_of_historical_stack_checkout",
       "harness/reliability/tests/test_fresh_device.py::test_logical_sqlite_digest_ignores_page_and_row_order_but_binds_schema_and_data",
       "harness/reliability/tests/test_fresh_device.py::test_pair_phase_resolves_parent_api_and_driver_seams",
+      "harness/reliability/tests/test_fresh_device.py::test_post_upgrade_checks_bind_exactly_one_edge_project",
       "harness/reliability/tests/test_fresh_device.py::test_project_ids_reject_bad_shape_and_missing_workspaces",
       "harness/reliability/tests/test_fresh_device.py::test_project_zip_must_be_nonempty_and_uncorrupt",
       "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container",
@@ -29974,6 +29980,34 @@
           "harness/reliability/tests/test_fresh_device.py::test_build_search_uses_native_engine_copy_for_dossiers",
           "harness/reliability/tests/test_fresh_device.py::test_compose_image_ids_ignore_provider_chatter",
           "harness/reliability/tests/test_fresh_device.py::test_required_service_copy_refuses_nonunique_container"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V56-POST-UPGRADE-SNAPSHOT-SCOPE",
+      "root": "harness",
+      "source_identity_before": "ac1d7f49d7db810bae0248b508b561a6bd5709df",
+      "source_identity_after": "5e7770da5c843f60901e9d97f3dfe52619245030",
+      "collected_roots": {
+        "harness": {
+          "before_count": 1429,
+          "after_count": 1433,
+          "added_ids": [
+            "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_upgrade_snapshot_that_rewrites_baseline",
+            "harness/reliability/tests/test_fresh_device.py::test_post_upgrade_checks_bind_exactly_one_edge_project",
+            "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[extra-snapshot-project]",
+            "harness/reliability/tests/test_run_results.py::test_fresh_device_refuses_incomplete_or_malformed_phase_evidence[missing-edge-project]"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "harness/reliability/tests/test_fresh_device.py::test_device_journey_rejects_upgrade_snapshot_that_rewrites_baseline",
+          "harness/reliability/tests/test_fresh_device.py::test_post_upgrade_checks_bind_exactly_one_edge_project"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

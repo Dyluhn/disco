@@ -60,6 +60,42 @@ def _validated_project_digests(
     return {project_id: value[project_id] for project_id in sorted(value)}
 
 
+def _validated_snapshot_project_digests(
+    value: Any,
+    *,
+    baseline: dict[str, str],
+) -> dict[str, str]:
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise RuntimeError("upgrade violated its project-snapshot contract")
+    snapshot = _validated_project_digests(
+        value,
+        project_ids=sorted(value),
+        phase="upgrade_snapshot",
+    )
+    if any(snapshot.get(project_id) != digest for project_id, digest in baseline.items()):
+        raise RuntimeError("upgrade snapshot does not retain the baseline projects")
+    if len(snapshot) != len(baseline) + 1:
+        raise RuntimeError("upgrade snapshot does not bind the post-upgrade edge project")
+    return snapshot
+
+
+def _validated_upgrade_project_digests(
+    evidence: dict[str, Any],
+    *,
+    baseline_ids: list[str],
+    baseline_digests: dict[str, str],
+) -> dict[str, str]:
+    _validated_project_digests(
+        evidence.get("project_digests"),
+        project_ids=baseline_ids,
+        phase="upgrade",
+    )
+    return _validated_snapshot_project_digests(
+        evidence.get("snapshot_project_digests"),
+        baseline=baseline_digests,
+    )
+
+
 def _run_recovery_phases(
     *,
     bindings: FreshDeviceJourneyBindings,
@@ -74,8 +110,8 @@ def _run_recovery_phases(
     app: str,
     agent: str,
     api: Any,
-    projects_before: list[str],
-    project_digests: dict[str, str],
+    projects_at_snapshot: list[str],
+    project_digests_at_snapshot: dict[str, str],
     known_image_ids: list[str],
     checks: list[dict[str, Any]],
 ) -> None:
@@ -90,13 +126,13 @@ def _run_recovery_phases(
         app,
         agent,
         api,
-        projects_before,
-        project_digests,
+        projects_at_snapshot,
+        project_digests_at_snapshot,
         out,
     )
     _validated_project_digests(
         evidence.get("project_digests"),
-        project_ids=projects_before,
+        project_ids=projects_at_snapshot,
         phase="backup_restore",
     )
     _record_pass(
@@ -184,10 +220,10 @@ def _run_persistence_phases(
         base_commit,
         out,
     )
-    _validated_project_digests(
-        upgrade_evidence.get("project_digests"),
-        project_ids=projects_before,
-        phase="upgrade",
+    snapshot_project_digests = _validated_upgrade_project_digests(
+        upgrade_evidence,
+        baseline_ids=projects_before,
+        baseline_digests=project_digests,
     )
     _record_pass(
         checks,
@@ -211,8 +247,8 @@ def _run_persistence_phases(
         app=app,
         agent=agent,
         api=api,
-        projects_before=projects_before,
-        project_digests=project_digests,
+        projects_at_snapshot=sorted(snapshot_project_digests),
+        project_digests_at_snapshot=snapshot_project_digests,
         known_image_ids=all_image_ids,
         checks=checks,
     )

@@ -535,6 +535,10 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
     api = object()
     compose_env = {"DISCO_LOCAL_ENGINE": "docker"}
     project_digests = {"project-a": "a" * 64}
+    snapshot_project_digests = {
+        **project_digests,
+        "project-edge": "b" * 64,
+    }
     calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def step(name: str, result: Any = None) -> Callable[..., Any]:
@@ -560,12 +564,16 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
                 {
                     "stable_data_digest": "upgrade-digest",
                     "project_digests": project_digests,
+                    "snapshot_project_digests": snapshot_project_digests,
                     "image_ids": ["initial-image", "upgraded-image"],
                 },
             ),
             backup_restore=step(
                 "restore",
-                {"backup_digest": "backup-digest", "project_digests": project_digests},
+                {
+                    "backup_digest": "backup-digest",
+                    "project_digests": snapshot_project_digests,
+                },
             ),
             uninstall=step("uninstall"),
         ),
@@ -607,7 +615,11 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
         "base-commit",
         tmp_path / "evidence",
     )
-    assert calls[6][1][-3:] == (["project-a"], project_digests, tmp_path / "evidence")
+    assert calls[6][1][-3:] == (
+        ["project-a", "project-edge"],
+        snapshot_project_digests,
+        tmp_path / "evidence",
+    )
     assert [check["id"] for check in checks] == [
         "install-and-boot",
         "first-pair-and-config",
@@ -618,6 +630,125 @@ def test_device_journey_runs_each_bound_phase_once_in_governed_order(tmp_path: P
         "backup-restore",
         "uninstall",
     ]
+
+
+def test_post_upgrade_checks_bind_exactly_one_edge_project(tmp_path: Path) -> None:
+    baseline_ids = ["project-a"]
+    snapshot_ids = ["project-a", "project-edge"]
+
+    class EdgeRunner(CommandRunner):
+        def run(
+            self,
+            name: str,
+            command: list[str] | tuple[str, ...],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            timeout: float = 600,
+            check: bool = True,
+        ) -> subprocess.CompletedProcess[str]:
+            del cwd, env, timeout, check
+            output = (
+                "PASS config\nPASS completion\nPASS tool-calling\n"
+                if name == "post-upgrade-model-verify"
+                else "[PASS] missing_file_sandbox_error\n"
+            )
+            return subprocess.CompletedProcess(command, 0, stdout=output)
+
+    class ProjectApi:
+        agent_base = "http://agent"
+
+        def __init__(self, project_sets: list[list[str]]) -> None:
+            self._project_sets = iter(project_sets)
+
+        def json(self, method: str, base: str, path: str) -> dict[str, Any]:
+            assert (method, base, path) == (
+                "GET",
+                self.agent_base,
+                "/api/projects",
+            )
+            return {
+                "projects": [
+                    {"id": project_id, "files_missing": False}
+                    for project_id in next(self._project_sets)
+                ]
+            }
+
+    engine = Engine("docker", ("docker", "compose"), "/var/run/docker.sock")
+    runner = EdgeRunner(tmp_path)
+    assert fresh_device_phases._run_post_upgrade_checks(
+        runner,
+        engine,
+        "project",
+        tmp_path,
+        {},
+        ProjectApi([baseline_ids, snapshot_ids]),  # type: ignore[arg-type]
+        baseline_ids,
+    ) == snapshot_ids
+
+    with pytest.raises(ProductError, match="exactly one bound project"):
+        fresh_device_phases._run_post_upgrade_checks(
+            runner,
+            engine,
+            "project",
+            tmp_path,
+            {},
+            ProjectApi(
+                [baseline_ids, ["project-a", "project-edge", "project-unbound"]]
+            ),  # type: ignore[arg-type]
+            baseline_ids,
+        )
+
+
+def test_device_journey_rejects_upgrade_snapshot_that_rewrites_baseline(
+    tmp_path: Path,
+) -> None:
+    baseline = {"project-a": "a" * 64}
+    calls: list[str] = []
+
+    def step(name: str, result: Any = None) -> Callable[..., Any]:
+        def invoke(*_args: Any) -> Any:
+            calls.append(name)
+            return result
+
+        return invoke
+
+    with pytest.raises(RuntimeError, match="snapshot does not retain the baseline"):
+        run_device_journey(
+            bindings=FreshDeviceJourneyBindings(
+                install_and_boot=step(
+                    "install", ("front", "app", "agent", ["initial-image"])
+                ),
+                pair_and_config=step("pair", object()),
+                verify_and_scenarios=step("verify"),
+                build_search_export=step("build", (["project-a"], baseline)),
+                cold_restart=step("restart", {"project_digests": baseline}),
+                upgrade=step(
+                    "upgrade",
+                    {
+                        "image_ids": ["initial-image", "upgraded-image"],
+                        "project_digests": baseline,
+                        "snapshot_project_digests": {"project-a": "b" * 64},
+                    },
+                ),
+                backup_restore=step("restore", {"project_digests": baseline}),
+                uninstall=step("uninstall"),
+            ),
+            runner=object(),
+            engine=object(),
+            project="project",
+            checkout=tmp_path / "checkout",
+            lifecycle_script=tmp_path / "controller/scripts/self_host_data.py",
+            compose_env={},
+            out=tmp_path / "out",
+            ui_port=1,
+            app_port=2,
+            agent_port=3,
+            base_commit="base",
+            upgrade_commit="upgrade",
+            checks=[],
+        )
+    assert calls == ["install", "pair", "verify", "build", "restart", "upgrade"]
 
 
 def test_device_journey_stops_before_restore_and_uninstall_on_upgrade_failure(
@@ -690,7 +821,13 @@ def test_device_journey_rejects_empty_phase_image_inventory(
                 verify_and_scenarios=step(),
                 build_search_export=step((["project-a"], project_digests)),
                 cold_restart=step({"project_digests": project_digests}),
-                upgrade=step({"image_ids": upgrade_images, "project_digests": project_digests}),
+                upgrade=step(
+                    {
+                        "image_ids": upgrade_images,
+                        "project_digests": project_digests,
+                        "snapshot_project_digests": project_digests,
+                    }
+                ),
                 backup_restore=step({"project_digests": project_digests}),
                 uninstall=step(),
             ),

@@ -252,7 +252,9 @@ def _run_post_upgrade_checks(
     project: str,
     checkout: Path,
     compose_env: dict[str, str],
-) -> None:
+    api: ApiSession,
+    baseline_project_ids: list[str],
+) -> list[str]:
     from .. import fresh_device as fd
 
     verify = runner.run(
@@ -265,6 +267,11 @@ def _run_post_upgrade_checks(
         timeout=1_200,
     )
     fd._assert_verify_output(verify.stdout, grounding=False)
+    projects_before_edge = fd._project_ids(
+        api.json("GET", api.agent_base, "/api/projects")
+    )
+    if projects_before_edge != baseline_project_ids:
+        raise ProductError("post-upgrade verification changed the baseline project set")
     edge = runner.run(
         "post-upgrade-edge-scenario",
         fd._compose_command(
@@ -285,6 +292,17 @@ def _run_post_upgrade_checks(
     )
     if "[PASS] missing_file_sandbox_error" not in edge.stdout:
         raise ProductError("post-upgrade build edge scenario failed")
+    projects_after_edge = fd._project_ids(
+        api.json("GET", api.agent_base, "/api/projects")
+    )
+    if (
+        not set(projects_before_edge).issubset(projects_after_edge)
+        or len(projects_after_edge) != len(projects_before_edge) + 1
+    ):
+        raise ProductError(
+            "post-upgrade build edge scenario did not create exactly one bound project"
+        )
+    return projects_after_edge
 
 
 def phase_upgrade(
@@ -344,11 +362,32 @@ def phase_upgrade(
         stable_before,
         out,
     )
-    _run_post_upgrade_checks(runner, engine, project, checkout, compose_env)
+    snapshot_project_ids = _run_post_upgrade_checks(
+        runner,
+        engine,
+        project,
+        checkout,
+        compose_env,
+        api,
+        projects_before,
+    )
+    snapshot_project_digests = fd._export_project_digests(
+        api,
+        api.agent_base,
+        snapshot_project_ids,
+        out,
+        "post-upgrade-snapshot",
+    )
+    if any(
+        snapshot_project_digests[project_id] != digest
+        for project_id, digest in project_digests.items()
+    ):
+        raise ProductError("post-upgrade checks changed a baseline project")
     return {
         "readiness_seconds": readiness_seconds,
         "stable_data_digest": stable_after,
         "project_digests": current_project_digests,
+        "snapshot_project_digests": snapshot_project_digests,
         "base_commit": base_commit,
         "upgrade_commit": upgrade_commit,
         "candidate_front_door": {"app": api.app_base, "agent": api.agent_base},
@@ -367,15 +406,15 @@ def phase_backup_restore(
     app: str,
     agent: str,
     api: ApiSession,
-    original_project_ids: list[str],
-    original_project_digests: dict[str, str],
+    snapshot_project_ids: list[str],
+    snapshot_project_digests: dict[str, str],
     out: Path,
 ) -> dict[str, Any]:
     """Destroy the data volume, restore a selected backup, and prove RPO 0."""
     from .. import fresh_device as fd
 
     projects_at_snapshot = fd._project_ids(api.json("GET", api.agent_base, "/api/projects"))
-    if projects_at_snapshot != original_project_ids:
+    if projects_at_snapshot != snapshot_project_ids:
         raise ProductError("backup snapshot contains an unbound project identity")
     selected_archive, selected_manifest = fd._create_backup(
         runner,
@@ -417,8 +456,8 @@ def phase_backup_restore(
         app,
         agent,
         projects_at_snapshot,
-        original_project_ids,
-        original_project_digests,
+        snapshot_project_ids,
+        snapshot_project_digests,
         out,
     )
     return {
@@ -506,8 +545,8 @@ def _assert_restored_api_state(
     app: str,
     agent: str,
     projects_at_snapshot: list[str],
-    original_project_ids: list[str],
-    original_project_digests: dict[str, str],
+    snapshot_project_ids: list[str],
+    snapshot_project_digests: dict[str, str],
     out: Path,
 ) -> dict[str, str]:
     from .. import fresh_device as fd
@@ -518,9 +557,9 @@ def _assert_restored_api_state(
     if assignments.get("default_model") != "fresh-device-driver":
         raise ProductError("backup restore lost the configured driver assignment")
     restored = fd._export_project_digests(
-        api, api.agent_base, original_project_ids, out, "after-restore"
+        api, api.agent_base, snapshot_project_ids, out, "after-restore"
     )
-    if restored != original_project_digests:
+    if restored != snapshot_project_digests:
         raise ProductError("backup restore changed committed project bytes")
     return restored
 

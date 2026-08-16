@@ -324,6 +324,7 @@ _FRESH_DEVICE_EVIDENCE_KEYS = {
         "readiness_seconds",
         "stable_data_digest",
         "project_digests",
+        "snapshot_project_digests",
         "base_commit",
         "upgrade_commit",
         "candidate_front_door",
@@ -505,13 +506,25 @@ def _valid_upgrade(
     install_images: Any,
 ) -> bool:
     image_ids = evidence["image_ids"]
-    if not _fresh_string_list(image_ids) or not isinstance(install_images, list):
+    snapshot_projects = evidence["snapshot_project_digests"]
+    if (
+        not _fresh_string_list(image_ids)
+        or not isinstance(install_images, list)
+        or not isinstance(projects, dict)
+        or not _fresh_project_digests(snapshot_projects)
+    ):
         return False
     return all(
         (
             _fresh_duration(evidence["readiness_seconds"], maximum=900),
             _fresh_sha256(evidence["stable_data_digest"]),
             evidence["project_digests"] == projects,
+            set(projects).issubset(snapshot_projects),
+            len(snapshot_projects) == len(projects) + 1,
+            all(
+                snapshot_projects.get(project_id) == digest
+                for project_id, digest in projects.items()
+            ),
             evidence["base_commit"] == base_commit,
             evidence["upgrade_commit"] == upgrade_commit,
             _valid_candidate_front_door(evidence["candidate_front_door"]),
@@ -572,7 +585,7 @@ def _fresh_device_checks_reason(checks: Any, fingerprint: str) -> str:
         return "fresh-device upgrade evidence is invalid"
 
     restore = evidence_by_phase["backup-restore"]
-    if not _valid_restore(restore, baseline_projects):
+    if not _valid_restore(restore, upgrade["snapshot_project_digests"]):
         return "fresh-device restore evidence is invalid"
     return ""
 
@@ -595,6 +608,8 @@ def _fresh_device_result(path: Path, *, exit_code: int, units: int) -> tuple[str
     if not isinstance(fingerprint, str) or re.fullmatch(r"[0-9a-f]{24}", fingerprint) is None:
         return INVALID, 0, "fresh-device evidence has no valid machine fingerprint"
     checks = report.get("checks")
+    if not isinstance(checks, list):
+        return INVALID, 0, "fresh-device evidence does not contain the exact ten checks"
     invalid_reason = _fresh_device_checks_reason(checks, fingerprint)
     if invalid_reason:
         return INVALID, 0, invalid_reason
