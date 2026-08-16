@@ -17,8 +17,16 @@ export function AddProviderForm({
   const [apiKey, setApiKey] = useState("");
   const [customBaseUrl, setCustomBaseUrl] = useState("");
 
+  // OpenRouter has a first-class key + catalogue flow directly below this form.
+  // Leaving its generic preset here created two legitimate-looking ways to add
+  // the same provider, backed by different secret storage.
+  const availablePresets = (presets ?? []).filter(
+    (preset) => preset.id !== "openrouter",
+  );
   const selected: ProviderPreset | undefined =
-    presets?.find((p) => p.id === (presetId || presets[0]?.id)) ?? presets?.[0];
+    availablePresets.find(
+      (preset) => preset.id === (presetId || availablePresets[0]?.id),
+    ) ?? availablePresets[0];
   const baseUrl = selected?.requires_base_url
     ? customBaseUrl.trim()
     : (selected?.base_url ?? "");
@@ -57,7 +65,7 @@ export function AddProviderForm({
           aria-label="Provider preset"
           className={FIELD}
         >
-          {(presets ?? []).map((preset) => (
+          {availablePresets.map((preset) => (
             <option key={preset.id} value={preset.id}>
               {preset.label}
             </option>

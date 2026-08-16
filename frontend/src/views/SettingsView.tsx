@@ -5,14 +5,13 @@ import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
 import { ImageGenSection } from "@/components/settings/ImageGenSection";
-import { LiveBrowserSection } from "@/components/settings/LiveBrowserSection";
 import { McpSection } from "@/components/settings/McpSection";
 import { ModelCatalogue } from "@/components/settings/ModelCatalogue";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
 import { ProjectStorageSection } from "@/components/settings/ProjectStorageSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { RoleFallbackSection } from "@/components/settings/RoleFallbackSection";
-import { SandboxSection } from "@/components/settings/SandboxSection";
+import { SandboxRuntimeSection } from "@/components/settings/SandboxRuntimeSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
 import {
   useAssignments,
@@ -30,10 +29,11 @@ import type {
 } from "@/types/models";
 
 const NAV = [
-  { id: "models-providers", label: "Models & Providers" },
-  { id: "intelligence", label: "Intelligence" },
-  { id: "agent-sandbox", label: "Agent & Sandbox" },
-  { id: "workspace", label: "Workspace" },
+  { id: "general", label: "General" },
+  { id: "models", label: "Models" },
+  { id: "research-media", label: "Research & Media" },
+  { id: "runtime", label: "Runtime" },
+  { id: "extensions-storage", label: "Extensions & Storage" },
 ] as const;
 
 function imageGenIssue(
@@ -160,17 +160,27 @@ function SettingsAttentionBanner() {
 
 function SettingsGroup({
   id,
+  aliases = [],
   title,
   summary,
   children,
 }: {
   id: string;
+  aliases?: readonly string[];
   title: string;
   summary: string;
   children: ReactNode;
 }) {
   return (
     <section id={id} className="scroll-mt-section">
+      {aliases.map((alias) => (
+        <span
+          key={alias}
+          id={alias}
+          aria-hidden="true"
+          className="block h-0 scroll-mt-section"
+        />
+      ))}
       <header className="mb-section">
         <h2 className="font-display text-[1.35rem] tracking-tight text-text">
           {title}
@@ -196,9 +206,9 @@ function SettingsItem({ id, children }: { id?: string; children: ReactNode }) {
 }
 
 /**
- * Settings: grouped controls for models, providers, intelligence, agent runtime,
- * sandboxing, and workspace connections. The section components remain the existing
- * wired surfaces; this view owns information architecture and navigation.
+ * Settings: grouped controls for the interface, models, research/media, runtime,
+ * extensions, and storage. The section components remain the existing wired surfaces;
+ * this view owns information architecture and navigation.
  */
 export function SettingsView() {
   return (
@@ -233,9 +243,20 @@ export function SettingsView() {
 
           <div className="flex min-w-0 flex-col gap-major">
             <SettingsGroup
-              id="models-providers"
-              title="Models & Providers"
-              summary="Assign model roles, connect provider keys, add catalogue entries, and configure image generation."
+              id="general"
+              title="General"
+              summary="Choose how the application presents itself while you work."
+            >
+              <SettingsItem id="agent-chat">
+                <ChatVerbositySection />
+              </SettingsItem>
+            </SettingsGroup>
+
+            <SettingsGroup
+              id="models"
+              aliases={["models-providers"]}
+              title="Models"
+              summary="Choose the models this instance uses and connect their providers."
             >
               <SettingsItem id="role-assignments">
                 <ModelMatrix />
@@ -243,21 +264,26 @@ export function SettingsView() {
               <SettingsItem>
                 <ProvidersSection />
               </SettingsItem>
-              <SettingsItem id="model-resilience">
-                <RoleFallbackSection />
-              </SettingsItem>
               <SettingsItem id="catalogue">
                 <ModelCatalogue />
               </SettingsItem>
-              <SettingsItem id="image-generation">
-                <ImageGenSection />
+              <SettingsItem id="model-resilience">
+                <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
+                  <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+                    Advanced model resilience
+                  </summary>
+                  <div className="mt-inline">
+                    <RoleFallbackSection />
+                  </div>
+                </details>
               </SettingsItem>
             </SettingsGroup>
 
             <SettingsGroup
-              id="intelligence"
-              title="Intelligence"
-              summary="Configure the non-chat intelligence systems that support research and synthesis."
+              id="research-media"
+              aliases={["intelligence"]}
+              title="Research & Media"
+              summary="Configure research retrieval, supporting encoders, and generated media."
             >
               <SettingsItem id="encoders">
                 <EncoderSection />
@@ -265,30 +291,29 @@ export function SettingsView() {
               <SettingsItem id="data-sources">
                 <DataSourcesSection />
               </SettingsItem>
+              <SettingsItem id="image-generation">
+                <ImageGenSection />
+              </SettingsItem>
               <SettingsItem id="audio-overview">
                 <AudioSection />
               </SettingsItem>
             </SettingsGroup>
 
             <SettingsGroup
-              id="agent-sandbox"
-              title="Agent & Sandbox"
-              summary="Tune the agent control pane, tool isolation, and live browser stream."
+              id="runtime"
+              aliases={["agent-sandbox"]}
+              title="Runtime"
+              summary="Choose where agent tools run and expose dependent runtime features."
             >
-              <SettingsItem id="agent-chat">
-                <ChatVerbositySection />
-              </SettingsItem>
               <SettingsItem id="sandbox">
-                <SandboxSection />
-              </SettingsItem>
-              <SettingsItem id="live-browser">
-                <LiveBrowserSection />
+                <SandboxRuntimeSection />
               </SettingsItem>
             </SettingsGroup>
 
             <SettingsGroup
-              id="workspace"
-              title="Workspace"
+              id="extensions-storage"
+              aliases={["workspace"]}
+              title="Extensions & Storage"
               summary="Choose where projects persist and manage reusable skills plus external tool connections."
             >
               <SettingsItem id="project-storage">

@@ -218,20 +218,31 @@ export function ModelMatrix() {
               busy={update.isPending}
               onSelect={(id) => update.mutate({ vision_model: id })}
             />
-            {ROLES.map((role) => (
-              <MatrixRow
-                key={role.id}
-                row={{
-                  key: role.id,
-                  label: role.label,
-                  desc: role.description,
-                  modelId: assignments.roles[role.id],
-                  onSelect: (id) => update.mutate({ roles: { [role.id]: id } }),
-                }}
-                models={models}
-                busy={update.isPending}
-              />
-            ))}
+            <details className="py-inline">
+              <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+                Specialist role overrides
+              </summary>
+              <p className="mt-hair font-ui text-[0.76rem] text-text-faint">
+                Optional fixed models for retrieval and synthesis tasks.
+              </p>
+              <div className="mt-inline border-t border-hairline">
+                {ROLES.map((role) => (
+                  <MatrixRow
+                    key={role.id}
+                    row={{
+                      key: role.id,
+                      label: role.label,
+                      desc: role.description,
+                      modelId: assignments.roles[role.id],
+                      onSelect: (id) =>
+                        update.mutate({ roles: { [role.id]: id } }),
+                    }}
+                    models={models}
+                    busy={update.isPending}
+                  />
+                ))}
+              </div>
+            </details>
           </>
         )}
       </div>

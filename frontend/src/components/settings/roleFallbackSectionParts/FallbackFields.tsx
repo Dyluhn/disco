@@ -4,6 +4,8 @@
  * shed cyclomatic complexity (TS-0034).
  */
 
+import { StoredCredentialField } from "../StoredCredentialField";
+
 const fieldClass =
   "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
 
@@ -54,21 +56,13 @@ export function FallbackFields({
           className={fieldClass}
         />
       </label>
-      <label className="flex flex-col gap-hair">
-        <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-          API key env
-          <span className="font-ui text-[0.72rem] text-text-faint">
-            · optional
-          </span>
-        </span>
-        <input
-          spellCheck={false}
-          value={apiKeyEnv}
-          onChange={(event) => onApiKeyEnvChange(event.target.value)}
-          placeholder="DISCO_FALLBACK_API_KEY"
-          className={fieldClass}
-        />
-      </label>
+      <StoredCredentialField
+        label="Fallback credential"
+        value={apiKeyEnv}
+        onChange={onApiKeyEnvChange}
+        placeholder="DISCO_FALLBACK_API_KEY"
+        inputClassName={fieldClass}
+      />
     </div>
   );
 }

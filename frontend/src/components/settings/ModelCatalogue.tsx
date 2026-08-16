@@ -18,6 +18,7 @@ import {
   type ModelInfo,
   type ModelUpsert,
 } from "@/types/models";
+import { StoredCredentialField } from "./StoredCredentialField";
 
 /**
  * The model CATALOGUE — add, edit, and remove the assignable models. Real CRUD:
@@ -148,151 +149,169 @@ function ModelForm({
             onChange={(e) => set("base_url", e.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Stored key name (optional)</span>
-          <input
-            className={field}
-            value={form.api_key_env ?? ""}
-            placeholder="OPENAI_API_KEY"
-            onChange={(e) => set("api_key_env", e.target.value)}
-          />
-        </label>
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Context window</span>
-          <input
-            type="number"
-            className={field}
-            value={form.context_window}
-            min={1}
-            onChange={(e) => set("context_window", Number(e.target.value))}
-            required
-          />
-        </label>
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Maximum output tokens (optional)</span>
-          <input
-            type="number"
-            className={field}
-            value={form.max_output_tokens ?? ""}
-            min={1}
-            placeholder="Provider default"
-            onChange={(e) =>
-              set("max_output_tokens", e.target.value ? Number(e.target.value) : null)
-            }
-          />
-        </label>
-        <label className="flex flex-col gap-hair">
-          <span className={labelCls}>Quantization (optional)</span>
-          <input
-            className={field}
-            value={form.quantization ?? ""}
-            placeholder="Q5_K_XL"
-            onChange={(e) => set("quantization", e.target.value)}
-          />
-        </label>
+        <StoredCredentialField
+          label="Model credential"
+          value={form.api_key_env ?? ""}
+          onChange={(value) => set("api_key_env", value)}
+          placeholder="OPENAI_API_KEY"
+          className="col-span-2"
+          inputClassName={field}
+        />
       </div>
 
-      <fieldset className="flex flex-col gap-hair">
-        <span className={labelCls}>Capabilities (advisory)</span>
-        <div className="flex flex-wrap gap-inline">
-          {CAPS.map((c) => (
-            <label
-              key={c}
-              className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted"
-            >
+      <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
+        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+          Advanced model metadata
+        </summary>
+        <div className="mt-body flex flex-col gap-body">
+          <div className="grid grid-cols-2 gap-body">
+            <label className="flex flex-col gap-hair">
+              <span className={labelCls}>Context window</span>
               <input
-                type="checkbox"
-                checked={form.capabilities.includes(c)}
+                type="number"
+                className={field}
+                value={form.context_window}
+                min={1}
+                onChange={(e) => set("context_window", Number(e.target.value))}
+                required
+              />
+            </label>
+            <label className="flex flex-col gap-hair">
+              <span className={labelCls}>Maximum output tokens (optional)</span>
+              <input
+                type="number"
+                className={field}
+                value={form.max_output_tokens ?? ""}
+                min={1}
+                placeholder="Provider default"
                 onChange={(e) =>
                   set(
-                    "capabilities",
-                    e.target.checked
-                      ? [...form.capabilities, c]
-                      : form.capabilities.filter((x) => x !== c),
+                    "max_output_tokens",
+                    e.target.value ? Number(e.target.value) : null,
                   )
                 }
               />
-              {CAPABILITY_LABEL[c]}
             </label>
-          ))}
+            <label className="col-span-2 flex flex-col gap-hair">
+              <span className={labelCls}>Quantization (optional)</span>
+              <input
+                className={field}
+                value={form.quantization ?? ""}
+                placeholder="Q5_K_XL"
+                onChange={(e) => set("quantization", e.target.value)}
+              />
+            </label>
+          </div>
+
+          <fieldset className="flex flex-col gap-hair">
+            <span className={labelCls}>Capabilities (advisory)</span>
+            <div className="flex flex-wrap gap-inline">
+              {CAPS.map((capability) => (
+                <label
+                  key={capability}
+                  className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted"
+                >
+                  <input
+                    type="checkbox"
+                    checked={form.capabilities.includes(capability)}
+                    onChange={(event) =>
+                      set(
+                        "capabilities",
+                        event.target.checked
+                          ? [...form.capabilities, capability]
+                          : form.capabilities.filter(
+                              (current) => current !== capability,
+                            ),
+                      )
+                    }
+                  />
+                  {CAPABILITY_LABEL[capability]}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <label className="flex flex-col gap-hair">
+            <span className={labelCls}>Image understanding</span>
+            <select
+              className={field}
+              value={visionSelectValue(form.vision)}
+              onChange={(e) => set("vision", visionFromSelect(e.target.value))}
+            >
+              <option value="auto">Auto-detect from the provider</option>
+              <option value="true">Supports images</option>
+              <option value="false">Text only</option>
+            </select>
+            <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
+              Override detection only when you know the endpoint's actual image
+              capability. This controls whether pixels may be sent to the model.
+            </span>
+          </label>
+
+          <div className="grid grid-cols-2 gap-body">
+            {form.pricing_mode === "subscription" ? (
+              <p
+                data-disco-flag="model-subscription-no-price"
+                className="col-span-2 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted"
+              >
+                Subscription — a flat-rate plan. No per-token price; this model
+                shows as “Subscription” everywhere (never “Free”, never a $/Mtok
+                rate).
+              </p>
+            ) : (
+              <>
+                <label className="flex flex-col gap-hair">
+                  <span className={labelCls}>Price in / Mtok (0 = free)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    className={field}
+                    value={form.price_in_per_m}
+                    onChange={(e) =>
+                      set("price_in_per_m", Number(e.target.value))
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-hair">
+                  <span className={labelCls}>Price out / Mtok</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    className={field}
+                    value={form.price_out_per_m}
+                    onChange={(e) =>
+                      set("price_out_per_m", Number(e.target.value))
+                    }
+                  />
+                </label>
+              </>
+            )}
+            <label className="col-span-2 flex flex-col gap-hair">
+              <span className={labelCls}>Pricing</span>
+              <select
+                className={field}
+                value={form.pricing_mode ?? "metered"}
+                onChange={(e) =>
+                  set(
+                    "pricing_mode",
+                    e.target.value as ModelUpsert["pricing_mode"],
+                  )
+                }
+              >
+                <option value="metered">
+                  Metered — pay per token (uses the prices above)
+                </option>
+                <option value="subscription">
+                  Subscription — flat plan, shown as “Subscription”
+                </option>
+                <option value="free">Free — no charge</option>
+              </select>
+            </label>
+          </div>
         </div>
-      </fieldset>
-
-      <label className="flex flex-col gap-hair">
-        <span className={labelCls}>Image understanding</span>
-        <select
-          className={field}
-          value={visionSelectValue(form.vision)}
-          onChange={(e) => set("vision", visionFromSelect(e.target.value))}
-        >
-          <option value="auto">Auto-detect from the provider</option>
-          <option value="true">Supports images</option>
-          <option value="false">Text only</option>
-        </select>
-        <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
-          Override detection only when you know the endpoint's actual image capability.
-          This controls whether pixels may be sent to the model.
-        </span>
-      </label>
-
-      <div className="grid grid-cols-2 gap-body">
-        {form.pricing_mode === "subscription" ? (
-          // W-05: a subscription is a flat plan — there is NO per-token price. Hide the
-          // price fields entirely (a "0" here reads as free, the exact bug we're fixing)
-          // and say plainly how it renders. Metered/free keep the price fields below.
-          <p
-            data-disco-flag="model-subscription-no-price"
-            className="col-span-2 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted"
-          >
-            Subscription — a flat-rate plan. No per-token price; this model
-            shows as “Subscription” everywhere (never “Free”, never a $/Mtok
-            rate).
-          </p>
-        ) : (
-          <>
-            <label className="flex flex-col gap-hair">
-              <span className={labelCls}>Price in / Mtok (0 = free)</span>
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                className={field}
-                value={form.price_in_per_m}
-                onChange={(e) => set("price_in_per_m", Number(e.target.value))}
-              />
-            </label>
-            <label className="flex flex-col gap-hair">
-              <span className={labelCls}>Price out / Mtok</span>
-              <input
-                type="number"
-                step="0.01"
-                min={0}
-                className={field}
-                value={form.price_out_per_m}
-                onChange={(e) => set("price_out_per_m", Number(e.target.value))}
-              />
-            </label>
-          </>
-        )}
-        <label className="col-span-2 flex flex-col gap-hair">
-          <span className={labelCls}>Pricing</span>
-          <select
-            className={field}
-            value={form.pricing_mode ?? "metered"}
-            onChange={(e) =>
-              set("pricing_mode", e.target.value as ModelUpsert["pricing_mode"])
-            }
-          >
-            <option value="metered">
-              Metered — pay per token (uses the prices above)
-            </option>
-            <option value="subscription">
-              Subscription — flat plan, shown as “Subscription”
-            </option>
-            <option value="free">Free — no charge</option>
-          </select>
-        </label>
-      </div>
+      </details>
 
       {err && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">

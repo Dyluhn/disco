@@ -11,14 +11,28 @@ function withQuery(ui: ReactElement) {
 }
 
 describe("Settings — model-assignment matrix", () => {
-  it("shows the absolute/manual story with a default primary + every role, cost-legible", async () => {
+  it("keeps primary and vision visible while specialist roles stay advanced", async () => {
+    const user = userEvent.setup();
     withQuery(<SettingsView />);
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Choose model for Default primary/i })).toBeInTheDocument(),
     );
+    expect(
+      screen.getByRole("button", {
+        name: /Choose optional visual inspection model/i,
+      }),
+    ).toBeInTheDocument();
     // The absolute, no-automatic-routing story is stated.
     expect(screen.getByText(/no automatic routing/i)).toBeInTheDocument();
-    // Every GENERATIVE non-driver role has its own selector...
+    // Specialist roles do not crowd the normal setup path.
+    const specialistSummary = screen.getByText(/Specialist role overrides/i, {
+      selector: "summary",
+    });
+    expect(specialistSummary.closest("details")).not.toHaveAttribute("open");
+    await user.click(specialistSummary);
+    expect(specialistSummary.closest("details")).toHaveAttribute("open");
+
+    // Every GENERATIVE non-driver role remains explicitly assignable.
     for (const role of ["RAG answerer", "Query rewriter", "Summarizer"]) {
       expect(
         screen.getByRole("button", { name: new RegExp(`Choose model for ${role}`, "i") }),
@@ -38,6 +52,11 @@ describe("Settings — model-assignment matrix", () => {
     // so the picker is operable, not a flagged dead control.
     const user = userEvent.setup();
     withQuery(<SettingsView />);
+    await user.click(
+      await screen.findByText(/Specialist role overrides/i, {
+        selector: "summary",
+      }),
+    );
     const ragTrigger = await screen.findByRole("button", {
       name: /Choose model for RAG answerer/i,
     });
@@ -82,11 +101,17 @@ describe("Settings — model-assignment matrix", () => {
 });
 
 describe("Settings — Encoders (bundled-local vs remote)", () => {
-  it("shows the encoder mode as an honest, wired toggle (default bundled-local)", async () => {
+  it("shows the current encoder compactly and reveals the wired alternatives on request", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
-    // The section exists and states the truth (encoders are bundled, not an LLM role).
     await screen.findByRole("heading", { name: /Encoders/i });
+    expect(await screen.findByText(/Current: Bundled \(local\)/i)).toBeInTheDocument();
+    const configure = screen.getByText(/Configure encoders/i, {
+      selector: "summary",
+    });
+    expect(configure.closest("details")).not.toHaveAttribute("open");
+    await user.click(configure);
+    expect(configure.closest("details")).toHaveAttribute("open");
     const bundled = await screen.findByRole("button", { name: /Bundled \(local\)/i });
     const remote = screen.getByRole("button", { name: /Remote endpoints/i });
     // Default is bundled-local (pressed); remote is the alternative.
@@ -108,12 +133,24 @@ describe("Settings — model catalogue (CRUD)", () => {
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByPlaceholderText("my-llama"), "test-model");
     await user.type(within(dialog).getByPlaceholderText(/llama-3.3-70b/i), "test.gguf");
+    await user.type(
+      within(dialog).getByLabelText("Model credential"),
+      "LEGACY_CUSTOM_KEY",
+    );
     await user.click(within(dialog).getByRole("button", { name: /^Add model$/i }));
 
     // the new model shows in the catalogue list (label derived like the backend)
-    await waitFor(() =>
-      expect(screen.getByText(/Test Model — test/i)).toBeInTheDocument(),
+    const label = await screen.findByText(/Test Model — test/i);
+    const row = label.closest("li");
+    expect(row).not.toBeNull();
+    await user.click(
+      within(row!).getByRole("button", { name: /Edit test-model/i }),
     );
+    expect(
+      within(await screen.findByRole("dialog")).getByLabelText(
+        "Model credential",
+      ),
+    ).toHaveValue("LEGACY_CUSTOM_KEY");
   });
 
   it("lets the user explicitly mark a model as image-capable", async () => {
@@ -123,6 +160,12 @@ describe("Settings — model catalogue (CRUD)", () => {
 
     await user.click(screen.getByRole("button", { name: /Add model/i }));
     const dialog = await screen.findByRole("dialog");
+    const advanced = within(dialog).getByText(/Advanced model metadata/i, {
+      selector: "summary",
+    });
+    expect(advanced.closest("details")).not.toHaveAttribute("open");
+    await user.click(advanced);
+    expect(advanced.closest("details")).toHaveAttribute("open");
     await user.type(within(dialog).getByPlaceholderText("my-llama"), "visual-test");
     await user.type(within(dialog).getByPlaceholderText(/llama-3.3-70b/i), "visual.gguf");
     await user.selectOptions(
@@ -136,9 +179,72 @@ describe("Settings — model catalogue (CRUD)", () => {
     expect(row).not.toBeNull();
     await user.click(within(row!).getByRole("button", { name: /Edit visual-test/i }));
     const editDialog = await screen.findByRole("dialog");
+    await user.click(
+      within(editDialog).getByText(/Advanced model metadata/i, {
+        selector: "summary",
+      }),
+    );
     expect(
       within(editDialog).getByRole("combobox", { name: /Image understanding/i }),
     ).toHaveValue("true");
+  });
+});
+
+describe("Settings — information architecture", () => {
+  it("separates interface, models, research, runtime, and extensions", async () => {
+    withQuery(<SettingsView />);
+    const nav = screen.getByRole("navigation", { name: /Settings sections/i });
+    for (const label of [
+      "General",
+      "Models",
+      "Research & Media",
+      "Runtime",
+      "Extensions & Storage",
+    ]) {
+      expect(within(nav).getByRole("link", { name: label })).toBeInTheDocument();
+    }
+
+    for (const [legacyId, currentId] of [
+      ["models-providers", "models"],
+      ["intelligence", "research-media"],
+      ["agent-sandbox", "runtime"],
+      ["workspace", "extensions-storage"],
+    ] as const) {
+      expect(document.getElementById(currentId)).toContainElement(
+        document.getElementById(legacyId),
+      );
+    }
+
+    const general = document.getElementById("general");
+    const runtime = document.getElementById("runtime");
+    expect(general).not.toBeNull();
+    expect(runtime).not.toBeNull();
+    const chat = await within(general!).findByRole("heading", {
+      name: "Agent chat",
+    });
+    await within(runtime!).findByRole("heading", { name: "Sandbox" });
+    expect(runtime).not.toContainElement(chat);
+
+    const resilience = screen.getByText(/Advanced model resilience/i, {
+      selector: "summary",
+    });
+    expect(resilience.closest("details")).not.toHaveAttribute("open");
+    await userEvent.click(resilience);
+    expect(resilience.closest("details")).toHaveAttribute("open");
+    expect(
+      await screen.findByRole("heading", { name: "Model resilience" }),
+    ).toBeInTheDocument();
+
+    // Local sandbox: the dependent noVNC form is absent rather than occupying a
+    // full standalone Settings section. A short explanation remains discoverable.
+    expect(
+      await within(runtime!).findByText(
+        /Live browser settings appear here when gVisor is active/i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Live browser" }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -227,17 +333,22 @@ describe("Settings — sandbox", () => {
     expect(screen.getByText(/leans TIGHTER/i)).toBeInTheDocument();
   });
 
-  it("saves a backend change (round-trips through the data layer)", async () => {
+  it("reveals the nested live-browser controls after gVisor is saved", async () => {
     const user = userEvent.setup();
     withQuery(<SettingsView />);
     const gvisor = await screen.findByRole("radio", { name: /gVisor sandbox backend/i });
-    const local = screen.getByRole("radio", { name: /Local container sandbox backend/i });
-    // pick whichever is NOT currently selected → the form is dirty → Save enabled
-    const target = gvisor.getAttribute("aria-checked") === "true" ? local : gvisor;
-    await user.click(target);
+    expect(gvisor).toHaveAttribute("aria-checked", "false");
+    await user.click(gvisor);
     const save = screen.getByRole("button", { name: /save sandbox/i });
     expect(save).toBeEnabled();
     await user.click(save);
     await waitFor(() => expect(screen.getByRole("button", { name: /^saved$/i })).toBeInTheDocument());
+    const liveBrowser = await screen.findByRole("heading", {
+      name: "Live browser",
+    });
+    expect(document.getElementById("live-browser")).toContainElement(liveBrowser);
+    expect(
+      await screen.findByRole("button", { name: /^On/i }),
+    ).toBeInTheDocument();
   });
 });

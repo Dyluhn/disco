@@ -8,6 +8,7 @@ import {
   useDataSourcesConfig,
   useImageGenConfig,
   useModels,
+  useRoleFallbackConfig,
   useTtsConfig,
 } from "@/hooks/useModels";
 
@@ -18,7 +19,7 @@ const SECRETS_KEY = ["secrets"] as const;
 const RESERVED_ENV = new Set(["DISCO_OPENROUTER_API_KEY", "PMX_OPENROUTER_API_KEY"]);
 
 /** The env-var NAMES referenced by the user's CURRENT provider config — the
- * paid models' `api_key_env`, plus the search / extraction / TTS key envs.
+ * paid models' `api_key_env`, plus search, extraction, TTS, image, and fallback key envs.
  * These are the keys the running app will look for; cross-referencing them with
  * the stored secrets tells the user which ones are still missing. */
 export function useExpectedKeyNames(): string[] {
@@ -26,12 +27,14 @@ export function useExpectedKeyNames(): string[] {
   const { data: ds } = useDataSourcesConfig();
   const { data: tts } = useTtsConfig();
   const { data: imageGen } = useImageGenConfig();
+  const { data: fallback } = useRoleFallbackConfig();
   const names = new Set<string>();
   for (const m of models ?? []) if (m.api_key_env) names.add(m.api_key_env);
   if (ds?.search_api_key_env) names.add(ds.search_api_key_env);
   if (ds?.extraction_api_key_env) names.add(ds.extraction_api_key_env);
   if (tts?.api_key_env) names.add(tts.api_key_env);
   if (imageGen?.provider === "openai" && imageGen.api_key_env) names.add(imageGen.api_key_env);
+  if (fallback?.enabled && fallback.api_key_env) names.add(fallback.api_key_env);
   return [...names].filter((n) => n && !RESERVED_ENV.has(n)).sort();
 }
 

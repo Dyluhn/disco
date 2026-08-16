@@ -22,6 +22,12 @@ vi.mock("@/api/client", async (importOriginal) => ({
   isLive: () => isLiveMock(),
 }));
 
+// Credential-name selection is tested at its own boundary. Keep this suite's
+// network contract focused on image configuration rather than `/api/secrets`.
+vi.mock("@/hooks/useSecrets", () => ({
+  useSecrets: () => ({ data: { names: [], locked_names: [] } }),
+}));
+
 function jsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,

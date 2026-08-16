@@ -331,6 +331,9 @@ test("every Settings family applies, survives a service restart, and restores cl
       .getByLabel("Model id (sent to the API)")
       .fill(`upstream-${suffix}`);
     await modelDialog.getByLabel("Endpoint base URL").fill(`${APP_API}/v1`);
+    await modelDialog
+      .getByText("Advanced model metadata", { exact: true })
+      .click();
     await modelDialog.getByLabel("Context window").fill("32768");
     await modelDialog.getByText("Tool calling", { exact: true }).click();
     await modelDialog
@@ -341,6 +344,9 @@ test("every Settings family applies, survives a service restart, and restores cl
     ).toBeVisible();
 
     const matrix = section(page, "Role assignments");
+    await matrix
+      .getByText("Specialist role overrides", { exact: true })
+      .click();
     await matrix.getByLabel("Choose model for Query rewriter").click();
     await page
       .locator(
@@ -356,6 +362,9 @@ test("every Settings family applies, survives a service restart, and restores cl
 
     // Every intelligence setting gets a non-default value. Its real consumer
     // probes must return a typed verdict; unreachable fixtures are expected red.
+    await page
+      .getByText("Advanced model resilience", { exact: true })
+      .click();
     const resilience = section(page, "Model resilience");
     await resilience
       .getByText("Fall back to a local model for auxiliary roles", {
@@ -369,7 +378,7 @@ test("every Settings family applies, survives a service restart, and restores cl
       .getByLabel("Model", { exact: true })
       .fill(`fallback-${suffix}`);
     await resilience
-      .getByLabel("API key env", { exact: false })
+      .getByLabel("Fallback credential", { exact: true })
       .fill(secretName);
     await resilience
       .locator('[data-disco-control="settings.role-fallback-save"]')
@@ -396,6 +405,7 @@ test("every Settings family applies, survives a service restart, and restores cl
     );
 
     const encoders = section(page, "Encoders");
+    await encoders.getByText("Configure encoders", { exact: true }).click();
     await encoders
       .locator(
         '[data-disco-control="settings.encoder-mode"][data-remote="true"]',
@@ -415,6 +425,8 @@ test("every Settings family applies, survives a service restart, and restores cl
       .click();
 
     const sources = section(page, "Data sources");
+    await sources.getByText("Configure search", { exact: true }).click();
+    await sources.getByText("Configure extraction", { exact: true }).click();
     await sources.locator('[data-provider-id="news"]').click();
     await sources.locator('[data-provider-id="crawl4ai"]').click();
     await sources.getByLabel("Service URL").fill(`${APP_API}/crawl-${suffix}`);
@@ -464,17 +476,8 @@ test("every Settings family applies, survives a service restart, and restores cl
       timeout: 60_000,
     });
 
-    const liveBrowser = section(page, "Live browser");
     await expect(
-      liveBrowser.locator('[data-live-browser-unsupported="true"]'),
-    ).toBeVisible();
-    await liveBrowser
-      .locator(
-        '[data-disco-control="settings.livebrowser-toggle"][data-enabled="true"]',
-      )
-      .click({ force: true });
-    await expect(
-      liveBrowser.locator('[data-live-browser-blocked="true"]'),
+      page.locator('[data-live-browser-relevance="gvisor-only"]'),
     ).toBeVisible();
     expect((await appGet<Json>(page, "/api/live-browser/config")).enabled).toBe(
       false,
@@ -592,6 +595,15 @@ test("every Settings family applies, survives a service restart, and restores cl
     expect(
       await page.evaluate(() => localStorage.getItem("verboseAgentChat")),
     ).toBe("0");
+    await page
+      .getByText("Advanced model resilience", { exact: true })
+      .click();
+    await section(page, "Encoders")
+      .getByText("Configure encoders", { exact: true })
+      .click();
+    await section(page, "Data sources")
+      .getByText("Configure search", { exact: true })
+      .click();
     await expect(
       section(page, "Model resilience").locator(
         '[data-disco-control="settings.role-fallback-toggle"]',
@@ -624,7 +636,11 @@ test("every Settings family applies, survives a service restart, and restores cl
     ).toBeVisible();
 
     // Exercise UI deletion paths before restoring the scalar DTO snapshots.
-    await section(page, "Role assignments")
+    const restartedMatrix = section(page, "Role assignments");
+    await restartedMatrix
+      .getByText("Specialist role overrides", { exact: true })
+      .click();
+    await restartedMatrix
       .getByLabel("Choose model for Query rewriter")
       .click();
     const originalQueryModel = String(

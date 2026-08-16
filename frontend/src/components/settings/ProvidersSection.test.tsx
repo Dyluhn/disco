@@ -14,7 +14,7 @@ vi.mock("@/api/client", async (importOriginal) => ({
 }));
 
 vi.mock("./OpenRouterSection", () => ({
-  OpenRouterSection: () => null,
+  OpenRouterSection: () => <h4>OpenRouter</h4>,
 }));
 
 vi.mock("./ProviderKeysSection", () => ({
@@ -22,6 +22,12 @@ vi.mock("./ProviderKeysSection", () => ({
 }));
 
 const presets = [
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    base_url: "https://openrouter.ai/api/v1",
+    kind: "openai-compat",
+  },
   {
     id: "openai",
     label: "OpenAI",
@@ -182,6 +188,16 @@ afterEach(() => {
 });
 
 describe("ProvidersSection — generic provider objects", () => {
+  it("offers OpenRouter only through its canonical dedicated surface", async () => {
+    render(createElement(ProvidersSection), { wrapper: makeWrapper() });
+
+    const preset = await screen.findByLabelText("Provider preset");
+    expect(
+      preset.querySelector('option[value="openrouter"]'),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("OpenRouter")).toHaveLength(1);
+  });
+
   it("adds a provider, opens browse, and toggles a model into the catalogue", async () => {
     render(createElement(ProvidersSection), { wrapper: makeWrapper() });
 

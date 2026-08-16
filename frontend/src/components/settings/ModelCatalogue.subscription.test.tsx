@@ -16,11 +16,22 @@ vi.mock("@/hooks/useModels", () => ({
   useDeleteModel: () => ({ mutate: vi.fn(), error: null }),
 }));
 
+vi.mock("@/hooks/useSecrets", () => ({
+  useSecrets: () => ({ data: { names: [] } }),
+}));
+
 describe("ModelCatalogue subscription pricing", () => {
   it("hides the per-token price fields and shows 'Subscription' when Pricing is subscription", () => {
     render(<ModelCatalogue />);
     // Open the Add-model dialog (header button is the only "Add model" before open).
     fireEvent.click(screen.getByText("Add model"));
+
+    // The everyday fields stay visible; technical metadata is opt-in.
+    expect(screen.getByText("Catalogue id")).toBeDefined();
+    const advanced = screen.getByText("Advanced model metadata");
+    expect(advanced.closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(advanced);
+    expect(advanced.closest("details")).toHaveAttribute("open");
 
     // Default Metered → the per-token price fields are present.
     expect(screen.getByText("Price in / Mtok (0 = free)")).toBeDefined();

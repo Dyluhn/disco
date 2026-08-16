@@ -56,6 +56,9 @@ export function EncoderSection() {
   }, [data]);
 
   const dirty = isEncoderUrlsDirty(urls, data);
+  const activeOption = data
+    ? OPTIONS.find((option) => option.remote === data.remote)
+    : undefined;
 
   return (
     <section className="flex flex-col gap-inline">
@@ -74,67 +77,90 @@ export function EncoderSection() {
         <p className="font-ui text-[0.86rem] text-text-faint">Loading…</p>
       ) : (
         <div className="flex flex-col gap-inline">
-          {OPTIONS.map((opt) => {
-            const active = data.remote === opt.remote;
-            return (
-              <button
-                key={String(opt.remote)}
-                type="button"
-                data-disco-control="settings.encoder-mode"
-                data-remote={opt.remote}
-                onClick={() =>
-                  !active && save.mutate({ remote: opt.remote, ...urls })
-                }
-                disabled={save.isPending}
-                aria-pressed={active}
-                className={cn(
-                  "flex items-start gap-inline rounded-card border px-body py-inline text-left transition-colors",
-                  active
-                    ? "border-accent/50 bg-accent/5"
-                    : "border-hairline hover:border-hairline-strong",
-                  save.isPending && "opacity-60",
-                )}
-              >
-                <opt.Icon
-                  className={cn(
-                    "mt-px size-4 shrink-0",
-                    active ? "text-accent" : "text-text-faint",
-                  )}
-                  aria-hidden
-                />
-                <span className="flex min-w-0 flex-col gap-hair">
-                  <span className="flex items-center gap-hair font-ui text-[0.9rem] font-medium text-text">
-                    {opt.label}
-                    {active && save.isPending && (
-                      <Loader2
-                        className="size-3 animate-spin text-accent"
-                        aria-hidden
-                      />
-                    )}
-                  </span>
-                  <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
-                    {opt.help}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+          <div
+            data-encoder-current={data.remote ? "remote" : "bundled"}
+            className="flex items-start gap-inline rounded-control border border-hairline bg-surface-1/40 px-body py-inline"
+          >
+            {activeOption && (
+              <activeOption.Icon
+                className="mt-px size-4 shrink-0 text-accent"
+                aria-hidden
+              />
+            )}
+            <span className="flex min-w-0 flex-col gap-hair">
+              <span className="font-ui text-[0.86rem] font-medium text-text">
+                Current: {activeOption?.label}
+              </span>
+              <span className="font-ui text-[0.78rem] leading-snug text-text-faint">
+                {activeOption?.help}
+              </span>
+            </span>
+          </div>
 
-          {/* Endpoint fields. Rendered always (so the config is legible), but the
-              inputs are honestly DISABLED + flagged when Bundled is active — the
-              agent-server ignores these URLs unless Remote is the selected mode, so
-              an editable-looking-but-ignored field would be a false affordance. */}
-          <EncoderEndpointsPanel
-            remote={data.remote}
-            urls={urls}
-            onUrlChange={(key, value) =>
-              setUrls((u) => ({ ...u, [key]: value }))
-            }
-            dirty={dirty}
-            pending={save.isPending}
-            onSaveEndpoints={() => save.mutate({ remote: true, ...urls })}
-            error={save.error}
-          />
+          <details className="rounded-control border border-hairline px-body py-inline">
+            <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+              Configure encoders
+            </summary>
+            <div className="mt-inline flex flex-col gap-inline">
+              {OPTIONS.map((opt) => {
+                const active = data.remote === opt.remote;
+                return (
+                  <button
+                    key={String(opt.remote)}
+                    type="button"
+                    data-disco-control="settings.encoder-mode"
+                    data-remote={opt.remote}
+                    onClick={() =>
+                      !active && save.mutate({ remote: opt.remote, ...urls })
+                    }
+                    disabled={save.isPending}
+                    aria-pressed={active}
+                    className={cn(
+                      "flex items-start gap-inline rounded-card border px-body py-inline text-left transition-colors",
+                      active
+                        ? "border-accent/50 bg-accent/5"
+                        : "border-hairline hover:border-hairline-strong",
+                      save.isPending && "opacity-60",
+                    )}
+                  >
+                    <opt.Icon
+                      className={cn(
+                        "mt-px size-4 shrink-0",
+                        active ? "text-accent" : "text-text-faint",
+                      )}
+                      aria-hidden
+                    />
+                    <span className="flex min-w-0 flex-col gap-hair">
+                      <span className="flex items-center gap-hair font-ui text-[0.9rem] font-medium text-text">
+                        {opt.label}
+                        {active && save.isPending && (
+                          <Loader2
+                            className="size-3 animate-spin text-accent"
+                            aria-hidden
+                          />
+                        )}
+                      </span>
+                      <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
+                        {opt.help}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+
+              <EncoderEndpointsPanel
+                remote={data.remote}
+                urls={urls}
+                onUrlChange={(key, value) =>
+                  setUrls((current) => ({ ...current, [key]: value }))
+                }
+                dirty={dirty}
+                pending={save.isPending}
+                onSaveEndpoints={() => save.mutate({ remote: true, ...urls })}
+                error={save.error}
+              />
+            </div>
+          </details>
         </div>
       )}
     </section>

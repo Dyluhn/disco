@@ -30,6 +30,7 @@ let modelKeyEnvs: string[] = [];
 let searchKeyEnv = "";
 let extractionKeyEnv = "";
 let ttsKeyEnv = "";
+let fallbackKeyEnv = "";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -75,6 +76,14 @@ function installFetch() {
         base_url: "",
         api_key_env: "",
         model: "",
+      });
+    }
+    if (method === "GET" && url === "/api/role-fallback/config") {
+      return jsonResponse({
+        enabled: !!fallbackKeyEnv,
+        base_url: fallbackKeyEnv ? "http://localhost:8080/v1" : "",
+        model: fallbackKeyEnv ? "fallback-model" : "",
+        api_key_env: fallbackKeyEnv,
       });
     }
     if (
@@ -129,6 +138,7 @@ beforeEach(() => {
   searchKeyEnv = "";
   extractionKeyEnv = "";
   ttsKeyEnv = "";
+  fallbackKeyEnv = "";
   isLiveMock.mockReturnValue(true);
   fetchStub = installFetch();
 });
@@ -280,6 +290,14 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
       "Provider key name",
     ) as HTMLInputElement;
     await waitFor(() => expect(nameInput.value).toBe("ANTHROPIC_API_KEY"));
+  });
+
+  it("includes an enabled resilience credential in the missing-key check", async () => {
+    fallbackKeyEnv = "FALLBACK_API_KEY";
+    render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
+
+    expect(await screen.findByText("FALLBACK_API_KEY")).toBeInTheDocument();
+    expect(screen.getByText(/1 not stored yet/i)).toBeInTheDocument();
   });
 
   it("T4.1: 'Test key' POSTs to the probe endpoint and renders the live result", async () => {

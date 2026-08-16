@@ -25,6 +25,7 @@ import type {
   SearchProvider,
 } from "@/types/models";
 import { ProbeButton } from "./ProbeButton";
+import { StoredCredentialField } from "./StoredCredentialField";
 import { DataSourcesSaveRow } from "./dataSourcesSectionParts/DataSourcesSaveRow";
 
 type Tier = "bundled" | "selfhost" | "paid";
@@ -38,7 +39,6 @@ interface Opt<P extends string> {
   baseUrlPlaceholder?: string;
   baseUrlType?: "text" | "url";
   showApiKeyEnv?: boolean;
-  apiKeyLabel?: string;
   apiKeyPlaceholder?: string;
 }
 
@@ -73,7 +73,6 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     label: "Semantic Scholar",
     help: "Academic papers + abstracts. Optional API key raises rate limits.",
     showApiKeyEnv: true,
-    apiKeyLabel: "Stored key name",
     apiKeyPlaceholder: "e.g. SEMANTIC_SCHOLAR_API_KEY",
   },
   {
@@ -90,6 +89,13 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     tier: "paid",
     label: "Tavily (paid)",
     help: "Hosted search API. Store its key in Providers.",
+  },
+  {
+    id: "brave",
+    tier: "paid",
+    label: "Brave Search (paid)",
+    help: "Brave's hosted Search API. Store its key in Providers.",
+    apiKeyPlaceholder: "e.g. BRAVE_SEARCH_API_KEY",
   },
 ];
 
@@ -144,84 +150,95 @@ function ProviderGroup<P extends string>({
   const active = opts.find((o) => o.id === value);
   const showBaseUrl = active?.tier === "selfhost" || !!active?.baseUrlLabel;
   const showApiKeyEnv = active?.tier === "paid" || !!active?.showApiKeyEnv;
+  const ActiveTierIcon = active ? TIER_ICON[active.tier] : Package;
   return (
     <div className="flex flex-col gap-inline">
       <h3 className="flex items-center gap-hair font-ui text-[0.95rem] font-medium text-text">
         <Icon className="size-4 text-text-faint" aria-hidden />
         {title}
       </h3>
-      <div className="grid gap-hair sm:grid-cols-3">
-        {opts.map((o) => {
-          const TierIcon = TIER_ICON[o.tier];
-          const on = o.id === value;
-          return (
-            <button
-              key={o.id}
-              type="button"
-              data-disco-control="settings.datasource-pick"
-              data-provider-id={o.id}
-              onClick={() => onPick(o.id)}
-              aria-pressed={on}
-              className={cn(
-                "flex flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
-                on
-                  ? "border-accent/60 bg-accent/5"
-                  : "border-hairline hover:border-hairline-strong",
-              )}
-            >
-              <span className="flex items-center gap-hair font-ui text-[0.82rem] font-medium text-text">
-                <TierIcon
-                  className={cn(
-                    "size-3.5",
-                    on ? "text-accent" : "text-text-faint",
-                  )}
-                  aria-hidden
-                />
-                {o.label}
-              </span>
-              <span className="font-ui text-[0.74rem] leading-snug text-text-faint">
-                {o.help}
-              </span>
-            </button>
-          );
-        })}
+      <div className="flex items-start gap-inline rounded-control border border-hairline bg-surface-1/40 px-body py-inline">
+        <ActiveTierIcon className="mt-px size-4 shrink-0 text-accent" aria-hidden />
+        <span className="flex min-w-0 flex-col gap-hair">
+          <span className="font-ui text-[0.86rem] font-medium text-text">
+            Current: {active?.label ?? value}
+          </span>
+          <span className="font-ui text-[0.76rem] leading-snug text-text-faint">
+            {active?.help}
+          </span>
+        </span>
       </div>
-      {/* contextual field for the active tier */}
-      {showBaseUrl && (
-        <label className="flex flex-col gap-hair">
-          <span className="font-ui text-[0.78rem] text-text-muted">
-            {active?.baseUrlLabel ?? "Service URL"}
-          </span>
-          <input
-            type={active?.baseUrlType ?? "url"}
-            spellCheck={false}
-            value={baseUrl}
-            onChange={(e) => onBaseUrl(e.target.value)}
-            placeholder={
-              active?.baseUrlPlaceholder ??
-              "http://host:port  (empty = server default)"
-            }
-            className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
-          />
-        </label>
-      )}
-      {showApiKeyEnv && (
-        <label className="flex flex-col gap-hair">
-          <span className="font-ui text-[0.78rem] text-text-muted">
-            {active?.apiKeyLabel ?? "Stored key name"}{" "}
-            <span className="text-text-faint">
-              ({active?.tier === "paid" ? "Advanced" : "Optional"})
-            </span>
-          </span>
-          <input
-            spellCheck={false}
-            value={apiKeyEnv}
-            onChange={(e) => onApiKeyEnv(e.target.value)}
-            placeholder={active?.apiKeyPlaceholder ?? "e.g. TAVILY_API_KEY"}
-            className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
-          />
-        </label>
-      )}
+
+      <details className="rounded-control border border-hairline px-body py-inline">
+        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+          Configure {title.toLowerCase()}
+        </summary>
+        <div className="mt-inline flex flex-col gap-inline">
+          <div className="grid gap-hair sm:grid-cols-3">
+            {opts.map((option) => {
+              const TierIcon = TIER_ICON[option.tier];
+              const on = option.id === value;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  data-disco-control="settings.datasource-pick"
+                  data-provider-id={option.id}
+                  onClick={() => onPick(option.id)}
+                  aria-pressed={on}
+                  className={cn(
+                    "flex flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
+                    on
+                      ? "border-accent/60 bg-accent/5"
+                      : "border-hairline hover:border-hairline-strong",
+                  )}
+                >
+                  <span className="flex items-center gap-hair font-ui text-[0.82rem] font-medium text-text">
+                    <TierIcon
+                      className={cn(
+                        "size-3.5",
+                        on ? "text-accent" : "text-text-faint",
+                      )}
+                      aria-hidden
+                    />
+                    {option.label}
+                  </span>
+                  <span className="font-ui text-[0.74rem] leading-snug text-text-faint">
+                    {option.help}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {showBaseUrl && (
+            <label className="flex flex-col gap-hair">
+              <span className="font-ui text-[0.78rem] text-text-muted">
+                {active?.baseUrlLabel ?? "Service URL"}
+              </span>
+              <input
+                type={active?.baseUrlType ?? "url"}
+                spellCheck={false}
+                value={baseUrl}
+                onChange={(event) => onBaseUrl(event.target.value)}
+                placeholder={
+                  active?.baseUrlPlaceholder ??
+                  "http://host:port  (empty = server default)"
+                }
+                className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
+              />
+            </label>
+          )}
+          {showApiKeyEnv && (
+            <StoredCredentialField
+              label={`${title} credential`}
+              value={apiKeyEnv}
+              onChange={onApiKeyEnv}
+              placeholder={active?.apiKeyPlaceholder ?? "e.g. TAVILY_API_KEY"}
+              optional={active?.tier !== "paid"}
+            />
+          )}
+        </div>
+      </details>
     </div>
   );
 }
