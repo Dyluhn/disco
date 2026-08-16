@@ -3,18 +3,12 @@ import { expect, test } from "@playwright/test";
 async function seedOverflowingActivityFeed(page: import("@playwright/test").Page) {
   const feed = page.getByTestId("build-activity-feed");
   await feed.evaluate((node) => {
-    const prior = node.querySelector<HTMLElement>("[data-f15-transcript]");
-    if (prior) prior.remove();
-    const transcript = document.createElement("pre");
-    transcript.dataset.f15Transcript = "true";
-    transcript.style.margin = "0";
-    transcript.style.whiteSpace = "pre";
-    transcript.textContent = Array.from(
-      { length: 120 },
-      (_, index) =>
-        `stream ${index.toString().padStart(3, "0")}: const longValue = "${"x".repeat(180)}";`,
-    ).join("\n");
-    node.append(transcript);
+    // Keep the overflow on the React-owned viewport itself. Injecting an
+    // unowned child is racy: the state update that reveals the dock also asks
+    // React to reconcile the feed and legitimately removes that child.
+    node.style.height = "320px";
+    node.style.flex = "0 0 320px";
+    node.style.paddingBottom = "4000px";
     node.scrollTop = 0;
     node.dispatchEvent(new Event("scroll", { bubbles: true }));
   });
@@ -114,33 +108,12 @@ test.describe("Build surface — scroll-to-latest accessibility", () => {
 
     await test.step("desktop at 100%", assertDocked);
 
-    await test.step("desktop at 200% zoom", async () => {
-      await page.evaluate(() => {
-        document.documentElement.style.zoom = "2";
-      });
-      await assertDocked();
-    });
-
-    await test.step("mobile width with a growing stream", async () => {
-      await page.evaluate(() => {
-        document.documentElement.style.zoom = "1";
-      });
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.getByTestId("build-activity-feed").evaluate((node) => {
-        // The narrow layout can grow with the page instead of overflowing its
-        // feed. Constrain the viewport to exercise the actual chevron state.
-        node.style.height = "240px";
-        node.style.flex = "0 0 240px";
-        const transcript = node.querySelector<HTMLElement>("[data-f15-transcript]");
-        if (transcript) transcript.textContent += `\n${"streaming text ".repeat(100)}`;
-        node.scrollTop = 0;
-        node.dispatchEvent(new Event("scroll", { bubbles: true }));
-      });
-      await assertDocked();
-    });
-
     const button = page.getByRole("button", { name: "Scroll to latest activity" });
-    for (let attempts = 0; attempts < 40 && !(await button.evaluate((el) => el === document.activeElement)); attempts += 1) {
+    for (
+      let attempts = 0;
+      attempts < 40 && !(await button.evaluate((el) => el === document.activeElement));
+      attempts += 1
+    ) {
       await page.keyboard.press("Tab");
     }
     await expect(button).toBeFocused();
@@ -162,5 +135,33 @@ test.describe("Build surface — scroll-to-latest accessibility", () => {
       "data-f15-scroll-behavior",
       "auto",
     );
+
+    // The activation above intentionally dismisses the dock. Recreate the
+    // overflow before checking the same layout contract at other viewports.
+    await seedOverflowingActivityFeed(page);
+
+    await test.step("desktop at 200% zoom", async () => {
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "2";
+      });
+      await assertDocked();
+    });
+
+    await test.step("mobile width with a growing stream", async () => {
+      await page.evaluate(() => {
+        document.documentElement.style.zoom = "1";
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByTestId("build-activity-feed").evaluate((node) => {
+        // The narrow layout can grow with the page instead of overflowing its
+        // feed. Constrain the viewport to exercise the actual chevron state.
+        node.style.height = "240px";
+        node.style.flex = "0 0 240px";
+        node.style.paddingBottom = "5600px";
+        node.scrollTop = 0;
+        node.dispatchEvent(new Event("scroll", { bubbles: true }));
+      });
+      await assertDocked();
+    });
   });
 });

@@ -13,7 +13,10 @@ test("Settings → Image generation: ComfyUI custom-workflow textarea", async ({
   await expect(section).toBeVisible();
   await section.scrollIntoViewIfNeeded();
 
-  await section.getByRole("button", { name: /Self-hosted \(ComfyUI\)/ }).click();
+  await section.getByText("Configure image generation", { exact: true }).click();
+  const comfy = section.getByRole("button", { name: /Self-hosted \(ComfyUI\)/ });
+  await expect(comfy).toBeVisible();
+  await comfy.click();
 
   // Base URL + checkpoint + the new custom-workflow textarea.
   await section.getByPlaceholder(/required for ComfyUI/i).fill("http://192.168.1.50:8188");
