@@ -626,6 +626,10 @@ def test_front_door_derives_dynamic_resolver_from_the_container_runtime(
     assert "set $app_upstream app-server;" in nginx
     assert "set $agent_upstream agent-server;" in nginx
 
+    index_shell = nginx.split("location = /index.html {", 1)[1].split("\n    }", 1)[0]
+    assert 'add_header Cache-Control "no-store" always;' in index_shell
+    assert "try_files $uri =404;" in index_shell
+
     assert (
         "COPY frontend/nginx.conf /etc/nginx/templates/default.conf.template"
         in dockerfile
