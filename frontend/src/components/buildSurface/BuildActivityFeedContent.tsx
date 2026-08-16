@@ -13,6 +13,7 @@ import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { BuildRunningActivity } from "./BuildRunningActivity";
 import type { ActivityItem, LiveSignal } from "@/lib/buildTrace";
 import type { BuildController } from "./types";
+import type { BuildFraming } from "@/components/BuildSurface";
 
 export function BuildActivityFeedContent({
   b,
@@ -21,6 +22,7 @@ export function BuildActivityFeedContent({
   finalMessage,
   draftingPlan,
   collapseFeed,
+  framing,
 }: {
   b: BuildController;
   activity: ActivityItem[];
@@ -28,6 +30,7 @@ export function BuildActivityFeedContent({
   finalMessage: string | null;
   draftingPlan: boolean;
   collapseFeed: boolean;
+  framing: BuildFraming;
 }) {
   if (b.status === "ERROR") {
     // Recovery: "Try again" RESUMES the errored conversation — it re-kicks
@@ -44,7 +47,7 @@ export function BuildActivityFeedContent({
           <p className="font-ui text-[0.78rem] text-text-muted">
             Try a different model before retrying:
           </p>
-          <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
+          <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
         </div>
       </div>
     );
@@ -66,6 +69,7 @@ export function BuildActivityFeedContent({
       finalMessage={finalMessage}
       draftingPlan={draftingPlan}
       collapseFeed={collapseFeed}
+      framing={framing}
     />
   );
 }

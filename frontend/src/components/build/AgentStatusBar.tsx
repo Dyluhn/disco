@@ -61,6 +61,7 @@ export function AgentStatusBar({
   events = [],
   modelId,
   seq,
+  surface = "build",
 }: {
   status: ConversationStatus;
   /** BP-15: null until the first state frame — renders muted '…'. */
@@ -86,6 +87,7 @@ export function AgentStatusBar({
    *  live gauntlet judges finish-freshness by state VERSION, not by having
    *  witnessed the transitions on a possibly-dead stream. */
   seq?: number;
+  surface?: "build" | "agent";
 }) {
   const waiting =
     status === "WAITING_FOR_CONFIRMATION" || status === "AWAITING_PLAN_APPROVAL";
@@ -104,7 +106,13 @@ export function AgentStatusBar({
           modelId={modelId}
         />
       </div>
-      <AgentControls status={status} onKill={onKill} onStop={onStop} onResume={onResume} />
+      <AgentControls
+        status={status}
+        onKill={onKill}
+        onStop={onStop}
+        onResume={onResume}
+        surface={surface}
+      />
     </div>
   );
 }
@@ -246,11 +254,13 @@ function AgentControls({
   onKill,
   onStop,
   onResume,
+  surface,
 }: {
   status: ConversationStatus;
   onKill: () => void;
   onStop?: () => void;
   onResume?: () => void;
+  surface: "build" | "agent";
 }) {
   const active = ACTIVE.includes(status);
 
@@ -271,7 +281,7 @@ function AgentControls({
 
   return (
     <div className="flex items-center gap-hair">
-      <ResumeButton status={status} onResume={onResume} />
+      <ResumeButton status={status} onResume={onResume} surface={surface} />
       <StopButton
         status={status}
         onStop={onStop}
@@ -299,16 +309,18 @@ function AgentControls({
 function ResumeButton({
   status,
   onResume,
+  surface,
 }: {
   status: ConversationStatus;
   onResume?: () => void;
+  surface: "build" | "agent";
 }) {
   if (!onResume || (status !== "PAUSED" && status !== "IDLE")) return null;
   return (
     <button
       type="button"
       onClick={onResume}
-      aria-label="Resume the agent — continue this build where it left off"
+      aria-label={`Resume the agent — continue this ${surface === "agent" ? "task" : "build"} where it left off`}
       data-disco-control="resume"
       className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
     >

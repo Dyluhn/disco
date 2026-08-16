@@ -13,6 +13,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
+from ._agent_prompt_templates import (
+    _AGENT_EXECUTION_DRIVER_PROMPT,
+    _AGENT_EXECUTION_DRIVER_PROMPT_SMALL,
+    _AGENT_PLANNING_DRIVER_PROMPT,
+)
 from ._prompt_templates import (
     _AGENT_PLANNING_CAPABILITY_BLOCK,
     _APPKIT_ASSISTED_SCOPE_GUIDANCE,
@@ -211,6 +216,16 @@ class DriverPrompts:
                 # in execution, where it is actually offered and allowed.
                 execution_prompt += _APPKIT_ASSISTED_SCOPE_GUIDANCE
                 execution_prompt_small += _APPKIT_ASSISTED_SCOPE_GUIDANCE
+        # Agent is a general task surface. It keeps Build's loop mechanics but owns
+        # an explicit proportional task contract so direct answers, files, browser
+        # work, and software are not all framed as web builds. Strict AppKit keeps
+        # its self-contained prompt above; its ordinary post-ejection profile is a
+        # separate non-AppKit DriverPrompts instance and lands here normally.
+        if flavor == "agent" and not appkit_mode:
+            planning_prompt = _AGENT_PLANNING_DRIVER_PROMPT
+            execution_prompt = _AGENT_EXECUTION_DRIVER_PROMPT
+            execution_prompt_small = _AGENT_EXECUTION_DRIVER_PROMPT_SMALL
+
         # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
         # with an explicit instruction to assume + proceed (OpenHands "never ask for
         # human help" + Cline "make reasonable assumptions, don't end with questions").
@@ -220,23 +235,6 @@ class DriverPrompts:
             planning_prompt = _AUTONOMOUS_PROMPT_PREFIX + planning_prompt
             execution_prompt = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt
             execution_prompt_small = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt_small
-        # `flavor` reframes the driver's IDENTITY for the agent surface — a general
-        # task agent rather than a software builder — while keeping every mechanic
-        # (plan→approve→execute, the meta-tools, the finish/verify gates) byte-
-        # identical. v1 is an identity-only swap; a deeper task-framed rewrite is
-        # deferred (it needs eval passes). "build" leaves the prompts untouched.
-        # Applied to BOTH execution variants so the small-model prompt is also
-        # identity-consistent with the surface it is rendering.
-        if flavor == "agent":
-            planning_prompt = planning_prompt.replace(
-                "autonomous build agent", "autonomous task agent"
-            )
-            execution_prompt = execution_prompt.replace(
-                "autonomous build agent", "autonomous task agent"
-            )
-            execution_prompt_small = execution_prompt_small.replace(
-                "autonomous build agent", "autonomous task agent"
-            )
         if host_verify_authoritative:
             execution_prompt = _soften_self_verify_mandate(execution_prompt)
             execution_prompt_small = _soften_self_verify_mandate(execution_prompt_small)

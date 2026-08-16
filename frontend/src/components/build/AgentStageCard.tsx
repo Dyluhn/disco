@@ -39,12 +39,14 @@ export function AgentStageCard({
   status,
   activity,
   conversationId,
+  surface = "build",
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
   /** The full derived activity — rendered inline when the card is expanded. */
   activity: ActivityItem[];
   conversationId?: string;
+  surface?: "build" | "agent";
 }) {
   const [expanded, setExpanded] = useState(false);
   const stage = deriveStage(events, status);
@@ -92,7 +94,7 @@ export function AgentStageCard({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block font-ui text-[0.9rem] font-medium text-text">
-            {STAGE_LABEL[stage]}
+            {surface === "agent" && stage === "building" ? "Working" : STAGE_LABEL[stage]}
           </span>
           <span className="block font-ui text-[0.74rem] text-text-faint">
             Verbose chat is off — {expanded ? "click to collapse" : "click to expand"} the full history

@@ -22,6 +22,7 @@ from disco.core import (
 )
 from disco.core.events import EventSource
 from disco.core.llm import OperatingMode, ToolSpec
+from disco.core.loop.control import Disp
 from loop_fakes import (
     FakeExecutor,
     ScriptedAgent,
@@ -61,6 +62,23 @@ def _env_messages(events) -> list[str]:
         and e.source == EventSource.ENVIRONMENT
         and e.message is not None
     ]
+
+
+@pytest.mark.asyncio
+async def test_execution_nudge_can_be_disabled_for_plain_agent_answers():
+    loop, _ = build_loop(
+        ScriptedAgent([]),
+        executor=_PlanExecutor(),
+        mode=OperatingMode.LONG_HORIZON,
+        planning_tools=frozenset({"submit_plan"}),
+        require_productive_action_before_finish=False,
+    )
+
+    assert (
+        await loop._finish.gate_execution_nudge(finish_step("The answer is 42."), [])
+        is Disp.FALLTHROUGH
+    )
+    assert loop._execution_nudges == 0
 
 
 @pytest.mark.asyncio

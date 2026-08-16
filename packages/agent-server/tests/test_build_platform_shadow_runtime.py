@@ -15,10 +15,11 @@ def _compose(
     *,
     conversation_id: str,
     appkit: bool,
+    surface: str = "build",
 ) -> tuple[ConversationRuntime, object]:
     monkeypatch.setenv("DISCO_BUILD_PLATFORM_SHADOW", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.settings._set_surface(conversation_id, "agent")
+    runtime.settings._set_surface(conversation_id, surface)
     if appkit:
         runtime.settings.set_appkit_mode(conversation_id, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
@@ -47,12 +48,25 @@ def test_runtime_records_appkit_shadow_and_keeps_strict_executor(monkeypatch) ->
         monkeypatch,
         conversation_id="shadow-appkit",
         appkit=True,
+        surface="agent",
     )
     record = runtime._build_shadows.snapshot()["shadow-appkit"]
     assert record.matches
     assert record.source == "appkit"
     assert record.active_route == "legacy"
     assert isinstance(loop.executor, AppKitToolExecutor)
+
+
+def test_runtime_skips_build_platform_shadow_for_plain_agent(monkeypatch) -> None:
+    runtime, loop = _compose(
+        monkeypatch,
+        conversation_id="shadow-agent",
+        appkit=False,
+        surface="agent",
+    )
+
+    assert runtime._build_shadows.snapshot() == {}
+    assert isinstance(loop.executor, DefaultToolExecutor)
 
 
 def test_runtime_shadows_declared_files_delivery_as_artifact(monkeypatch) -> None:
@@ -102,7 +116,7 @@ def test_host_verifier_uses_the_verification_operation_budget(monkeypatch) -> No
 def test_broken_observer_cannot_break_legacy_loop_composition(monkeypatch) -> None:
     monkeypatch.setenv("DISCO_BUILD_PLATFORM_SHADOW", "1")
     runtime = ConversationRuntime(SqliteEventStore(":memory:"))
-    runtime.settings._set_surface("shadow-broken", "agent")
+    runtime.settings._set_surface("shadow-broken", "build")
     with (
         mock.patch.object(runtime, "_sandbox_service_now"),
         mock.patch(

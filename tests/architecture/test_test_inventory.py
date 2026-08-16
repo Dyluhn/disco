@@ -623,10 +623,14 @@ class TestMappingStatic:
             # The post-campaign settings and Deep Research UI passes add five
             # frontend test files, thirteen static TypeScript IDs net, and one
             # same-file Python regression.
-            "python_test_file_count": 846,
-            "python_static_test_id_count": 10373,
-            "typescript_test_file_count": 244,
-            "typescript_static_test_id_count": 1227,
+            # The Agent surface pass adds one Python test file with eleven
+            # static/collected package IDs, plus one Vitest file with five
+            # TypeScript IDs. Its three live task shapes are folded into the
+            # existing Agent capability cell, preserving the sealed live IDs.
+            "python_test_file_count": 847,
+            "python_static_test_id_count": 10384,
+            "typescript_test_file_count": 245,
+            "typescript_static_test_id_count": 1232,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -756,12 +760,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1176, 181)
+            == (1181, 182)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1176
-        assert len(set(frontend["vitest_files_list"])) == 181
+        assert len(set(frontend["vitest_ids_list"])) == 1181
+        assert len(set(frontend["vitest_files_list"])) == 182
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1012,7 +1016,10 @@ class TestCollectedCounts:
             # V55 adds one non-parametrized helper-controller provenance id in
             # that same lifecycle file; V54 added assertions but no new id.
             # V57 adds three non-parametrized snapshot/front-door lifecycle ids.
-            "packages": 10775,
+            # The Agent surface pass adds eleven non-parametrized package IDs:
+            # prompt selection, proportional finish/admission policy, ingress
+            # neutrality, and the inverse Build-shadow boundary.
+            "packages": 10786,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1142,7 +1149,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12613 == sum(expected.values())
+        assert collected["total"] == 12624 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1158,7 +1165,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12613}
+        assert result == {"collected_total": 12624}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1177,9 +1184,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10373,
-            "typescript_static_ids": 1227,
-            "collected_total": 12613,
+            "python_static_ids": 10384,
+            "typescript_static_ids": 1232,
+            "collected_total": 12624,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

@@ -76,6 +76,7 @@ class _LoopPresentation:
     autonomous: bool
     context_window: int | None
     delivery_kind: Literal["app", "files"] | None
+    require_productive_action_before_finish: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,8 +123,18 @@ class BuildLoopAssembler:
     ) -> AgentLoop:
         finish_alias = self._finish_alias(conversation_id, sealed_workflow_run)
         delivery_kind = self._contract.expected_delivery_mode(conversation_id)
-        build_admission_enabled = sealed_workflow_run is None and not (
-            context.modes.art_mode or context.modes.workflow_router_mode
+        ordinary_agent = (
+            self._settings._surface_of(conversation_id) == "agent"
+            and delivery_kind is None
+            and sealed_workflow_run is None
+            and not context.modes.art_mode
+            and not context.modes.appkit_mode
+            and not context.modes.workflow_router_mode
+        )
+        build_admission_enabled = (
+            sealed_workflow_run is None
+            and not (context.modes.art_mode or context.modes.workflow_router_mode)
+            and not ordinary_agent
         )
         self._set_finish_alias(agent, finish_alias)
         self._observe_composition(
@@ -132,6 +143,7 @@ class BuildLoopAssembler:
             context,
             sealed=sealed_workflow_run is not None,
             delivery_kind=delivery_kind,
+            admission_enabled=not ordinary_agent,
         )
         runtime = _LoopRuntime(
             conversation_id=conversation_id,
@@ -147,6 +159,10 @@ class BuildLoopAssembler:
             autonomous=self._settings._effective_autonomous(conversation_id),
             context_window=context.policy.driver_context_window,
             delivery_kind=delivery_kind,
+            # A plain Agent may answer entirely in its finish summary. Build,
+            # AppKit, artifacts, and workflows still require an execution
+            # action after plan approval.
+            require_productive_action_before_finish=not ordinary_agent,
         )
         hooks = self._hooks(
             conversation_id,
@@ -189,9 +205,10 @@ class BuildLoopAssembler:
         *,
         sealed: bool,
         delivery_kind: Literal["app", "files"] | None,
+        admission_enabled: bool,
     ) -> None:
         modes = context.modes
-        if build_platform_shadow_enabled() and not sealed:
+        if build_platform_shadow_enabled() and not sealed and admission_enabled:
             try:
                 self._shadows.record(
                     conversation_id,
@@ -209,7 +226,8 @@ class BuildLoopAssembler:
         self._build_platform.select_builtin(
             conversation_id,
             appkit=modes.appkit_mode,
-            eligible=not sealed
+            eligible=admission_enabled
+            and not sealed
             and not (modes.art_mode or modes.workflow_router_mode),
             tool_specs=executor.available_tools(),
             delivery_kind=delivery_kind,
@@ -283,6 +301,9 @@ class BuildLoopAssembler:
             "control_fence": hooks.fence,
             "declared_delivery_kind": presentation.delivery_kind,
             "delivery_contract_resolver": hooks.delivery_contract_resolver,
+            "require_productive_action_before_finish": (
+                presentation.require_productive_action_before_finish
+            ),
         }
 
     def _sealed_loop(

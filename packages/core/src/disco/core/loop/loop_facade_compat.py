@@ -99,6 +99,7 @@ class _AgentLoopCompatibility:
     _revision_force_submit_enabled: bool
     _plan_explore_reads: int
     _execution_nudges: int
+    _require_productive_action_before_finish: bool
     _browser_verify_refusals: int
     _identical_plan_revisions: int
     _finish_verify_refusals: int

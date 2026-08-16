@@ -232,10 +232,12 @@ export function BuildModelPicker({
   value,
   onChange,
   disabled,
+  surface = "build",
 }: {
   value: string | null;
   onChange: (id: string | null) => void;
   disabled?: boolean;
+  surface?: "build" | "agent";
 }) {
   const { data } = useDriverModels();
   const { data: lastSelected } = useLastSelectedModel();
@@ -264,19 +266,20 @@ export function BuildModelPicker({
 
   const select = (m: DriverModel) => {
     onChange(m.id === defaultId ? null : m.id);
+    const action = surface === "agent" ? "working" : "building";
     // Cost honesty (A2): the build driver IS the whole agent — a paid/subscription
     // pick drives every step. Say it once; a genuinely free model stays silent.
     if (isSubscriptionDriver(m)) {
       toast.show({
         tone: "cost",
-        title: `Now building with ${m.label}`,
+        title: `Now ${action} with ${m.label}`,
         body: "This subscription model drives every step of the agent (flat-rate plan, not per-token).",
       });
     } else if (!m.free) {
       toast.show({
         tone: "cost",
-        title: `Now building with ${m.label}`,
-        body: "This paid model drives every step of the agent for this build.",
+        title: `Now ${action} with ${m.label}`,
+        body: `This paid model drives every step of the agent for this ${surface === "agent" ? "task" : "build"}.`,
       });
     }
     if (

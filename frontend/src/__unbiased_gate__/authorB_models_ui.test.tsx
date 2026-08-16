@@ -17,6 +17,7 @@ const hookState = vi.hoisted(() => ({
   lastSelected: null as string | null,
   visionModel: null as string | null,
   updateAssignments: vi.fn(),
+  showToast: vi.fn(),
 }));
 
 vi.mock("@/hooks/useModels", () => ({
@@ -47,7 +48,7 @@ vi.mock("@/hooks/useDriverModels", () => ({
 }));
 
 vi.mock("@/components/toastApi", () => ({
-  useToast: () => ({ show: vi.fn() }),
+  useToast: () => ({ show: hookState.showToast }),
 }));
 
 const subscriptionModel: ModelInfo = {
@@ -74,6 +75,7 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
     hookState.lastSelected = null;
     hookState.visionModel = null;
     hookState.updateAssignments.mockReset();
+    hookState.showToast.mockReset();
   });
 
   it("W-04 keeps the OpenRouter or- catalogue key but removes the bogus 'Or ' label prefix", async () => {
@@ -174,6 +176,59 @@ describe("AuthorB unbiased gate — W-04/W-05 model display", () => {
 
     await user.click(trigger);
     expect(await screen.findByText("Subscription")).toBeInTheDocument();
+  });
+
+  it("uses task copy when Agent selects a paid driver", async () => {
+    const user = userEvent.setup();
+    hookState.driverModels = [
+      {
+        id: "free-driver",
+        label: "Free Driver",
+        provider: "local",
+        free: true,
+        context_window: 128_000,
+        capabilities: ["tool_calling", "vision"],
+      },
+      {
+        id: "paid-driver",
+        label: "Paid Driver",
+        provider: "openrouter",
+        free: false,
+        context_window: 128_000,
+        capabilities: ["tool_calling", "vision"],
+      },
+    ];
+    hookState.driverDefault = "free-driver";
+
+    render(
+      <MemoryRouter>
+        <BuildModelPicker value={null} onChange={() => {}} surface="agent" />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /choose the model/i }));
+    await user.click(await screen.findByText("Paid Driver"));
+
+    expect(hookState.showToast).toHaveBeenCalledWith({
+      tone: "cost",
+      title: "Now working with Paid Driver",
+      body: "This paid model drives every step of the agent for this task.",
+    });
+  });
+
+  it("uses task copy when resuming the Agent surface", () => {
+    render(
+      <AgentStatusBar
+        status="PAUSED"
+        isolation={{ tier: "local", label: "Local sandbox", adversarialSafe: true }}
+        onKill={() => {}}
+        onResume={() => {}}
+        surface="agent"
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /continue this task where it left off/i }),
+    ).toBeInTheDocument();
   });
 
   it("recommends and assigns a bounded visual model after a text-only driver pick", async () => {
