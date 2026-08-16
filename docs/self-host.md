@@ -43,9 +43,12 @@ under `/opt/disco-cache`, so the `/data` volume does not hide them.
 ## Backup and restore
 
 Use the repository lifecycle command rather than copying a live `disco.db` file.
-Backup briefly stops the two database writers, uses SQLite's backup API, archives
-the complete `disco-data` volume with per-entry SHA-256 checksums, then restarts
-only the writers that were running before the snapshot:
+Backup briefly stops the front door and the two database writers, uses SQLite's
+backup API, archives the complete `disco-data` volume with per-entry SHA-256
+checksums, then restores the prior service state. The writers start first and the
+front door is brought back through its healthy-backend dependencies, so a
+Docker or rootless-Podman backend reattachment cannot leave nginx on a stale
+network path:
 
 ```bash
 .venv/bin/python scripts/self_host_data.py backup \

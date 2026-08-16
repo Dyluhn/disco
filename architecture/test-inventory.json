@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "5e7770da5c843f60901e9d97f3dfe52619245030",
+  "source_identity": "80f24403c1f90d591de7435cab0426884c24b82e",
   "collected": {
     "counts": {
-      "packages": 10771,
+      "packages": 10774,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12609,
+    "total": 12612,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6980,6 +6980,9 @@
         "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
         "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
         "packages/core/tests/test_self_host_data.py::test_restore_rejects_traversal_before_writing_target",
+        "packages/core/tests/test_self_host_data.py::test_snapshot_coordinates_frontend_after_both_writers",
+        "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_a_partial_writer_state",
+        "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_an_intentionally_stopped_frontend",
         "packages/core/tests/test_self_host_data.py::test_uninstall_retains_data_unless_exact_confirmation_is_present",
         "packages/core/tests/test_semantic_attr_parity.py::test_ts_mirror_matches_python_canonical_exactly",
         "packages/core/tests/test_semantic_refs.py::test_bare_cardinal_digits_are_ordinals",
@@ -12630,9 +12633,9 @@
     }
   },
   "mapping_static": {
-    "identity": "5e7770da5c843f60901e9d97f3dfe52619245030",
+    "identity": "80f24403c1f90d591de7435cab0426884c24b82e",
     "python_test_file_count": 846,
-    "python_static_test_id_count": 10369,
+    "python_static_test_id_count": 10372,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20301,6 +20304,9 @@
       "packages/core/tests/test_self_host_data.py::test_restore_refuses_nonempty_target_without_changing_it",
       "packages/core/tests/test_self_host_data.py::test_restore_rejects_checksum_drift_without_partial_promotion",
       "packages/core/tests/test_self_host_data.py::test_restore_rejects_traversal_before_writing_target",
+      "packages/core/tests/test_self_host_data.py::test_snapshot_coordinates_frontend_after_both_writers",
+      "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_a_partial_writer_state",
+      "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_an_intentionally_stopped_frontend",
       "packages/core/tests/test_self_host_data.py::test_uninstall_retains_data_unless_exact_confirmation_is_present",
       "packages/core/tests/test_semantic_attr_parity.py::test_ts_mirror_matches_python_canonical_exactly",
       "packages/core/tests/test_semantic_refs.py::test_bare_cardinal_digits_are_ordinals",
@@ -34164,6 +34170,34 @@
         "python_test_files": [],
         "python_static_test_ids": [
           "packages/core/tests/test_self_host_data.py::test_container_helper_executes_the_invoking_controller_not_the_service_image"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-19-V57-FRONTDOOR-SNAPSHOT-RECOVERY",
+      "root": "packages",
+      "source_identity_before": "5e7770da5c843f60901e9d97f3dfe52619245030",
+      "source_identity_after": "80f24403c1f90d591de7435cab0426884c24b82e",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10771,
+          "after_count": 10774,
+          "added_ids": [
+            "packages/core/tests/test_self_host_data.py::test_snapshot_coordinates_frontend_after_both_writers",
+            "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_a_partial_writer_state",
+            "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_an_intentionally_stopped_frontend"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [
+          "packages/core/tests/test_self_host_data.py::test_snapshot_coordinates_frontend_after_both_writers",
+          "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_a_partial_writer_state",
+          "packages/core/tests/test_self_host_data.py::test_snapshot_preserves_an_intentionally_stopped_frontend"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

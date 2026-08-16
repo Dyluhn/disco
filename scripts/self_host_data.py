@@ -62,6 +62,12 @@ class _ArchiveItem:
         return row
 
 
+@dataclass(frozen=True)
+class _SnapshotRuntime:
+    writers: tuple[str, ...]
+    frontend: bool
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -413,9 +419,9 @@ class _Compose:
             raise DataLifecycleError("Compose project has no data volume")
         return None
 
-    def running_data_services(self) -> tuple[str, ...]:
+    def running_services(self, services: Sequence[str]) -> tuple[str, ...]:
         running: list[str] = []
-        for service in ("app-server", "agent-server"):
+        for service in services:
             container_ids = self._resource_lines(
                 self._engine_text(
                     "ps",
@@ -435,6 +441,12 @@ class _Compose:
             if container_ids:
                 running.append(service)
         return tuple(running)
+
+    def running_data_services(self) -> tuple[str, ...]:
+        return self.running_services(("app-server", "agent-server"))
+
+    def frontend_running(self) -> bool:
+        return self.running_services(("frontend",)) == ("frontend",)
 
 
 def _engine(name: str) -> str:
@@ -487,16 +499,33 @@ def _container_helper(compose: _Compose, command: str, *, stdin=None, stdout=Non
     )
 
 
-def _stop_for_snapshot(compose: _Compose) -> tuple[str, ...]:
-    running = compose.running_data_services()
-    if running:
-        compose.run("stop", *running)
-    return running
+def _stop_for_snapshot(compose: _Compose) -> _SnapshotRuntime:
+    writers = compose.running_data_services()
+    frontend = compose.frontend_running()
+    # The proxy is not a database writer, but it belongs to the maintenance
+    # boundary. Rootless Podman can reattach stopped backends beneath a still-live
+    # proxy; restarting the proxy after its healthy dependencies removes that
+    # stale network path on Podman while preserving the same Compose flow on Docker.
+    if frontend:
+        compose.run("stop", "frontend")
+    if writers:
+        compose.run("stop", *writers)
+    return _SnapshotRuntime(writers=writers, frontend=frontend)
 
 
-def _restart_snapshot_services(compose: _Compose, running: Sequence[str]) -> None:
-    if running:
-        compose.run("start", *running)
+def _restart_snapshot_services(compose: _Compose, running: _SnapshotRuntime) -> None:
+    if running.writers:
+        compose.run("start", *running.writers)
+    if running.frontend:
+        if running.writers == ("app-server", "agent-server"):
+            # `up` reapplies frontend's declared healthy-backend dependencies;
+            # plain `start` does not. It also gives nginx a fresh network
+            # namespace after the writers have reattached.
+            compose.run("up", "-d", "frontend")
+        else:
+            # Preserve an intentionally partial/degraded service state exactly;
+            # backup must not turn on a writer that the operator had stopped.
+            compose.run("start", "frontend")
 
 
 def _host_backup(compose: _Compose, engine: str, output: Path) -> None:

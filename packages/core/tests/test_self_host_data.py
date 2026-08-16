@@ -195,6 +195,7 @@ def test_compose_resource_discovery_uses_native_project_labels(monkeypatch, engi
 
     assert compose.volume_name() == "campaign_disco-data"
     assert compose.running_data_services() == ("app-server",)
+    assert compose.frontend_running() is False
     assert all(command[0] == engine and command[1] != "compose" for command in calls)
     assert calls[0] == [
         engine,
@@ -280,6 +281,82 @@ def test_compose_running_service_discovery_rejects_multiple_owners(monkeypatch) 
         compose.running_data_services()
 
 
+def test_snapshot_coordinates_frontend_after_both_writers() -> None:
+    class _SnapshotCompose:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def running_data_services(self) -> tuple[str, ...]:
+            return ("app-server", "agent-server")
+
+        def frontend_running(self) -> bool:
+            return True
+
+        def run(self, *arguments: str) -> None:
+            self.calls.append(arguments)
+
+    compose = _SnapshotCompose()
+    running = lifecycle._stop_for_snapshot(compose)
+    lifecycle._restart_snapshot_services(compose, running)
+
+    assert compose.calls == [
+        ("stop", "frontend"),
+        ("stop", "app-server", "agent-server"),
+        ("start", "app-server", "agent-server"),
+        ("up", "-d", "frontend"),
+    ]
+
+
+def test_snapshot_preserves_an_intentionally_stopped_frontend() -> None:
+    class _SnapshotCompose:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def running_data_services(self) -> tuple[str, ...]:
+            return ("app-server", "agent-server")
+
+        def frontend_running(self) -> bool:
+            return False
+
+        def run(self, *arguments: str) -> None:
+            self.calls.append(arguments)
+
+    compose = _SnapshotCompose()
+    running = lifecycle._stop_for_snapshot(compose)
+    lifecycle._restart_snapshot_services(compose, running)
+
+    assert compose.calls == [
+        ("stop", "app-server", "agent-server"),
+        ("start", "app-server", "agent-server"),
+    ]
+
+
+def test_snapshot_preserves_a_partial_writer_state() -> None:
+    class _SnapshotCompose:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, ...]] = []
+
+        def running_data_services(self) -> tuple[str, ...]:
+            return ("app-server",)
+
+        def frontend_running(self) -> bool:
+            return True
+
+        def run(self, *arguments: str) -> None:
+            self.calls.append(arguments)
+
+    compose = _SnapshotCompose()
+    running = lifecycle._stop_for_snapshot(compose)
+    lifecycle._restart_snapshot_services(compose, running)
+
+    assert compose.calls == [
+        ("stop", "frontend"),
+        ("stop", "app-server"),
+        ("start", "app-server"),
+        ("start", "frontend"),
+    ]
+
+
 def test_restore_lets_compose_create_and_then_binds_a_missing_volume(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -295,6 +372,9 @@ def test_restore_lets_compose_create_and_then_binds_a_missing_volume(
 
         def running_data_services(self) -> tuple[str, ...]:
             return ()
+
+        def frontend_running(self) -> bool:
+            return False
 
         def run(self, *arguments: str) -> None:
             self.calls.append(arguments)
