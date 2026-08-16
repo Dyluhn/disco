@@ -13,6 +13,17 @@ async function toggleTheme(page: Page) {
 }
 
 test.describe("visual regression", () => {
+  test("deep research splash — both themes", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: /^scope:/i }).click();
+    await page.getByRole("menuitem", { name: /deep research/i }).click();
+    await expect(page.getByPlaceholder(/ask a research question/i)).toBeVisible();
+
+    await expect(page).toHaveScreenshot("deep-research-splash.png");
+    await toggleTheme(page);
+    await expect(page).toHaveScreenshot("deep-research-splash-alt-theme.png");
+  });
+
   test("research answer — both themes", async ({ page }) => {
     await page.goto("/");
     await page

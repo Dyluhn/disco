@@ -167,6 +167,33 @@ def test_followup_context_preserves_head_and_tail_of_long_evidence():
     assert "[excerpt middle omitted]" in prompt
 
 
+def test_followup_context_names_the_full_saved_source_corpus():
+    """The model sees the corpus size and every passage identity even at scale."""
+    from disco.agent_server.deep_research_service import _build_follow_up_prompt
+
+    passages = [
+        {
+            "id": f"source-{index}",
+            "source_title": f"Release source {index}",
+            "text": (f"Evidence from source {index}. " * 300),
+        }
+        for index in range(40)
+    ]
+    report = ReportEvent(
+        source=EventSource.AGENT,
+        query="Which models shipped?",
+        summary="Several releases were found.",
+        sections=[],
+        passages=passages,
+        all_hits=[],
+    )
+
+    prompt = _build_follow_up_prompt(report, passages, "List the releases.")
+
+    assert "Saved source corpus: 40 passages." in prompt
+    assert all(f"[[source-{index}]]" in prompt for index in range(40))
+
+
 async def test_followup_requires_existing_report():
     """_has_fresh_user_message returns False when there's no report at all."""
     store = SqliteEventStore(":memory:")

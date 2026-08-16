@@ -25,10 +25,8 @@ interface Props {
    *  hint) INSIDE the card border with the submit button, instead of as a
    *  sibling <div> floating below it. */
   footer?: React.ReactNode;
-  /** R10: secondary controls rendered INLINE in the same flex-wrap pill row as
-   *  the model/scope/think cluster (same size + register). Used by the Deep
-   *  Research surface for Depth/Recency/Iterative so selecting DR doesn't add a
-   *  new full-width row that grows the card and reflows the centered layout. */
+  /** Secondary controls rendered inline in the same flex-wrap row as the
+   *  model/scope/think cluster. */
   extraControls?: React.ReactNode;
   /** Gap #18: the stable `data-disco-control` id for the submit button. The
    *  shared QueryInput is mounted at TWO distinct sites (first send + the build

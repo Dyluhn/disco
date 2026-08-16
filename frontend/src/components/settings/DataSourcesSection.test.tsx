@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 describe("DataSourcesSection — WALK-05 label", () => {
-  it("shows compact defaults and reveals the complete provider choices on request", async () => {
+  it("WALK-05: shows 'Bundled — ddgs' (not 'Bundled — DuckDuckGo') for the bundled search option", async () => {
     render(createElement(DataSourcesSection), { wrapper: makeWrapper() });
 
     expect(await screen.findByText(/Current: Bundled — ddgs/i)).toBeInTheDocument();

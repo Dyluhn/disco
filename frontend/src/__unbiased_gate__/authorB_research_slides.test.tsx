@@ -130,6 +130,7 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
     await user.click(screen.getByRole("button", { name: /scope: standard/i }));
     expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
 
+    await user.click(screen.getByRole("button", { name: /research options/i }));
     await user.click(screen.getByRole("button", { name: /scope: deep research/i }));
     expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
   });
