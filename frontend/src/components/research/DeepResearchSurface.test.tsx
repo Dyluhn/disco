@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
 import {
   deriveAssemblingSections,
@@ -25,7 +25,7 @@ import {
 } from "@/fixtures/deepResearchTrace";
 import { DeepResearchSurface } from "./DeepResearchSurface";
 
-function renderSurface() {
+function renderSurface(onScopeChange?: (next: "standard" | "deep_research") => void) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
@@ -34,7 +34,7 @@ function renderSurface() {
       <MemoryRouter initialEntries={["/"]}>
         <ModeProvider>
           <Routes>
-            <Route path="/" element={<DeepResearchSurface />} />
+            <Route path="/" element={<DeepResearchSurface onScopeChange={onScopeChange} />} />
           </Routes>
         </ModeProvider>
       </MemoryRouter>
@@ -63,7 +63,8 @@ describe("Deep Research surface — full lifecycle", () => {
 
     const options = screen.getByRole("button", { name: /Research options/i });
     expect(options).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: /Scope: Deep Research/i })).not.toBeInTheDocument();
+    // Search type stays outside the disclosure so Standard Search is always reachable.
+    expect(screen.getByRole("button", { name: /Scope: Deep Research/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Recency filter/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Attach files/i })).not.toBeInTheDocument();
 
@@ -73,7 +74,6 @@ describe("Deep Research surface — full lifecycle", () => {
 
     await user.click(options);
     expect(options).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByRole("button", { name: /Scope: Deep Research/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Recency filter: Any time/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Attach files/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^(Web|News|arXiv|Semantic Scholar)$/i })).toHaveLength(4);
@@ -105,7 +105,8 @@ describe("Deep Research surface — full lifecycle", () => {
 
   it("after submit, shows the plan gate with editable sub-questions", async () => {
     const user = userEvent.setup();
-    renderSurface();
+    const onScopeChange = vi.fn();
+    renderSurface(onScopeChange);
     await user.type(
       screen.getByPlaceholderText(/ask a research question/i),
       "what is the current state of solid-state battery commercialization?",
@@ -117,6 +118,8 @@ describe("Deep Research surface — full lifecycle", () => {
       () => screen.getByRole("alertdialog", { name: /plan needs your approval/i }),
       { timeout: 5000 },
     );
+    await user.click(screen.getByRole("button", { name: /Standard Search/i }));
+    expect(onScopeChange).toHaveBeenCalledWith("standard");
     // sub-questions present from the fixture plan
     expect(
       within(gate).getByText(/Which solid-state battery products/i),

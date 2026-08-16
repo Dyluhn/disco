@@ -92,7 +92,7 @@ describe("W-06 — draft persists across Search ↔ Deep Research toggle", () =>
     expect(drInput).toHaveValue(DRAFT);
 
     // Toggle back → standard; the draft still persists across the second swap.
-    await user.click(screen.getByRole("button", { name: /Research options/i }));
+    // The route back is persistent; it must not be hidden behind Research options.
     await user.click(screen.getByRole("button", { name: /Scope: Deep Research/i }));
 
     expect(await screen.findByPlaceholderText(/ask anything/i)).toHaveValue(DRAFT);

@@ -63,24 +63,31 @@ async def _call_llm(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
+    data: dict | None = None
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(600.0, connect=30.0),
             trust_env=False,
             follow_redirects=False,
         ) as client:
-            resp = await client.post(
-                f"{llm_url}/chat/completions",
-                json=payload,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            for attempt in range(2):
+                resp = await client.post(
+                    f"{llm_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                if attempt == 0 and (resp.status_code == 429 or resp.status_code >= 500):
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
     except httpx.TimeoutException as e:
         raise RuntimeError(
             f"{type(e).__name__} after 600s from {llm_url} (reasoning models can "
             "exceed short caps; the driver endpoint may be slow or wedged)"
         ) from e
+    if data is None:  # pragma: no cover - the bounded loop returns or raises
+        raise RuntimeError("slide author returned no response payload")
     from disco.core.think import strip_think_spans
 
     choice = data["choices"][0]

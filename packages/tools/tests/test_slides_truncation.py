@@ -42,6 +42,8 @@ def _context(sandbox: FakeSandboxInstance | None = None) -> ToolContext:
 @pytest.mark.asyncio
 async def test_http_adapter_preserves_length_finish_reason(monkeypatch) -> None:
     class _Response:
+        status_code = 200
+
         def raise_for_status(self) -> None:
             return None
 
@@ -191,6 +193,7 @@ async def test_public_tool_reports_truncation_as_failure_not_degraded_renderer()
 
 @pytest.mark.asyncio
 async def test_completed_malformed_fill_keeps_one_retry_then_plain_fallback() -> None:
+    """Retain the historical inventory ID while proving diagnostics stay internal."""
     with (
         patch.object(
             slides,

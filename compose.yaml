@@ -71,6 +71,10 @@ services:
       - disco-data:/data
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_APP_PORT:-${PMX_APP_PORT:-8800}}:8800"
+    # The app-server owns provider /models probes. Give it the same stable host
+    # alias as agent-server so the keyless Ollama preset works under Compose.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8800/api/health')"]
       interval: 10s

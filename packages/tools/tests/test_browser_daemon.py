@@ -403,6 +403,58 @@ def test_fill_accepts_css_selector_without_a_transient_element_index():
     locator.fill.assert_called_once_with("Jane Doe")
 
 
+def _click_context(handler, page):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        handler=handler,
+        page=page,
+        params={"action": "click", "selector": "#go"},
+        lane_name="agent",
+        generation="g" * 32,
+        nonce="n" * 32,
+        requested_epoch=3,
+        sync_performed=False,
+        click_timeout_ms=8000,
+    )
+
+
+def test_click_exception_remains_blocked():
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_click
+
+    handler = MagicMock()
+    handler._freshness.return_value = {"schema_version": 1}
+    handler._error.return_value = {
+        "ok": False,
+        "error_class": "browser_action_failed",
+        "error_reason": "interaction_blocked",
+    }
+    locator = MagicMock()
+    locator.click.side_effect = RuntimeError("intercepted")
+    handler._action_locator.return_value = (locator, None)
+    page = MagicMock()
+
+    result = _handle_click(_click_context(handler, page), MagicMock())
+
+    assert result["error_reason"] == "interaction_blocked"
+
+
+def test_post_click_settle_failure_does_not_reclassify_dispatched_click():
+    from disco.tools.builtin._browser_daemon_parts.dispatch import _handle_click
+
+    handler = MagicMock()
+    handler._freshness.return_value = {"schema_version": 1}
+    locator = MagicMock()
+    handler._action_locator.return_value = (locator, None)
+    page = MagicMock()
+    page.url = "http://example.test/"
+    page.wait_for_timeout.side_effect = RuntimeError("settle transport raced")
+
+    assert _handle_click(_click_context(handler, page), MagicMock()) is None
+    locator.click.assert_called_once_with(timeout=8000)
+    handler._error.assert_not_called()
+
+
 @pytest.mark.integration
 def test_fill_css_selector_reaches_real_selected_renderer(tmp_path, monkeypatch):
     import json
@@ -432,6 +484,39 @@ def test_fill_css_selector_reaches_real_selected_renderer(tmp_path, monkeypatch)
 
         assert result["ok"] is True, result
         assert page.locator("#name").input_value() == "Jane Doe"
+    finally:
+        browser_state.stop()
+
+
+@pytest.mark.integration
+def test_click_self_removing_target_returns_transition_capture(tmp_path, monkeypatch):
+    import json
+
+    import disco.tools.builtin._browser_daemon as daemon_mod
+    from disco.tools.builtin.browser import _installed_browser_executables
+
+    executables = _installed_browser_executables()
+    assert executables, "a real installed browser renderer is required"
+    monkeypatch.setenv("DISCO_BROWSER_EXECUTABLES", json.dumps(executables))
+    browser_state = daemon_mod.BrowserState()
+    monkeypatch.setattr(daemon_mod, "state", browser_state)
+    monkeypatch.setattr(daemon_mod, "WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(daemon_mod, "SCREENSHOT_DIR", str(tmp_path / ".pmx/screenshots"))
+    monkeypatch.setattr(daemon_mod, "_page_kind", lambda _url: "external")
+
+    try:
+        browser_state.start()
+        page = browser_state.page
+        assert page is not None
+        page.set_content(
+            "<button id='go' onclick=\"this.remove(); "
+            "document.body.textContent='DONE'\">GO</button>"
+        )
+        handler = daemon_mod.BrowserHandler.__new__(daemon_mod.BrowserHandler)
+        result = handler._handle_action("click", {"action": "click", "selector": "#go"})
+
+        assert result["ok"] is True, result
+        assert result["text"] == "DONE"
     finally:
         browser_state.stop()
 

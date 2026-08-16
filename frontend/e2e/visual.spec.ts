@@ -13,6 +13,15 @@ async function toggleTheme(page: Page) {
 }
 
 test.describe("visual regression", () => {
+  test("standard search splash — both themes", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByPlaceholder(/ask anything/i)).toBeVisible();
+
+    await expect(page).toHaveScreenshot("standard-search-splash.png");
+    await toggleTheme(page);
+    await expect(page).toHaveScreenshot("standard-search-splash-alt-theme.png");
+  });
+
   test("deep research splash — both themes", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: /^scope:/i }).click();
@@ -56,5 +65,34 @@ test.describe("visual regression", () => {
     await expect(page).toHaveScreenshot("settings.png");
     await toggleTheme(page);
     await expect(page).toHaveScreenshot("settings-alt-theme.png");
+  });
+
+  test("settings model and media groups — both themes", async ({ page }) => {
+    await page.goto("/settings");
+    await expect(page.getByRole("heading", { name: /^settings$/i })).toBeVisible();
+    await page.waitForTimeout(300);
+
+    const models = page.locator("#models");
+    const media = page.locator("#research-media");
+    const generatedMedia = page.locator("#image-generation");
+    await models.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-models.png");
+    await media.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-research-media.png");
+    await generatedMedia.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-generated-media.png");
+    await toggleTheme(page);
+    await models.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-models-alt-theme.png");
+    await media.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-research-media-alt-theme.png");
+    await generatedMedia.evaluate((element) => element.scrollIntoView({ block: "start" }));
+    await page.waitForTimeout(200);
+    await expect(page).toHaveScreenshot("settings-generated-media-alt-theme.png");
   });
 });

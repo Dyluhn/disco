@@ -1,6 +1,7 @@
 /** Deep Research's pre-run question box and its secondary options. */
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { ModelLeaderPill } from "@/components/ModelLeaderPill";
 import { QueryInput } from "@/components/QueryInput";
@@ -23,6 +24,12 @@ interface Props {
 
 export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChange }: Props) {
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const navigate = useNavigate();
+  const changeScope =
+    onScopeChange ??
+    ((next: ScopeId) => {
+      if (next === "standard") navigate("/");
+    });
   const recencyLabel =
     r.recencyWindow === "week"
       ? "Past week"
@@ -38,6 +45,15 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
     <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
       <EmptyState title="Deep Research" subtitle="Multi-step reports with cited evidence." />
       <div className="flex w-full max-w-measure flex-col gap-inline">
+        <div className="flex items-center justify-between gap-inline px-hair">
+          <span className="font-ui text-[0.76rem] font-medium text-text-faint">
+            Search type
+          </span>
+          <ScopeControl
+            value="deep_research"
+            onChange={changeScope}
+          />
+        </div>
         <QueryInput
           onSubmit={r.submit}
           busy={r.submitting}
@@ -83,10 +99,6 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
               >
                 <div className="flex flex-wrap items-center gap-inline">
                   <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
-                  <ScopeControl
-                    value={"deep_research" as ScopeId}
-                    onChange={onScopeChange ?? (() => {})}
-                  />
                   <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-inline">

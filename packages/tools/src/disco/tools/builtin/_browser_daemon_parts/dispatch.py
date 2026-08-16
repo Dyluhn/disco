@@ -198,7 +198,6 @@ def _handle_click(ctx: _ActionCtx, state):
     assert locator is not None
     try:
         locator.click(timeout=ctx.click_timeout_ms)
-        ctx.page.wait_for_timeout(500)
     except Exception:
         return ctx.handler._error(
             "browser_action_failed",
@@ -206,6 +205,13 @@ def _handle_click(ctx: _ActionCtx, state):
             "browser click could not be completed",
             freshness,
         )
+    try:
+        ctx.page.wait_for_timeout(500)
+    except Exception:
+        # Settling is observation latency after a dispatched click, not part of
+        # actionability. The common capture below will still fail honestly if
+        # the page itself is no longer readable.
+        pass
     return None
 
 

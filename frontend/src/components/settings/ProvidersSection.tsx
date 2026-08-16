@@ -24,7 +24,17 @@ export function ProvidersSection() {
 
       <GenericProviders />
 
-      <OpenRouterSection />
+      <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
+        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+          OpenRouter
+          <span className="ml-inline font-normal text-text-faint">
+            Shared key and catalogue
+          </span>
+        </summary>
+        <div className="mt-inline border-t border-hairline pt-inline">
+          <OpenRouterSection embedded />
+        </div>
+      </details>
 
       <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
         <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">

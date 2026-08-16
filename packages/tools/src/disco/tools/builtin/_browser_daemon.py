@@ -101,9 +101,11 @@ MAX_ELEMENTS = 120
 # with websockets/HMR, where networkidle can hang the turn indefinitely.
 CAPTURE_RETRY_MAX = 8
 CAPTURE_RETRY_INTERVAL_MS = 250
-# W6: click timeout cut from Playwright's 30s default to a few seconds so a
-# div-based dock/button that is briefly un-clickable doesn't stall a full turn.
-CLICK_TIMEOUT_MS = 3000
+# W6: keep clicks bounded well below Playwright's 30s default. Complex WebGL
+# pages can make the software renderer miss a three-second actionability window,
+# so one real click gets eight seconds; the removed duplicate trial no longer
+# spends a second timeout checking the same actionability conditions twice.
+CLICK_TIMEOUT_MS = 8000
 DAEMON_INSTANCE_ID = secrets.token_hex(16)
 _LANES = frozenset({"agent", "host_verifier"})
 _SYNC_ACTIONS = frozenset({"screenshot", "click", "fill", "press", "submit", "console_view"})
@@ -680,10 +682,6 @@ class BrowserHandler(BaseHTTPRequestHandler):
                     "browser action target is disabled",
                     freshness,
                 )
-            # Playwright's actionability trial detects overlays, hit-target
-            # interception, instability, and other blocked interactions without
-            # changing page state. Classification does not parse exception prose.
-            locator.click(trial=True, timeout=CLICK_TIMEOUT_MS)
             return locator, None
         except Exception:
             return None, self._error(
