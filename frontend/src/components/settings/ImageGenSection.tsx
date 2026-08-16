@@ -26,7 +26,10 @@ import {
 import { ContextualFieldsPanel } from "./imageGenSectionParts/ContextualFieldsPanel";
 import { computeImageGenFieldsDirty } from "./imageGenSectionParts/fieldsDirty";
 import { getFallbackWarning } from "./imageGenSectionParts/fallbackWarning";
-import type { Provider } from "./imageGenSectionParts/providerOptions";
+import {
+  OPTIONS,
+  type Provider,
+} from "./imageGenSectionParts/providerOptions";
 import { ProviderOptionList } from "./imageGenSectionParts/ProviderOptionList";
 import { getWorkflowJsonError } from "./imageGenSectionParts/workflowJsonValidator";
 import { ProbeButton } from "./ProbeButton";
@@ -58,6 +61,7 @@ export function ImageGenSection() {
   }, [data]);
 
   const active = data?.provider;
+  const activeOption = OPTIONS.find((option) => option.provider === active);
 
   // Switching provider preserves the current field drafts so edits aren't lost.
   const selectProvider = (provider: Provider) => {
@@ -111,60 +115,83 @@ export function ImageGenSection() {
         <p className="font-ui text-[0.86rem] text-text-faint">Loading…</p>
       ) : (
         <div className="flex flex-col gap-inline">
-          <ProviderOptionList
-            active={active}
-            pending={save.isPending}
-            onSelect={selectProvider}
-          />
+          <div
+            data-imagegen-current={active}
+            className="flex items-start gap-inline rounded-control border border-hairline bg-surface-1/40 px-body py-inline"
+          >
+            {activeOption && (
+              <activeOption.Icon
+                className="mt-px size-4 shrink-0 text-accent"
+                aria-hidden
+              />
+            )}
+            <span className="flex min-w-0 flex-col gap-hair">
+              <span className="font-ui text-[0.86rem] font-medium text-text">
+                Current: {activeOption?.label}
+              </span>
+              <span className="font-ui text-[0.78rem] leading-snug text-text-faint">
+                {activeOption?.help}
+              </span>
+            </span>
+          </div>
 
           {fallbackWarning && (
-            <p
-              className="font-ui text-[0.8rem] text-warn"
+            <div
+              className="rounded-control border border-warn/35 bg-warn/5 px-body py-inline font-ui text-[0.8rem] leading-snug text-warn"
               role="status"
               data-disco-flag="imagegen-procedural-fallback"
             >
               {fallbackWarning}
-            </p>
+            </div>
           )}
 
-          {/* T4.4 live probe: one tiny 64×64 generation via the SAVED tier. If a
-              real tier is selected but the run falls back to the keyless procedural
-              placeholder (#76), the probe SAYS procedural-fallback rather than
-              faking a green. Disabled until edits are saved + the agent is up. */}
-          <ProbeButton
-            control="settings.imagegen-test"
-            idleLabel="Test image"
-            run={testImageGen}
-            disabled={!agentIsLive() || fieldsDirty}
-            disabledHint={
-              fieldsDirty
-                ? "unsaved changes — click Save first, then Test"
-                : "agent server offline — start it to test"
-            }
-          />
+          <details className="rounded-control border border-hairline px-body py-inline">
+            <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+              Configure image generation
+            </summary>
+            <div className="mt-inline flex flex-col gap-inline">
+              <ProviderOptionList
+                active={active}
+                pending={save.isPending}
+                onSelect={selectProvider}
+              />
 
-          <ContextualFieldsPanel
-            provider={data.provider}
-            baseUrl={baseUrl}
-            setBaseUrl={setBaseUrl}
-            apiKeyEnv={apiKeyEnv}
-            setApiKeyEnv={setApiKeyEnv}
-            model={model}
-            setModel={setModel}
-            workflowJson={workflowJson}
-            setWorkflowJson={setWorkflowJson}
-            workflowJsonError={workflowJsonError}
-            orModelsData={orModels.data}
-            orModelsLoading={orModels.isLoading}
-            fieldsDirty={fieldsDirty}
-            savePending={save.isPending}
-            onSave={saveFields}
-          />
-          {save.error && (
-            <p className="font-ui text-[0.8rem] text-warn">
-              Couldn't save: {(save.error as Error).message}
-            </p>
-          )}
+              <ProbeButton
+                control="settings.imagegen-test"
+                idleLabel="Test image"
+                run={testImageGen}
+                disabled={!agentIsLive() || fieldsDirty}
+                disabledHint={
+                  fieldsDirty
+                    ? "unsaved changes — click Save first, then Test"
+                    : "agent server offline — start it to test"
+                }
+              />
+
+              <ContextualFieldsPanel
+                provider={data.provider}
+                baseUrl={baseUrl}
+                setBaseUrl={setBaseUrl}
+                apiKeyEnv={apiKeyEnv}
+                setApiKeyEnv={setApiKeyEnv}
+                model={model}
+                setModel={setModel}
+                workflowJson={workflowJson}
+                setWorkflowJson={setWorkflowJson}
+                workflowJsonError={workflowJsonError}
+                orModelsData={orModels.data}
+                orModelsLoading={orModels.isLoading}
+                fieldsDirty={fieldsDirty}
+                savePending={save.isPending}
+                onSave={saveFields}
+              />
+              {save.error && (
+                <p className="font-ui text-[0.8rem] text-warn">
+                  Couldn't save: {(save.error as Error).message}
+                </p>
+              )}
+            </div>
+          </details>
         </div>
       )}
     </section>

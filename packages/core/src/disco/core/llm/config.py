@@ -51,6 +51,7 @@ class ProviderSettings(BaseModel):
     base_url: str
     kind: Literal["openai-compat", "anthropic", "gemini"]
     secret_name: str
+    requires_api_key: bool = True
 
 
 class ModelEntry(BaseModel):
@@ -88,6 +89,9 @@ class ModelEntry(BaseModel):
     # slot). `api_key_env` names an env var holding the key, if the server needs one.
     base_url: str | None = None
     api_key_env: str | None = None
+    # Provider ownership remains represented by api_key_env even for keyless
+    # local endpoints. This flag decides whether a missing secret blocks wiring.
+    requires_api_key: bool = True
     # V1 (§2): manual vision override pin.  None = derive via the runtime probe
     # order (probe → env back-compat → static table → False).  True/False =
     # force the capability, bypassing all probes.  Persisted in disco-config.json.

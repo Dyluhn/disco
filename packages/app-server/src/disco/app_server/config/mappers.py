@@ -116,6 +116,17 @@ def _note(entry) -> str:
     return " · ".join(bits)
 
 
+def _vision_status(entry: ModelEntry) -> Literal["vision", "text-only", "unknown"]:
+    """Present only states the persisted settings authority can prove."""
+    if entry.vision is True:
+        return "vision"
+    if entry.vision is False:
+        return "text-only"
+    if Requirement.VISION in entry.capabilities:
+        return "vision"
+    return "unknown"
+
+
 def _models_from(config: RouterConfig) -> list[ModelDTO]:
     out: list[ModelDTO] = []
     for key, entry in config.models.items():
@@ -132,10 +143,12 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
                 pricing_mode=_pricing_mode(entry),
                 capabilities=sorted(r.value for r in entry.capabilities),
                 vision=entry.vision,
+                vision_status=_vision_status(entry),
                 note=_note(entry),
                 model_id=entry.model_id,
                 base_url=entry.base_url,
                 api_key_env=entry.api_key_env,
+                requires_api_key=entry.requires_api_key,
                 context_window=entry.context_window,
                 max_output_tokens=entry.max_output_tokens,
                 quantization=entry.quantization,
@@ -230,6 +243,9 @@ def _entry_from(
         pricing_mode=upsert.pricing_mode,  # W-05: carry the pay model through edits
         base_url=upsert.base_url,
         api_key_env=upsert.api_key_env,
+        requires_api_key=(
+            upsert.requires_api_key if existing is None else existing.requires_api_key
+        ),
         vision=vision,
         # These are not editable on this surface; retain their architectural
         # meaning instead of erasing them on an unrelated catalogue edit.

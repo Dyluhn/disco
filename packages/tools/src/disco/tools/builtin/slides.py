@@ -4,13 +4,13 @@ the workspace.
 Primary path (C2): when a ``goal`` is supplied, the staged C2 pipeline
 (outline → fill → assets → lower_deck → C3 render) generates a structured
 AuthoredDeck and renders it to native editable .pptx / brand HTML.  On parse
-failure after one retry the Marp fallback is taken automatically — no crash.
+failure, it makes one correction attempt and then fails without shipping a
+plain substitute under the authored-deck request.
 Provider-declared truncation is different: it fails explicitly without rendering
 an incomplete or plain substitute deck.
 
-Marp fallback: when only ``markdown`` is supplied, or when a completed C2
-response is malformed after correction, the tool falls back to Marp CLI (or
-the pure-HTML fallback when Marp is absent).
+Marp path: when ``markdown`` mode is explicitly supplied, the tool uses Marp
+CLI (or the pure-HTML fallback when Marp is absent).
 
 Format support:
   - html: always works (C3 brand HTML, or Marp CLI, or self-contained fallback).
@@ -175,13 +175,14 @@ class SlidesTool:
             "Primary path (recommended): supply ``goal`` (e.g. 'A 6-slide investor "
             "pitch for an EV battery startup') and the C2 pipeline generates a "
             "structured, brand-themed deck automatically (native editable PPTX + "
-            "brand HTML). Completed malformed output falls back to Marp after one "
-            "correction attempt.\n\n"
+            "brand HTML). Malformed authored output receives one correction attempt "
+            "and then fails without delivering a plain substitute.\n\n"
             "Markdown path (backward-compat): supply ``markdown`` with '---' slide "
             "separators; rendered via Marp CLI (image-based PPTX) or the HTML "
             "fallback. Provider-truncated output fails explicitly instead of being "
             "misclassified as malformed JSON.\n\n"
-            "HTML always works.  PDF and native PPTX require the sandbox toolchain."
+            "Explicit markdown mode can still use Marp. PDF and native PPTX require "
+            "the sandbox toolchain."
         ),
         args_model=SlidesGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -217,7 +218,7 @@ class SlidesTool:
                 success=False,
                 content=(
                     f"filename {args.filename!r} is empty after removing invalid "
-                    "characters (<>:\"|?* and control chars). Provide a plain base "
+                    'characters (<>:"|?* and control chars). Provide a plain base '
                     "name like 'my-deck'."
                 ),
                 error="invalid filename",
@@ -309,7 +310,9 @@ class SlidesTool:
             "\n\nDeck generated AND delivered. Files on disk:\n"
             f"{paths}\n"
             "This is a finished binary deliverable (NOT a web app) — no further "
-            "verification is needed. Do NOT re-open, re-read, re-verify, or file_write "
+            "verification is needed: the slide renderer and export validator already "
+            "checked the artifact. Do NOT run an index.html or web-app check, re-open, "
+            "re-read, re-verify, or file_write "
             "into these files; they are already produced and delivered to the user. "
             "Call finish to complete the task."
         )
@@ -317,7 +320,7 @@ class SlidesTool:
     async def _run_c2_pipeline(
         self, args: SlidesGenerateArgs, ctx: ToolContext, fmt: str
     ) -> ToolOutcome:
-        """Run C2; only completed malformed output may fall back to Marp."""
+        """Run the authored C2/C3 path without substituting another product."""
         from disco.tools.builtin._slides_pipeline import generate_deck
 
         assert args.goal is not None  # caller-checked
@@ -350,40 +353,23 @@ class SlidesTool:
                 image_stats=image_stats,
             )
 
-        # C2 failed → fall back to Marp/html fallback with the generated markdown.
-        # This path is a DEGRADED deck: no theme/brand, no layout variety, no
-        # embedded images. Report that LOUDLY (content + structured) so neither the
-        # user nor the agent mistakes a plain fallback for the real styled deck and
-        # silently "finishes" on it. (The dominant live cause of landing here —
-        # OpenRouter driver origin-not-approved — was fixed in 90828654; when that
-        # is resolved the authored pipeline succeeds and this branch is rare.)
+        # A goal requested the authored C2/C3 product. Never convert its failure
+        # into a successful plain Marp artifact: that changes the deliverable while
+        # claiming completion and caused duplicate, sentence-per-slide decks live.
+        # Explicit mode="markdown" remains the honest way to request Marp.
         if fallback_md:
-            marp_args = SlidesGenerateArgs(
-                goal=None,
-                markdown=fallback_md,
-                filename=args.filename,
-                format=args.format,
-                theme=args.theme,
-                mode="markdown",
-            )
-            outcome = await self._run_marp_path(marp_args, ctx, fmt)
-            note = (
-                "\n\n⚠️ DEGRADED: this deck came out of the PLAIN fallback renderer — the "
-                f"styled deck author didn't complete ({err}), so it has no theme, no "
-                "images, and no layout variety. To get the full branded deck with "
-                "images: make sure a capable driver model is selected and an image "
-                "backend is configured in Settings → Image generation, then regenerate."
-            )
-            degraded_meta = dict(outcome.structured or {})
-            degraded_meta.update(
-                {"degraded": True, "degraded_reason": err, "renderer": "marp_fallback"}
-            )
             return ToolOutcome(
-                success=outcome.success,
-                content=outcome.content + note,
-                error=outcome.error,
-                artifacts=outcome.artifacts,
-                structured=degraded_meta,
+                success=False,
+                content=(
+                    "Authored slide generation failed before delivery; no substitute "
+                    f"deck was written. {err or 'The structured author did not complete.'}"
+                ),
+                error=err or "authored_deck_generation_failed",
+                structured={
+                    "degraded": False,
+                    "renderer": "authored",
+                    "stage": "authoring",
+                },
             )
 
         return ToolOutcome(

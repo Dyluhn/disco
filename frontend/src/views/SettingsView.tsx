@@ -102,7 +102,7 @@ function SettingsAttentionBanner() {
     issues.push({
       title: "Driver model not configured",
       detail: modelConfigIssue,
-      href: "#catalogue",
+      href: "#model-library",
       cta: "Configure model",
     });
   }
@@ -128,32 +128,35 @@ function SettingsAttentionBanner() {
   return (
     <div
       role="status"
-      className="flex items-start gap-inline rounded-card border border-warn/50 bg-warn/5 p-body"
+      className="overflow-hidden rounded-card border border-warn/40 bg-warn/[0.04]"
     >
-      <AlertTriangle className="mt-px size-4 shrink-0 text-warn" aria-hidden />
-      <div className="flex flex-col gap-inline">
-        {issues.map((issue) => (
-          <div
-            key={issue.title}
-            className="flex flex-col gap-hair sm:flex-row sm:items-center"
-          >
-            <div className="min-w-0">
-              <p className="font-ui text-[0.84rem] font-medium text-text">
-                {issue.title}
-              </p>
-              <p className="font-ui text-[0.78rem] text-text-muted">
-                {issue.detail}
-              </p>
-            </div>
-            <a
-              href={issue.href}
-              className="shrink-0 font-ui text-[0.78rem] font-medium text-accent hover:underline"
-            >
-              {issue.cta}
-            </a>
+      {issues.map((issue) => (
+        <div
+          key={issue.title}
+          className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-inline border-b border-warn/15 px-body py-inline last:border-b-0 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+        >
+          <AlertTriangle className="size-4 shrink-0 text-warn" aria-hidden />
+          <div className="min-w-0">
+            <p className="font-ui text-[0.84rem] font-medium text-text">
+              {issue.title}
+            </p>
+            <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
+              {issue.detail}
+            </p>
           </div>
-        ))}
-      </div>
+          <a
+            href={issue.href}
+            onClick={() => {
+              const target = document.querySelector(issue.href);
+              const disclosure = target?.querySelector("details");
+              if (disclosure instanceof HTMLDetailsElement) disclosure.open = true;
+            }}
+            className="col-start-2 w-fit shrink-0 rounded-control border border-warn/25 px-inline py-hair font-ui text-[0.76rem] font-medium text-accent hover:border-warn/50 sm:col-start-auto"
+          >
+            {issue.cta}
+          </a>
+        </div>
+      ))}
     </div>
   );
 }
@@ -172,7 +175,10 @@ function SettingsGroup({
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="scroll-mt-section">
+    <section
+      id={id}
+      className="scroll-mt-section rounded-card border border-hairline bg-surface-1/20 p-body sm:p-section"
+    >
       {aliases.map((alias) => (
         <span
           key={alias}
@@ -181,7 +187,7 @@ function SettingsGroup({
           className="block h-0 scroll-mt-section"
         />
       ))}
-      <header className="mb-section">
+      <header className="mb-section border-b border-hairline pb-body">
         <h2 className="font-display text-[1.35rem] tracking-tight text-text">
           {title}
         </h2>
@@ -264,7 +270,8 @@ export function SettingsView() {
               <SettingsItem>
                 <ProvidersSection />
               </SettingsItem>
-              <SettingsItem id="catalogue">
+              <SettingsItem id="model-library">
+                <span id="catalogue" aria-hidden className="block h-0 scroll-mt-section" />
                 <ModelCatalogue />
               </SettingsItem>
               <SettingsItem id="model-resilience">

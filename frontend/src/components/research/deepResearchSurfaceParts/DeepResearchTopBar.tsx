@@ -5,7 +5,17 @@
  * Relocated verbatim from DeepResearchSurface.tsx's `<header>` block. See that
  * file's header for the surface map.
  */
-import { Ban, Bell, FileText, FileType, Loader2, Play, RotateCcw, Square } from "lucide-react";
+import {
+  Ban,
+  Bell,
+  FileText,
+  FileType,
+  Loader2,
+  Play,
+  RotateCcw,
+  Search,
+  Square,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import type { useDeepResearch } from "@/hooks/useDeepResearch";
 import type { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDoneNotification";
@@ -16,6 +26,7 @@ import { CTRL_BTN, KILL_BTN, NOTIFY_ARMED_BTN, PENDING_BTN } from "./styles";
 
 interface Props {
   r: ReturnType<typeof useDeepResearch>;
+  onStandardSearch: () => void;
   handleNewResearch: () => void;
   exportCaps: ExportCapabilities;
   doneNotify: ReturnType<typeof useDeepResearchDoneNotification>;
@@ -27,6 +38,7 @@ interface Props {
 
 export function DeepResearchTopBar({
   r,
+  onStandardSearch,
   handleNewResearch,
   exportCaps,
   doneNotify,
@@ -53,6 +65,15 @@ export function DeepResearchTopBar({
           {r.query}
         </h1>
         <div className="flex items-center gap-inline">
+          <button
+            type="button"
+            onClick={onStandardSearch}
+            className={CTRL_BTN}
+            data-disco-control="dr.standard-search"
+          >
+            <Search className="size-3.5" aria-hidden />
+            Standard Search
+          </button>
           {/* While running: Notify, Stop (pause, keeps partial), Kill (end, final). */}
           {r.status === "RUNNING" && (
             <>

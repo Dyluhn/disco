@@ -39,8 +39,20 @@ _GENERATION_TIMEOUT_S = 60.0
 # How long a REQUEST waits on generation before serving the curated pool. The
 # background task keeps running and caches, so the next view gets generated.
 _REQUEST_WAIT_S = 8.0
+_CACHE_SCHEMA_VERSION = 2
 _QUOTE_CHARS = "\"'`“”‘’"
 _LEADER_RE = re.compile(r"^\s*(?:[-•>*]|\d+[.)])\s+")
+_BUILD_DOCUMENT_RE = re.compile(
+    r"\b(?:report|research paper|document|slides?|slide deck|presentation|"
+    r"spreadsheet|essay|brief|white ?paper)\b",
+    re.IGNORECASE,
+)
+_BUILD_SOFTWARE_RE = re.compile(
+    r"\b(?:app|application|site|website|page|game|dashboard|tracker|tool|editor|"
+    r"builder|board|portal|calculator|simulator|visuali[sz]er|generator|workspace|"
+    r"player|planner|clone)\b",
+    re.IGNORECASE,
+)
 
 CURATED_SUGGESTIONS: dict[SuggestionSurface, tuple[str, ...]] = {
     "research": (
@@ -57,7 +69,7 @@ CURATED_SUGGESTIONS: dict[SuggestionSurface, tuple[str, ...]] = {
         "a kanban board with drag and drop",
         "a landing page for a coffee roastery",
         "a 2048 clone",
-        "an invoice PDF generator",
+        "an invoice tracker with searchable customers and payment status",
         "a habit tracker with weekly streak charts",
         "a personal finance dashboard from CSV uploads",
         "a classroom quiz game with score tracking",
@@ -81,7 +93,8 @@ _SURFACE_PROMPTS: dict[SuggestionSurface, str] = {
         "timelines, tradeoffs, or source-backed explanation"
     ),
     "build": (
-        "things to build: sites, decks, sheets, games, apps, dashboards, documents, and small tools"
+        "interactive software to build: sites, games, apps, dashboards, and useful tools. "
+        "Never suggest a report, research task, document, slide deck, or spreadsheet-only task"
     ),
     "agent": (
         "small multi-step computer tasks involving files, browsing, forms, extraction, "
@@ -125,6 +138,20 @@ def parse_suggestions(raw: str) -> list[str]:
             break
     if len(suggestions) < 4:
         raise ValueError("not enough usable generated suggestions")
+    return suggestions
+
+
+def _suitable_for_surface(surface: SuggestionSurface, suggestion: str) -> bool:
+    """Reject document-only prompts from Build while allowing software that edits them."""
+    if surface != "build":
+        return True
+    return not _BUILD_DOCUMENT_RE.search(suggestion) or bool(_BUILD_SOFTWARE_RE.search(suggestion))
+
+
+def _surface_suggestions(surface: SuggestionSurface, raw: str) -> list[str]:
+    suggestions = [item for item in parse_suggestions(raw) if _suitable_for_surface(surface, item)]
+    if len(suggestions) < 4:
+        raise ValueError(f"not enough suitable {surface} suggestions")
     return suggestions
 
 
@@ -184,7 +211,7 @@ class SuggestionService:
                 max_tokens=_MAX_OUTPUT_TOKENS,
             )
         )
-        return parse_suggestions(getattr(resp, "text", "") or "")
+        return _surface_suggestions(surface, getattr(resp, "text", "") or "")
 
     def _cache_path(self, surface: SuggestionSurface) -> Path:
         root = Path(self._projects_root_now()).expanduser()
@@ -199,10 +226,12 @@ class SuggestionService:
                 return None
             if data.get("surface") != surface:
                 return None
+            if data.get("schema_version") != _CACHE_SCHEMA_VERSION:
+                return None
             suggestions = data.get("suggestions")
             if not isinstance(suggestions, list):
                 return None
-            parsed = parse_suggestions("\n".join(str(s) for s in suggestions))
+            parsed = _surface_suggestions(surface, "\n".join(str(s) for s in suggestions))
             return parsed if len(parsed) >= 4 else None
         except FileNotFoundError:
             return None
@@ -216,6 +245,7 @@ class SuggestionService:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "surface": surface,
+                "schema_version": _CACHE_SCHEMA_VERSION,
                 "created_at": time.time(),
                 "suggestions": suggestions[:8],
             }

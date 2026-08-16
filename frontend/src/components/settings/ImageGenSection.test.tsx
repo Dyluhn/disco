@@ -65,6 +65,15 @@ function makeWrapper() {
     createElement(QueryClientProvider, { client: qc }, children);
 }
 
+async function openImageConfiguration() {
+  const summary = await screen.findByText(/Configure image generation/i, {
+    selector: "summary",
+  });
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  fireEvent.click(summary);
+  expect(summary.closest("details")).toHaveAttribute("open");
+}
+
 beforeEach(() => {
   isLiveMock.mockReturnValue(true);
   installFetch();
@@ -78,6 +87,8 @@ afterEach(() => {
 describe("ImageGenSection — A3 image-gen provider settings", () => {
   it("renders the three real tiers from the live config with the configured tier active", async () => {
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    expect(await screen.findByText(/Current: Paid API/i)).toBeInTheDocument();
+    await openImageConfiguration();
     // W-50: there is NO bundled "Bundled (procedural)" tier anymore.
     const paid = await screen.findByRole("button", { name: /Paid API/ });
     expect(paid).toHaveAttribute("aria-pressed", "true");
@@ -88,6 +99,7 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
 
   it("PUTs the chosen provider and shows the ComfyUI base-URL field (required, no false default)", async () => {
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    await openImageConfiguration();
     const comfy = await screen.findByRole("button", { name: /Self-hosted \(ComfyUI\)/ });
     fireEvent.click(comfy);
     await waitFor(() => expect(lastPut).not.toBeNull());
@@ -119,6 +131,7 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
       }),
     );
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    await openImageConfiguration();
 
     const textarea = await screen.findByPlaceholderText(/Save \(API Format\)/i);
     const graph = '{ "1": { "class_type": "CheckpointLoaderSimple", "inputs": { "ckpt_name": "%ckpt%" } } }';
@@ -179,6 +192,7 @@ describe("ImageGenSection — OpenRouter priced image-model picker", () => {
       }),
     );
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
+    await openImageConfiguration();
 
     // the priced picker appears (a <select>) and lists ONLY the image-output models,
     // each showing the real per-image-token cost ($X /M img-tok) enriched from /endpoints.

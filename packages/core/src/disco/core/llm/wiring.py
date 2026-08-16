@@ -278,7 +278,7 @@ def build_providers(
             *(e.capabilities for e in config.models.values() if e.provider == entry.provider)
         )
         api_key = resolve_provider_secret(entry.api_key_env, secret_store)
-        if entry.api_key_env and not api_key:
+        if entry.requires_api_key and entry.api_key_env and not api_key:
             _LOG.warning("provider %s secret_ref is not decryptable; skipping", entry.provider)
             continue
         providers[entry.provider] = OpenAIProvider(
