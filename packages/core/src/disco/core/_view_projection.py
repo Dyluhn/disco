@@ -37,6 +37,21 @@ _SCREENSHOT_TOOLS = frozenset({"browser", "verify_web_app"})
 
 _MASK_KEEP_RECENT = 8
 _MASK_MIN_CHARS = 600
+_TRACE_ONLY_MODEL_VISIBILITY = "trace_only"
+
+
+def _is_trace_only_environment_message(event: Event) -> bool:
+    """Keep host telemetry in the log/UI without turning it into model input.
+
+    Only the host-owned ENVIRONMENT lane may opt out of model projection.  A
+    USER event remains authoritative even if untrusted metadata happens to use
+    the same marker.
+    """
+    return (
+        isinstance(event, MessageEvent)
+        and event.source is EventSource.ENVIRONMENT
+        and event.meta.get("model_visibility") == _TRACE_ONLY_MODEL_VISIBILITY
+    )
 
 
 def _host_probe_message(content: str) -> LLMMessage:
@@ -627,7 +642,11 @@ def build_view_messages(events: list[Event]) -> tuple[list[LLMMessage], list[int
         return False
 
     def is_visible(e: Event) -> bool:
-        return not is_forgotten(e.seq) and not pair_omitted(e)
+        return (
+            not _is_trace_only_environment_message(e)
+            and not is_forgotten(e.seq)
+            and not pair_omitted(e)
+        )
 
     from .env import disco_env
 

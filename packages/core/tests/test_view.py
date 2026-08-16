@@ -93,6 +93,38 @@ def test_view_is_deterministic():
     assert View.of(events).messages == View.of(events).messages
 
 
+def test_trace_only_host_message_is_auditable_but_not_model_visible():
+    public = MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content="ordinary host guidance"),
+    )
+    trace_only = MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content="UI-only diagnostic"),
+        meta={"model_visibility": "trace_only"},
+    )
+    events = with_seqs([user_msg("task"), public, trace_only])
+
+    view = View.of(events)
+
+    persisted = next(event for event in events if event.id == trace_only.id)
+    assert persisted.seq is not None
+    assert [message.content for message in view.messages] == ["task", "ordinary host guidance"]
+    assert persisted.seq not in view.visible_seqs
+
+
+def test_trace_only_metadata_cannot_hide_a_real_user_instruction():
+    instruction = MessageEvent(
+        source=EventSource.USER,
+        message=LLMMessage(role="user", content="real user instruction"),
+        meta={"model_visibility": "trace_only"},
+    )
+
+    view = View.of(with_seqs([instruction]))
+
+    assert [message.content for message in view.messages] == ["real user instruction"]
+
+
 def test_non_convertibles_never_appear():
     """StatusEvent / ErrorEvent / CondensationEvent are never in View.messages."""
     events = with_seqs(

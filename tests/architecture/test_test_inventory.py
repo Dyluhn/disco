@@ -634,8 +634,11 @@ class TestMappingStatic:
             # contracts for the bounded guest parser and guarded container path.
             # The Three.js trace correction adds six same-file Python contracts:
             # three for state-aware browser dedup and three for click dispatch.
+            # The C18 projection correction adds two same-file Python contracts
+            # proving trace-only host diagnostics cannot steer the model or hide
+            # genuine user instructions.
             "python_test_file_count": 847,
-            "python_static_test_id_count": 10409,
+            "python_static_test_id_count": 10411,
             "typescript_test_file_count": 246,
             "typescript_static_test_id_count": 1241,
         }
@@ -1028,7 +1031,8 @@ class TestCollectedCounts:
             # neutrality, and the inverse Build-shadow boundary.
             # The clean-container correction adds two package IDs and the
             # Three.js trace correction adds six more in existing files.
-            "packages": 10812,
+            # C18 trace-only projection adds two more in existing files.
+            "packages": 10814,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1158,7 +1162,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12650 == sum(expected.values())
+        assert collected["total"] == 12652 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1174,7 +1178,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12650}
+        assert result == {"collected_total": 12652}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1193,9 +1197,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10409,
+            "python_static_ids": 10411,
             "typescript_static_ids": 1241,
-            "collected_total": 12650,
+            "collected_total": 12652,
         }
 
         latest_identity = test_inventory.subprocess.check_output(
