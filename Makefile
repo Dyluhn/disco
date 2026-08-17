@@ -7,7 +7,7 @@
 # from `make test` so the fast path stays fast and offline.
 
 BASE ?= http://localhost:8001          # agent-server base URL for live probes
-CASSETTE ?= harness/cassettes/research_demo.jsonl
+CASSETTE ?= development/harness/cassettes/research_demo.jsonl
 
 .PHONY: help test unit harness contract fuzz fault eval eval-real replay \
         canary canary-health capture capture-loop lint fmt e2e verify
@@ -15,8 +15,8 @@ CASSETTE ?= harness/cassettes/research_demo.jsonl
 help:
 	@echo "disco runners:"
 	@echo "  make test        unit + harness (contract/fuzz/fault/canary) — fast, hermetic, offline"
-	@echo "  make unit        per-package unit suite only (packages/*/tests)"
-	@echo "  make harness     all harness/ tests"
+	@echo "  make unit        per-package unit suite only (current/packages/*/tests)"
+	@echo "  make harness     all development/harness/ tests"
 	@echo "  make contract    TS<->Python wire/event contract drift"
 	@echo "  make fuzz        property-based parser fuzzing (hypothesis)"
 	@echo "  make fault       fault/chaos injection — resilience fires"
@@ -33,19 +33,19 @@ help:
 
 # ---- hermetic (fast, offline) ----------------------------------------------
 
-# PKG-19-CERT-STRUCTURAL finding F2: `test` reached `harness/tests` and nothing
-# else, while architecture/test-inventory.json certified 1253 harness ids and 9
+# PKG-19-CERT-STRUCTURAL finding F2: `test` reached `development/harness/tests` and nothing
+# else, while development/architecture/test-inventory.json certified 1253 harness ids and 9
 # integrations ids. 1213 certified ids were runnable by no sanctioned command at
 # all — the certification's own Stage 3 batteries used `pytest harness` and
 # `pytest integrations`, which no Makefile target and no CI step named.
-# scripts/check_inventory_execution.py now fails if that gap ever reopens.
+# development/scripts/check_inventory_execution.py now fails if that gap ever reopens.
 test: unit harness integrations
 
 unit:
 	uv run pytest
 
-# Whole-tree harness, not just harness/tests. Safe to widen because F6-b marked
-# the marathon phases `live` (harness/marathon/conftest.py) — they need a real
+# Whole-tree harness, not just development/harness/tests. Safe to widen because F6-b marked
+# the marathon phases `live` (development/harness/marathon/conftest.py) — they need a real
 # agent-server, and now say so contractually instead of ERRORing at setup.
 harness:
 	PYTHONPATH=. uv run pytest harness
@@ -54,13 +54,13 @@ integrations:
 	PYTHONPATH=. uv run pytest integrations
 
 contract:
-	PYTHONPATH=. uv run pytest harness/tests/test_contract.py
+	PYTHONPATH=. uv run pytest development/harness/tests/test_contract.py
 
 fuzz:
-	PYTHONPATH=. uv run pytest harness/tests/test_fuzz.py
+	PYTHONPATH=. uv run pytest development/harness/tests/test_fuzz.py
 
 fault:
-	PYTHONPATH=. uv run pytest harness/tests/test_faults.py
+	PYTHONPATH=. uv run pytest development/harness/tests/test_faults.py
 
 lint:
 	uv run ruff check packages harness

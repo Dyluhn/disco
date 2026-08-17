@@ -7,31 +7,31 @@ missed. Humans: see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Where authority actually lives
 
-**Read [`docs/governance/README.md`](./docs/governance/README.md) first.** It is
+**Read [`current/docs/governance/README.md`](./current/docs/governance/README.md) first.** It is
 the finite authority surface. The order, highest first:
 
 1. **Current code + passing tests + live evidence** — beats every document.
-2. [`docs/governance/ENGINEERING-STANDARDS.md`](./docs/governance/ENGINEERING-STANDARDS.md) — sealed.
-3. [`docs/governance/ARCHITECTURE-BOUNDARIES.md`](./docs/governance/ARCHITECTURE-BOUNDARIES.md) — sealed.
-4. [`docs/governance/CAMPAIGN-PLAN.md`](./docs/governance/CAMPAIGN-PLAN.md) — the current work order.
-5. [`docs/governance/CURRENT-STATE.md`](./docs/governance/CURRENT-STATE.md) and
-   [`CAMPAIGN-STATUS.md`](./docs/governance/CAMPAIGN-STATUS.md) — what is true right now.
+2. [`current/docs/governance/ENGINEERING-STANDARDS.md`](./current/docs/governance/ENGINEERING-STANDARDS.md) — sealed.
+3. [`current/docs/governance/ARCHITECTURE-BOUNDARIES.md`](./current/docs/governance/ARCHITECTURE-BOUNDARIES.md) — sealed.
+4. [`current/docs/governance/CAMPAIGN-PLAN.md`](./current/docs/governance/CAMPAIGN-PLAN.md) — the current work order.
+5. [`current/docs/governance/CURRENT-STATE.md`](./current/docs/governance/CURRENT-STATE.md) and
+   [`CAMPAIGN-STATUS.md`](./current/docs/governance/CAMPAIGN-STATUS.md) — what is true right now.
 
 The two sealed files are hash-gated by
-[`scripts/check_governance_seal.py`](./scripts/check_governance_seal.py); an agent
+[`development/scripts/check_governance_seal.py`](./development/scripts/check_governance_seal.py); an agent
 cannot silently edit them.
 
 Subject-matter design authority (below governance, above prose):
-[`basis-of-design.md`](./basis-of-design.md),
-[`event-state-contract.md`](./event-state-contract.md),
-[`agent-loop-contract.md`](./agent-loop-contract.md),
-[`llm-router-contract.md`](./llm-router-contract.md),
-[`retrieval-grounding-contract.md`](./retrieval-grounding-contract.md),
-[`security-analyzer-contract.md`](./security-analyzer-contract.md),
-[`tool-sandbox-contract.md`](./tool-sandbox-contract.md).
+[`basis-of-design.md`](./current/docs/contracts/basis-of-design.md),
+[`event-state-contract.md`](./current/docs/contracts/event-state-contract.md),
+[`agent-loop-contract.md`](./current/docs/contracts/agent-loop-contract.md),
+[`llm-router-contract.md`](./current/docs/contracts/llm-router-contract.md),
+[`retrieval-grounding-contract.md`](./current/docs/contracts/retrieval-grounding-contract.md),
+[`security-analyzer-contract.md`](./current/docs/contracts/security-analyzer-contract.md),
+[`tool-sandbox-contract.md`](./current/docs/contracts/tool-sandbox-contract.md).
 
 > **Historical campaign prose is non-authoritative.** `archive/`,
-> `docs/archive/`, and any dated handoff, "current status", findings, or
+> `archive/docs/`, and any dated handoff, "current status", findings, or
 > work-order file are **history only**. Read them for a specific code-archaeology
 > question — never as status, policy, or open-work authority. This file
 > deliberately carries **no** campaign status and no second copy of the campaign.
@@ -40,8 +40,8 @@ Subject-matter design authority (below governance, above prose):
 
 Disco is a self-hosted **Research + Agent** platform built as *one agent core
 over an append-only event log*, engineered to stay reliable on local/open-weight
-models. Monorepo: five Python packages under `packages/*` (uv workspace, Python
-3.13, namespace `disco.*`) + a React/Vite/TS `frontend/` + a `harness/`.
+models. Monorepo: five Python packages under `current/packages/*` (uv workspace, Python
+3.13, namespace `disco.*`) + a React/Vite/TS `current/frontend/` + a `development/harness/`.
 
 ## Package layout & the layering rule (enforced)
 
@@ -52,7 +52,7 @@ core  ←  retrieval  ←  tools  ←  { agent_server | app_server }
 `agent_server` and `app_server` are independent top siblings (neither imports the
 other — there's an import-linter contract proving it). Dependencies point
 **downward only**. The live, auto-derived map is
-[`docs/architecture.generated.md`](./docs/architecture.generated.md) (never hand-edit
+[`current/docs/architecture.generated.md`](./current/docs/architecture.generated.md) (never hand-edit
 it — regenerate). **Three** tracked upward-debt edges exist, all `tools →
 agent_server` and all whitelisted in `.importlinter`'s `ignore_imports`; don't
 add more:
@@ -70,7 +70,7 @@ add more:
 ## Navigating the code (use the symbol graph, not grep)
 
 This repo is wired for **Serena** — an LSP-backed code-navigation MCP server
-(config in `.mcp.json`; it indexes all Python under `packages/*/src` into
+(config in `.mcp.json`; it indexes all Python under `current/packages/*/src` into
 `.serena/cache/`). When its tools are available (any Claude Code session started
 in this directory, and the subagents it spawns), **prefer them over `grep`/`rg`
 for symbol work**:
@@ -106,15 +106,15 @@ which is fine for those.
 # browser/shell/docker and are EXCLUDED by the marker — they are not hidden,
 # they run in CI's advisory job.
 .venv/bin/python3 -m pytest -m "not integration"
-.venv/bin/python3 -m pytest packages/core packages/agent-server -m "not integration"
+.venv/bin/python3 -m pytest current/packages/core current/packages/agent-server -m "not integration"
 
 # The four architecture fitness gates (all required in CI + pre-commit):
-uv run python scripts/check_arch_budget.py     # size caps — no god-objects
+uv run python development/scripts/check_arch_budget.py     # size caps — no god-objects
 uv run lint-imports                            # layering + no cycles
-uv run python scripts/gen_arch_diagram.py --check   # generated diagram is fresh
+uv run python development/scripts/gen_arch_diagram.py --check   # generated diagram is fresh
 uv run basedpyright                            # strict: ZERO type errors tree-wide
 
-# Frontend (from frontend/):
+# Frontend (from current/frontend/):
 npm run test            # vitest
 npm run typecheck:build # shipping-file tsc (excludes test files) — the honest gate
 npx vite build          # production build
@@ -153,10 +153,10 @@ for UI work — see "Visual evidence" below.
 
 | Gate | File | Enforces |
 |------|------|----------|
-| Size budget | `scripts/check_arch_budget.py` | No class > 800 / function > 200 LOC, except a small whitelist of capped coordinators + dispatchers (`ALLOW_CLASSES`/`ALLOW_FUNCS`). Adding LOC to a capped item past its cap fails. |
-| Tool schemas | `scripts/check_tool_schemas.py` | Built-in tool args must not advertise blind object params or arrays with untyped items; genuinely free-form JSON requires a justified allow entry. |
+| Size budget | `development/scripts/check_arch_budget.py` | No class > 800 / function > 200 LOC, except a small whitelist of capped coordinators + dispatchers (`ALLOW_CLASSES`/`ALLOW_FUNCS`). Adding LOC to a capped item past its cap fails. |
+| Tool schemas | `development/scripts/check_tool_schemas.py` | Built-in tool args must not advertise blind object params or arrays with untyped items; genuinely free-form JSON requires a justified allow entry. |
 | Layering | `.importlinter` (`uv run lint-imports`) | The downward-only layering above + no package cycles + app/agent independence. |
-| Diagram freshness | `scripts/gen_arch_diagram.py --check` | `docs/architecture.generated.md` matches the code's real (AST-parsed) imports. Re-run without `--check` to refresh after changing cross-package imports. |
+| Diagram freshness | `development/scripts/gen_arch_diagram.py --check` | `current/docs/architecture.generated.md` matches the code's real (AST-parsed) imports. Re-run without `--check` to refresh after changing cross-package imports. |
 | Types | `uv run basedpyright` | Zero type errors tree-wide. |
 
 If you split or move code across package boundaries, you will likely need to
@@ -197,8 +197,8 @@ GET /api/debug/inspect                   # enabled? + live conversation ids
 ```
 
 Off → zero overhead (no handler, `NullRoutingSink`). Implementation:
-`packages/core/src/disco/core/inspect.py`; the canonical test exercising the real
-loop → trace → REST chain is `packages/agent-server/tests/test_inspect_trace.py`.
+`current/packages/core/src/disco/core/inspect.py`; the canonical test exercising the real
+loop → trace → REST chain is `current/packages/agent-server/tests/test_inspect_trace.py`.
 
 ## Visual evidence for UI changes
 

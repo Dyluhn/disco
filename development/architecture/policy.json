@@ -1,0 +1,201 @@
+{
+  "schema": "disclaude-architecture-policy-v1",
+  "source_identity": "1cf00dbe194a2a276ea1fd17ab74589355f2e0dc",
+  "roots": {
+    "python": [
+      "current/packages/",
+      "development/harness/",
+      "development/scripts/",
+      "development/tests/"
+    ],
+    "typescript": [
+      "frontend/src/"
+    ]
+  },
+  "non_source_exclusions": {
+    "python": [
+      "__pycache__",
+      ".pyc"
+    ],
+    "typescript": [
+      ".d.ts"
+    ]
+  },
+  "scanner_versions": {
+    "python": {
+      "language": "python",
+      "parser": "ast",
+      "logical_line_rule": "nonblank, non-comment-only; Python multiline-string spans count; AST-McCabe = 1 + if/loop/handler/comprehension paths + BoolOp extra operands + match extra cases + assert"
+    },
+    "typescript": {
+      "language": "typescript",
+      "compiler_version": "5.9.3",
+      "compiler_source": "frontend/node_modules/typescript",
+      "logical_line_rule": "TypeScript scanner tokens excluding whitespace/newline/comment trivia; multiline strings/templates count; AST-McCabe explicitly labeled"
+    }
+  },
+  "logical_limits": {
+    "python_production_module": 700,
+    "python_class": 350,
+    "python_callable": 100,
+    "python_callable_mccabe": 15,
+    "python_service_public_methods": 12,
+    "python_route_handler": 80,
+    "python_composition_root": 300,
+    "python_constructor_collaborators": 10,
+    "python_dependency_aggregate_members": 10,
+    "harness_oracle_module": 400,
+    "harness_module": 700,
+    "test_module": 1200,
+    "typescript_module": 500,
+    "typescript_component": 250,
+    "typescript_hook": 200,
+    "typescript_callable_mccabe": 15
+  },
+  "typed_classifications": {
+    "protocol_non_violations": [
+      {
+        "path": "current/packages/core/src/disco/core/store/base.py",
+        "symbol": "EventStore",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0664",
+        "criterion": "typed Protocol with zero mutable implementation state"
+      },
+      {
+        "path": "current/packages/agent-server/src/disco/agent_server/build_kernel/base.py",
+        "symbol": "BuildKernel",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0188",
+        "criterion": "typed Protocol with zero mutable implementation state"
+      }
+    ],
+    "adjudicated_width_non_violations": [
+      {
+        "path": "current/packages/tools/src/disco/tools/projects/store.py",
+        "symbol": "ProjectStore",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0836",
+        "width_kind": "intrinsic",
+        "observed_at_adjudication": 20,
+        "criterion": "intrinsic width under one authority the mission requires: a single _version_transaction discipline over one physical project root; splitting would partition one authority. release_intent_for is owner-sanctioned test-only (8 of 13 call sites are SHA-256-pinned closeout evidence, so migration is prohibited).",
+        "decision_record": "PROTOCOL-WIDTH-DECISION-2026-07-31.md - Amendment 1",
+        "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
+      },
+      {
+        "path": "current/packages/tools/src/disco/tools/sandbox/_container.py",
+        "symbol": "ContainerInstance",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0846",
+        "width_kind": "protocol",
+        "observed_at_adjudication": 15,
+        "criterion": "faithful structural implementation of the 11-member SandboxInstance Protocol (sandbox/base.py), which alone fills 11 of the cap's 12; sole criterion-2 failure host_service_relay_url is contract-declared by HostServiceRelayInstance and unremovable without breaking conformance. Robust to that Protocol's deletion (drops to 14).",
+        "decision_record": "PROTOCOL-WIDTH-DECISION-2026-07-31.md - Amendment 2",
+        "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
+      },
+      {
+        "path": "current/packages/tools/src/disco/tools/sandbox/process.py",
+        "symbol": "ProcessSandboxInstance",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0873",
+        "width_kind": "protocol",
+        "observed_at_adjudication": 14,
+        "criterion": "faithful structural implementation of the 11-member SandboxInstance Protocol; sole criterion-2 failure host_service_relay_url is contract-declared and unremovable without breaking conformance. Robust to that Protocol's deletion (drops to 13).",
+        "decision_record": "PROTOCOL-WIDTH-DECISION-2026-07-31.md - Amendment 2",
+        "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
+      },
+      {
+        "path": "current/packages/tools/src/disco/tools/sandbox/session.py",
+        "symbol": "SandboxSession",
+        "rule": "python_service_public_methods_gt_12_candidate",
+        "disposition_id": "PY-0877",
+        "width_kind": "protocol",
+        "observed_at_adjudication": 28,
+        "criterion": "faithful structural implementation of the 11-member SandboxInstance Protocol. ensure_service / tracked_services / peek_recovered_memory_facts are owner-retained-dormant by design (52 test references, zero production callers); the wire-or-withdraw obligation stays OPEN as DEFERRED-PRODUCT-FINDINGS.md #1, owner Program 2. Both futures converge on this adjudication.",
+        "decision_record": "PROTOCOL-WIDTH-DECISION-2026-07-31.md - Amendment 2",
+        "accepting_receipt": "EPIC-10C-ACCEPTANCE-RECEIPT.md"
+      }
+    ],
+    "route_adapters": {
+      "may_validate": true,
+      "may_translate": true,
+      "may_delegate": true,
+      "may_render": true,
+      "may_not_own_persistence": true,
+      "may_not_own_process_effects": true,
+      "may_not_own_network_effects": true,
+      "may_not_own_lifecycle_transitions": true
+    },
+    "frontend_components": {
+      "may_consume_typed_api_client": true,
+      "may_not_call_fetch": true,
+      "may_not_call_websocket": true,
+      "may_not_call_eventsource": true,
+      "may_not_call_raw_transport": true
+    }
+  },
+  "collaborator_rules": {
+    "constructor_collaborator_cap": 10,
+    "dependency_aggregate_member_cap": 10,
+    "scalar_config_excluded": true,
+    "value_input_excluded": true,
+    "injected_ports_are_collaborators": true,
+    "injected_services_are_collaborators": true,
+    "injected_repositories_are_collaborators": true,
+    "injected_clients_are_collaborators": true,
+    "injected_runtimes_are_collaborators": true,
+    "relay_members_are_collaborators": true,
+    "disguise_patterns_rejected": [
+      "dict",
+      "Any",
+      "Context",
+      "Services",
+      "Runtime",
+      "Deps"
+    ]
+  },
+  "generated_proof_requirements": [
+    "tracked_generator_owns_output",
+    "deterministic_regeneration_command",
+    "regenerated_bytes_match_registered_sha256",
+    "content_scan_proves_declared_family",
+    "named_owner_package_and_removal_responsibility",
+    "deterministic_regeneration_test_collected"
+  ],
+  "shrink_only_rules": {
+    "current_violation_without_debt_row_fails": true,
+    "debt_row_metric_exceeding_observed_fails": true,
+    "current_metric_at_or_below_limit_while_active_fails_as_stale": true,
+    "moving_or_renaming_still_violating_symbol_fails": true,
+    "accepted_commit_updates_observed_downward_only": true,
+    "row_removed_only_when_checker_proves_cap_satisfied_and_package_owns_id": true,
+    "new_ids_fail": true,
+    "duplicate_ids_fail": true,
+    "missing_original_ids_fail": true,
+    "later_delete_by_packages_fail": true,
+    "unknown_roots_fail": true,
+    "wildcards_fail": true,
+    "raised_caps_fail": true,
+    "new_observations_fail": true,
+    "broadened_context_edges_fail": true
+  },
+  "import_rules": {
+    "static_imports_participate": true,
+    "literal_dynamic_imports_participate": true,
+    "function_local_imports_participate": true,
+    "parse_ambiguity_fails_closed": true,
+    "cycles_rejected": true,
+    "upward_imports_rejected": true,
+    "context_edges_enforced": true
+  },
+  "exact_exclusions": {
+    "importlinter_exemptions": [
+      "disco.tools.builtin.audio_overview -> disco.agent_server.audio_config",
+      "disco.tools.builtin.audio_overview -> disco.agent_server.tts_local",
+      "disco.tools.builtin.preview -> disco.agent_server.preview_manager"
+    ],
+    "exemption_owner": "DM-005",
+    "exemption_may_shrink": true,
+    "exemption_may_not_broaden": true,
+    "exemption_may_not_wildcard": true
+  }
+}

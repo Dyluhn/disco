@@ -47,14 +47,14 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: current/frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm ci
 
       - name: Install Playwright Firefox
-        working-directory: frontend
+        working-directory: current/frontend
         run: npx playwright install firefox
 
       - name: Boot ephemeral backend (agent-server :8000 + app-server :8800)
@@ -90,7 +90,7 @@ jobs:
           [ "$ok" = 1 ] || { echo "agent-server never became healthy"; cat "${DB_DIR}/agent.log"; exit 1; }
 
       - name: Run live e2e specs (Firefox, real model)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npx playwright test --config playwright.live.config.ts
 
       - name: Tear down backend
@@ -103,8 +103,8 @@ jobs:
         with:
           name: e2e-live-evidence
           path: |
-            frontend/test-results/**
-            frontend/e2e-live/**/*.png
+            current/frontend/test-results/**
+            current/frontend/e2e-live/**/*.png
             ${{ env.BACKEND_LOG_DIR }}/*.log
           if-no-files-found: ignore
           retention-days: 14

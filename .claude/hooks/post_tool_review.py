@@ -44,7 +44,7 @@ REINJECT_SECONDS = 90
 REVIEW_TEMPLATE = """\
 ## Review <N> — <YYYY-MM-DD HH:MM local> / <YYYY-MM-DDTHH:MM:SSZ UTC>
 
-Source fingerprint: sha256:<.venv/bin/python3 scripts/source_fingerprint.py --which source --quiet>
+Source fingerprint: sha256:<.venv/bin/python3 development/scripts/source_fingerprint.py --which source --quiet>
 Work completed since prior review: <what actually changed>
 Evidence that it actually worked: <exit codes, test counts, evidence paths>
 What went well and why: <...>
