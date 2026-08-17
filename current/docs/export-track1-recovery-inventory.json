@@ -1,0 +1,44 @@
+{
+  "base_sha": "c0c4f728e8669dd27f88a9515383cc9a4a58f0d3",
+  "deletions": [],
+  "excludes_self": "current/docs/export-track1-recovery-inventory.json",
+  "expected_proof": {
+    "failed": 0,
+    "passed": 105,
+    "tests": [
+      "current/packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py",
+      "current/packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py",
+      "current/packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py",
+      "current/packages/tools/tests/test_security.py",
+      "current/packages/core/tests/release_remediation/test_candidate_receipt_mutations.py"
+    ]
+  },
+  "external_evidence": [
+    {
+      "path": "/var/home/dylan/.local/state/disco/r7-round5-adversary/20260714T-round5-independent/adversarial_probe.py",
+      "role": "104-case adversarial probe \u2014 discovery evidence only, never an oracle",
+      "sha256": "c61be16673f1bf772a6b39181e5b5a36b7cbe516887f89b2164c8b7cc1dfe691"
+    }
+  ],
+  "files": {
+    "current/docs/export-track1-closeout-acceptance.sha256": "cd4e197745bb45fdebb0a1446dd01b49c9947f368a113712d63893e4566ea17c",
+    "current/packages/agent-server/tests/integration/_closeout_live_support.py": "a41c379ec8920f383b85ddc6f03186ab5ded3e7b40d85f8a870fa51fac5d2378",
+    "current/packages/agent-server/tests/integration/test_closeout_live_capture_regression.py": "d8db9e62b265bd98842a10af1506cf9a783fe6cce04e1c5f37d1b8f6a1dc192a",
+    "current/packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "4dba6fbdb813e31932442784eb10bdf38eb1c59807b323400552d8baff63b7a6",
+    "current/packages/agent-server/tests/release_remediation/test_r6b_pytest_lane_truthfulness.py": "dadc38c955441d6901a0548e573cd0a8fc47d1a1b09075eef9a1aea5925dba83",
+    "current/packages/agent-server/tests/release_remediation/test_r7_live_build_env_parity.py": "fcfffb64b82962a85d1717c9ac540043822909885ac4b9f6c3b6aaaa037c501f",
+    "current/packages/agent-server/tests/release_remediation/test_r7_live_port_contract.py": "c79ec6c51d58f358feecf67f793ea134127ee6aa6585195758de55024c4ad100",
+    "current/packages/agent-server/tests/test_disco_verify_runner.py": "d7bf919bdaabc5f16ddfad2c40a974a0e20ec4aa0e943831b892162c164f8bf2",
+    "current/packages/core/src/disco/core/release/detect.py": "3b1031fed467a335135aafd1c48600458a83111772be93ce982e78d8a5cd54cd",
+    "current/packages/core/tests/release_remediation/test_candidate_receipt_mutations.py": "a030e73790a78b7dd5a43f095b4c71786921f0efbfd47b8c62426ba99866863c",
+    "current/packages/tools/src/disco/tools/verify/heavy_validators.py": "ed67c2e157176248de4375364c9ea42ad11b04c9520ba1fcb8c5d4f1f31b54a9",
+    "current/packages/tools/tests/test_heavy_validators.py": "d2441163a8798fccc2b533337990040f5839c087bcb88d56bfff8e51a953b19d",
+    "current/packages/tools/tests/test_security.py": "45b311043f39a4cc7868d7ba5d1fe086a46adaf7989c7643eed22dbbf900f533",
+    "development/scripts/export_track1_candidate_receipt.py": "c59de92e06e93952488929f9e3854abd32b20945147911710224a51c8f5a868b",
+    "development/scripts/gen_closeout_acceptance_manifest.py": "59930a0027d0d1df7ee1d008545e5f338fe0a4e069d4d20102a8cd008cf40aae",
+    "development/scripts/verify_export_track1_closeout.py": "c9b3bbe665be4eccfefee8f6d898958f7ec4aee183f238d5ae7ac365e3189f8c"
+  },
+  "note": "Hash inventory for the Export Track-1 recovery (base c0c4f728..HEAD). Regenerate with development/scripts/export_track1_candidate_receipt.py --emit-inventory (authoring aid; the protection is human review of this file's diff + the operator-supplied HEAD). external_evidence is OPTIONAL and NON-AUTHORITATIVE (owner policy 2026-07-17): bytes are pinned for a tamper-evident trail; the receipt never executes it.",
+  "schema": "export-track1-recovery-inventory/v1",
+  "trusted_interpreter_sha256": "74fceb0fdd29c31cf066ac8d92465975ea4ac8592308d7c888e26a70092d8eeb"
+}

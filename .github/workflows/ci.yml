@@ -1,7 +1,7 @@
 name: CI
 
 # Deterministic required gate. The `required` job runs the exact ordered
-# architecture/governance gates followed by the persistent non-web conformance
+# development/architecture/governance gates followed by the persistent non-web conformance
 # test and the deterministic suites. The `advisory` job runs broader,
 # environment-dependent checks (full pytest incl. integration, eslint, full
 # `tsc -b` over tests). It is `continue-on-error` so it informs without
@@ -35,44 +35,44 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: current/frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm ci
 
       - name: Soak freeze
-        run: uv run python scripts/check_soak_freeze.py
+        run: uv run python development/scripts/check_soak_freeze.py
 
       - name: Governance seal
-        run: uv run python scripts/check_governance_seal.py
+        run: uv run python development/scripts/check_governance_seal.py
 
       - name: Architecture budget
-        run: uv run python scripts/check_arch_budget.py
+        run: uv run python development/scripts/check_arch_budget.py
 
       - name: Architecture debt
-        run: uv run python scripts/check_arch_debt.py
+        run: uv run python development/scripts/check_arch_debt.py
 
       - name: Architecture imports
-        run: uv run python scripts/check_arch_imports.py
+        run: uv run python development/scripts/check_arch_imports.py
 
       - name: Architecture diagram freshness
-        run: uv run python scripts/gen_arch_diagram.py --check
+        run: uv run python development/scripts/gen_arch_diagram.py --check
 
       - name: Public API
-        run: uv run python scripts/check_public_api.py
+        run: uv run python development/scripts/check_public_api.py
 
       - name: Test inventory
-        run: uv run python scripts/check_test_inventory.py
+        run: uv run python development/scripts/check_test_inventory.py
 
       - name: CI contract
-        run: uv run python scripts/check_ci_contract.py
+        run: uv run python development/scripts/check_ci_contract.py
 
       - name: Tool schemas
-        run: uv run python scripts/check_tool_schemas.py
+        run: uv run python development/scripts/check_tool_schemas.py
 
       - name: Persistent non-web conformance
-        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
+        run: uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py
 
       # The adversarial suite guarding the seal, ownership and inventory
       # machinery. It is also inside `testpaths`, so the unit-test step below
@@ -80,8 +80,8 @@ jobs:
       # any future narrowing of testpaths. It was inventoried but never run
       # for the whole campaign, and the first execution found nine real
       # defects; it does not go unnamed again.
-      - name: Architecture machinery tests (tests/architecture)
-        run: uv run pytest -q tests/architecture
+      - name: Architecture machinery tests (development/tests/architecture)
+        run: uv run pytest -q development/tests/architecture
 
       - name: Python type-check (basedpyright — strict, zero type errors tree-wide)
         run: uv run basedpyright
@@ -90,10 +90,10 @@ jobs:
         run: uv run pytest -m "not integration"
 
       - name: Frontend shipping-file typecheck (honest gate)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run typecheck:build
 
-      # PKG-02-GATE-E2ELIVE-TYPECHECK (finding F24). `frontend/e2e-live` was
+      # PKG-02-GATE-E2ELIVE-TYPECHECK (finding F24). `current/frontend/e2e-live` was
       # type-checked by NO tsconfig project: app includes only `src`, node only
       # `vite.config.ts`, build excludes tests, and the root project references
       # just app+node — so the advisory job's `npx tsc -b` could not reach the 38
@@ -107,31 +107,31 @@ jobs:
       # add a gate to. Verified green BEFORE being made required — never
       # wired-then-silenced.
       # Invoked directly rather than through an npm script, matching how
-      # tsconfig.closeout-g11.json is driven (scripts/closeout_verify_parts/
-      # _lanes.py). frontend/package.json is one of the 15 change-controlled
-      # contract files in architecture/public-api.json, and non-diagram contract
+      # tsconfig.closeout-g11.json is driven (development/scripts/closeout_verify_parts/
+      # _lanes.py). current/frontend/package.json is one of the 15 change-controlled
+      # contract files in development/architecture/public-api.json, and non-diagram contract
       # bytes cannot be rebaselined by any sanctioned path — so a dedicated
       # type-check scope is wired at its call sites, never by amending it.
       - name: Frontend live-e2e typecheck (F24 — e2e-live had no project)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npx tsc -p tsconfig.e2e-live.json --noEmit
 
       - name: Frontend production build
-        working-directory: frontend
+        working-directory: current/frontend
         run: npx vite build
 
       - name: Frontend unit tests (vitest)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run test
 
       # Amendment A3 restores the `api/client.ts` funnel with a
       # `no-restricted-imports` boundary rule. A boundary rule that runs only in
       # the advisory job cannot hold a line, so ESLint is promoted here — the
-      # same move Amendment A2 made for tests/architecture, and on the same
+      # same move Amendment A2 made for development/tests/architecture, and on the same
       # precondition: it was verified green BEFORE being made required, never
       # wired-then-silenced. The advisory job keeps its own full-tsc step.
       - name: ESLint (import boundaries + style — required since Epic 12-A)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run lint
 
   advisory:
@@ -158,16 +158,16 @@ jobs:
       # Advisory. The Python↔TS drift this comment used to describe is GONE:
       # `schedule` / `schedule_run` have had TypeScript mirrors for some time,
       # and Epic 12-A closed the remaining event-kind and frame-type gaps, so
-      # harness/tests/test_contract.py is green and its allowlists are empty.
+      # development/harness/tests/test_contract.py is green and its allowlists are empty.
       # That parity is now also enforced fail-closed in the required job by
-      # packages/core/tests/test_frontend_contract_parity.py, which reads the TS
+      # current/packages/core/tests/test_frontend_contract_parity.py, which reads the TS
       # side with the pinned compiler instead of a regex.
       #
       # This job stays advisory for the one KNOWN remaining failure here:
       # test_replay_runner.py::test_deterministic_replay_reproduces_recorded_events
       # (unrelated to contract parity, reproduces at the Epic 12-A parent
       # a9daf96d, unowned as of this writing).
-      # PKG-19-CERT-STRUCTURAL finding F2: this named harness/tests only, so the
+      # PKG-19-CERT-STRUCTURAL finding F2: this named development/harness/tests only, so the
       # certified harness ids outside it — build_soak, marathon, replay — ran in
       # no lane at all. Widened to the whole tree to match `make harness`;
       # F6-b's `live` marker on the marathon phases keeps it hermetic.
@@ -184,16 +184,16 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: current/frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm ci
 
       - name: ESLint (style debt — advisory)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run lint
 
       - name: Full project typecheck (includes test files — advisory)
-        working-directory: frontend
+        working-directory: current/frontend
         run: npx tsc -b

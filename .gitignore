@@ -35,7 +35,7 @@ inspect-trace.jsonl
 .idea/
 .vscode/
 
-# orchestration runtime state (scripts/orchestrate.sh) + Claude review queue
+# orchestration runtime state (development/scripts/orchestrate.sh) + Claude review queue
 .orchestrate/
 review-queue/
 
@@ -46,7 +46,7 @@ review-queue/
 /test-record/
 
 # Root-level manual-test scratch (these patterns are ROOT-scoped on purpose — real
-# test_*.py live under packages/ and must stay tracked).
+# test_*.py live under current/packages/ and must stay tracked).
 /run_manual*.py
 /test_*.py
 /validate.py
@@ -71,14 +71,14 @@ disco-config.json.*
 # orchestration scratch (review output, lane diffs, screenshot helper)
 .review/
 *.diff
-frontend/_*.mjs
+current/frontend/_*.mjs
 
 # harness strays — never commit
 /node_modules/
 /workorders/
-frontend/_a2harness*
-frontend/_a2-deck.json
-frontend/_a4_toggle*
+current/frontend/_a2harness*
+current/frontend/_a2-deck.json
+current/frontend/_a4_toggle*
 
 # --- close-out cull (2026-07-07) ---
 test-record/
@@ -87,7 +87,7 @@ disco-config.json*
 disco-approved-origins.json
 tmux-client-*.log
 .env
-frontend/.env.development.local
+current/frontend/.env.development.local
 .bashrc
 .bash_profile
 .zshrc

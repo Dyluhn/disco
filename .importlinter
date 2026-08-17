@@ -1,5 +1,5 @@
 # Architecture layering contract (enforced by import-linter — `lint-imports`).
-# Wire into CI/pre-commit alongside scripts/check_arch_budget.py.
+# Wire into CI/pre-commit alongside development/scripts/check_arch_budget.py.
 #
 # Real dependency direction (measured): core is the foundation; retrieval sits on
 # core; tools on retrieval+core; agent_server and app_server are independent top

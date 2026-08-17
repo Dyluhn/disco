@@ -29,44 +29,44 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: current/frontend/package-lock.json
 
       - name: Install frontend deps
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm ci
 
       - name: Soak freeze
-        run: uv run python scripts/check_soak_freeze.py
+        run: uv run python development/scripts/check_soak_freeze.py
 
       - name: Governance seal
-        run: uv run python scripts/check_governance_seal.py
+        run: uv run python development/scripts/check_governance_seal.py
 
       - name: Architecture budget
-        run: uv run python scripts/check_arch_budget.py
+        run: uv run python development/scripts/check_arch_budget.py
 
       - name: Architecture debt
-        run: uv run python scripts/check_arch_debt.py
+        run: uv run python development/scripts/check_arch_debt.py
 
       - name: Architecture imports
-        run: uv run python scripts/check_arch_imports.py
+        run: uv run python development/scripts/check_arch_imports.py
 
       - name: Architecture diagram freshness
-        run: uv run python scripts/gen_arch_diagram.py --check
+        run: uv run python development/scripts/gen_arch_diagram.py --check
 
       - name: Public API
-        run: uv run python scripts/check_public_api.py
+        run: uv run python development/scripts/check_public_api.py
 
       - name: Test inventory
-        run: uv run python scripts/check_test_inventory.py
+        run: uv run python development/scripts/check_test_inventory.py
 
       - name: CI contract
-        run: uv run python scripts/check_ci_contract.py
+        run: uv run python development/scripts/check_ci_contract.py
 
       - name: Tool schemas
-        run: uv run python scripts/check_tool_schemas.py
+        run: uv run python development/scripts/check_tool_schemas.py
 
       - name: Persistent non-web conformance
-        run: uv run pytest -q packages/core/tests/test_build_platform_nonweb_conformance.py
+        run: uv run pytest -q current/packages/core/tests/test_build_platform_nonweb_conformance.py
 
       - name: Python type check
         run: uv run basedpyright
@@ -75,21 +75,21 @@ jobs:
         run: uv run pytest -m "not integration"
 
       - name: Frontend unit suite
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run test
 
       - name: Frontend shipping-file typecheck
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run typecheck:build
 
       - name: Frontend production build
-        working-directory: frontend
+        working-directory: current/frontend
         run: npm run build
 
       - name: Package frontend build
         run: |
           mkdir -p release-artifacts
-          tar -C frontend/dist -czf "release-artifacts/disco-frontend-dist-${GITHUB_REF_NAME}.tar.gz" .
+          tar -C current/frontend/dist -czf "release-artifacts/disco-frontend-dist-${GITHUB_REF_NAME}.tar.gz" .
 
       - name: Extract changelog section
         run: |

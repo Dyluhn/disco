@@ -3,7 +3,7 @@
 #   64 = synthetic fixtures inside redaction/schema tests (fake Stripe/GitHub/
 #        Slack tokens that exist precisely to prove the redaction machinery),
 #   1  = harness cassette "key" field (sha256[:16] request-hash cache key,
-#        see harness/cassette.py cassette_key(), not a credential).
+#        see development/harness/cassette.py cassette_key(), not a credential).
 # Real secrets never enter the repo: they live in the encrypted SecretStore
 # (DISCO_SECRET_KEY Fernet) or the env; the MCP launcher allowlists child env.
 
@@ -13,9 +13,9 @@ useDefault = true
 [allowlist]
 description = "Synthetic test fixtures + cassette request-hash keys"
 paths = [
-    '''packages/.*/tests/.*''',
-    '''frontend/e2e-full/support/.*\.test\.ts''',
-    '''frontend/src/.*\.test\.tsx?''',
-    '''harness/cassettes/.*\.jsonl''',
+    '''current/packages/.*/tests/.*''',
+    '''current/frontend/e2e-full/support/.*\.test\.ts''',
+    '''current/frontend/src/.*\.test\.tsx?''',
+    '''development/harness/cassettes/.*\.jsonl''',
     '''\.claude/.*''',
 ]
