@@ -861,7 +861,7 @@ def test_validate_account_id_unit():
 def test_scrub_paths_unit():
     # An absolute host path is replaced with an opaque marker; a relative path
     # (a workspace-relative record path) is left intact; None/empty pass through.
-    assert _scrub_paths("read /home/dylan/projects/x/secrets.json failed") == ("read <path> failed")
+    assert _scrub_paths("read /home/user/projects/x/secrets.json failed") == ("read <path> failed")
     assert _scrub_paths(".disco/cloudflare/deployments/rec.json") == (
         ".disco/cloudflare/deployments/rec.json"
     )
@@ -875,7 +875,7 @@ def test_scrub_paths_unit():
 def test_scrub_text_unit():
     # SEC-26 (remainder): the free-text scrub strips BOTH absolute host paths AND the
     # internal workspace-relative ``.disco/...`` structure (which _scrub_paths leaves).
-    assert _scrub_text("read /home/dylan/projects/x/secrets.json failed") == "read <path> failed"
+    assert _scrub_text("read /home/user/projects/x/secrets.json failed") == "read <path> failed"
     assert _scrub_text("wrote .disco/cloudflare/deployments/rec.json ok") == "wrote <path> ok"
     assert _scrub_text("both /var/lib/disco/x and .disco/cloudflare/state.json") == (
         "both <path> and <path>"
@@ -898,7 +898,7 @@ def test_route_deploy_success_scrubs_internal_paths_in_freetext_fields(tmp_path,
     client, ps, cid = _client(tmp_path, monkeypatch)
     _connect(client)
     ws = ps.path_for(cid)
-    host_leak = "/home/dylan/secret/projects/abc/workspace"
+    host_leak = "/home/user/secret/projects/abc/workspace"
     internal_leak = ".disco/cloudflare/deployments/internal-state.json"
     plan = DeployPlan(
         workspace=host_leak,
@@ -949,7 +949,7 @@ def test_route_deploy_success_scrubs_internal_paths_in_freetext_fields(tmp_path,
     assert j["executed"] is True
     # No absolute host path leaks anywhere.
     assert host_leak not in res.text
-    assert "/home/dylan" not in res.text
+    assert "/home/user" not in res.text
     # The internal ``.disco/...`` layout is scrubbed out of the FREE-TEXT fields.
     joined_transcript = "\n".join(j["transcript"])
     assert internal_leak not in joined_transcript

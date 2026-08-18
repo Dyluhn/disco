@@ -1,5 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM module scope — no __dirname; derive it (frontend package is "type": "module").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Close-out gauntlet — Pillar B: one site per primitive through the REAL build
@@ -28,7 +33,11 @@ const EDITS = (process.env.B_EDITS ?? "").split("||").filter(Boolean);
 const BUDGET = Number(process.env.B_BUDGET ?? 1_500_000);
 const ITER_BUDGET = Number(process.env.B_ITER_BUDGET ?? 900_000);
 
-const EVID = `/var/home/dylan/projects/disclaude/test-record/gauntlet/${LABEL}`;
+// DISCO_E2E_EVIDENCE_DIR overrides the default; falls back to a repo-relative
+// path (like the other e2e-live specs) so this runs on any machine unconfigured.
+const EVID = process.env.DISCO_E2E_EVIDENCE_DIR
+  ? path.join(process.env.DISCO_E2E_EVIDENCE_DIR, LABEL)
+  : path.resolve(__dirname, "../../test-record/gauntlet", LABEL);
 
 const APPROVE = '[data-disco-control="approve-plan"]';
 const ANSWER = '[data-disco-control="answer-question"]';

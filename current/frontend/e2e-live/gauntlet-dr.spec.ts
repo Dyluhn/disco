@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM module scope — no __dirname; derive it (frontend package is "type": "module").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Close-out gauntlet — Pillar A: one live deep-research run through the REAL UI,
@@ -24,7 +29,11 @@ const TOPIC =
   "What are the practical tradeoffs of small on-device language models for summarization?";
 const BUDGET = Number(process.env.DR_BUDGET ?? 1_500_000);
 
-const EVID = `/var/home/dylan/projects/disclaude/test-record/gauntlet/${LABEL}`;
+// DISCO_E2E_EVIDENCE_DIR overrides the default; falls back to a repo-relative
+// path (like the other e2e-live specs) so this runs on any machine unconfigured.
+const EVID = process.env.DISCO_E2E_EVIDENCE_DIR
+  ? path.join(process.env.DISCO_E2E_EVIDENCE_DIR, LABEL)
+  : path.resolve(__dirname, "../../test-record/gauntlet", LABEL);
 
 const TIER_MENU_LABEL: Record<string, RegExp> = {
   quick: /quick/i,

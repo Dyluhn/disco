@@ -325,12 +325,12 @@ TLS (a reverse proxy) in front (`.env.example:5-8`).
 
 ## 8. Reporting a vulnerability
 
-Disco is an early single-owner project and **has no formal vulnerability-disclosure
-process, security contact, or SLA yet.** If you find a security issue, please report it
-privately to the maintainer (e.g. via a private GitHub Security Advisory on the repository, or
-direct contact) rather than opening a public issue with exploit detail. This section is a
-placeholder and should be replaced with a real contact + policy before any public/multi-user
-deployment.
+The reporting channel and policy live at [`/SECURITY.md`](../../SECURITY.md) (repo root) —
+GitHub's private security advisory form, not a public issue. That file is the current
+source of record for how to report; this section used to carry a placeholder saying no
+such process existed, which is no longer true as of the repo going public. Disco is still
+a single-maintainer project with no formal SLA, only a commitment to respond to private
+reports before anything else in the queue.
 
 ---
 
@@ -354,4 +354,5 @@ deployment.
   script-hardened (`ExecutionCanvas.tsx:401-403`).
 - **The risk gate auto-approves in-sandbox actions** on the Build surface; it is not
   per-command human review (§6, `policies.py:84-104`).
-- **No formal vulnerability-disclosure process** (§8).
+- **No SLA on vulnerability response** — reporting has a real private channel now (§8), but
+  there's no committed response time, only a single maintainer's best effort.

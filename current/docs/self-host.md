@@ -7,8 +7,8 @@ socket is inherited by a fresh install.
 ## Quickstart
 
 ```bash
-git clone <repo-url>
-cd disclaude
+git clone https://github.com/Dyluhn/disco.git
+cd disco
 systemctl --user enable --now podman.socket
 podman compose up -d --build
 podman compose logs app-server
@@ -218,9 +218,19 @@ UID or socket location differs. `DISCO_LOCAL_ENGINE=podman` is the default and
 keeps native Podman lifecycle/exec semantics even though the socket has the
 engine-neutral in-container name `/var/run/docker.sock`.
 
-Docker's root-owned socket grants root-equivalent control of the host. It is not
-selected automatically. A trusted single-user operator can explicitly accept
-that weaker host boundary (and ensure the sandbox image is built in that daemon):
+Docker is also supported, and rootless Docker is the preferred way to run it: it
+keeps the same non-root-owned boundary as the Podman default. Its socket lives
+under `$XDG_RUNTIME_DIR`, not `/var/run`:
+
+```bash
+DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
+  docker compose up -d --build
+```
+
+Rootful Docker's socket at `/var/run/docker.sock` grants root-equivalent control
+of the host. It is not selected automatically. A trusted single-user operator can
+explicitly accept that weaker host boundary (and ensure the sandbox image is
+built in that daemon):
 
 ```bash
 DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \

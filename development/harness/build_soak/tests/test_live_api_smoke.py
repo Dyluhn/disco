@@ -5,8 +5,10 @@ Enable with a running agent-server on :8000 and a reachable model:
 
     DISCO_SOAK_LIVE=1 \
     DISCO_SOAK_MODEL=driver-local \
-    DISCO_DB=/var/home/dylan/projects/disco/disco.db \
+    DISCO_DB=/path/to/disco/disco.db \
     .venv/bin/python -m pytest development/harness/build_soak/tests/test_live_api_smoke.py -m live
+
+(DISCO_DB defaults to <repo root>/disco.db when unset.)
 
 It drives `static_html_minimal` end-to-end through the REAL HttpTransport (the same
 path `python -m harness.build_soak.run` uses), asserts a complete run folder was
@@ -32,7 +34,8 @@ _LIVE = os.environ.get("DISCO_SOAK_LIVE")
 @pytest.mark.asyncio
 async def test_live_static_html_minimal_smoke(tmp_path):
     base_url = os.environ.get("DISCO_SOAK_BASE_URL", "http://127.0.0.1:8000")
-    db_path = os.environ.get("DISCO_DB", "/var/home/dylan/projects/disco/disco.db")
+    default_db = Path(__file__).resolve().parents[4] / "disco.db"
+    db_path = os.environ.get("DISCO_DB", str(default_db))
     model = os.environ.get("DISCO_SOAK_MODEL", "driver-local")
 
     client = DiscoApiClient(HttpTransport(base_url), db_path=db_path, poll_interval_s=2.0)

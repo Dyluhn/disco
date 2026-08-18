@@ -11,11 +11,14 @@ and PLAN revisions. This is what Dylan sees in the trace pane.
 """
 
 import json
+import os
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any
 
-DB = "/home/dylan/projects/disco/disco.db"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DB = os.environ.get("DISCO_DB", str(_REPO_ROOT / "disco.db"))
 
 
 def short(s, n=600):

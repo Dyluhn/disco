@@ -184,8 +184,10 @@ services:
       # Docker-compatible API endpoint used to spawn sibling sandbox containers.
       # SAFE DEFAULT: the current user's rootless Podman socket. The fixed target
       # is an in-container Docker-API compatibility name; it does not imply that
-      # the host source is Docker or root-owned. Operators who deliberately accept
-      # Docker's root-equivalent source must opt in with
+      # the host source is Docker or root-owned. Docker also works: prefer its
+      # rootless socket with DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock,
+      # which keeps this same non-root-owned boundary. Operators who deliberately
+      # accept Docker's root-equivalent rootful source must opt in explicitly with
       # DISCO_SANDBOX_SOCKET=/var/run/docker.sock.
       - "${DISCO_SANDBOX_SOCKET:-${PMX_SANDBOX_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock}}:/var/run/docker.sock"
     # SELinux otherwise denies access to a rootless Podman socket even though
