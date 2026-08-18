@@ -54,7 +54,6 @@ export function AgentStatusBar({
   sandboxState,
   connectionState = "connected",
   autonomous,
-  assist,
   onKill,
   onStop,
   onResume,
@@ -72,8 +71,6 @@ export function AgentStatusBar({
   connectionState?: "connected" | "degraded";
   /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */
   autonomous?: boolean;
-  /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */
-  assist?: boolean;
   onKill: () => void;
   /** Cluster 6: graceful stop (cooperative cancel — no sandbox teardown). */
   onStop?: () => void;
@@ -99,7 +96,6 @@ export function AgentStatusBar({
         <StatusBadges
           isolation={isolation}
           autonomous={autonomous}
-          assist={assist}
           sandboxState={sandboxState}
           connectionState={connectionState}
           events={events}
@@ -148,13 +144,17 @@ function StatusLabel({
   );
 }
 
-/** The row of informational pills: isolation tier, autonomous/assist tiers,
- * suspended sandbox, degraded connection, and the cumulative cost meter. Each
- * pill decides its own visibility — the caller always renders this fragment. */
+/** The row of informational pills: isolation tier, autonomous tier, suspended
+ * sandbox, degraded connection, and the cumulative cost meter. Each pill
+ * decides its own visibility — the caller always renders this fragment.
+ *
+ * The Assist/Standard execution-tier pill that used to live here is
+ * deliberately hidden (deprecated control, not removed) — the server-derived
+ * value it read still exists at `useBuildStream`'s `assist` field / the
+ * reducer's `extras.assist`, this component just no longer renders it. */
 function StatusBadges({
   isolation,
   autonomous,
-  assist,
   sandboxState,
   connectionState,
   events,
@@ -162,7 +162,6 @@ function StatusBadges({
 }: {
   isolation: IsolationInfo | null;
   autonomous?: boolean;
-  assist?: boolean;
   sandboxState?: "active" | "suspended";
   connectionState: "connected" | "degraded";
   events: AgentEvent[];
@@ -197,25 +196,6 @@ function StatusBadges({
           className="flex items-center gap-hair rounded-full border border-accent/40 px-inline py-px font-ui text-[0.7rem] text-accent"
         >
           autonomous
-        </span>
-      )}
-      {/* Execution-tier badge: "Assist" (weak/small-model tier) vs "Standard" (capable).
-          Server-derived — no user toggle this pass; read from state.extras.assist. */}
-      {assist !== undefined && (
-        <span
-          title={
-            assist
-              ? "Assist tier — running with small-model compensations (weak driver)"
-              : "Standard tier — running with a capable model"
-          }
-          className={cn(
-            "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem]",
-            assist
-              ? "border-warn/40 text-warn"
-              : "border-hairline text-text-faint",
-          )}
-        >
-          {assist ? "Assist" : "Standard"}
         </span>
       )}
       {sandboxState === "suspended" && (

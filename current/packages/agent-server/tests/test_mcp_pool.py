@@ -128,6 +128,9 @@ async def test_pool_server_status():
         await pool.start()
         status = pool.server_status()
         assert status["fake_srv"] == "connected"
+        # A healthy server carries no diagnostic entry at all — not an empty
+        # stub — same convention the streamable_http transport uses.
+        assert pool.server_diagnostics() == {}
     finally:
         await pool.aclose()
 
@@ -358,6 +361,35 @@ async def test_pool_init_timeout_error_surfaces():
         status = pool.server_status()
         assert status["hang_srv"] == "error"
         assert len(pool.snapshot()) == 0
+    finally:
+        await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pool_stdio_connect_failure_carries_diagnostic():
+    """BUG 2: before this, a stdio server that failed to even spawn (e.g. a
+    misspelled/missing command — exactly what BUG 1's broken single-argv-token
+    behavior produced) was marked "error" with NO further detail anywhere but
+    the container's stdout. `server_diagnostics()` now carries the same
+    {code, attempts, exception_type} shape the streamable_http transport's
+    `McpHttpConnector.status` already provides for its own failures."""
+    srv = McpServerConfig(
+        name="missing_srv",
+        transport="stdio",
+        command=["/definitely/not/a/real/executable/on/this/host"],
+        risk_tier=SecurityRisk.MEDIUM,
+        enabled=True,
+    )
+    pool = _make_pool({"missing_srv": srv})
+    try:
+        await pool.start()
+        assert pool.server_status()["missing_srv"] == "error"
+        diagnostics = pool.server_diagnostics()
+        assert diagnostics["missing_srv"] == {
+            "code": "mcp_stdio_connect_failed",
+            "attempts": 1,
+            "exception_type": "FileNotFoundError",
+        }
     finally:
         await pool.aclose()
 
