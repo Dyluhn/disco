@@ -38,11 +38,11 @@ import type { ReleaseResponse } from "@/types/release";
 // fresh one. The path-picker fixture lists a small synthetic tree.
 
 let fixtureStorage: ProjectStorageConfig = {
-  projects_root: "/home/dylan/disco-projects",
+  projects_root: "/home/user/disco-projects",
   status: "ok",
   // Offline fixture: the user has set a root, so the effective (in-use) root
   // equals the configured one (it only diverges in the zero-config default).
-  effective_root: "/home/dylan/disco-projects",
+  effective_root: "/home/user/disco-projects",
 };
 
 const fixtureProjects: Project[] = [
@@ -397,8 +397,8 @@ export async function updateProjectsConfig(
 // ---- server-side directory picker (AGENT server) ---------------------------
 
 const FIXTURE_TREE: Record<string, BrowseResult> = {
-  "/home/dylan": {
-    path: "/home/dylan",
+  "/home/user": {
+    path: "/home/user",
     parent: "/home",
     selectable: "ok",
     entries: [
@@ -409,9 +409,9 @@ const FIXTURE_TREE: Record<string, BrowseResult> = {
       { name: "notes.md", is_dir: false },
     ],
   },
-  "/home/dylan/disco-projects": {
-    path: "/home/dylan/disco-projects",
-    parent: "/home/dylan",
+  "/home/user/disco-projects": {
+    path: "/home/user/disco-projects",
+    parent: "/home/user",
     selectable: "ok",
     entries: [
       { name: "conv_demo_snake", is_dir: true },
@@ -423,8 +423,8 @@ const FIXTURE_TREE: Record<string, BrowseResult> = {
 export async function browseStorage(path: string): Promise<BrowseResult> {
   if (!agentLive()) {
     await fixtureDelay();
-    const target = path || "/home/dylan";
-    return FIXTURE_TREE[target] ?? FIXTURE_TREE["/home/dylan"];
+    const target = path || "/home/user";
+    return FIXTURE_TREE[target] ?? FIXTURE_TREE["/home/user"];
   }
   const params = new URLSearchParams(path ? { path } : {});
   return agentGet<BrowseResult>(`/api/storage/browse?${params.toString()}`);

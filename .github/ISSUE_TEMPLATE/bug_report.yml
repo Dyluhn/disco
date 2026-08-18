@@ -1,0 +1,120 @@
+name: Bug report
+description: Something isn't working the way it should.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Disco is local-first and runs on whatever
+        model you point it at, so the deployment mode and model in use change
+        what a given failure means — please fill in as much of this as you can.
+
+        **Do not paste API keys, tokens, or session cookies** anywhere below,
+        including inside logs. Redact anything that looks like a secret before
+        pasting.
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which of the four surfaces is this about?
+      options:
+        - Search
+        - Deep Research
+        - Build
+        - Agent
+        - Settings / other (not surface-specific)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - podman compose (default self-host path)
+        - docker compose
+        - Local development (uv sync + npm run dev)
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Include the version, e.g. "Fedora 42", "Ubuntu 24.04", "macOS 15", "Windows 11 + WSL2".
+      placeholder: e.g. Fedora 42
+    validations:
+      required: true
+
+  - type: dropdown
+    id: rootless
+    attributes:
+      label: Container engine mode
+      description: Only relevant if you're running podman/docker compose.
+      options:
+        - Rootless Podman (default)
+        - Rootful Podman
+        - Docker (root-owned socket)
+        - Not using a container engine (local dev)
+        - Not sure
+    validations:
+      required: false
+
+  - type: input
+    id: model
+    attributes:
+      label: Model / provider in use
+      description: >
+        The driver model and how it's served (Ollama, llama.cpp, vLLM, LM
+        Studio, OpenRouter, a direct API, ...), plus size/quant if it's local.
+        A weak local model can produce failures that look like bugs but are
+        really a capability ceiling — if you can, try to reproduce on a
+        stronger model and note whether it still happens.
+      placeholder: e.g. Ollama, Qwen2.5-32B-Instruct-Q4_K_M
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        `podman compose logs app-server` / `podman compose logs agent-server`
+        (swap in `docker compose` if that's your deployment). Paste the window
+        around the failure, not the whole log — and redact anything that
+        looks like a key, token, or cookie first.
+      render: shell
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else — screenshots, related issues, workarounds you already tried.

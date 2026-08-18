@@ -101,19 +101,19 @@ describe("importProject", () => {
   it("sends the session-bound CSRF header on the protected storage browse GET", async () => {
     const { browseStorage } = await importLiveProjects();
     const stub = makeFetchStub({
-      path: "/home/dylan",
+      path: "/home/user",
       parent: null,
       selectable: "ok",
       entries: [],
     });
     vi.stubGlobal("fetch", stub);
 
-    await browseStorage("/home/dylan");
+    await browseStorage("/home/user");
 
     const call = stub.mock.calls.find(([url]) => String(url).includes("/api/storage/browse?"));
     expect(call).toBeDefined();
     const [url, init] = call as unknown as [string, RequestInit];
-    expect(url).toContain("path=%2Fhome%2Fdylan");
+    expect(url).toContain("path=%2Fhome%2Fuser");
     expect((init.method ?? "GET").toUpperCase()).toBe("GET");
     expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
   });

@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "67ef47be00ef70e1a0fea457f3b67adf4f1bb823",
+  "source_identity": "a22481956df83eae0b12cd884f5234d392362618",
   "collected": {
     "counts": {
       "packages": 10821,
@@ -12680,7 +12680,7 @@
     }
   },
   "mapping_static": {
-    "identity": "67ef47be00ef70e1a0fea457f3b67adf4f1bb823",
+    "identity": "a22481956df83eae0b12cd884f5234d392362618",
     "python_test_file_count": 848,
     "python_static_test_id_count": 10418,
     "python_test_files": [
@@ -26652,7 +26652,7 @@
       {
         "framework": "pytest",
         "path": "harness/build_soak/tests/test_live_api_smoke.py",
-        "line": 31,
+        "line": 33,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -26813,7 +26813,7 @@
       {
         "framework": "pytest",
         "path": "packages/core/tests/test_f41_stripe_primitive.py",
-        "line": 625,
+        "line": 627,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"repository frontend esbuild is unavailable\")"
       },
@@ -26841,7 +26841,7 @@
       {
         "framework": "pytest",
         "path": "harness/build_soak/tests/test_efficiency.py",
-        "line": 716,
+        "line": 719,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -26869,14 +26869,14 @@
       {
         "framework": "pytest",
         "path": "harness/build_soak/tests/test_efficiency.py",
-        "line": 745,
+        "line": 748,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
       {
         "framework": "pytest",
         "path": "packages/core/tests/test_f41_stripe_primitive.py",
-        "line": 750,
+        "line": 752,
         "marker": "pytest.skip",
         "source": "pytest.skip(\"wrangler/workerd is required for the live Stripe proof\")"
       },
@@ -31229,6 +31229,41 @@
       "root": "multiple",
       "source_identity_before": "638a27741411d93eb5338f8db68b694d6a3e22b5",
       "source_identity_after": "67ef47be00ef70e1a0fea457f3b67adf4f1bb823",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10821,
+          "after_count": 10821,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1433,
+          "after_count": 1433,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-21-PUBLIC-RELEASE-PREP",
+      "root": "multiple",
+      "source_identity_before": "67ef47be00ef70e1a0fea457f3b67adf4f1bb823",
+      "source_identity_after": "a22481956df83eae0b12cd884f5234d392362618",
       "collected_roots": {
         "packages": {
           "before_count": 10821,

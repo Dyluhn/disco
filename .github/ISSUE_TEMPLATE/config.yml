@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussion
+    url: https://github.com/Dyluhn/disco/discussions
+    about: Usage questions, deployment help, and general discussion belong here, not in an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/Dyluhn/disco/security/advisories/new
+    about: Do not open a public issue for a security vulnerability. See SECURITY.md and report it privately instead.

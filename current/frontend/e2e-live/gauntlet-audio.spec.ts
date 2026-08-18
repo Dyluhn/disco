@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// ESM module scope — no __dirname; derive it (frontend package is "type": "module").
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Close-out gauntlet — Pillar A audio: generate an audio overview from an
@@ -13,7 +18,11 @@ import * as fs from "node:fs";
 
 const CID = process.env.AUDIO_CID ?? "";
 const BUDGET = Number(process.env.AUDIO_BUDGET ?? 900_000);
-const EVID = `/var/home/dylan/projects/disclaude/test-record/gauntlet/audio`;
+// DISCO_E2E_EVIDENCE_DIR overrides the default; falls back to a repo-relative
+// path (like the other e2e-live specs) so this runs on any machine unconfigured.
+const EVID = process.env.DISCO_E2E_EVIDENCE_DIR
+  ? path.join(process.env.DISCO_E2E_EVIDENCE_DIR, "audio")
+  : path.resolve(__dirname, "../../test-record/gauntlet/audio");
 
 test(`gauntlet AUDIO: report → single-voice audio overview with real player/export`, async ({ page }) => {
   test.setTimeout(BUDGET + 300_000);

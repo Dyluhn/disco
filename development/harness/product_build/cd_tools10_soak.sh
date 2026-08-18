@@ -4,10 +4,12 @@
 # per run to soak_summary.jsonl. MiniMax DIRECT only (relay :8080 → MiniMax); the driver's own oracle
 # enforces 0 OpenRouter + 0 post-terminal + the hardened Mode-B-gone checks.
 set -u
-RUN_DIR="${RUN_DIR:-/tmp/claude-1000/-var-home-dylan/c1e33ca0-6ffb-409a-8303-c38c11bb886d/scratchpad/p1blive3b}"
+RUN_DIR="${RUN_DIR:-/tmp/disco-cd-tools10-soak}"
 N="${1:-10}"
-PY=/home/dylan/projects/Disco-Pi/.venv/bin/python3
+REPO="${DISCO_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+PY="${DISCO_PY:-$REPO/.venv/bin/python3}"
 SUMMARY="$RUN_DIR/soak_summary.jsonl"
+mkdir -p "$RUN_DIR"
 : > "$SUMMARY"
 echo "CD-TOOLS-10 soak: $N runs -> $SUMMARY"
 for i in $(seq 1 "$N"); do

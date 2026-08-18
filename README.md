@@ -103,8 +103,8 @@ agent, frontend, data volume, bundled encoders, and bundled TTS without source
 edits or a required `.env` file:
 
 ```bash
-git clone <repo-url>
-cd disclaude
+git clone https://github.com/Dyluhn/disco.git
+cd disco
 systemctl --user enable --now podman.socket
 podman compose up -d --build
 podman compose logs app-server
@@ -121,7 +121,10 @@ podman compose exec agent-server disco-verify --quick
 
 Copy `.env.example` to `.env` only when you need to override ports, bind
 addresses, provider keys, or the sandbox socket. The default is local rootless
-Podman; Docker's root-owned socket is available only as an explicit override.
+Podman. Docker also works and is an explicit override, not automatic; prefer
+rootless Docker's socket (`$XDG_RUNTIME_DIR/docker.sock`) over the root-equivalent
+`/var/run/docker.sock` — see [`current/docs/self-host.md`](./current/docs/self-host.md#sandbox-image)
+for both invocations.
 
 See [`current/docs/self-host.md`](./current/docs/self-host.md) for Podman notes, offline asset
 smoke commands, and the bundled-weight license inventory.

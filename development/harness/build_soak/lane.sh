@@ -15,7 +15,7 @@ set -u
 # event stream lacks an owner id.
 export DISCO_BUILD_SOAK_OUTER_LANE=1
 LANE="$1"; OUT="$2"; SEED="$3"; shift 3
-REPO=/var/home/dylan/projects/disclaude
+REPO="${DISCO_REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 PY="$REPO/.venv/bin/python"
 mkdir -p "$OUT"
 LEDGER="$OUT/ledger.tsv"

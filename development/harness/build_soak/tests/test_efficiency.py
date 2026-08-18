@@ -9,6 +9,7 @@ work-cost range without making a single model call.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -697,7 +698,9 @@ def test_report_separates_families():
 # Retrospective validation against the SEALED Epic-4 dossiers
 # --------------------------------------------------------------------------
 
-_EPIC4 = Path("/var/home/dylan/build-platform-campaign-evidence/2026-07-26/epic4")
+# Sealed evidence lives outside the repo on whichever host holds it; point
+# DISCO_EPIC4_EVIDENCE_DIR at it locally. Absent that, this test skips.
+_EPIC4 = Path(os.environ.get("DISCO_EPIC4_EVIDENCE_DIR", "/nonexistent/epic4-evidence"))
 
 
 def _sealed_dossiers() -> list[tuple[Path, dict]]:
