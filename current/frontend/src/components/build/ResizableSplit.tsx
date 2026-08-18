@@ -113,9 +113,20 @@ export function ResizableSplit({
     };
   }, [onPointerMove, onPointerUp]);
 
-  const inspectorStyle = collapsed
-    ? { width: 0, minWidth: 0 }
-    : { width: `${inspectorFrac * 100}%`, minWidth: `${MIN_INSPECTOR_PX}px` };
+  // These widths are a DESKTOP-ONLY concept (the draggable split). Below `lg`
+  // the layout falls back to a stacked column (see file header), so the pixel/
+  // percent values must only take effect at the `lg:` breakpoint — otherwise a
+  // desktop-sized MIN_INSPECTOR_PX (or a persisted narrow inspectorFrac) gets
+  // applied as a real width on a 375–430px phone screen, leaving the stacked
+  // inspector squeezed into a slice of the viewport with dead space beside it.
+  // CSS custom properties carry the value across the `lg:` media query; Tailwind
+  // only *reads* them once that query matches.
+  const inspectorVars = collapsed
+    ? ({ "--ins-w": "0px", "--ins-min-w": "0px" } as React.CSSProperties)
+    : ({
+        "--ins-w": `${inspectorFrac * 100}%`,
+        "--ins-min-w": `${MIN_INSPECTOR_PX}px`,
+      } as React.CSSProperties);
 
   return (
     <div
@@ -125,9 +136,9 @@ export function ResizableSplit({
       <aside
         className={cn(
           "flex min-h-0 flex-col border-hairline lg:shrink-0 lg:overflow-hidden lg:border-r",
-          "lg:flex-1",
+          "lg:min-w-[var(--chat-min-w)] lg:flex-1",
         )}
-        style={{ minWidth: `${MIN_CHAT_PX}px` }}
+        style={{ "--chat-min-w": `${MIN_CHAT_PX}px` } as React.CSSProperties}
       >
         {chat}
       </aside>
@@ -159,10 +170,10 @@ export function ResizableSplit({
 
       <section
         className={cn(
-          "flex min-h-[55vh] flex-col border-t border-hairline lg:min-h-0 lg:border-t-0",
+          "flex min-h-[55vh] w-full flex-col border-t border-hairline lg:min-h-0 lg:w-[var(--ins-w)] lg:min-w-[var(--ins-min-w)] lg:border-t-0",
           collapsed && "lg:hidden",
         )}
-        style={inspectorStyle}
+        style={inspectorVars}
       >
         <div className="flex items-center justify-between border-b border-hairline px-body py-hair">
           <span className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">

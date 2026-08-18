@@ -1,7 +1,11 @@
 /**
- * The Build surface's pre-start landing view: hero + model picker + assist/
- * autonomous toggles + the task composer + suggestion chips. Extracted verbatim
- * from BuildSurface.tsx's `!b.started` branch (PKG-12-FE-BUILD).
+ * The Build surface's pre-start landing view: hero + model picker + autonomous
+ * toggle + the task composer + suggestion chips. Extracted verbatim from
+ * BuildSurface.tsx's `!b.started` branch (PKG-12-FE-BUILD).
+ *
+ * The Assist tier toggle that used to sit next to Autonomous is deliberately
+ * hidden (deprecated control, not removed — see the comment at its old call
+ * site below).
  */
 
 import { cn } from "@/lib/cn";
@@ -39,23 +43,11 @@ export function BuildEmptyState({
           <div className="mb-inline flex items-center justify-between gap-inline">
             <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
             <div className="flex items-center gap-hair">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={b.assistChoice}
-                aria-label="Assist tier (weak-model compensations)"
-                data-disco-control="build.assist-toggle"
-                onClick={() => b.setAssistChoice(!b.assistChoice)}
-                title="Assist: weak-model compensations (file-state reinforcement, simplified tool surface + plan handling). Turn ON for a genuinely small/weak model. Leave OFF for capable models — it is NEVER auto-enabled, even for local models like Qwen 27B."
-                className={cn(
-                  "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
-                  b.assistChoice
-                    ? "border-accent/50 bg-accent/5 text-accent"
-                    : "border-hairline text-text-faint hover:text-text-muted",
-                )}
-              >
-                {b.assistChoice ? "assist: on" : "assist: off"}
-              </button>
+              {/* Assist tier toggle deliberately hidden at launch (deprecated
+                  control) — b.assistChoice/setAssistChoice still exist and
+                  still drive the create/patch payload at its default (off);
+                  only the render is gone. See AgentStatusBar.tsx for the
+                  matching read-only badge removal. */}
               <button
                 type="button"
                 role="switch"

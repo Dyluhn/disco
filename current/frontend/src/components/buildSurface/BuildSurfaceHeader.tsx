@@ -36,7 +36,10 @@ export function BuildSurfaceHeader({
         sandboxState={b.sandboxState ?? undefined}
         connectionState={b.connectionState}
         autonomous={b.autonomous}
-        assist={b.assist}
+        /* Assist-tier badge deliberately hidden at launch (deprecated
+           control) — b.assist (server-derived, from the reducer's
+           extras.assist) still exists and is computed; AgentStatusBar just
+           no longer accepts/renders it. */
         onKill={b.kill}
         onStop={b.cancel}
         onResume={b.canResume ? b.resume : undefined}

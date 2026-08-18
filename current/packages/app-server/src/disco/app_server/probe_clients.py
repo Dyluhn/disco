@@ -104,6 +104,13 @@ async def probe_reachable(url: str, *, api_key: str | None = None) -> tuple[bool
     extraction endpoints). A GET that treats ANY HTTP response as "reachable"
     (the host answered) — only a connect/timeout/DNS failure is "unreachable".
     A 401/403 is surfaced as ``unauthorized`` so a bad paid-API key reads honestly.
+
+    Used for the self-host tiers (searxng / crawl4ai), which have no fixed vendor
+    endpoint to functionally exercise. The paid vendor tiers (Brave / Tavily /
+    Firecrawl) use their own probes below instead, each of which makes a REAL call
+    against the real search/scrape endpoint in that vendor's actual auth shape —
+    a bare GET against the root with a guessed header would report a bad key as
+    merely "reachable".
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
@@ -124,3 +131,113 @@ async def probe_reachable(url: str, *, api_key: str | None = None) -> tuple[bool
             (f"{url} answered {resp.status_code} — reachable, but the credential was rejected."),
         )
     return True, "ok", f"{url} answered {resp.status_code} — reachable."
+
+
+def _classify_vendor_probe(resp: httpx.Response, root: str, action: str) -> tuple[bool, str, str]:
+    """Shared status-code → (ok, status, detail) classification for a probe that
+    made ONE real, credentialed call against a vendor's actual search/extract
+    endpoint. ``action`` names what was attempted (e.g. "a real search query") for
+    an honest detail string. A 401/403 means the credential itself was exercised
+    and rejected — a bad key can no longer read as "reachable"."""
+    if resp.status_code in (401, 403):
+        return (
+            False,
+            "unauthorized",
+            f"{root} answered {resp.status_code} on {action} — the key was rejected.",
+        )
+    if resp.status_code == 200:
+        return True, "ok", f"{root} answered {action} — the key works."
+    if resp.status_code == 429:
+        return (
+            True,
+            "ok",
+            f"{root} answered 429 (rate-limited) on {action} — the key authenticated; "
+            "you're just over a rate limit right now.",
+        )
+    return False, "error", f"{root} answered {resp.status_code} on {action}."
+
+
+async def probe_brave_search(
+    base_url: str,
+    *,
+    api_key: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> tuple[bool, str, str]:
+    """The REAL Brave Search probe: one real query against
+    ``GET {base}/res/v1/web/search`` using Brave's actual auth header —
+    ``X-Subscription-Token`` (Brave does NOT accept ``Authorization: Bearer``).
+    Exercises the credential against the real search endpoint, so a bad/missing
+    key reports honestly as ``unauthorized`` rather than a root-URL "reachable".
+
+    ``transport`` is test-only (a mocked ``httpx.AsyncBaseTransport``, e.g.
+    ``httpx.MockTransport``) — production callers never pass it, so the default
+    ``None`` makes a real connection.
+    """
+    root = base_url.rstrip("/")
+    url = f"{root}/res/v1/web/search"
+    headers = {"X-Subscription-Token": api_key} if api_key else {}
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
+        ) as client:
+            resp = await client.get(
+                url, params={"q": "disco connectivity test", "count": 1}, headers=headers
+            )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
+    except httpx.HTTPError as exc:
+        return False, "unreachable", f"Request to {root} failed: {exc}."
+    return _classify_vendor_probe(resp, root, "a real search query")
+
+
+async def probe_tavily_search(
+    base_url: str,
+    *,
+    api_key: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> tuple[bool, str, str]:
+    """The REAL Tavily probe: one real query against ``POST {base}/search`` with
+    Tavily's actual auth shape — the key in the JSON body, no header at all.
+
+    ``transport`` is test-only, see ``probe_brave_search``.
+    """
+    root = base_url.rstrip("/")
+    url = f"{root}/search"
+    payload = {"api_key": api_key or "", "query": "disco connectivity test", "max_results": 1}
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
+        ) as client:
+            resp = await client.post(url, json=payload)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
+    except httpx.HTTPError as exc:
+        return False, "unreachable", f"Request to {root} failed: {exc}."
+    return _classify_vendor_probe(resp, root, "a real search query")
+
+
+async def probe_firecrawl_extract(
+    base_url: str,
+    *,
+    api_key: str | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> tuple[bool, str, str]:
+    """The REAL Firecrawl probe: one real scrape against ``POST {base}/v1/scrape``
+    using Firecrawl's actual auth shape — ``Authorization: Bearer <key>``.
+
+    ``transport`` is test-only, see ``probe_brave_search``.
+    """
+    root = base_url.rstrip("/")
+    url = f"{root}/v1/scrape"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    payload = {"url": "https://example.com", "formats": ["markdown"]}
+    try:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT, transport=transport, trust_env=False, follow_redirects=False
+        ) as client:
+            resp = await client.post(url, json=payload, headers=headers)
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+        return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
+    except httpx.HTTPError as exc:
+        return False, "unreachable", f"Request to {root} failed: {exc}."
+    return _classify_vendor_probe(resp, root, "a real scrape request")

@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
+  "source_identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
   "collected": {
     "counts": {
-      "packages": 10821,
+      "packages": 10837,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12659,
+    "total": 12675,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1631,6 +1631,7 @@
         "packages/agent-server/tests/test_mcp_pool.py::test_pool_snapshot_returns_copy",
         "packages/agent-server/tests/test_mcp_pool.py::test_pool_start_is_idempotent",
         "packages/agent-server/tests/test_mcp_pool.py::test_pool_start_with_fake_server",
+        "packages/agent-server/tests/test_mcp_pool.py::test_pool_stdio_connect_failure_carries_diagnostic",
         "packages/agent-server/tests/test_mcp_pool.py::test_pool_streamable_http_deferred",
         "packages/agent-server/tests/test_mcp_pool.py::test_pool_teardown_clears_clients",
         "packages/agent-server/tests/test_mcp_reload_route.py::test_reload_route_applies_persisted_mcp_settings_to_runtime",
@@ -1661,6 +1662,8 @@
         "packages/agent-server/tests/test_mcp_status_routes.py::test_single_mcp_status_normalizes_typed_and_raw_inputs[raw0]",
         "packages/agent-server/tests/test_mcp_status_routes.py::test_single_mcp_status_normalizes_typed_and_raw_inputs[raw1]",
         "packages/agent-server/tests/test_mcp_status_routes.py::test_single_mcp_status_returns_redacted_typed_diagnostic",
+        "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_diagnostic_also_appears_on_list_endpoint",
+        "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_is_typed_error_and_redacted",
         "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_advertises_tool_search_not_mcp_schemas",
         "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_does_not_resurrect_withheld_tools",
         "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_mcp_tool_callable_by_qualified_name",
@@ -2918,14 +2921,19 @@
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_connection_projection_includes_optional_fields",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_and_list_round_trip",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_duplicate_is_400",
+        "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_http_transport_never_splits_url_or_persists_args",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_rejects_invalid_http_target_without_persisting[ftp://mcp.example/tools]",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_rejects_invalid_http_target_without_persisting[https://user:secret@mcp.example/tools]",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_rejects_invalid_http_target_without_persisting[not-a-url]",
+        "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_explicit_args_wins_over_split",
+        "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_splits_pasted_vendor_command_into_argv",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_delete_removes_server",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_invalid_config_edit_is_transactional",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_list_starts_empty",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_nonexistent_is_404",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_rejects_empty_url_and_silent_rename",
+        "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_args_only_keeps_existing_command",
+        "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_url_edit_splits_pasted_command",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_toggle_enabled",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_reapprove_mutates_single_row_not_second_insert",
         "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_revoke_clears_database_and_signed_egress_approvals",
@@ -2937,6 +2945,7 @@
         "packages/app-server/tests/test_preview_quarantine.py::test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_bundled_is_honest_not_remote_green",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_new_keyless_search_tiers_are_bundled",
+        "packages/app-server/tests/test_probe_routes.py::test_data_source_search_brave_dispatches_to_brave_probe",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_reachable",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_without_url_is_misconfigured",
         "packages/app-server/tests/test_probe_routes.py::test_data_source_unknown_kind_is_error_not_500",
@@ -2946,6 +2955,12 @@
         "packages/app-server/tests/test_probe_routes.py::test_key_test_ok_when_provider_answers",
         "packages/app-server/tests/test_probe_routes.py::test_key_test_points_data_source_keys_elsewhere",
         "packages/app-server/tests/test_probe_routes.py::test_key_test_unauthorized_is_not_a_500",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_bad_key_is_credential_failure_not_reachable",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_sends_subscription_token_not_bearer",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_bad_key_is_credential_failure",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_bad_key_is_credential_failure",
+        "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_puts_key_in_json_body",
         "packages/app-server/tests/test_providers_routes.py::test_delete_refuses_while_catalogue_models_reference_provider",
         "packages/app-server/tests/test_providers_routes.py::test_enable_creates_catalogue_entry_visible_in_models",
         "packages/app-server/tests/test_providers_routes.py::test_enable_requires_context_when_catalogue_silent",
@@ -9515,6 +9530,7 @@
         "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_endpoint_full_url_vs_origin",
         "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_posts_to_imagerouter_path_and_normalizes_webp",
         "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_raises_on_api_error",
+        "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_response_format_conditional_on_model",
         "packages/tools/tests/test_image_gen_binary.py::test_openai_endpoint_ignores_query_string_false_positive",
         "packages/tools/tests/test_image_gen_binary.py::test_openrouter_backend_parses_data_url_image",
         "packages/tools/tests/test_image_gen_binary.py::test_openrouter_backend_refuses_remote_url_ssrf",
@@ -12680,9 +12696,9 @@
     }
   },
   "mapping_static": {
-    "identity": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
+    "identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
     "python_test_file_count": 848,
-    "python_static_test_id_count": 10418,
+    "python_static_test_id_count": 10434,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -15885,6 +15901,7 @@
       "packages/agent-server/tests/test_mcp_pool.py::test_pool_snapshot_returns_copy",
       "packages/agent-server/tests/test_mcp_pool.py::test_pool_start_is_idempotent",
       "packages/agent-server/tests/test_mcp_pool.py::test_pool_start_with_fake_server",
+      "packages/agent-server/tests/test_mcp_pool.py::test_pool_stdio_connect_failure_carries_diagnostic",
       "packages/agent-server/tests/test_mcp_pool.py::test_pool_streamable_http_deferred",
       "packages/agent-server/tests/test_mcp_pool.py::test_pool_teardown_clears_clients",
       "packages/agent-server/tests/test_mcp_reload_route.py::test_reload_route_applies_persisted_mcp_settings_to_runtime",
@@ -15914,6 +15931,8 @@
       "packages/agent-server/tests/test_mcp_status_routes.py::test_mcp_server_list_reports_disabled_and_malformed_entries_per_server",
       "packages/agent-server/tests/test_mcp_status_routes.py::test_single_mcp_status_normalizes_typed_and_raw_inputs",
       "packages/agent-server/tests/test_mcp_status_routes.py::test_single_mcp_status_returns_redacted_typed_diagnostic",
+      "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_diagnostic_also_appears_on_list_endpoint",
+      "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_is_typed_error_and_redacted",
       "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_advertises_tool_search_not_mcp_schemas",
       "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_does_not_resurrect_withheld_tools",
       "packages/agent-server/tests/test_mcp_tool_search_cap.py::test_over_cap_mcp_tool_callable_by_qualified_name",
@@ -17029,12 +17048,17 @@
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_connection_projection_includes_optional_fields",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_and_list_round_trip",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_duplicate_is_400",
+      "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_http_transport_never_splits_url_or_persists_args",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_rejects_invalid_http_target_without_persisting",
+      "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_explicit_args_wins_over_split",
+      "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_splits_pasted_vendor_command_into_argv",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_delete_removes_server",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_invalid_config_edit_is_transactional",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_list_starts_empty",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_nonexistent_is_404",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_rejects_empty_url_and_silent_rename",
+      "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_args_only_keeps_existing_command",
+      "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_url_edit_splits_pasted_command",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_toggle_enabled",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_reapprove_mutates_single_row_not_second_insert",
       "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_revoke_clears_database_and_signed_egress_approvals",
@@ -17046,6 +17070,7 @@
       "packages/app-server/tests/test_preview_quarantine.py::test_app_auth_ignores_tossed_marker_and_blocks_generated_host_or_cross_alias",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_bundled_is_honest_not_remote_green",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_new_keyless_search_tiers_are_bundled",
+      "packages/app-server/tests/test_probe_routes.py::test_data_source_search_brave_dispatches_to_brave_probe",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_reachable",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_selfhost_without_url_is_misconfigured",
       "packages/app-server/tests/test_probe_routes.py::test_data_source_unknown_kind_is_error_not_500",
@@ -17055,6 +17080,12 @@
       "packages/app-server/tests/test_probe_routes.py::test_key_test_ok_when_provider_answers",
       "packages/app-server/tests/test_probe_routes.py::test_key_test_points_data_source_keys_elsewhere",
       "packages/app-server/tests/test_probe_routes.py::test_key_test_unauthorized_is_not_a_500",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_bad_key_is_credential_failure_not_reachable",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_sends_subscription_token_not_bearer",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_bad_key_is_credential_failure",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_bad_key_is_credential_failure",
+      "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_puts_key_in_json_body",
       "packages/app-server/tests/test_providers_routes.py::test_delete_refuses_while_catalogue_models_reference_provider",
       "packages/app-server/tests/test_providers_routes.py::test_enable_creates_catalogue_entry_visible_in_models",
       "packages/app-server/tests/test_providers_routes.py::test_enable_requires_context_when_catalogue_silent",
@@ -22479,6 +22510,7 @@
       "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_endpoint_full_url_vs_origin",
       "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_posts_to_imagerouter_path_and_normalizes_webp",
       "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_raises_on_api_error",
+      "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_response_format_conditional_on_model",
       "packages/tools/tests/test_image_gen_binary.py::test_openai_endpoint_ignores_query_string_false_positive",
       "packages/tools/tests/test_image_gen_binary.py::test_openrouter_backend_parses_data_url_image",
       "packages/tools/tests/test_image_gen_binary.py::test_openrouter_backend_refuses_remote_url_ssrf",
@@ -23953,8 +23985,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 246,
-    "typescript_static_test_id_count": 1241,
+    "typescript_test_file_count": 248,
+    "typescript_static_test_id_count": 1245,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24065,6 +24097,7 @@
       "frontend/src/components/build/AgentCanvas.live.test.tsx",
       "frontend/src/components/build/AgentCanvas.test.tsx",
       "frontend/src/components/build/AgentStageCard.test.tsx",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx",
       "frontend/src/components/build/AgentStatusBar.resume.test.tsx",
       "frontend/src/components/build/AgentStatusBar.suspend.test.tsx",
@@ -24099,6 +24132,7 @@
       "frontend/src/components/build/editor/SlideCanvas.test.tsx",
       "frontend/src/components/build/editor/SlideThumbnail.test.tsx",
       "frontend/src/components/build/latestEditableDeckBase.test.ts",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx",
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
@@ -24379,6 +24413,7 @@
       "frontend/src/components/BuildSurface.recovery.test.tsx::exposes the model picker in the ERROR state so the user can switch before retrying",
       "frontend/src/components/BuildSurface.recovery.test.tsx::falls back to a TRUNCATED first task when no stored title exists",
       "frontend/src/components/BuildSurface.recovery.test.tsx::leaves a FRESH (non-resumed) run's task untouched",
+      "frontend/src/components/BuildSurface.recovery.test.tsx::never renders the Assist/Standard execution-tier pill, even though b.assist is still a real field",
       "frontend/src/components/BuildSurface.recovery.test.tsx::opens a blank window synchronously and mints only after the click",
       "frontend/src/components/BuildSurface.recovery.test.tsx::prefers the STORED auto-title over the raw first prompt on resume",
       "frontend/src/components/BuildSurface.recovery.test.tsx::wires the ErrorState onRetry to resume, preserving the session",
@@ -24546,6 +24581,9 @@
       "frontend/src/components/build/AgentStageCard.test.tsx::click-to-expand reveals the full activity feed (artifacts preserved)",
       "frontend/src/components/build/AgentStageCard.test.tsx::shows the stage label and is collapsed by default (feed not shown)",
       "frontend/src/components/build/AgentStageCard.test.tsx::uses task-neutral working copy on the Agent surface",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::keeps the other status badges intact \u2014 a targeted removal, not a wholesale gutting",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::never renders an Assist or Standard pill when autonomous/running",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::never renders an Assist or Standard pill when paused/non-autonomous",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::calculates cumulative cost from events",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::shows 'Free' for a free model",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::shows 'Subscription' (never 'Free', never a price) for a subscription model",
@@ -25928,13 +25966,13 @@
         "scope": "pytest.fixture"
       },
       {
-        "path": "packages/app-server/tests/test_probe_routes.py",
-        "line": 29,
+        "path": "packages/agent-server/tests/test_probes_route.py",
+        "line": 30,
         "fixture": "client",
         "scope": "pytest.fixture"
       },
       {
-        "path": "packages/agent-server/tests/test_probes_route.py",
+        "path": "packages/app-server/tests/test_probe_routes.py",
         "line": 30,
         "fixture": "client",
         "scope": "pytest.fixture"
@@ -26247,7 +26285,7 @@
       },
       {
         "path": "packages/app-server/tests/test_probe_routes.py",
-        "line": 20,
+        "line": 21,
         "fixture": "state",
         "scope": "pytest.fixture"
       },
@@ -27193,8 +27231,8 @@
         ]
       }
     },
-    "vitest_ids": 1188,
-    "vitest_files": 183,
+    "vitest_ids": 1194,
+    "vitest_files": 185,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -27274,6 +27312,7 @@
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > WALK-01: the blinking caret is present alongside the markdown output",
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > does not render the streaming block once it has moved into blocks[]",
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > renders plain streaming text without a markdown token",
+      "frontend/src/components/BuildSurface.recovery.test.tsx::Assist tier badge \u2014 deprecated, stays hidden (regression guard) > never renders the Assist/Standard execution-tier pill, even though b.assist is still a real field",
       "frontend/src/components/BuildSurface.recovery.test.tsx::CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt > falls back to a TRUNCATED first task when no stored title exists",
       "frontend/src/components/BuildSurface.recovery.test.tsx::CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt > leaves a FRESH (non-resumed) run's task untouched",
       "frontend/src/components/BuildSurface.recovery.test.tsx::CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt > prefers the STORED auto-title over the raw first prompt on resume",
@@ -27445,6 +27484,9 @@
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > a running browser tool \u2192 reading",
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > a running file_write \u2192 building",
       "frontend/src/components/build/AgentStageCard.test.tsx::deriveStage (W-43) > a running shell \u2192 building",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::AgentStatusBar \u2014 Assist/Standard tier badge stays hidden > keeps the other status badges intact \u2014 a targeted removal, not a wholesale gutting",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::AgentStatusBar \u2014 Assist/Standard tier badge stays hidden > never renders an Assist or Standard pill when autonomous/running",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx::AgentStatusBar \u2014 Assist/Standard tier badge stays hidden > never renders an Assist or Standard pill when paused/non-autonomous",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::AgentStatusBar cost meter > calculates cumulative cost from events",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::AgentStatusBar cost meter > shows 'Free' for a free model",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx::AgentStatusBar cost meter > shows 'Subscription' (never 'Free', never a price) for a subscription model",
@@ -27702,6 +27744,8 @@
       "frontend/src/components/build/latestEditableDeckBase.test.ts::latestEditableDeckBase > returns null when the latest render of the base is a non-editable Marp regen",
       "frontend/src/components/build/latestEditableDeckBase.test.ts::latestEditableDeckBase > returns null when there is no slides deck at all",
       "frontend/src/components/build/latestEditableDeckBase.test.ts::latestEditableDeckBase > returns the base when the latest render is editable",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 Assist tier toggle stays hidden > renders the Autonomous toggle but no Assist toggle (agent framing)",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 Assist tier toggle stays hidden > renders the Autonomous toggle but no Assist toggle (build framing)",
       "frontend/src/components/controls.test.tsx::Mode slider (the sole mode control) > holds three live modes \u2014 Search (active), Build, and Agent \u2014 selectable, nothing else",
       "frontend/src/components/controls.test.tsx::Model leader pill (model-only) > opens a cost-legible picker grouped local vs overflow and selects a model",
       "frontend/src/components/controls.test.tsx::Model leader pill (model-only) > shows the settings default on the pill face, cost-legible, with no mode options",
@@ -28432,6 +28476,7 @@
       "frontend/src/components/build/AgentCanvas.live.test.tsx",
       "frontend/src/components/build/AgentCanvas.test.tsx",
       "frontend/src/components/build/AgentStageCard.test.tsx",
+      "frontend/src/components/build/AgentStatusBar.assist.test.tsx",
       "frontend/src/components/build/AgentStatusBar.cost.test.tsx",
       "frontend/src/components/build/AgentStatusBar.resume.test.tsx",
       "frontend/src/components/build/AgentStatusBar.suspend.test.tsx",
@@ -28466,6 +28511,7 @@
       "frontend/src/components/build/editor/SlideCanvas.test.tsx",
       "frontend/src/components/build/editor/SlideThumbnail.test.tsx",
       "frontend/src/components/build/latestEditableDeckBase.test.ts",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx",
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
@@ -31168,6 +31214,58 @@
         "harness": {
           "before_count": 1429,
           "after_count": 1429,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-23-PRELAUNCH-FIXES",
+      "root": "multiple",
+      "source_identity_before": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
+      "source_identity_after": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10821,
+          "after_count": 10837,
+          "added_ids": [
+            "packages/agent-server/tests/test_mcp_pool.py::test_pool_stdio_connect_failure_carries_diagnostic",
+            "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_diagnostic_also_appears_on_list_endpoint",
+            "packages/agent-server/tests/test_mcp_status_routes.py::test_stdio_connection_failure_is_typed_error_and_redacted",
+            "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_http_transport_never_splits_url_or_persists_args",
+            "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_explicit_args_wins_over_split",
+            "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_create_stdio_splits_pasted_vendor_command_into_argv",
+            "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_args_only_keeps_existing_command",
+            "packages/app-server/tests/test_mcp_endpoints.py::test_mcp_patch_stdio_url_edit_splits_pasted_command",
+            "packages/app-server/tests/test_probe_routes.py::test_data_source_search_brave_dispatches_to_brave_probe",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_bad_key_is_credential_failure_not_reachable",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_brave_search_sends_subscription_token_not_bearer",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_bad_key_is_credential_failure",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_firecrawl_extract_uses_bearer_on_real_scrape_endpoint",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_bad_key_is_credential_failure",
+            "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_puts_key_in_json_body",
+            "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_response_format_conditional_on_model"
+          ]
+        },
+        "harness": {
+          "before_count": 1433,
+          "after_count": 1433,
           "added_ids": []
         },
         "integrations": {

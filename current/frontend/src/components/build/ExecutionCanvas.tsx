@@ -151,8 +151,8 @@ export function ExecutionCanvas({
       data-active-tab={tab}
       className="flex h-full min-h-0 flex-col"
     >
-      <div className="flex shrink-0 items-center border-b border-hairline px-inline">
-        <Tabs.List className="flex min-w-0 items-center gap-px">
+      <div className="flex shrink-0 items-center overflow-x-auto border-b border-hairline px-inline">
+        <Tabs.List className="flex min-w-0 shrink-0 items-center gap-px">
           {TABS.map((t) => (
             <Tabs.Trigger
               key={t.id}

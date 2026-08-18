@@ -190,6 +190,19 @@ describe("RECOVERY: errored build — 'Try again' resumes (never resets)", () =>
   });
 });
 
+describe("Assist tier badge — deprecated, stays hidden (regression guard)", () => {
+  it("never renders the Assist/Standard execution-tier pill, even though b.assist is still a real field", () => {
+    // b.assist (server-derived, from the reducer's extras.assist) is still
+    // computed and present on the controller — only AgentStatusBar's render
+    // of it is gone. false is deliberate here: pre-removal this rendered a
+    // visible "Standard" pill (assist !== undefined, not just assist === true).
+    buildState = baseBuild({ status: "RUNNING", assist: false });
+    renderSurface(<BuildSurface resumeCid="cid-1" />);
+    expect(screen.queryByText("Assist")).not.toBeInTheDocument();
+    expect(screen.queryByText("Standard")).not.toBeInTheDocument();
+  });
+});
+
 describe("finished app handoff isolation", () => {
   const appEvents = [
     userMessage("u1", "build an app"),

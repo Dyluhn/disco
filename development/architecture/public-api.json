@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
+  "source_identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -16899,6 +16899,7 @@
             "async def start(self) -> None",
             "def __init__(self, settings: McpSettings, *, secrets: Any | None=None, approvals: dict[str, str] | None=None, config_approvals: dict[str, str] | None=None) -> None",
             "def approval_pending(self) -> dict[str, dict[str, str]]",
+            "def server_diagnostics(self) -> dict[str, dict[str, object]]",
             "def server_status(self) -> dict[str, str]",
             "def snapshot(self) -> list[ToolDef]",
             "def started(self) -> bool"
@@ -29937,6 +29938,14 @@
       "target_sha256": "3982cc8eba5f949b3ac0aa326e6c1398dda6a13aff4ab50195b98ca01ad53644",
       "owner_package": "PKG-20-UX-RELIABILITY",
       "reason": "Post-campaign UX reliability correction: preserve the public surface while adding explicit vision and keyless-provider configuration."
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/mcp/__init__.py",
+      "public_name": "McpPool",
+      "owner_package": "PKG-23-PRELAUNCH-FIXES",
+      "target_sha256": "10d6479ddcd6d0f8fde25d94cdab07fa3c2d0384c03b8ff901562b99685e7939",
+      "reason": "McpPool gains server_diagnostics(): stdio MCP connect failures now carry the same {code, attempts, exception_type} diagnostic that streamable_http failures already did, instead of a bare error status."
     }
   ],
   "compatibility_bridges": [],
@@ -30398,6 +30407,21 @@
       "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
       "accepting_commit": "dca160deb7a264711fae711c629076f04fd3dee5",
       "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v32-appkit-representation/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/tools/src/disco/tools/mcp/__init__.py",
+      "public_name": "McpPool",
+      "origin": "disco.tools.mcp.pool.McpPool",
+      "removed_members": [],
+      "added_members": [
+        "def server_diagnostics(self) -> dict[str, dict[str, object]]"
+      ],
+      "old_signature_sha256": "e087755f1c536a39a8e1b12433c1f80294e950b43956545b0232d2746579d272",
+      "new_signature_sha256": "aba382eeb67547d85c93864a9ac98c3f93cb666559db173665c0dd5cc34cd0e7",
+      "owner_package": "PKG-23-PRELAUNCH-FIXES",
+      "accepting_commit": "f850e63e7f2fb2a71874a4644b4fac23a9b23c0d",
+      "accepting_receipt": "automation/runtime/boundary-20260817-prelaunch-fixes/BOUNDARY-RECEIPT.md"
     }
   ],
   "frontend_declaration_transitions": [

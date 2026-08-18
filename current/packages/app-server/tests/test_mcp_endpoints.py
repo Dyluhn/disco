@@ -271,6 +271,117 @@ def test_mcp_stdio_url_edit_updates_the_executed_command(client, config_store):
     assert persisted["command"] == ["new-command"]
 
 
+def test_mcp_create_stdio_splits_pasted_vendor_command_into_argv(client, config_store):
+    """BUG 1: the standard incantation every MCP vendor's docs give — pasted
+    whole into the single "URL or command" box — must become a real argv:
+    command[0] is the executable, the rest are separate args. Before this
+    fix the WHOLE string became one broken argv[0] token."""
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "filesystem",
+            "url": "npx -y @modelcontextprotocol/server-filesystem /tmp",
+            "transport": "stdio",
+        },
+    )
+    assert created.status_code == 201, created.text
+    persisted = config_store.load().mcp.servers["filesystem"]
+    assert persisted["command"] == ["npx"]
+    assert persisted["args"] == ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+
+def test_mcp_create_stdio_explicit_args_wins_over_split(client, config_store):
+    """The precise form: an explicit `args` list is used verbatim and `url`
+    is taken as the single-token executable — no shlex-splitting applied."""
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "precise",
+            "url": "python3",
+            "args": ["-m", "my_mcp_server", "--flag", "value with spaces"],
+            "transport": "stdio",
+        },
+    )
+    assert created.status_code == 201, created.text
+    persisted = config_store.load().mcp.servers["precise"]
+    assert persisted["command"] == ["python3"]
+    assert persisted["args"] == ["-m", "my_mcp_server", "--flag", "value with spaces"]
+
+
+def test_mcp_create_http_transport_never_splits_url_or_persists_args(client, config_store):
+    """`args` and shlex-splitting are stdio-only. A streamable_http server's
+    `url` must reach McpServerConfig untouched, and a stray `args` in the
+    request body (e.g. a client mistake) must never be persisted for it."""
+    created = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "http_with_stray_args",
+            "url": "https://mcp.example.com/rpc path segment",
+            "transport": "streamable_http",
+            "args": ["should", "be", "ignored"],
+        },
+    )
+    # An http URL with embedded whitespace is invalid regardless — this also
+    # proves the URL reached validation unsplit (a shlex-split would have
+    # turned it into several tokens instead of one rejected string).
+    assert created.status_code == 400
+    assert "absolute HTTP(S) URL" in created.text
+
+    created_ok = client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "http_with_stray_args",
+            "url": "https://mcp.example.com/rpc",
+            "transport": "streamable_http",
+            "args": ["should", "be", "ignored"],
+        },
+    )
+    assert created_ok.status_code == 201, created_ok.text
+    persisted = config_store.load().mcp.servers["http_with_stray_args"]
+    assert persisted["url"] == "https://mcp.example.com/rpc"
+    assert "command" not in persisted
+    assert "args" not in persisted
+
+
+def test_mcp_patch_stdio_url_edit_splits_pasted_command(client, config_store):
+    """PATCHing a stdio server's command line text re-splits it the same way
+    create does (bug 1 also lived at the PATCH call site)."""
+    client.post(
+        "/api/mcp/servers",
+        json={"name": "stdio_patch", "url": "old-command", "transport": "stdio"},
+    )
+
+    patched = client.patch(
+        "/api/mcp/servers/stdio_patch",
+        json={"url": "uvx mcp-server-time --local-timezone=UTC"},
+    )
+
+    assert patched.status_code == 200, patched.text
+    persisted = config_store.load().mcp.servers["stdio_patch"]
+    assert persisted["command"] == ["uvx"]
+    assert persisted["args"] == ["mcp-server-time", "--local-timezone=UTC"]
+
+
+def test_mcp_patch_stdio_args_only_keeps_existing_command(client, config_store):
+    """An args-only PATCH (no `url`) replaces just the args; the previously
+    split executable is left alone."""
+    client.post(
+        "/api/mcp/servers",
+        json={"name": "args_only", "url": "npx -y some-pkg", "transport": "stdio"},
+    )
+    assert config_store.load().mcp.servers["args_only"]["command"] == ["npx"]
+
+    patched = client.patch(
+        "/api/mcp/servers/args_only",
+        json={"args": ["-y", "some-pkg", "--extra-flag"]},
+    )
+
+    assert patched.status_code == 200, patched.text
+    persisted = config_store.load().mcp.servers["args_only"]
+    assert persisted["command"] == ["npx"]
+    assert persisted["args"] == ["-y", "some-pkg", "--extra-flag"]
+
+
 def test_mcp_patch_rejects_empty_url_and_silent_rename(client, config_store):
     created = client.post(
         "/api/mcp/servers",

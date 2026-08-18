@@ -58,6 +58,19 @@ def _invalid_server_entry(name: str, diagnostic: dict[str, Any]) -> dict[str, An
     }
 
 
+def _sanitize_diagnostic(diagnostic: object) -> dict[str, Any]:
+    """Keep only the safe {code, attempts, exception_type} keys — never a raw
+    exception message, command, or secret-bearing value."""
+
+    if not isinstance(diagnostic, Mapping):
+        return {}
+    return {
+        key: value
+        for key, value in diagnostic.items()
+        if key in {"code", "attempts", "exception_type"} and isinstance(value, (str, int))
+    }
+
+
 def _http_runtime_state(runtime: ConversationRuntime, name: str) -> dict[str, Any]:
     """Return only the manager's already-sanitized status projection."""
 
@@ -68,14 +81,73 @@ def _http_runtime_state(runtime: ConversationRuntime, name: str) -> dict[str, An
     status = raw.get("status")
     if isinstance(status, str):
         state["status"] = status
-    diagnostic = raw.get("diagnostic")
-    if isinstance(diagnostic, Mapping):
-        state["diagnostic"] = {
-            key: value
-            for key, value in diagnostic.items()
-            if key in {"code", "attempts", "exception_type"} and isinstance(value, (str, int))
-        }
+    diagnostic = _sanitize_diagnostic(raw.get("diagnostic"))
+    if diagnostic:
+        state["diagnostic"] = diagnostic
     return state
+
+
+def _server_status_entry(
+    runtime: ConversationRuntime,
+    name: str,
+    srv: Any,
+    *,
+    config_enabled: bool,
+    pool_status: str,
+    approval_pending: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """The status projection for one configured, parseable MCP server.
+
+    Extracted from ``list_mcp_servers`` so that endpoint stays inside the
+    callable-complexity budget; the branching lives here where it belongs.
+    """
+    live = bool(config_enabled and srv.enabled)
+    status = pool_status if live else "disabled"
+
+    # HTTP servers override status from our own connector tracking. Stdio
+    # servers keep the pool's status but may still carry a diagnostic (e.g. a
+    # bad command) — same treatment, different source.
+    live_state: dict[str, Any] = {}
+    if live and srv.transport == "streamable_http":
+        live_state = _http_runtime_state(runtime, name)
+        status = (
+            "approval_required"
+            if name in approval_pending
+            else str(live_state.get("status") or "disconnected")
+        )
+    elif live:
+        live_state = _stdio_runtime_state(runtime, name)
+
+    entry: dict[str, Any] = {
+        "name": name,
+        "transport": srv.transport,
+        "enabled": srv.enabled,
+        "status": status,
+        "approval_required": name in approval_pending,
+    }
+    if name in approval_pending:
+        entry["description_hash"] = approval_pending[name].get("new_hash", "")
+        entry["old_description_hash"] = approval_pending[name].get("old_hash", "")
+    if "diagnostic" in live_state:
+        entry["diagnostic"] = live_state["diagnostic"]
+    return entry
+
+
+def _stdio_runtime_state(runtime: ConversationRuntime, name: str) -> dict[str, Any]:
+    """The stdio counterpart of `_http_runtime_state`: a failed stdio server's
+    {code, attempts, exception_type} from the pool, same sanitized shape.
+
+    Before this, a stdio connect failure (e.g. a bad/misspelled command)
+    surfaced only `{"status": "error"}` here — the real cause was visible
+    nowhere but the container's stdout.
+    """
+
+    pool = runtime.mcp._pool
+    get_diagnostics = getattr(pool, "server_diagnostics", None)
+    if pool is None or get_diagnostics is None:
+        return {}
+    diagnostic = _sanitize_diagnostic(get_diagnostics().get(name))
+    return {"diagnostic": diagnostic} if diagnostic else {}
 
 
 def _resolve_live_status(
@@ -84,22 +156,24 @@ def _resolve_live_status(
     cfg: RouterConfig,
     srv: McpServerConfig,
 ) -> tuple[str, dict[str, Any]]:
-    """Compute the single-server status + any live HTTP tracking state.
+    """Compute the single-server status + any live transport tracking state.
 
     Mirrors the per-server resolution `get_mcp_server_status` needs: disabled
     servers report "disabled"; enabled streamable_http servers defer to the
-    manager's own sanitized tracking; other enabled servers defer to the pool.
+    manager's own sanitized tracking; other enabled (stdio) servers defer to
+    the pool for status AND, on failure, for the same diagnostic shape.
     """
 
     status = "disabled" if not cfg.mcp.enabled or not srv.enabled else "disconnected"
-    live_http: dict[str, Any] = {}
+    live_state: dict[str, Any] = {}
     if cfg.mcp.enabled and srv.enabled and srv.transport == "streamable_http":
-        live_http = _http_runtime_state(runtime, name)
-        status = str(live_http.get("status") or "disconnected")
+        live_state = _http_runtime_state(runtime, name)
+        status = str(live_state.get("status") or "disconnected")
     elif cfg.mcp.enabled and srv.enabled:
         if runtime.mcp._pool is not None:
             status = runtime.mcp._pool.server_status().get(name, "disconnected")
-    return status, live_http
+        live_state = _stdio_runtime_state(runtime, name)
+    return status, live_state
 
 
 def _apply_approval_projection(
@@ -108,7 +182,7 @@ def _apply_approval_projection(
     approval_pending: dict[str, dict],
     mcp_enabled: bool,
     srv_enabled: bool,
-    live_http: dict[str, Any],
+    live_state: dict[str, Any],
 ) -> None:
     """Layer the approval-pending projection onto a status `result`, in place."""
 
@@ -120,8 +194,8 @@ def _apply_approval_projection(
             result["status"] = "approval_required"
     else:
         result["approval_required"] = False
-    if "diagnostic" in live_http:
-        result["diagnostic"] = live_http["diagnostic"]
+    if "diagnostic" in live_state:
+        result["diagnostic"] = live_state["diagnostic"]
 
 
 def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
@@ -149,36 +223,14 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             if srv is None:
                 servers[name] = _invalid_server_entry(name, diagnostic or {})
                 continue
-            status = (
-                "disabled"
-                if not mcp_cfg.enabled or not srv.enabled
-                else srv_status.get(name, "disconnected")
+            servers[name] = _server_status_entry(
+                runtime,
+                name,
+                srv,
+                config_enabled=mcp_cfg.enabled,
+                pool_status=srv_status.get(name, "disconnected"),
+                approval_pending=approval_pending,
             )
-            # HTTP servers: override status from our own tracking
-            live_http: dict[str, Any] = {}
-            if mcp_cfg.enabled and srv.enabled and srv.transport == "streamable_http":
-                live_http = _http_runtime_state(runtime, name)
-                if name in approval_pending:
-                    status = "approval_required"
-                else:
-                    status = str(live_http.get("status") or "disconnected")
-
-            entry: dict = {
-                "name": name,
-                "transport": srv.transport,
-                "enabled": srv.enabled,
-                "status": status,
-            }
-            if name in approval_pending:
-                entry["approval_required"] = True
-                entry["description_hash"] = approval_pending[name].get("new_hash", "")
-                entry["old_description_hash"] = approval_pending[name].get("old_hash", "")
-            else:
-                entry["approval_required"] = False
-            if "diagnostic" in live_http:
-                entry["diagnostic"] = live_http["diagnostic"]
-
-            servers[name] = entry
 
         return {"enabled": mcp_cfg.enabled, "servers": servers}
 
@@ -202,7 +254,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
         if srv is None:
             return _invalid_server_entry(name, diagnostic or {})
 
-        status, live_http = _resolve_live_status(runtime, name, cfg, srv)
+        status, live_state = _resolve_live_status(runtime, name, cfg, srv)
 
         approval_pending = runtime.mcp.mcp_approval_state()
         result: dict = {
@@ -212,7 +264,7 @@ def make_mcp_router(store: SqliteEventStore, runtime: ConversationRuntime | None
             "status": status,
         }
         _apply_approval_projection(
-            result, name, approval_pending, cfg.mcp.enabled, srv.enabled, live_http
+            result, name, approval_pending, cfg.mcp.enabled, srv.enabled, live_state
         )
 
         return result

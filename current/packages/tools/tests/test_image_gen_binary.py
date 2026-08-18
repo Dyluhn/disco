@@ -800,6 +800,61 @@ def test_openai_backend_builds_correct_request_shape():
         assert result.startswith(b"\x89PNG")
 
 
+def test_openai_backend_response_format_conditional_on_model():
+    """Bug fix: `response_format: "b64_json"` is accepted by DALL·E 2/3 but
+    REJECTED (400) by gpt-image-1, which returns b64_json unconditionally
+    anyway. So the field must be sent for DALL·E models (and the no-model /
+    other-OpenAI-compatible-provider default) but omitted for gpt-image-1 —
+    and the b64 response must still parse correctly either way."""
+    import base64
+    from unittest.mock import MagicMock, patch
+
+    png_data = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+    )  # noqa: E501
+
+    def _generate(model: str) -> tuple[dict, bytes]:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": [{"b64_json": png_data.decode()}]}
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_response
+
+        with patch("disco.tools.builtin.image_gen.httpx.Client", return_value=mock_client):
+            backend = _OpenAIImageBackend(
+                base_url="https://api.openai.com/v1", api_key="test-key", model=model
+            )
+            result = backend.generate(prompt="x", width=512, height=512, seed=1, fmt="png")
+        call_args = mock_client.post.call_args
+        body = call_args.kwargs.get("json") or call_args[1].get("json")
+        return body, result
+
+    # DALL·E 3 (and DALL·E 2, and the no-model default) accept the field.
+    body_dalle3, result_dalle3 = _generate("dall-e-3")
+    assert body_dalle3["response_format"] == "b64_json"
+    assert body_dalle3["model"] == "dall-e-3"
+    assert result_dalle3.startswith(b"\x89PNG")
+
+    body_dalle2, _ = _generate("dall-e-2")
+    assert body_dalle2["response_format"] == "b64_json"
+
+    body_default, _ = _generate("")
+    assert body_default["response_format"] == "b64_json"
+    assert "model" not in body_default
+
+    # gpt-image-1 REJECTS response_format — must be omitted entirely — but the
+    # b64_json it returns unconditionally still parses into real image bytes.
+    body_gpt_image, result_gpt_image = _generate("gpt-image-1")
+    assert "response_format" not in body_gpt_image
+    assert body_gpt_image["model"] == "gpt-image-1"
+    assert result_gpt_image.startswith(b"\x89PNG"), (
+        "gpt-image-1's unconditional b64_json must still be parsed correctly "
+        "even though response_format was never requested"
+    )
+
+
 def test_openai_backend_raises_on_api_error():
     """The OpenAI-compatible backend raises on API errors."""
     from unittest.mock import MagicMock, patch

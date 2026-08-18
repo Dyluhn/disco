@@ -102,3 +102,6 @@ current/frontend/.env.development.local
 .claude/*-prompt.md
 .claude/*-review-prompt.md
 .wire-dump/
+
+# Our source lives in components/build/ — defend it from a global `build/` rule
+!/current/frontend/src/components/build/
