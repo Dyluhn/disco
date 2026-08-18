@@ -7,6 +7,7 @@ ConfigState keeps its historical public/private methods as delegators.
 
 from __future__ import annotations
 
+import shlex
 from typing import TYPE_CHECKING
 
 from disco.core.llm import ConfigStore, SecretStore
@@ -27,6 +28,66 @@ if TYPE_CHECKING:
     from disco.tools.mcp.migrations import _ApprovalConn
 
 
+def _split_stdio_command(raw: str, explicit_args: list[str] | None) -> tuple[list[str], list[str]]:
+    """Turn a stdio "URL or command" box into (command, args) argv pieces.
+
+    Two shapes are both real and both supported:
+    - `explicit_args` given (the precise form, even an empty list) wins
+      verbatim: `raw` becomes the single-token executable and `explicit_args`
+      becomes `args` unchanged.
+    - `explicit_args` omitted (None): `raw` is shlex-split so the exact
+      incantation every MCP vendor's docs give — e.g.
+      ``npx -y @modelcontextprotocol/server-filesystem /tmp`` — can be pasted
+      whole into one box. Token 0 becomes the command, the rest become args.
+
+    This is argv-list splitting only — never shell=True, never shell
+    interpolation — and is only ever called for the stdio transport; an
+    http/streamable_http URL must never reach here.
+    """
+    if explicit_args is not None:
+        return [raw], list(explicit_args)
+    try:
+        tokens = shlex.split(raw)
+    except ValueError as exc:
+        # Unbalanced quotes etc. Fail loudly (this becomes an HTTP 400 at the
+        # route layer) rather than silently persisting an unusable command.
+        raise ValueError(f"could not parse stdio command {raw!r}: {exc}") from exc
+    if not tokens:
+        # Preserve the historical single-token shape for an empty/blank box;
+        # McpServerConfig's validator rejects a blank command either way.
+        return [raw], []
+    return [tokens[0]], tokens[1:]
+
+
+def _apply_launch_fields(updated: dict, patch: McpServerPatchDTO) -> None:
+    """Reconcile the transport with the process-launch fields, in place.
+
+    Split out of ``_apply_server_patch`` to keep that function inside the
+    callable-complexity budget. Three cases, in priority order:
+    the command text was (re)set, the server became HTTP, or only args moved.
+    """
+    transport = updated.get("transport")
+    command_text_set = "url" in patch.model_fields_set or patch.transport == "stdio"
+
+    if transport == "stdio" and command_text_set:
+        # The command line text is being (re)set this patch — re-derive both
+        # command and args from it. An explicit `args` in the SAME patch
+        # (the precise form) wins over shlex-splitting the text.
+        explicit_args = patch.args if "args" in patch.model_fields_set else None
+        command, args = _split_stdio_command(updated.get("url") or "", explicit_args)
+        updated["command"] = command
+        updated["args"] = args
+    elif patch.transport == "streamable_http":
+        # Do not leave an inactive process launch target in the signed
+        # HTTP config. It could otherwise be resurrected by a later edit.
+        for field in ("command", "args", "env"):
+            updated.pop(field, None)
+    elif transport == "stdio" and "args" in patch.model_fields_set:
+        # Command line text unchanged this patch — replace only the args,
+        # keep the existing (already-split) command untouched.
+        updated["args"] = patch.args
+
+
 def _apply_server_patch(existing: dict, name: str, patch: McpServerPatchDTO) -> dict:
     """Merge a PATCH body onto a server's persisted config dict.
 
@@ -43,15 +104,7 @@ def _apply_server_patch(existing: dict, name: str, patch: McpServerPatchDTO) -> 
         updated["transport"] = patch.transport
     if "url" in patch.model_fields_set:
         updated["url"] = patch.url
-    if updated.get("transport") == "stdio" and (
-        "url" in patch.model_fields_set or patch.transport == "stdio"
-    ):
-        updated["command"] = [patch.url or updated.get("url", "")]
-    elif patch.transport == "streamable_http":
-        # Do not leave an inactive process launch target in the signed
-        # HTTP config. It could otherwise be resurrected by a later edit.
-        for field in ("command", "args", "env"):
-            updated.pop(field, None)
+    _apply_launch_fields(updated, patch)
     if patch.enabled is not None:
         updated["enabled"] = patch.enabled
     if "allowed_tools" in patch.model_fields_set:
@@ -213,7 +266,9 @@ class McpConfigService:
             "risk_tier": body.risk_tier,
         }
         if body.transport == "stdio":
-            srv["command"] = [body.url]
+            command, args = _split_stdio_command(body.url, body.args)
+            srv["command"] = command
+            srv["args"] = args
         from disco.tools.mcp.config import McpServerConfig
 
         McpServerConfig.model_validate({"name": body.name, **srv})

@@ -27,9 +27,13 @@ def _runtime(
     statuses: dict[str, str] | None = None,
     connected_http: set[str] | None = None,
     http_states: dict[str, dict[str, object]] | None = None,
+    stdio_diagnostics: dict[str, dict[str, object]] | None = None,
 ):
     mcp = SimpleNamespace(enabled=enabled, servers=servers)
-    pool = SimpleNamespace(server_status=lambda: statuses or {})
+    pool = SimpleNamespace(
+        server_status=lambda: statuses or {},
+        server_diagnostics=lambda: stdio_diagnostics or {},
+    )
     # 13-B3: `_mcp` is the declared public seam `mcp`, and `mcp_approval_state`
     # is owned by McpManager rather than forwarded by a runtime delegate, so the
     # double holds ONE object supplying both instead of two disagreeing surfaces.
@@ -167,6 +171,66 @@ def test_single_mcp_status_returns_redacted_typed_diagnostic() -> None:
     assert response.json()["diagnostic"]["code"] == "invalid_mcp_server_config"
     assert set(response.json()["diagnostic"]["fields"]) == {"risk_tier"}
     assert "secret-ref" not in response.text
+
+
+def test_stdio_connection_failure_is_typed_error_and_redacted() -> None:
+    """BUG 2: a failed stdio server (e.g. a bad/missing command) must carry
+    the same {code, attempts, exception_type} diagnostic shape the
+    streamable_http transport already gets — not just a bare 'error' status —
+    while still never leaking a raw command/secret onto the wire."""
+    stdio_srv = {
+        "transport": "stdio",
+        "command": ["nonexistent-tool", "--with-a-secret-arg=must-not-cross-boundary"],
+        "risk_tier": "medium",
+    }
+    response = _client(
+        _runtime(
+            {"one": stdio_srv},
+            statuses={"one": "error"},
+            stdio_diagnostics={
+                "one": {
+                    "code": "mcp_stdio_connect_failed",
+                    "attempts": 1,
+                    "exception_type": "FileNotFoundError",
+                    "secret": "must-not-cross-boundary",
+                }
+            },
+        )
+    ).get("/api/mcp/servers/one/status")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "error"
+    assert response.json()["diagnostic"] == {
+        "code": "mcp_stdio_connect_failed",
+        "attempts": 1,
+        "exception_type": "FileNotFoundError",
+    }
+    assert "must-not-cross-boundary" not in response.text
+
+
+def test_stdio_connection_failure_diagnostic_also_appears_on_list_endpoint() -> None:
+    stdio_srv = {
+        "transport": "stdio",
+        "command": ["nonexistent-tool"],
+        "risk_tier": "medium",
+    }
+    response = _client(
+        _runtime(
+            {"one": stdio_srv},
+            statuses={"one": "error"},
+            stdio_diagnostics={
+                "one": {"code": "mcp_stdio_connect_failed", "exception_type": "FileNotFoundError"}
+            },
+        )
+    ).get("/api/mcp/servers")
+
+    assert response.status_code == 200
+    entry = response.json()["servers"]["one"]
+    assert entry["status"] == "error"
+    assert entry["diagnostic"] == {
+        "code": "mcp_stdio_connect_failed",
+        "exception_type": "FileNotFoundError",
+    }
 
 
 def test_http_connection_failure_is_typed_degraded_and_redacted() -> None:

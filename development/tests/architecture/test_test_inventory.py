@@ -639,10 +639,13 @@ class TestMappingStatic:
             # genuine user instructions.
             # The records policy correction adds one Core file with six ids and
             # one same-file Tools dispatch id; none is parametrized.
+            # Pre-launch fixes: 16 new Python ids across the MCP/probe/image
+            # repairs, and two new frontend suites guarding the hidden Assist
+            # control (2 files / 4 ids).
             "python_test_file_count": 848,
-            "python_static_test_id_count": 10418,
-            "typescript_test_file_count": 246,
-            "typescript_static_test_id_count": 1241,
+            "python_static_test_id_count": 10434,
+            "typescript_test_file_count": 248,
+            "typescript_static_test_id_count": 1245,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -772,12 +775,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1188, 183)
+            == (1194, 185)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1188
-        assert len(set(frontend["vitest_files_list"])) == 183
+        assert len(set(frontend["vitest_ids_list"])) == 1194
+        assert len(set(frontend["vitest_files_list"])) == 185
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1035,7 +1038,7 @@ class TestCollectedCounts:
             # Three.js trace correction adds six more in existing files.
             # C18 trace-only projection adds two more in existing files.
             # The records policy correction adds seven non-parametrized package ids.
-            "packages": 10821,
+            "packages": 10837,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1165,7 +1168,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12659 == sum(expected.values())
+        assert collected["total"] == 12675 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1181,7 +1184,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12659}
+        assert result == {"collected_total": 12675}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1200,9 +1203,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10418,
-            "typescript_static_ids": 1241,
-            "collected_total": 12659,
+            "python_static_ids": 10434,
+            "typescript_static_ids": 1245,
+            "collected_total": 12675,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

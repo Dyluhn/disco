@@ -217,10 +217,19 @@ class ConfigFeatures:
     async def test_data_source(self, kind: str) -> ProbeResult:
         """Probe T4.2: reachability of the configured search/extraction endpoint.
         Bundled (in-process) tiers have no network dependency — reported honestly
-        as such, never as a remote "ok". Self-host tiers probe the configured base
-        URL; paid tiers probe the vendor host (any HTTP answer = reachable, a
-        401/403 = the key was rejected)."""
-        from .probe_clients import probe_reachable
+        as such, never as a remote "ok". Self-host tiers (searxng/crawl4ai) probe
+        the configured base URL for bare reachability. Paid tiers (tavily/brave/
+        firecrawl) make a REAL functional call in that vendor's actual auth shape
+        (Brave: X-Subscription-Token header; Tavily: key in the JSON body;
+        Firecrawl: Authorization: Bearer) against the real search/scrape endpoint —
+        so a bad key is exercised and reported as `unauthorized`, not as a
+        root-URL "reachable"."""
+        from .probe_clients import (
+            probe_brave_search,
+            probe_firecrawl_extract,
+            probe_reachable,
+            probe_tavily_search,
+        )
 
         cfg = self._store.load()
         # Vendor hosts for the paid tiers (no key-free models list; reachability only).
@@ -289,5 +298,11 @@ class ConfigFeatures:
         from disco.core.llm.secret_refs import resolve_provider_secret
 
         key = resolve_provider_secret(key_env, self._secrets) if key_env else None
-        ok, status, detail = await probe_reachable(host, api_key=key)
+        _PAID_PROBES = {
+            "tavily": probe_tavily_search,
+            "brave": probe_brave_search,
+            "firecrawl": probe_firecrawl_extract,
+        }
+        probe = _PAID_PROBES.get(provider, probe_reachable)
+        ok, status, detail = await probe(host, api_key=key)
         return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)

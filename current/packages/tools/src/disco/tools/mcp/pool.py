@@ -38,6 +38,19 @@ _UNTRUSTED_DESC_WRAPPER = (
 )
 
 
+def _leaf_exception_type(exc: BaseException) -> str:
+    """Return a useful leaf exception type name, unwrapping ExceptionGroups.
+
+    Mirrors the intent of `agent_server.mcp_transport._diagnostic_exception_type`
+    (the streamable_http diagnostic's exception_type), kept as a small local
+    copy rather than an import: `tools` sits below `agent_server` in the
+    package layering and must not import upward.
+    """
+    if isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        return _leaf_exception_type(exc.exceptions[0])
+    return type(exc).__name__
+
+
 class McpPool:
     """A managed pool of MCP server connections.
 
@@ -61,6 +74,11 @@ class McpPool:
         self._clients: dict[str, McpStdioClient] = {}
         self._tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
         self._server_status: dict[str, str] = {}  # server_name -> status
+        # server_name -> {code, exception_type, attempts} — same shape as the
+        # streamable_http transport's diagnostic (mcp_transport.py). Only
+        # populated for servers whose status ends up "error": the previous
+        # behavior surfaced no code/message anywhere but the container log.
+        self._server_diagnostics: dict[str, dict[str, object]] = {}
         self._started = False
         # D3: per-server approval-pending info for WS frame dispatch
         self._approval_pending: dict[str, dict[str, str]] = {}
@@ -142,6 +160,11 @@ class McpPool:
             except Exception as exc:
                 _LOG.warning("McpPool: server %r failed to start: %s", name, exc)
                 self._server_status[name] = "error"
+                self._server_diagnostics[name] = {
+                    "code": "mcp_stdio_connect_failed",
+                    "attempts": 1,
+                    "exception_type": _leaf_exception_type(exc),
+                }
                 continue
 
             self._server_status[name] = "connected"
@@ -180,6 +203,12 @@ class McpPool:
     def server_status(self) -> dict[str, str]:
         """Per-server status: connected | disconnected | error | disabled | approval_required."""
         return dict(self._server_status)
+
+    def server_diagnostics(self) -> dict[str, dict[str, object]]:
+        """Per-server {code, attempts, exception_type} for servers in "error"
+        status — the stdio counterpart of the streamable_http transport's
+        diagnostic (mcp_transport.McpHttpConnector.status)."""
+        return {name: dict(diag) for name, diag in self._server_diagnostics.items()}
 
     def approval_pending(self) -> dict[str, dict[str, str]]:
         """Return {server: {old_hash, new_hash}} for servers that need re-approval."""

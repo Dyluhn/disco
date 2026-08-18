@@ -554,11 +554,21 @@ class SkillCreate(BaseModel):
 
 
 class McpServerConfigDTO(BaseModel):
-    """POST body for creating an MCP server."""
+    """POST body for creating an MCP server.
+
+    `url` doubles as the stdio "command" field — for stdio servers it is the
+    command line exactly as vendors document it (e.g.
+    ``npx -y @modelcontextprotocol/server-filesystem /tmp``). When `args` is
+    omitted, the service shlex-splits `url` into argv; when `args` is given
+    explicitly, `url` is taken verbatim as the executable and `args` wins.
+    `args` is stdio-only — ignored for streamable_http, whose `url` is never
+    split.
+    """
 
     name: str = Field(pattern=r"^[a-z0-9_]+$")
     url: str
     transport: Literal["stdio", "streamable_http"] = "stdio"
+    args: list[str] | None = None
     enabled: bool = True
     allowed_tools: list[str] | None = None
     risk_tier: Literal["unknown", "low", "medium", "high"] = "medium"
@@ -570,6 +580,7 @@ class McpServerPatchDTO(BaseModel):
     name: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
     url: str | None = None
     transport: Literal["stdio", "streamable_http"] | None = None
+    args: list[str] | None = None  # stdio only; see McpServerConfigDTO
     enabled: bool | None = None
     allowed_tools: list[str] | None = None
     risk_tier: Literal["unknown", "low", "medium", "high"] | None = None

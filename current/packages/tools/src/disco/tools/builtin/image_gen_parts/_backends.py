@@ -125,10 +125,6 @@ class _OpenAIImageBackend:
         seed: int,
         fmt: str,
     ) -> bytes:
-        # Map our format to the API's response_format
-        # Both PNG and JPEG use b64_json for direct byte return
-        response_format = "b64_json"
-
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
@@ -142,12 +138,17 @@ class _OpenAIImageBackend:
             "prompt": prompt,
             "n": 1,
             "size": "1024x1024",
-            "response_format": response_format,
         }
         # Pin the model when configured (e.g. "gpt-image-1", "dall-e-3"); empty → the
         # provider's default. Optional because many OpenAI-compatible servers expose one model.
         if self._model:
             payload["model"] = self._model
+        # response_format is a DALL·E 2/3 (and most OpenAI-compatible-server) field —
+        # gpt-image-1 REJECTS it outright (400 unknown_parameter) and returns b64_json
+        # unconditionally regardless, so it's never sent for that model. The parse below
+        # already reads `b64_json` off the response either way, so gpt-image-1 still works.
+        if self._model != "gpt-image-1":
+            payload["response_format"] = "b64_json"
 
         with httpx.Client(timeout=60.0, trust_env=False, follow_redirects=False) as client:
             response = client.post(
