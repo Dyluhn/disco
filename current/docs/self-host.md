@@ -12,8 +12,21 @@ cd disco
 systemctl --user enable --now podman.socket
 podman compose up -d --build
 podman compose logs app-server
-open http://localhost:8088
 ```
+
+Then open **http://localhost:8088** in a browser.
+
+On a Docker host, skip the two Podman lines above — `podman.socket` does not
+exist there and the enable step fails — and substitute:
+
+```bash
+DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
+  docker compose up -d --build
+```
+
+See [Sandbox Image](#sandbox-image) for the rootful alternative and why the
+rootless socket is preferred. Compose prints `pull access denied for
+disco-server` before it builds; that is expected, not a failure.
 
 The app-server logs print the working UI URL and a one-time first-run pairing
 token. On localhost the browser normally pairs automatically; if it asks for a
@@ -320,13 +333,18 @@ podman build -t disco-frontend -f current/frontend/Dockerfile .
 
 ## Image Sizes
 
-Measured during the packaging verification on 2026-07-07:
+Measured during the packaging verification on 2026-07-07, under Podman 5.8.2:
 
-| Image | Size |
-|---|---:|
-| `disco-server` | 4.69 GB |
-| `disco-frontend` | 65.4 MB |
-| `disco-sandbox:base` | 2.95 GB |
+| Image | Podman | Docker (BuildKit) |
+|---|---:|---:|
+| `disco-server` | 4.69 GB | 7.88 GB |
+| `disco-frontend` | 65.4 MB | — |
+| `disco-sandbox:base` | 2.95 GB | 4.21 GB |
+
+Docker's figures were measured on Ubuntu 24.04 with rootless Docker on
+2026-08-17. BuildKit adds provenance/attestation layers that Podman's builder
+does not, so size a Docker host off the right column — the gap is over 3 GB on
+the server image alone.
 
 The default `disco-server` is expected to be large because it includes
 LibreOffice plus the full fastembed and Kokoro asset set. Anything materially
