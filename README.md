@@ -102,13 +102,40 @@ This is the supported self-host path from a clean checkout. It boots the app,
 agent, frontend, data volume, bundled encoders, and bundled TTS without source
 edits or a required `.env` file:
 
+**Rootless Podman** (the path this project's install testing actually covers):
+
 ```bash
 git clone https://github.com/Dyluhn/disco.git
 cd disco
 systemctl --user enable --now podman.socket
 podman compose up -d --build
 podman compose logs app-server
-open http://localhost:8088
+```
+
+**Rootless Docker** — do NOT run the Podman lines above; `podman.socket` does not
+exist on a Docker host and the enable step fails:
+
+```bash
+git clone https://github.com/Dyluhn/disco.git
+cd disco
+DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=$XDG_RUNTIME_DIR/docker.sock \
+  docker compose up -d --build
+docker compose logs app-server
+```
+
+Then open **http://localhost:8088** in a browser.
+
+Two things Docker prints that look like failures and are not. Compose attempts a
+registry pull before it builds, so `Error: pull access denied for disco-server`
+scrolls past on every `up --build` — the build then runs normally. And if the
+build dies within about 20 seconds on a `dns error` reaching a package index,
+that is rootless Docker's network namespace failing to reach systemd-resolved's
+loopback stub, not a problem with disco; give the daemon explicit resolvers:
+
+```bash
+mkdir -p ~/.config/docker
+echo '{"dns":["1.1.1.1","8.8.8.8"]}' > ~/.config/docker/daemon.json
+systemctl --user restart docker
 ```
 
 The app-server logs print the working UI URL and a one-time admin pairing token.

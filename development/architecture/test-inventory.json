@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "a22481956df83eae0b12cd884f5234d392362618",
+  "source_identity": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
   "collected": {
     "counts": {
       "packages": 10821,
@@ -12680,7 +12680,7 @@
     }
   },
   "mapping_static": {
-    "identity": "a22481956df83eae0b12cd884f5234d392362618",
+    "identity": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
     "python_test_file_count": 848,
     "python_static_test_id_count": 10418,
     "python_test_files": [
@@ -31264,6 +31264,41 @@
       "root": "multiple",
       "source_identity_before": "67ef47be00ef70e1a0fea457f3b67adf4f1bb823",
       "source_identity_after": "a22481956df83eae0b12cd884f5234d392362618",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10821,
+          "after_count": 10821,
+          "added_ids": []
+        },
+        "harness": {
+          "before_count": 1433,
+          "after_count": 1433,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-22-DOCKER-QUICKSTART-DOCS",
+      "root": "multiple",
+      "source_identity_before": "a22481956df83eae0b12cd884f5234d392362618",
+      "source_identity_after": "140d211b8c6caf3ddecadd08f55906a6bc68b8ce",
       "collected_roots": {
         "packages": {
           "before_count": 10821,
