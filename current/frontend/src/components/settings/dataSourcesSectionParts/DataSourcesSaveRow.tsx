@@ -26,7 +26,7 @@ export function DataSourcesSaveRow({
         disabled={!dirty || pending}
         onClick={onSave}
         className={cn(
-          "flex items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.82rem] transition-colors",
+          "flex min-h-11 items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.82rem] transition-colors lg:min-h-0",
           dirty && !pending
             ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
             : "border-hairline text-text-faint",

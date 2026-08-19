@@ -92,7 +92,7 @@ function InspectTip() {
         type="button"
         onClick={dismiss}
         aria-label="Dismiss inspect tip"
-        className="shrink-0 rounded p-0.5 text-text-faint hover:text-text"
+        className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded p-0.5 text-text-faint hover:text-text lg:min-h-0 lg:min-w-0"
       >
         <X className="size-3" aria-hidden />
       </button>
@@ -151,7 +151,7 @@ export function SelectionOverlay({
           <button
             type="button"
             onClick={onDisarm}
-            className="flex items-center gap-1 rounded border border-accent bg-surface-1/90 px-2 py-0.5 font-ui text-[0.7rem] text-accent shadow-sm backdrop-blur-sm hover:bg-surface-2"
+            className="flex min-h-11 items-center gap-1 rounded border border-accent bg-surface-1/90 px-2 py-0.5 font-ui text-[0.7rem] text-accent shadow-sm backdrop-blur-sm hover:bg-surface-2 lg:min-h-0"
           >
             <MousePointer2 className="size-3" aria-hidden />
             Stop inspecting
@@ -160,7 +160,7 @@ export function SelectionOverlay({
           <button
             type="button"
             onClick={onArm}
-            className="flex items-center gap-1 rounded border border-hairline bg-surface-1/90 px-2 py-0.5 font-ui text-[0.7rem] text-text-muted shadow-sm backdrop-blur-sm hover:border-accent hover:text-text"
+            className="flex min-h-11 items-center gap-1 rounded border border-hairline bg-surface-1/90 px-2 py-0.5 font-ui text-[0.7rem] text-text-muted shadow-sm backdrop-blur-sm hover:border-accent hover:text-text lg:min-h-0"
           >
             <MousePointer2 className="size-3" aria-hidden />
             Inspect

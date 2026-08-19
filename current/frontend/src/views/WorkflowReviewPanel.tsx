@@ -95,7 +95,7 @@ function WorkflowCard({
           disabled={workflow.approved || hasError || approving}
           data-validation-blocked={hasError}
           aria-label={`Approve ${workflow.name}`}
-          className="inline-flex shrink-0 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-supported/50 hover:text-supported disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-supported/50 hover:text-supported disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {approving ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -162,7 +162,7 @@ export function WorkflowReviewPanel() {
           <button
             type="button"
             onClick={() => setCreating((value) => !value)}
-            className="inline-flex w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text"
+            className="inline-flex min-h-11 w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text lg:min-h-0"
           >
             <Plus className="size-4" aria-hidden />
             Create workflow
@@ -183,7 +183,7 @@ export function WorkflowReviewPanel() {
             <button
               type="button"
               onClick={() => refetch()}
-              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Try again
             </button>

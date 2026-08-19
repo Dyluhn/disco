@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { OpenRouterModel } from "@/types/models";
 import { orPrice } from "./providerOptions";
 import { FIELD_CLASS } from "./styles";
@@ -17,7 +19,7 @@ export function PricedModelSelect({
     <select
       value={model}
       onChange={(e) => setModel(e.target.value)}
-      className={FIELD_CLASS}
+      className={cn(FIELD_CLASS, TAP_TARGET)}
     >
       <option value="">Select an image model…</option>
       {/* Keep a currently-saved id selectable even if it's not in the live

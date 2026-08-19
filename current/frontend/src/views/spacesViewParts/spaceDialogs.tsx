@@ -37,7 +37,7 @@ export function CreateSpaceDialog() {
         <button
           type="button"
           data-disco-control="spaces.create"
-          className="flex items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90"
+          className="flex min-h-11 items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90 lg:min-h-0"
         >
           <Plus className="size-4" aria-hidden />
           New Space
@@ -59,7 +59,7 @@ export function CreateSpaceDialog() {
               <button
                 type="button"
                 aria-label="Close"
-                className="grid size-7 place-items-center rounded-control text-text-faint transition-colors hover:bg-surface-2 hover:text-text"
+                className="grid size-11 place-items-center rounded-control text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:size-7"
               >
                 <X className="size-4" aria-hidden />
               </button>
@@ -72,7 +72,7 @@ export function CreateSpaceDialog() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 autoFocus
-                className="rounded-control border border-hairline bg-surface-1 px-inline py-hair text-[0.9rem] text-text outline-none focus:border-hairline-strong"
+                className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair text-[0.9rem] text-text outline-none focus:border-hairline-strong lg:min-h-0"
               />
             </label>
             <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
@@ -93,7 +93,7 @@ export function CreateSpaceDialog() {
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
+                  className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
                 >
                   Cancel
                 </button>
@@ -101,7 +101,7 @@ export function CreateSpaceDialog() {
               <button
                 type="submit"
                 disabled={!name.trim() || create.isPending}
-                className="flex items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex min-h-11 items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
               >
                 {create.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
                 Create
@@ -144,7 +144,7 @@ export function RenameSpaceDialog({ space }: { space: SpaceDetail }) {
           type="button"
           aria-label={`Rename Space: ${space.name}`}
           data-disco-control="spaces.rename"
-          className="grid size-8 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text"
+          className="grid size-11 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text lg:size-8"
         >
           <Pencil className="size-4" aria-hidden />
         </button>
@@ -160,7 +160,7 @@ export function RenameSpaceDialog({ space }: { space: SpaceDetail }) {
               <button
                 type="button"
                 aria-label="Close"
-                className="grid size-7 place-items-center rounded-control text-text-faint transition-colors hover:bg-surface-2 hover:text-text"
+                className="grid size-11 place-items-center rounded-control text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:size-7"
               >
                 <X className="size-4" aria-hidden />
               </button>
@@ -173,7 +173,7 @@ export function RenameSpaceDialog({ space }: { space: SpaceDetail }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 autoFocus
-                className="rounded-control border border-hairline bg-surface-1 px-inline py-hair text-[0.9rem] text-text outline-none focus:border-hairline-strong"
+                className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair text-[0.9rem] text-text outline-none focus:border-hairline-strong lg:min-h-0"
               />
             </label>
             <label className="flex flex-col gap-hair font-ui text-[0.78rem] text-text-muted">
@@ -194,7 +194,7 @@ export function RenameSpaceDialog({ space }: { space: SpaceDetail }) {
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
+                  className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
                 >
                   Cancel
                 </button>
@@ -202,7 +202,7 @@ export function RenameSpaceDialog({ space }: { space: SpaceDetail }) {
               <button
                 type="submit"
                 disabled={!name.trim() || rename.isPending}
-                className="flex items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex min-h-11 items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.84rem] text-bg transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
               >
                 {rename.isPending && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
                 Save

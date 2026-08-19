@@ -42,7 +42,8 @@ export function ScrollFadeEdges({
           // Tailwind v4 renamed the gradient utilities: it's `bg-linear-to-*`,
           // NOT the v3-era `bg-gradient-to-*` (which silently emits no CSS at
           // all under v4 — an easy, invisible way to ship a fade that never
-          // fades).
+          // fades). Enforced mechanically by the no-restricted-syntax rule in
+          // eslint.config.js, which fails the lint on any v3 gradient class.
           "pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-linear-to-r from-bg to-transparent transition-opacity duration-150",
           showLeft ? "opacity-100" : "opacity-0",
           className,

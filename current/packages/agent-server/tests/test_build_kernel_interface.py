@@ -21,6 +21,7 @@ from disco.agent_server.build_kernel import (
 )
 from disco.agent_server.conversation_control_service import ConversationControlService
 from disco.agent_server.routes._common import _context_message, _user_message
+from disco.agent_server.run_lifecycle_service import RunLifecycleService
 from disco.agent_server.run_registry import (
     CancellationRegistry,
     KernelPinRegistry,
@@ -121,14 +122,20 @@ def _kernel_harness(store: SqliteEventStore) -> types.SimpleNamespace:
     control = ConversationControlService(
         contract,
         pins,
+        controls,
+        resume,
+    )
+    run_lifecycle = RunLifecycleService(
+        contract,
+        pins,
         runs,
         CancellationRegistry(),
         controller,
         controls,
-        resume,
     )
     harness.kernel = kernel
     harness.control = control
+    harness.run_lifecycle = run_lifecycle
     harness.controls = controls
     harness.controller = controller
     harness.contract = contract
@@ -210,7 +217,7 @@ async def test_disco_kernel_control_ops_delegate_unchanged(store: SqliteEventSto
     rt.controls.kill.assert_awaited_once_with(CID, None)
 
     rt.controller.kick.reset_mock()
-    await rt.control.resume(CID)
+    await rt.run_lifecycle.resume(CID)
     rt.controller.kick.assert_called_once_with(CID)
     rt.resume.resume_conversation.assert_not_awaited()
 

@@ -189,7 +189,7 @@ export function PlanPanel({
               // to the approve/revise decision); collapsed during execution.
               open={gate}
             >
-              <summary className="cursor-pointer font-ui text-[0.74rem] uppercase tracking-wide text-text-faint">
+              <summary className="cursor-pointer py-3 font-ui text-[0.74rem] uppercase tracking-wide text-text-faint lg:py-0">
                 Context &amp; rationale
               </summary>
               <div className="mt-hair text-[0.84rem] leading-relaxed text-text-muted">

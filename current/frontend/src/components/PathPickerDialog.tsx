@@ -84,7 +84,7 @@ export function PathPickerDialog({
               onClick={() => data?.parent && browse.mutate(data.parent)}
               disabled={!data?.parent || browse.isPending}
               aria-label="Parent directory"
-              className="grid size-7 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text disabled:opacity-40"
+              className="grid size-11 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text disabled:opacity-40 lg:size-7"
             >
               <ArrowUp className="size-3.5" aria-hidden />
             </button>
@@ -122,7 +122,7 @@ export function PathPickerDialog({
                       }
                       disabled={!entry.is_dir}
                       className={cn(
-                        "flex w-full items-center gap-inline px-body py-hair text-left font-ui text-[0.84rem] transition-colors",
+                        "flex min-h-11 w-full items-center gap-inline px-body py-hair text-left font-ui text-[0.84rem] transition-colors lg:min-h-0",
                         entry.is_dir
                           ? "text-text hover:bg-surface-1"
                           : "cursor-default text-text-faint",
@@ -163,7 +163,7 @@ export function PathPickerDialog({
               <Dialog.Close asChild>
                 <button
                   type="button"
-                  className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+                  className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
                 >
                   Cancel
                 </button>
@@ -173,7 +173,7 @@ export function PathPickerDialog({
                 data-disco-control="settings.storage-pick"
                 onClick={confirm}
                 disabled={!data || data.selectable !== "ok"}
-                className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40 lg:min-h-0"
               >
                 Choose this directory
               </button>

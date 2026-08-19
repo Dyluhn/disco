@@ -6,7 +6,7 @@
   "description": "Research Answer UI — the Research surface front-end (BoD §13.3).",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck:build && vite build && node development/scripts/check-bundle-budget.mjs",
+    "build": "npm run typecheck:build && vite build && node scripts/check-bundle-budget.mjs",
     "typecheck:build": "tsc -p tsconfig.build.json --noEmit",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -14,7 +14,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
-    "test:live-trace-policy": "node development/scripts/check-live-trace-policy.mjs",
+    "test:live-trace-policy": "node scripts/check-live-trace-policy.mjs",
     "test:preview-cookie-policy": "playwright test --config playwright.security-policy.config.ts"
   },
   "dependencies": {

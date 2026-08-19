@@ -96,7 +96,7 @@ export function GenericProviders() {
                       type="button"
                       data-disco-control="settings.provider-browse"
                       onClick={() => setActiveId(active ? null : provider.id)}
-                      className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+                      className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
                     >
                       {active ? "Close" : "Browse"}
                     </button>
@@ -114,7 +114,7 @@ export function GenericProviders() {
                             ),
                         });
                       }}
-                      className="rounded-control border border-hairline px-inline py-hair text-text-muted transition-colors hover:border-unsupported/50 hover:text-unsupported"
+                      className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted transition-colors hover:border-unsupported/50 hover:text-unsupported lg:min-h-0 lg:min-w-0"
                     >
                       <Trash2 className="size-3.5" aria-hidden />
                     </button>

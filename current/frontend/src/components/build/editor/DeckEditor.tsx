@@ -237,6 +237,7 @@ export function DeckEditor({
               type="button"
               onClick={() => handleSelectSlide(Math.max(0, activeSlideIdx - 1))}
               disabled={activeSlideIdx === 0}
+              className="min-h-11 min-w-11 lg:min-h-0 lg:min-w-0"
               style={{
                 padding: "0.25rem 0.75rem",
                 border: "1px solid #ccc",
@@ -258,6 +259,7 @@ export function DeckEditor({
                 handleSelectSlide(Math.min(deck.slides.length - 1, activeSlideIdx + 1))
               }
               disabled={activeSlideIdx === deck.slides.length - 1}
+              className="min-h-11 min-w-11 lg:min-h-0 lg:min-w-0"
               style={{
                 padding: "0.25rem 0.75rem",
                 border: "1px solid #ccc",

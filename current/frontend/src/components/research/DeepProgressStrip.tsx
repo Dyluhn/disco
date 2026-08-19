@@ -159,7 +159,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
         <button
           type="button"
           onClick={() => setExpandedWhenFinished(true)}
-          className="group flex w-full items-center gap-inline text-left"
+          className="group flex min-h-11 w-full items-center gap-inline text-left lg:min-h-0"
         >
           <ChevronRight className="size-3.5 text-text-faint transition-colors group-hover:text-text" aria-hidden />
           <span className="font-ui text-[0.82rem] text-text-muted transition-colors group-hover:text-text">

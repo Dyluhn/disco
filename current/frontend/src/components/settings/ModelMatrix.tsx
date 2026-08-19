@@ -239,7 +239,7 @@ export function ModelMatrix() {
               onSelect={(id) => update.mutate({ vision_model: id })}
             />
             <details className="py-inline">
-              <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+              <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
                 Specialist role overrides
               </summary>
               <p className="mt-hair font-ui text-[0.76rem] text-text-faint">

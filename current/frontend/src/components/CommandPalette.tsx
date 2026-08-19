@@ -124,7 +124,7 @@ export function CommandPalette() {
                         data-disco-control={`shell.command-${command.id}`}
                         data-selected={i === selectedIndex}
                         className={cn(
-                          "flex w-full items-center gap-3 rounded-control px-3 py-2 text-left font-ui text-[0.86rem] transition-colors",
+                          "flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left font-ui text-[0.86rem] transition-colors lg:min-h-0",
                           i === selectedIndex
                             ? "bg-surface-2 text-accent"
                             : "text-text-muted hover:bg-surface-2 hover:text-text"

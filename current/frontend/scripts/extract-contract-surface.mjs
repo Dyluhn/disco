@@ -16,7 +16,7 @@
  * declaration is missing, unresolvable, or shaped unexpectedly — never emits a
  * partial surface, because a partial surface reads as agreement.
  *
- * Usage: node development/scripts/extract-contract-surface.mjs [--repo <root>]
+ * Usage: node scripts/extract-contract-surface.mjs [--repo <root>]
  */
 
 import fs from "node:fs";

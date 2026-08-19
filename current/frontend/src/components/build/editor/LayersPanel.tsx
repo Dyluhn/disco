@@ -103,6 +103,7 @@ export function LayersPanel({
               <button
                 type="button"
                 onClick={() => onSelectSlide(i)}
+                className="min-h-11 lg:min-h-0"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -154,6 +155,7 @@ export function LayersPanel({
                           data-element-id={el.element_id}
                           data-slide-id={el.slide_id}
                           data-disco-control="build.deck-layer"
+                          className="min-h-11 lg:min-h-0"
                           style={{
                             display: "flex",
                             alignItems: "center",

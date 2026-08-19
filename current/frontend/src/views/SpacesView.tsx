@@ -57,7 +57,7 @@ function SpaceRow({
         onClick={onSelect}
         data-disco-control="spaces.open-row"
         className={cn(
-          "flex w-full flex-col gap-hair border-b border-hairline px-inline py-inline text-left transition-colors last:border-b-0",
+          "flex min-h-11 w-full flex-col gap-hair border-b border-hairline px-inline py-inline text-left transition-colors last:border-b-0 lg:min-h-0",
           active ? "bg-surface-2" : "hover:bg-surface-1",
         )}
       >
@@ -82,7 +82,7 @@ function MemberRow({ c }: { c: ConversationSummary }) {
         data-disco-control="spaces.open-member"
         data-conversation-id={c.id}
         onClick={() => navigate(surfaceRoute(c))}
-        className="group min-w-0 flex-1 text-left"
+        className="group min-h-11 min-w-0 flex-1 text-left lg:min-h-0"
       >
         <div className="flex min-w-0 items-center gap-hair">
           <span className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
@@ -127,7 +127,7 @@ function SpaceDetailPane({ spaceId }: { spaceId: string | null }) {
         <button
           type="button"
           onClick={() => refetch()}
-          className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+          className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
         >
           Try again
         </button>
@@ -162,7 +162,7 @@ function SpaceDetailPane({ spaceId }: { spaceId: string | null }) {
               <button
                 type="button"
                 aria-label={`Delete Space: ${space.name}`}
-                className="grid size-8 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported"
+                className="grid size-11 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported lg:size-8"
               >
                 <Trash2 className="size-4" aria-hidden />
               </button>
@@ -231,7 +231,7 @@ export function SpacesView() {
             <button
               type="button"
               onClick={() => refetch()}
-              className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:text-text"
+              className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Try again
             </button>

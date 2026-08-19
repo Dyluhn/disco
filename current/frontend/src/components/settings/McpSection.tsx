@@ -115,14 +115,14 @@ function ConnectionForm({
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Server name (e.g. filesystem)"
         aria-label="MCP server name"
-        className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent"
+        className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent lg:min-h-0"
       />
       <input
         value={draft.url}
         onChange={(e) => setDraft({ ...draft, url: e.target.value })}
         placeholder="URL or command (e.g. https://mcp.example.com)"
         aria-label="MCP server URL"
-        className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-mono text-[0.82rem] text-text outline-none focus:border-accent"
+        className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-mono text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
       />
       <div className="flex items-center gap-inline">
         <label className="font-ui text-[0.78rem] text-text-muted">
@@ -132,7 +132,7 @@ function ConnectionForm({
           value={draft.transport}
           onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
           aria-label="Transport type"
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text outline-none"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text outline-none lg:min-h-0"
         >
           <option value="streamable_http">Streamable HTTP</option>
           <option value="stdio">Stdio</option>
@@ -142,7 +142,7 @@ function ConnectionForm({
           value={draft.risk_tier}
           onChange={(e) => setDraft({ ...draft, risk_tier: e.target.value })}
           aria-label="Risk tier"
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text outline-none"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text outline-none lg:min-h-0"
         >
           <option value="low">Low</option>
           <option value="medium">Medium</option>
@@ -154,7 +154,7 @@ function ConnectionForm({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+          className="min-h-11 rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text lg:min-h-0"
         >
           Cancel
         </button>
@@ -163,7 +163,7 @@ function ConnectionForm({
           data-disco-control="settings.mcp-add-save"
           disabled={!canSave || busy}
           onClick={() => onSave(draft)}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Adding…" : "Add connection"}
         </button>
@@ -218,7 +218,7 @@ function ApprovalDiff({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="min-h-11 rounded-control px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           Dismiss
         </button>
@@ -227,7 +227,7 @@ function ApprovalDiff({
           data-disco-control="settings.mcp-reapprove-confirm"
           disabled={busy}
           onClick={onConfirm}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity disabled:opacity-40"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Approving…" : "Approve"}
         </button>
@@ -297,7 +297,7 @@ export function McpSection() {
             data-disco-control="settings.mcp-add"
             disabled={isLoading}
             onClick={() => setCreating(true)}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-wait disabled:opacity-40"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-wait disabled:opacity-40 lg:min-h-0"
           >
             <Plus className="size-3.5" aria-hidden />
             {isLoading ? "Loading connections…" : "Add connection"}

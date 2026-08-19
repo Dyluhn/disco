@@ -21,11 +21,21 @@ DONE / DEFERRED + the fail-closed `template_only` finish gate). Start there.
 
 ## Current security state (one-liner)
 
-**S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 / S-W5 / S-W6 DONE.** The independent
-Opus half of the final two-model assurance pass remains outstanding, but no campaign
-implementation wave is parked. Two fail-closed builder seams still have separate deferred
-security fills documented **on their own unmerged branches** (not in this folder):
-`disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`).
+**S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 / S-W5 / S-W6 DONE — and so are the two
+builder seams.** The F4.1 Stripe and F3.3 webhook security fills merged long ago
+as `8f356c1e` and `ce349096` and are live on `main`: the primitives
+(`current/packages/core/src/disco/core/appkit/stripe_primitive.py`,
+`webhook_primitive.py`) register real deterministic verifiers plus a mandatory
+`live_verify_id` host exploit runner (no longer `verify=None`), backed by host
+services in core, live verifiers in agent-server, and config routes in
+app-server. All 14 seam test suites pass at `main` (185 passed, 1 skipped;
+verified 2026-08-19). Historical provenance only: the former branches
+`disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam`
+(`ec622888`) were pruned in the 2026-08-17 branch archiving, and their archived
+tips `refs/archive/disclaude/f41-stripe-seam` (`11d3d70f`) /
+`refs/archive/disclaude/f33-webhook-seam` (`375e0f14`) are **ancestors of
+`main`** — nothing on them is unmerged. The one genuinely outstanding item is
+the independent second-model half of the final two-model assurance pass.
 
 ## What deliberately did NOT move (and why)
 

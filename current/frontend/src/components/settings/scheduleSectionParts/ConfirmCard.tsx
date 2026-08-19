@@ -52,7 +52,7 @@ export function ConfirmCard({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+          className="min-h-11 rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text lg:min-h-0"
         >
           Cancel
         </button>
@@ -61,7 +61,7 @@ export function ConfirmCard({
           data-disco-control="settings.schedule-save"
           disabled={busy}
           onClick={onConfirm}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Saving…" : "Save schedule"}
         </button>

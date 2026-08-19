@@ -147,7 +147,7 @@ export function ScheduleSection({ conversationId }: { conversationId: string }) 
             type="button"
             data-disco-control="settings.schedule-new"
             onClick={() => setCreating(true)}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text lg:min-h-0"
           >
             <Plus className="size-3.5" aria-hidden />
             New schedule

@@ -96,7 +96,7 @@ export function SlidesBlockComponent({
           onClick={goPrev}
           disabled={total <= 1}
           aria-label="Previous slide"
-          className="flex items-center gap-hair rounded-control border border-hairline bg-surface-0 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-0 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-40 lg:min-h-0"
         >
           <ChevronLeft className="size-3.5" aria-hidden />
           Prev
@@ -115,7 +115,7 @@ export function SlidesBlockComponent({
           onClick={goNext}
           disabled={total <= 1}
           aria-label="Next slide"
-          className="flex items-center gap-hair rounded-control border border-hairline bg-surface-0 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-0 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-40 lg:min-h-0"
         >
           Next
           <ChevronRight className="size-3.5" aria-hidden />

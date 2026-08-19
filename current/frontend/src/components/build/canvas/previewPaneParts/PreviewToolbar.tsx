@@ -46,7 +46,7 @@ export function PreviewToolbar({
           disabled={restarting || !cid}
           aria-label="Refresh or restart Preview"
           data-disco-control="build.preview-refresh"
-          className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50"
+          className="flex min-h-11 items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50 lg:min-h-0"
         >
           <RotateCw className={cn("size-3", restarting && "animate-spin")} aria-hidden />
           {restarting ? "Restarting…" : "Refresh"}
@@ -62,7 +62,7 @@ export function PreviewToolbar({
             aria-label="Toggle click-to-edit mode on Preview"
             data-disco-control="build.edit-toggle"
             className={cn(
-              "flex items-center gap-hair font-ui text-[0.74rem] transition-colors",
+              "flex min-h-11 items-center gap-hair font-ui text-[0.74rem] transition-colors lg:min-h-0",
               editMode ? "text-accent" : "text-text-muted hover:text-text",
             )}
           >
@@ -75,7 +75,7 @@ export function PreviewToolbar({
             onClick={onOpenPreview}
             aria-label="Open Preview in new tab"
             data-disco-control="build.preview-open"
-            className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+            className="flex min-h-11 items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
           >
             <ExternalLink className="size-3" aria-hidden /> Open
           </button>

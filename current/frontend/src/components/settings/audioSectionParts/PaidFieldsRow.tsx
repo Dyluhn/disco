@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { FIELD_CLASS } from "./styles";
 import { StoredCredentialField } from "../StoredCredentialField";
 
@@ -29,7 +31,7 @@ export function PaidFieldsRow({
           value={model}
           onChange={(e) => setModel(e.target.value)}
           placeholder="tts-1"
-          className={FIELD_CLASS}
+          className={cn(FIELD_CLASS, TAP_TARGET)}
         />
       </label>
     </div>

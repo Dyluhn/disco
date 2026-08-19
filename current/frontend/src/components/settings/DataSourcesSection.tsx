@@ -170,7 +170,7 @@ function ProviderGroup<P extends string>({
       </div>
 
       <details className="rounded-control border border-hairline px-body py-inline">
-        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+        <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
           Configure {title.toLowerCase()}
         </summary>
         <div className="mt-inline flex flex-col gap-inline">
@@ -224,7 +224,7 @@ function ProviderGroup<P extends string>({
                   active?.baseUrlPlaceholder ??
                   "http://host:port  (empty = server default)"
                 }
-                className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
+                className="min-h-11 rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 lg:min-h-0"
               />
             </label>
           )}

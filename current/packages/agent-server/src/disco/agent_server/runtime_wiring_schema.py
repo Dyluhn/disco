@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from .resume_service import ResumeService
     from .run_controller import RunController
     from .run_kill_service import RunKillService
+    from .run_lifecycle_service import RunLifecycleService
     from .run_registry import (
         CancellationRegistry,
         KernelPinRegistry,
@@ -137,6 +138,7 @@ class _RuntimeWiringSchema:
     _disco_kernel: DiscoKernel
     _kernel_pins: KernelPinRegistry
     conversation_control: ConversationControlService
+    _run_lifecycle: RunLifecycleService
     _run_finalizer: RunFinalizer
     run_sweep: RunStrandedSweep
     _run_execution: RunPersistenceSupervisor

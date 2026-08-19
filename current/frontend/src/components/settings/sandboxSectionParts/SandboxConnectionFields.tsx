@@ -64,7 +64,7 @@ export function SandboxConnectionFields({
         <details className="rounded-control border border-hairline px-body py-inline">
           <summary
             data-disco-control="settings.sandbox-advanced"
-            className="cursor-pointer font-ui text-[0.78rem] text-text-muted"
+            className="cursor-pointer py-3 font-ui text-[0.78rem] text-text-muted lg:py-0"
           >
             Advanced
           </summary>

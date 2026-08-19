@@ -25,7 +25,7 @@ export function ProvidersSection() {
       <GenericProviders />
 
       <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
-        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+        <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
           OpenRouter
           <span className="ml-inline font-normal text-text-faint">
             Shared key and catalogue
@@ -37,7 +37,7 @@ export function ProvidersSection() {
       </details>
 
       <details className="rounded-card border border-hairline bg-surface-1/30 px-body py-inline">
-        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+        <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
           Advanced provider keys
         </summary>
         <div className="mt-inline">

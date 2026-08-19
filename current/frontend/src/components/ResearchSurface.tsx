@@ -130,7 +130,7 @@ export function ResearchSurface() {
               showControls={false}
               footer={
                 <details className="border-t border-hairline pt-inline">
-                  <summary className="cursor-pointer font-ui text-[0.78rem] font-medium text-text-muted hover:text-text">
+                  <summary className="cursor-pointer py-3 font-ui text-[0.78rem] font-medium text-text-muted hover:text-text lg:py-0">
                     Search options
                   </summary>
                   <div className="mt-inline flex flex-wrap items-center gap-inline">
@@ -187,7 +187,7 @@ export function ResearchSurface() {
                   type="button"
                   onClick={r.stop}
                   data-disco-control="search.stop"
-                  className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
+                  className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
                 >
                   <Square className="size-3" aria-hidden />
                   Stop generating

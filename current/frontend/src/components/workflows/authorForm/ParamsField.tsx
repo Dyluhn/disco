@@ -28,7 +28,7 @@ export function ParamsField({
         <button
           type="button"
           onClick={onAdd}
-          className="inline-flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="inline-flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <Plus className="size-3.5" aria-hidden />
           Add
@@ -42,13 +42,13 @@ export function ParamsField({
               value={param.name}
               onChange={(event) => onUpdate(index, { name: event.target.value })}
               placeholder="name"
-              className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+              className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
             />
             <select
               aria-label={`Parameter ${index + 1} type`}
               value={param.type}
               onChange={(event) => onUpdate(index, { type: event.target.value as ParamType })}
-              className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+              className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
             >
               {paramTypes.map((type) => (
                 <option key={type} value={type}>
@@ -56,7 +56,7 @@ export function ParamsField({
                 </option>
               ))}
             </select>
-            <label className="flex items-center gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted">
+            <label className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted lg:min-h-0">
               <input
                 type="checkbox"
                 checked={param.required}
@@ -69,13 +69,13 @@ export function ParamsField({
               value={param.description ?? ""}
               onChange={(event) => onUpdate(index, { description: event.target.value })}
               placeholder="description"
-              className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+              className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
             />
             <button
               type="button"
               onClick={() => onRemove(index)}
               aria-label={`Remove parameter ${index + 1}`}
-              className="inline-flex items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted hover:text-unsupported"
+              className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted hover:text-unsupported lg:min-h-0 lg:min-w-0"
             >
               <Trash2 className="size-4" aria-hidden />
             </button>

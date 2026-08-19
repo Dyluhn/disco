@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { OpenRouterModel } from "@/types/models";
 import { FIELD_CLASS } from "./styles";
 import { PricedModelSelect } from "./PricedModelSelect";
@@ -50,7 +52,7 @@ export function ModelField({
                 ? "google/gemini-2.5-flash-image"
                 : "gpt-image-1"
           }
-          className={FIELD_CLASS}
+          className={cn(FIELD_CLASS, TAP_TARGET)}
         />
       )}
       {showOpenRouter && orModelsLoading && (

@@ -88,7 +88,7 @@ export function DraftReviewPanel({
           type="button"
           onClick={onApprove}
           disabled={errorFindings || approveIsPending || result.workflow.approved}
-          className="inline-flex w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {approveIsPending ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -100,7 +100,7 @@ export function DraftReviewPanel({
         <button
           type="button"
           onClick={onEditDetails}
-          className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <Pencil className="size-3.5" aria-hidden />
           Edit details
@@ -108,7 +108,7 @@ export function DraftReviewPanel({
         <button
           type="button"
           onClick={onStartOver}
-          className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <RotateCcw className="size-3.5" aria-hidden />
           Start over

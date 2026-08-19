@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { FIELD_CLASS } from "./styles";
 
 export function VoiceFieldsRow({
@@ -25,7 +27,7 @@ export function VoiceFieldsRow({
           value={voiceA}
           onChange={(e) => setVoiceA(e.target.value)}
           placeholder="af_heart"
-          className={FIELD_CLASS}
+          className={cn(FIELD_CLASS, TAP_TARGET)}
         />
       </label>
       <label className="flex flex-col gap-hair">
@@ -35,7 +37,7 @@ export function VoiceFieldsRow({
           value={voiceB}
           onChange={(e) => setVoiceB(e.target.value)}
           placeholder="af_bella"
-          className={FIELD_CLASS}
+          className={cn(FIELD_CLASS, TAP_TARGET)}
         />
       </label>
     </div>

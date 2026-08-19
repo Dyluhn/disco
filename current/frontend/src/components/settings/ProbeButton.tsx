@@ -100,7 +100,7 @@ export function ProbeButton({
         disabled={disabled || state.phase === "testing"}
         onClick={onClick}
         className={cn(
-          "flex shrink-0 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors",
+          "flex min-h-11 shrink-0 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors lg:min-h-0",
           disabled
             ? "border-hairline text-text-faint"
             : "border-hairline text-text-muted hover:border-accent hover:text-text",

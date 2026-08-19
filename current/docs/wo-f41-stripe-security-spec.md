@@ -1,11 +1,19 @@
 # WO-F4.1 — Stripe security fill: the spec for the deferred security session
 
-Status: **NOT BUILT.** The `stripe` primitive (`current/packages/core/src/disco/core/appkit/stripe_primitive.py`)
-is a fail-closed SEAM: `tier="template_only"`, `verify=None`, host_contract declares
-`payments.checkout` + `payments.webhook` (neither implemented). Under WO-A3's rule (template_only +
-verify=None ⇒ cannot ship), any app that adds `stripe` fails the finish gate — **intentionally** — until
-everything below exists. This work is security-classed (plan §10.5: NOT Fable; Opus/codex session with
-adversarial review). Nothing here is optional; do not stub any of it to pass the gate.
+Status: **SECURITY FILL COMPLETE** on `disclaude/mega-campaign` (merge
+`8f356c1e`, hardened through `11d3d70f`; archived reference:
+`refs/archive/disclaude/f41-stripe-seam`). The primitive
+(`current/packages/core/src/disco/core/appkit/stripe_primitive.py`) remains Disco-owned
+`tier="template_only"`, now with the two-stage gate live: `stripe_verify`
+(deterministic provenance / trusted-tree / secret-absence checks) plus the
+mandatory `stripe.security.v1` live exploit runner (§5's five checks). The
+host side lives in `current/packages/core/src/disco/core/stripe_host_service.py`
+(`payments.checkout` + `payments.ready`), worker emission in
+`appkit/stripe_worker.py`, and the live runner in
+`current/packages/agent-server/src/disco/agent_server/stripe_live_verifier.py`.
+This work was security-classed (plan §10.5: NOT Fable; Opus/codex session with
+adversarial review). The sections below are the specification of record for the
+fill; none of it may be stubbed or regressed to pass the gate.
 
 ## What the seam already provides (do not rebuild)
 

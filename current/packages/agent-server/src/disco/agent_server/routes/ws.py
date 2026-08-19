@@ -63,7 +63,17 @@ async def _send_json_redacted(websocket: WebSocket, frame: dict[str, Any]) -> No
 
 
 _REVIVE_FRAME_TYPES = frozenset(
-    {"send_message", "steer", "inject_source", "confirm", "reject", "selection_edit"}
+    {
+        "send_message",
+        "steer",
+        "inject_source",
+        "confirm",
+        "reject",
+        "selection_edit",
+        # accept_finished never kicks, but it may append the user's acknowledgment
+        # note — a write an imported (read-only) conversation must refuse too.
+        "accept_finished",
+    }
 )
 
 
@@ -108,7 +118,7 @@ async def _handle_control_frame(
     runtime: ConversationRuntime,
 ) -> None:
     """Dispatch a control frame (confirm/reject/approve_plan/request_plan/
-    pick_alternative/pause/cancel/resume) to the runtime."""
+    accept_finished/pick_alternative/pause/cancel/resume) to the runtime."""
     if frame.type == "confirm":
         await runtime.conversation_control.confirm(conversation_id)
     elif frame.type == "reject":
@@ -120,13 +130,20 @@ async def _handle_control_frame(
             conversation_id,
             frame.content or "",
         )
+    elif frame.type == "accept_finished":
+        # Explicit stop-intent: the FINISHED build is accepted as-is. Authoritative
+        # — content (if any) is an acknowledgment note, never re-guessed as a replan.
+        await runtime.conversation_control.accept_finished(
+            conversation_id,
+            frame.content or "",
+        )
     elif frame.type == "pick_alternative" and frame.option_id is not None:
         await runtime.conversation_control.pick_alternative(
             conversation_id,
             frame.option_id,
         )
     elif frame.type == "pause":
-        await runtime.conversation_control.pause(conversation_id)
+        await runtime.pause(conversation_id)
     elif frame.type == "cancel":
         await runtime.cancel(conversation_id)
     elif frame.type == "resume":

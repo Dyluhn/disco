@@ -81,6 +81,12 @@ class WSClientFrame(BaseModel):
         # Build plan-mode gate:
         "approve_plan",  # approve the pending plan → start building
         "request_plan",  # (re-)enter plan mode; `content` carries the instruction
+        # F-3 follow-up: the EXPLICIT "accept the finished build as-is" action.
+        # The UI states stop-intent instead of the server guessing it from prose
+        # (`control_ops._is_ship_it_intent` stays as the fallback for plain typed
+        # messages). Authoritative: the conversation stays FINISHED — no replan,
+        # no kick. Optional `content` rides along as a visible user note only.
+        "accept_finished",
         # Structured error recovery: pick one of the alternatives the agent
         # proposed after 4 consecutive failures (see AlternativesEvent).
         "pick_alternative",
@@ -99,6 +105,8 @@ class WSClientFrame(BaseModel):
     # send_message / request_plan: free text (a user message / the (re)plan instruction).
     # Also carries answers to ask_user / clarify / questions_v2 gates; answering is
     # just the user's next turn, which resumes the loop.
+    # accept_finished: an OPTIONAL acknowledgment note echoed to the log — never
+    # inspected for intent (the frame itself is the authoritative stop signal).
     content: str | None = None
     # confirm/reject: respond to WAITING_FOR_CONFIRMATION (echoes pending_action_id).
     action_id: str | None = None

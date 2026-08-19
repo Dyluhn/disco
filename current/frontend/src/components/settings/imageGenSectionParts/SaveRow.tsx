@@ -18,7 +18,7 @@ export function SaveRow({
         disabled={!fieldsDirty || savePending}
         onClick={onSave}
         className={cn(
-          "flex items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors",
+          "flex min-h-11 items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors lg:min-h-0",
           fieldsDirty && !savePending
             ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
             : "border-hairline text-text-faint",

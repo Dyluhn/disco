@@ -23,7 +23,7 @@ export function OutputField({
         <input
           value={outputPathTemplate}
           onChange={(event) => onOutputPathTemplateChange(event.target.value)}
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
         />
         <span className="text-text-faint">Example: outputs/{"{param}"}.md</span>
       </label>
@@ -33,7 +33,7 @@ export function OutputField({
           aria-label="Output format"
           value={outputFormat}
           onChange={(event) => onOutputFormatChange(event.target.value as OutputFormat)}
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
         >
           {outputFormats.map((format) => (
             <option key={format} value={format}>

@@ -44,10 +44,13 @@ make *those* deterministic and leave layout free.
 
 Non-goal: replacing either existing tier. AppKit keeps cookie-cutter shapes
 (lead capture in one validated call); free-form stays the escape hatch. The
-fail-closed Stripe/webhook seams parked on `disclaude/f41-stripe-seam` /
-`disclaude/f33-webhook-seam` (template_only, verify=None, blocked by the WO-A3
-gate) are the natural graduates INTO this tier — they have been waiting for
-exactly this verification discipline.
+fail-closed Stripe/webhook seams — implemented and merged on `main` as
+`8f356c1e` / `ce349096` (spec-only `template_only` discipline, real verifiers,
+mandatory live exploit runners; their pruned branches survive only as the
+archived tips `refs/archive/disclaude/f41-stripe-seam` /
+`refs/archive/disclaude/f33-webhook-seam`, both ancestors of `main`) — are the
+natural graduates INTO this tier — they already practice exactly this
+verification discipline.
 
 ## 2. Component anatomy
 

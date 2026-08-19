@@ -13,7 +13,7 @@ export function PolicyCheckboxes({
 }: PolicyCheckboxesProps) {
   return (
     <section className="grid gap-hair md:grid-cols-2">
-      <label className="flex items-start gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.8rem] text-text-muted">
+      <label className="flex min-h-11 items-start gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.8rem] text-text-muted lg:min-h-0">
         <input
           type="checkbox"
           checked={allowsWrites}
@@ -25,7 +25,7 @@ export function PolicyCheckboxes({
           <span>Required if any MCP mount is writable.</span>
         </span>
       </label>
-      <label className="flex items-start gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.8rem] text-text-muted">
+      <label className="flex min-h-11 items-start gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.8rem] text-text-muted lg:min-h-0">
         <input
           type="checkbox"
           checked={untrustedContent}

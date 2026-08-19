@@ -72,7 +72,7 @@ export function ImportProjectDialog() {
           aria-label="Import project"
           title={live ? "Import project" : "Project import requires a live agent server"}
           data-disco-control="build.import-project"
-          className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+          className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40 lg:min-h-0"
         >
           <FolderOpen className="size-3.5" aria-hidden />
           Import project
@@ -94,7 +94,7 @@ export function ImportProjectDialog() {
               <button
                 type="button"
                 aria-label="Close import project"
-                className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control p-hair text-text-faint transition-colors hover:text-text lg:min-h-0 lg:min-w-0"
               >
                 <X className="size-4" aria-hidden />
               </button>
@@ -114,7 +114,7 @@ export function ImportProjectDialog() {
                 aria-selected={tab === id}
                 onClick={() => selectTab(id)}
                 className={cn(
-                  "flex min-w-0 items-center justify-center gap-hair rounded-control px-hair py-hair font-ui text-[0.76rem] transition-colors",
+                  "flex min-h-11 min-w-0 items-center justify-center gap-hair rounded-control px-hair py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
                   tab === id
                     ? "bg-bg text-text shadow-sm"
                     : "text-text-muted hover:text-text",
@@ -139,7 +139,7 @@ export function ImportProjectDialog() {
                     setZipFile(event.target.files?.[0] ?? null);
                     setError(null);
                   }}
-                  className="rounded-control border border-hairline bg-surface-1 px-inline py-hair text-text file:mr-inline file:rounded-control file:border-0 file:bg-accent file:px-inline file:py-hair file:font-ui file:text-bg"
+                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair text-text file:mr-inline file:rounded-control file:border-0 file:bg-accent file:px-inline file:py-hair file:font-ui file:text-bg lg:min-h-0"
                 />
               </label>
             )}
@@ -157,7 +157,7 @@ export function ImportProjectDialog() {
                   }}
                   placeholder="/absolute/path/to/project"
                   aria-label="Local folder path"
-                  className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong"
+                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
                 />
               </label>
             )}
@@ -175,7 +175,7 @@ export function ImportProjectDialog() {
                   }}
                   placeholder="https://github.com/org/repo.git"
                   aria-label="Git URL"
-                  className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong"
+                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
                 />
               </label>
             )}
@@ -192,7 +192,7 @@ export function ImportProjectDialog() {
               <button
                 type="button"
                 disabled={busy}
-                className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+                className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text disabled:opacity-40 lg:min-h-0"
               >
                 Cancel
               </button>
@@ -202,7 +202,7 @@ export function ImportProjectDialog() {
               disabled={!canSubmit}
               onClick={() => void submit()}
               data-disco-control="build.import-project.submit"
-              className="flex items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-45"
+              className="flex min-h-11 items-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-45 lg:min-h-0"
             >
               {busy && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
               Import

@@ -29,7 +29,7 @@ export function SandboxField({
         spellCheck={false}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong disabled:opacity-50"
+        className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong disabled:opacity-50 lg:min-h-0"
       />
     </label>
   );

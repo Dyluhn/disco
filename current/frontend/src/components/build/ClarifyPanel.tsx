@@ -117,7 +117,7 @@ export function ClarifyPanel({
                 onChange={(e) => update(it.id, e.target.value)}
                 placeholder="Type your answer…"
                 className={cn(
-                  "rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.85rem] text-text outline-none",
+                  "min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.85rem] text-text outline-none lg:min-h-0",
                   "transition-colors focus:border-accent placeholder:text-text-faint",
                 )}
               />
@@ -135,7 +135,7 @@ export function ClarifyPanel({
                 }}
                 placeholder="Type your answer…"
                 className={cn(
-                  "rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.85rem] text-text outline-none",
+                  "min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.85rem] text-text outline-none lg:min-h-0",
                   "transition-colors focus:border-accent placeholder:text-text-faint",
                 )}
               />

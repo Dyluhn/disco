@@ -66,7 +66,7 @@ export function FilesPane({
               type="button"
               onClick={() => setActive(i)}
               className={cn(
-                "flex w-full items-center gap-hair truncate px-inline py-hair text-left font-mono text-[0.76rem] transition-colors",
+                "flex min-h-11 w-full items-center gap-hair truncate px-inline py-hair text-left font-mono text-[0.76rem] transition-colors lg:min-h-0",
                 i === active ? "bg-surface-2 text-text" : "text-text-muted hover:text-text",
               )}
             >

@@ -40,7 +40,7 @@ export function DescribeStep({
           onChange={(event) => onDescriptionChange(event.target.value)}
           rows={5}
           placeholder="Every morning, pull my unread emails, summarize them into 5 bullets, and save a markdown brief."
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
         />
       </label>
 
@@ -58,7 +58,7 @@ export function DescribeStep({
         <button
           type="submit"
           disabled={!canDraft}
-          className="inline-flex w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {isDrafting ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -71,7 +71,7 @@ export function DescribeStep({
           <button
             type="button"
             onClick={onOpenAdvanced}
-            className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+            className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
           >
             <Pencil className="size-3.5" aria-hidden />
             Edit details (Advanced)

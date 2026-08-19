@@ -67,7 +67,7 @@ export function AgentStageCard({
         aria-expanded={expanded}
         aria-label={expanded ? "Collapse agent history" : "Expand agent history"}
         data-disco-control="build.stage-card-toggle"
-        className="flex items-center gap-inline px-body py-inline text-left transition-colors hover:bg-surface-2/60"
+        className="flex min-h-11 items-center gap-inline px-body py-inline text-left transition-colors hover:bg-surface-2/60 lg:min-h-0"
       >
         {expanded ? (
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />

@@ -69,7 +69,7 @@ function toUpsert(m: ModelInfo): ModelUpsert {
 }
 
 const field =
-  "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
+  "min-h-11 w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong lg:min-h-0";
 const labelCls =
   "font-ui text-[0.74rem] font-medium uppercase tracking-wide text-text-faint";
 
@@ -162,7 +162,7 @@ function ModelForm({
       </div>
 
       <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
-        <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+        <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
           Advanced model metadata
         </summary>
         <div className="mt-body flex flex-col gap-body">
@@ -325,7 +325,7 @@ function ModelForm({
         <Dialog.Close asChild>
           <button
             type="button"
-            className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted hover:text-text"
+            className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted hover:text-text lg:min-h-0"
           >
             Cancel
           </button>
@@ -333,7 +333,7 @@ function ModelForm({
         <button
           type="submit"
           disabled={busy}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60 lg:min-h-0"
         >
           {busy ? "Saving…" : mode === "add" ? "Add model" : "Save changes"}
         </button>
@@ -410,7 +410,7 @@ export function ModelCatalogue() {
             type="button"
             data-disco-control="settings.model-add"
             onClick={() => setDialog({ mode: "add", initial: BLANK })}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
           >
             <Plus className="size-3.5" aria-hidden /> Add model
           </button>

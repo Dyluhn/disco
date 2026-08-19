@@ -18,7 +18,7 @@ export function PointButton({
       aria-label={armed ? "Cancel element mention" : "Point at element"}
       data-disco-control="build.element-mention"
       className={cn(
-        "flex items-center gap-hair font-ui text-[0.74rem] transition-colors",
+        "flex min-h-11 items-center gap-hair font-ui text-[0.74rem] transition-colors lg:min-h-0",
         armed ? "text-accent" : "text-text-muted hover:text-text",
       )}
     >

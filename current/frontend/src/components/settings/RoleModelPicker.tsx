@@ -66,7 +66,7 @@ export function RoleModelPicker({
           data-model-id={value ?? undefined}
           aria-label={ariaLabel}
           disabled={busy || disabled}
-          className="flex w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64"
+          className="flex min-h-11 w-full items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text transition-colors hover:border-hairline-strong disabled:cursor-not-allowed disabled:opacity-50 sm:w-64 lg:min-h-0"
         >
           <span className="truncate">{selected?.label ?? noneLabel ?? value}</span>
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
@@ -94,7 +94,7 @@ export function RoleModelPicker({
                 data-model-id="main"
                 onClick={() => pick(null)}
                 className={cn(
-                  "mb-inline flex w-full items-center gap-inline rounded-control border px-inline py-inline text-left font-ui text-[0.84rem] transition-colors",
+                  "mb-inline flex min-h-11 w-full items-center gap-inline rounded-control border px-inline py-inline text-left font-ui text-[0.84rem] transition-colors lg:min-h-0",
                   value === null
                     ? "border-accent/50 bg-surface-1"
                     : "border-transparent hover:bg-surface-1",
@@ -124,7 +124,7 @@ export function RoleModelPicker({
                             data-model-id={m.id}
                             onClick={() => pick(m.id)}
                             className={cn(
-                              "flex w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
+                              "flex min-h-11 w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors lg:min-h-0",
                               active
                                 ? "border-accent/50 bg-surface-1"
                                 : "border-transparent hover:bg-surface-1",

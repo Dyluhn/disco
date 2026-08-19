@@ -7,7 +7,7 @@
 import { StoredCredentialField } from "../StoredCredentialField";
 
 const fieldClass =
-  "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
+  "min-h-11 rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 lg:min-h-0";
 
 export function FallbackFields({
   enabled,

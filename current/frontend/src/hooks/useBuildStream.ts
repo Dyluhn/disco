@@ -178,6 +178,10 @@ export interface BuildStream extends BuildStreamState {
   answer: (text: string) => void;
   approvePlan: () => void;
   requestPlan: (text: string) => void;
+  /** Explicit "accept the finished build as-is" (the Mark-done control): sends the
+   *  authoritative `accept_finished` frame — the server keeps the conversation
+   *  FINISHED with no replan, instead of guessing stop-intent from typed prose. */
+  acceptFinished: () => void;
   pickAlternative: (optionId: string) => void;
   resume: () => void;
   /** True when the conversation is in a resumable state (PAUSED, or IDLE with an
@@ -270,6 +274,12 @@ export function useBuildStream(
     dispatch({ type: "local_message", event: localUserMessage(trimmed, makeId) });
     handle.current?.send({ type: "request_plan", content: trimmed });
   }, [makeId]);
+  // Explicit stop-intent (F-3 follow-up): no text, no optimistic echo — the frame
+  // itself is the whole signal, and the conversation simply stays FINISHED.
+  const acceptFinished = useCallback(
+    () => handle.current?.send({ type: "accept_finished" }),
+    [],
+  );
   const pickAlternative = useCallback(
     (optionId: string) =>
       handle.current?.send({ type: "pick_alternative", option_id: optionId }),
@@ -375,6 +385,7 @@ export function useBuildStream(
     answer: steer,
     approvePlan,
     requestPlan,
+    acceptFinished,
     pickAlternative,
     resume,
     canResume,

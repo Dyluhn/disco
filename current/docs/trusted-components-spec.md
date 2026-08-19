@@ -427,11 +427,18 @@ Order is the design doc's: each component proves one new mechanism.
 - probe: seeded admin passes an admin-guarded route; seeded member gets 403;
   role checks happen server-side (member token + forged client claim → 403).
 
-### 7.4 Graduate the parked Stripe seam (f41)
-`disclaude/f41-stripe-seam` (`60436fa8`) becomes `payments-kit` — its
-fail-closed `template_only, verify=None` scaffold already matches this tier's
-shape; its security-fill spec (`current/docs/wo-f41-stripe-security-spec.md`, on that
-branch) becomes the probe's check list. This is the first component whose
+### 7.4 Graduate the Stripe seam (f41)
+The f41 work becomes `payments-kit`. Its security fill is **implemented and
+merged on `main`** (`8f356c1e`; primitive in
+`current/packages/core/src/disco/core/appkit/stripe_primitive.py` with a real
+verifier and a mandatory live exploit runner). The former branch
+`disclaude/f41-stripe-seam` (`60436fa8`) was pruned in the 2026-08-17 branch
+archiving; its archived tip `refs/archive/disclaude/f41-stripe-seam`
+(`11d3d70f`) is an ancestor of `main` — provenance, not pending work. The
+seam's spec-only discipline (`template_only`: every emitted byte Disco-owned)
+already matches this tier's shape; its security-fill spec
+(`current/docs/wo-f41-stripe-security-spec.md`) becomes the probe's check
+list. This is the first component whose
 probe needs secret custody (host-side Stripe test key) — it composes the S-W2
 substrates (`secret_refs`, `host_egress`) rather than new machinery.
 

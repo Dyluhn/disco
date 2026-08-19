@@ -6,7 +6,11 @@
  *   2. Export as…       — Radix Dialog with MD / PDF choices + File System
  *                         Access API save-picker (graceful fallback for Firefox/Safari)
  *   3. Audio Overview   — state machine (idle → generating → done | unavailable)
- *                         wired to a TODO stub; shows honest error, never fake success
+ *                         fully wired (needMoreCardParts/AudioSection +
+ *                         useAudioOverview) to the agent-server report-audio
+ *                         endpoints via api/deepResearch: SSE progress stream
+ *                         with a blocking-POST fallback; shows honest error,
+ *                         never fake success
  *
  * ROBUSTNESS GUARANTEE: all three actions have INDEPENDENT, RESETTABLE state.
  * No one-way `done` latches. Re-pressing any button re-opens/re-fires.

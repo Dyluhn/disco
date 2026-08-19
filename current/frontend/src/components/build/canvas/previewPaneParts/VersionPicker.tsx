@@ -19,7 +19,7 @@ export function VersionPicker({
     <Dropdown.Root>
       <Dropdown.Trigger
         aria-label="Version history"
-        className="flex max-w-[18rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+        className="flex min-h-11 max-w-[18rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
       >
         <History className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">{selected ? `v${selected.seq}` : "Current"}</span>
@@ -33,7 +33,7 @@ export function VersionPicker({
         >
           <Dropdown.Item
             onSelect={() => onSelect(null)}
-            className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2"
+            className="flex min-h-11 cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2 lg:min-h-0"
           >
             <Check className={cn("size-3.5 shrink-0", selectedSeq === null ? "text-accent" : "opacity-0")} aria-hidden />
             <span className="min-w-0 flex-1 truncate">Current</span>
@@ -43,7 +43,7 @@ export function VersionPicker({
             <Dropdown.Item
               key={version.seq}
               onSelect={() => onSelect(version.seq)}
-              className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2"
+              className="flex min-h-11 cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2 lg:min-h-0"
             >
               <Check className={cn("size-3.5 shrink-0", selectedSeq === version.seq ? "text-accent" : "opacity-0")} aria-hidden />
               <span className="min-w-0 flex-1 truncate">{versionLabel(version)}</span>

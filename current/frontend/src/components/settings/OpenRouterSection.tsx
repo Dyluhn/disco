@@ -18,7 +18,7 @@ import type { OpenRouterModel } from "@/types/models";
 import { ProbeButton } from "./ProbeButton";
 
 const field =
-  "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
+  "min-h-11 w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong lg:min-h-0";
 const price = (m: OpenRouterModel) =>
   m.price_in_per_m === 0 && m.price_out_per_m === 0
     ? "Free"
@@ -55,7 +55,7 @@ function KeyManager() {
           type="submit"
           data-disco-control="settings.openrouter-key-save"
           disabled={setKey.isPending || !value.trim()}
-          className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+          className="min-h-11 shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60 lg:min-h-0"
         >
           {setKey.isPending ? "Saving…" : "Save key"}
         </button>
@@ -85,7 +85,7 @@ function KeyManager() {
           type="button"
           data-disco-control="settings.openrouter-key-clear"
           onClick={() => clearKey.mutate()}
-          className="self-start font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+          className="min-h-11 self-start font-ui text-[0.8rem] text-text-muted hover:text-unsupported lg:min-h-0"
         >
           Clear stored key
         </button>
@@ -104,7 +104,7 @@ function KeyManager() {
             type="button"
             data-disco-control="settings.openrouter-key-clear"
             onClick={() => clearKey.mutate()}
-            className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+            className="min-h-11 font-ui text-[0.8rem] text-text-muted hover:text-unsupported lg:min-h-0"
           >
             Clear
           </button>
@@ -183,7 +183,7 @@ function BrowseDialog({
               ? undefined
               : "Add a decryptable OpenRouter key first — browsing queries the live API."
           }
-          className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           <Search className="size-3.5" aria-hidden /> Browse OpenRouter models
         </button>
@@ -217,7 +217,7 @@ function BrowseDialog({
                 data-disco-control="settings.openrouter-add-selected"
                 disabled={selectedModels.length === 0 || create.isPending}
                 onClick={() => void addSelected()}
-                className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
+                className="min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50 lg:min-h-0"
               >
                 {create.isPending ? "Adding..." : "Add selected"}
               </button>
@@ -277,7 +277,7 @@ function BrowseDialog({
                         })
                       }
                       className={cn(
-                        "flex shrink-0 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors",
+                        "flex min-h-11 shrink-0 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors lg:min-h-0",
                         added
                           ? "border-hairline text-text-faint"
                           : "border-hairline text-text-muted hover:border-hairline-strong hover:text-text",
