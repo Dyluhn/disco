@@ -136,7 +136,7 @@ export function AudioSection() {
           </div>
 
           <details className="rounded-control border border-hairline px-body py-inline">
-            <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+            <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
               Configure audio overview
             </summary>
             <div className="mt-inline flex flex-col gap-inline">

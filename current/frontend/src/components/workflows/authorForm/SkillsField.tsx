@@ -17,7 +17,7 @@ export function SkillsField({ skills, selectedSkills, onChange }: SkillsFieldPro
         {skills.map((skill) => (
           <label
             key={skill}
-            className="flex items-center gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted lg:min-h-0"
           >
             <input
               type="checkbox"

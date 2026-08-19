@@ -1,6 +1,7 @@
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { useCreateProvider, useProviderPresets } from "@/hooks/useModels";
 import type { ProviderMutationResult, ProviderPreset } from "@/types/models";
 import { errorText, hostLabel } from "./helpers";
@@ -82,7 +83,7 @@ function ProviderFields({
             onPresetChange(id, presets.find((preset) => preset.id === id));
           }}
           aria-label="Provider preset"
-          className={FIELD}
+          className={cn(FIELD, TAP_TARGET)}
         >
           {presets.map((preset) => (
             <option key={preset.id} value={preset.id}>
@@ -97,14 +98,14 @@ function ProviderFields({
             onChange={(event) => onApiKeyChange(event.target.value)}
             placeholder="API key"
             aria-label="Provider API key"
-            className={FIELD}
+            className={cn(FIELD, TAP_TARGET)}
           />
         )}
         <button
           type="submit"
           data-disco-control="settings.provider-add"
           disabled={!canSave || pending}
-          className="flex shrink-0 items-center justify-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+          className="flex min-h-11 shrink-0 items-center justify-center gap-hair rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60 lg:min-h-0"
         >
           <Plus className="size-3.5" aria-hidden />
           {pending ? "Adding..." : "Add provider"}
@@ -116,7 +117,7 @@ function ProviderFields({
           onChange={(event) => onBaseUrlChange(event.target.value)}
           placeholder={selected.base_url || "https://provider.example/v1"}
           aria-label="Custom provider base URL"
-          className={cn(FIELD, "font-mono")}
+          className={cn(FIELD, "font-mono", TAP_TARGET)}
         />
       )}
       <OllamaHint selected={selected} />

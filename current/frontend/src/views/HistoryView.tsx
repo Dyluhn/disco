@@ -99,7 +99,7 @@ function EmptyHistory() {
         type="button"
         data-disco-control="history.start-query"
         onClick={() => navigate("/")}
-        className="mt-inline rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
+        className="mt-inline min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
       >
         Start a query
       </button>
@@ -125,7 +125,7 @@ function MoveToSpaceMenu({
   const move = useSetConversationSpace();
   const currentSpaceId = conversation.space_id ?? null;
   const itemClass =
-    "flex w-full items-center gap-hair rounded-control px-inline py-hair text-left font-ui text-[0.78rem] text-text-muted outline-none transition-colors hover:bg-surface-2 hover:text-text data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45";
+    "flex min-h-11 w-full items-center gap-hair rounded-control px-inline py-hair text-left font-ui text-[0.78rem] text-text-muted outline-none transition-colors hover:bg-surface-2 hover:text-text data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45 lg:min-h-0";
 
   return (
     <DropdownMenu.Root>
@@ -134,7 +134,7 @@ function MoveToSpaceMenu({
           type="button"
           aria-label={`Move conversation to space: ${conversation.title}`}
           data-disco-control="history.move-space"
-          className="grid size-8 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text"
+          className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text lg:size-8"
         >
           <MoreHorizontal className="size-4" aria-hidden />
         </button>
@@ -264,7 +264,7 @@ export function HistoryView() {
               onClick={() => fileRef.current?.click()}
               title="Import an exported share bundle (read-only)"
               data-disco-control="import-share"
-              className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               <Upload className="size-3.5" aria-hidden /> Import
             </button>
@@ -278,7 +278,7 @@ export function HistoryView() {
 
         {showFilterBar && (
           <div className="grid gap-inline sm:grid-cols-[minmax(0,1fr)_12rem]">
-            <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
+            <div className="flex min-h-11 items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong lg:min-h-0">
               <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
               <input
                 type="search"
@@ -296,7 +296,7 @@ export function HistoryView() {
               data-disco-control="history.space-filter"
               value={spaceFilter}
               onChange={(e) => setSpaceFilter(e.target.value)}
-              className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong"
+              className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong lg:min-h-0"
             >
               <option value="all">All Spaces</option>
               <option value="unfiled">Unfiled</option>
@@ -322,7 +322,7 @@ export function HistoryView() {
               type="button"
               data-disco-control="history.retry"
               onClick={() => refetch()}
-              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Try again
             </button>
@@ -360,7 +360,7 @@ export function HistoryView() {
                       onClick={() =>
                         navigate(surfaceRoute(c))
                       }
-                      className="group min-w-0 flex-1 text-left"
+                      className="group min-h-11 min-w-0 flex-1 text-left lg:min-h-0"
                     >
                       <div className="flex items-center gap-hair">
                         <span className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
@@ -405,7 +405,7 @@ export function HistoryView() {
                           type="button"
                           aria-label={`Delete conversation: ${c.title}`}
                           data-disco-control="delete-conversation"
-                          className="grid size-8 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported"
+                          className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported lg:size-8"
                         >
                           <Trash2 className="size-4" aria-hidden />
                         </button>

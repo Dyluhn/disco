@@ -23,7 +23,7 @@ export function VersionBanner({
         <button
           type="button"
           onClick={onBackToCurrent}
-          className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted hover:text-text"
+          className="flex min-h-11 items-center gap-hair font-ui text-[0.74rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <MonitorPlay className="size-3" aria-hidden /> Back to current
         </button>
@@ -37,7 +37,7 @@ export function VersionBanner({
             <button
               type="button"
               disabled={restoringSeq !== null}
-              className="flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.74rem] text-warn disabled:opacity-50"
+              className="flex min-h-11 items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.74rem] text-warn disabled:opacity-50 lg:min-h-0"
             >
               <Undo2 className={cn("size-3", restoringSeq !== null && "animate-spin")} aria-hidden />
               {restoringSeq !== null ? "Rolling back…" : "Roll back"}

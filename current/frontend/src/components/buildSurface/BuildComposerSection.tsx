@@ -5,6 +5,7 @@
  */
 
 import type { ReactNode } from "react";
+import { Check } from "lucide-react";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
 // file this directory decomposes. It is not ours to edit; only its
 // `UploadComposer` export is consumed here, unchanged from the original.
@@ -63,6 +64,24 @@ export function BuildComposerSection({
       {settled && (
         <div className="flex flex-col gap-hair">
           <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
+          {/* F-3 follow-up: the EXPLICIT "accept as-is" path. Sends the authoritative
+              accept_finished frame — the UI states stop-intent instead of the server
+              guessing it from typed prose ("ship it" in the composer below remains
+              the free-text fallback). FINISHED only: there is nothing to accept on
+              an IDLE/STUCK settled state. */}
+          {b.status === "FINISHED" && (
+            <button
+              type="button"
+              onClick={b.acceptFinished}
+              aria-label="Mark the build done — accept it as-is"
+              title="Accept the finished build as-is (no re-plan)"
+              data-disco-control="build.mark-done"
+              className="flex max-lg:min-h-11 items-center gap-hair self-start rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+            >
+              <Check className="size-3.5" aria-hidden />
+              Mark done
+            </button>
+          )}
           {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
           <QueryInput
             onSubmit={requestPlanWithMention}

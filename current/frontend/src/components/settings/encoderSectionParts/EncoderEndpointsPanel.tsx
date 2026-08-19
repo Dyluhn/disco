@@ -73,7 +73,7 @@ export function EncoderEndpointsPanel({
               value={urls[ep.key]}
               onChange={(e) => onUrlChange(ep.key, e.target.value)}
               placeholder="http://host:port  (empty = server default)"
-              className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 disabled:opacity-50"
+              className="min-h-11 rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60 disabled:opacity-50 lg:min-h-0"
             />
           </label>
         ))}
@@ -85,7 +85,7 @@ export function EncoderEndpointsPanel({
               disabled={!dirty || pending}
               onClick={onSaveEndpoints}
               className={cn(
-                "flex items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors",
+                "flex min-h-11 items-center gap-hair self-start rounded-control border px-inline py-hair font-ui text-[0.8rem] transition-colors lg:min-h-0",
                 dirty && !pending
                   ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/20"
                   : "border-hairline text-text-faint",

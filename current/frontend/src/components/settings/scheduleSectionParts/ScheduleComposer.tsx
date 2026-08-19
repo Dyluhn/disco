@@ -75,7 +75,7 @@ export function ScheduleComposer({
             data-cron={cron}
             disabled={previewLoading}
             onClick={() => onSelectPreset(cron, description)}
-            className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40"
+            className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-40 lg:min-h-0"
           >
             {label}
           </button>
@@ -90,7 +90,7 @@ export function ScheduleComposer({
         onChange={(e) => onInputChange(e.target.value)}
         placeholder='e.g. "every day at 9am" or "*/5 * * * *"'
         aria-label="Schedule expression"
-        className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent"
+        className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent lg:min-h-0"
       />
       {parseError && (
         <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
@@ -106,7 +106,7 @@ export function ScheduleComposer({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+          className="min-h-11 rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text lg:min-h-0"
         >
           Cancel
         </button>
@@ -115,7 +115,7 @@ export function ScheduleComposer({
           data-disco-control="settings.schedule-preview"
           disabled={!draft.input.trim() || previewLoading}
           onClick={onPreview}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {previewLoading ? "Checking…" : "Preview schedule"}
         </button>

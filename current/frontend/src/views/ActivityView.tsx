@@ -69,7 +69,7 @@ export function ActivityView() {
             <button
               type="button"
               onClick={() => refetch()}
-              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Try again
             </button>
@@ -104,7 +104,7 @@ export function ActivityView() {
                         data-disco-control="activity.open-task"
                         data-task-id={t.id}
                         onClick={() => navigate(surfacePath(t))}
-                        className="group flex w-full items-center gap-inline text-left"
+                        className="group flex min-h-11 w-full items-center gap-inline text-left lg:min-h-0"
                       >
                         <Loader2
                           className="size-4 shrink-0 animate-spin text-accent"

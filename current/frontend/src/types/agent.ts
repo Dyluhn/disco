@@ -515,6 +515,12 @@ export type WSClientFrame =
   | { type: "reject"; action_id?: string }
   | { type: "approve_plan" } // approve the pending plan → start building
   | { type: "request_plan"; content: string } // (re-)enter plan mode with an instruction
+  // F-3 follow-up: the EXPLICIT "accept the finished build as-is" action (the
+  // Mark-done control). The UI states stop-intent; the server treats it as
+  // authoritative — the conversation stays FINISHED, no replan, no kick. The
+  // server-side free-text heuristic remains only for plain typed messages.
+  // Optional `content` is echoed to the log as a user note, never intent-matched.
+  | { type: "accept_finished"; content?: string }
   | { type: "pick_alternative"; option_id: string } // structured recovery: pick a proposed alternative
   | { type: "pause" } // cooperative Build/Agent stop at the next step boundary; resumable
   | { type: "cancel" }

@@ -56,7 +56,7 @@ export function ScheduleList({
             data-disco-control="settings.schedule-delete"
             onClick={() => onDelete(s.schedule_id)}
             aria-label={`Delete schedule ${s.description}`}
-            className="text-text-faint transition-colors hover:text-unsupported"
+            className="inline-flex min-h-11 min-w-11 items-center justify-center text-text-faint transition-colors hover:text-unsupported lg:min-h-0 lg:min-w-0"
           >
             <Trash2 className="size-3.5" aria-hidden />
           </button>

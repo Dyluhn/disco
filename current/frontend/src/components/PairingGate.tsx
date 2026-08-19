@@ -119,7 +119,7 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
         <button
           type="button"
           onClick={() => void boot()}
-          className="self-start rounded-control bg-accent px-body py-hair font-ui text-[0.85rem] font-medium text-bg transition-opacity hover:opacity-90"
+          className="min-h-11 self-start rounded-control bg-accent px-body py-hair font-ui text-[0.85rem] font-medium text-bg transition-opacity hover:opacity-90 lg:min-h-0"
         >
           Retry
         </button>
@@ -155,7 +155,7 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
           placeholder="pairing token"
           aria-label="Pairing token"
           data-disco-control="auth.pairing-token"
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-inline font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-accent"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-inline font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-accent lg:min-h-0"
         />
         {error && (
           <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
@@ -165,7 +165,7 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
         <button
           type="submit"
           disabled={!token.trim() || submitting}
-          className="flex items-center justify-center gap-inline rounded-control bg-accent px-body py-hair font-ui text-[0.85rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="flex min-h-11 items-center justify-center gap-inline rounded-control bg-accent px-body py-hair font-ui text-[0.85rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50 lg:min-h-0"
         >
           {submitting && <Loader2 className="size-4 animate-spin" aria-hidden />}
           {submitting ? "Pairing…" : "Pair browser"}

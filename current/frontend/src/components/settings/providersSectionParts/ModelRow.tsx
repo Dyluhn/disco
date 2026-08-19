@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { ProviderCatalogueModel } from "@/types/models";
 import { contextLabel, priceLabel } from "./helpers";
 import { FIELD } from "./styles";
@@ -60,13 +61,13 @@ export function ModelRow({
               onChange={(e) => onCtxAskChange(e.target.value)}
               aria-label={`Context window for ${model.model_id}`}
               placeholder="context window (tokens)"
-              className={cn(FIELD, "w-44 font-mono text-[0.74rem]")}
+              className={cn(FIELD, "w-44 font-mono text-[0.74rem]", TAP_TARGET)}
             />
             <button
               type="submit"
               data-disco-control="settings.provider-ctx-confirm"
               disabled={!(Number(ctxAskValue) >= 1024)}
-              className="shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50"
+              className="min-h-11 shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50 lg:min-h-0"
             >
               Enable
             </button>

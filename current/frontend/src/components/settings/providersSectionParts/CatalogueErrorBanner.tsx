@@ -1,5 +1,6 @@
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { errorText } from "./helpers";
 import { FIELD } from "./styles";
 
@@ -43,7 +44,7 @@ export function CatalogueErrorBanner({
           onChange={(e) => setManualId(e.target.value)}
           aria-label={`Manual model ID for ${providerLabel}`}
           placeholder="model ID"
-          className={cn(FIELD, "font-mono")}
+          className={cn(FIELD, "font-mono", TAP_TARGET)}
         />
         <input
           value={manualCtx}
@@ -51,13 +52,13 @@ export function CatalogueErrorBanner({
           inputMode="numeric"
           aria-label={`Context window for manual model on ${providerLabel}`}
           placeholder="context window"
-          className={cn(FIELD, "w-36 font-mono")}
+          className={cn(FIELD, "w-36 font-mono", TAP_TARGET)}
         />
         <button
           type="submit"
           data-disco-control="settings.provider-manual-add"
           disabled={!manualId.trim() || !(Number(manualCtx) >= 1024) || addPending}
-          className="shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
+          className="min-h-11 shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50 lg:min-h-0"
         >
           Add model ID
         </button>

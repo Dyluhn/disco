@@ -267,7 +267,7 @@ function ExpandableDetail({ item }: { item: ActivityItem }) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-hair font-mono text-[0.74rem] text-text-faint transition-colors hover:text-text-muted"
+        className="flex min-h-11 w-full items-center gap-hair font-mono text-[0.74rem] text-text-faint transition-colors hover:text-text-muted lg:min-h-0"
       >
         {isOpen ? (
           <ChevronDown className="size-3 shrink-0" aria-hidden />
@@ -330,7 +330,7 @@ function Thought({ text }: { text: string }) {
       )}
       {reasoning && (
         <details className="group mt-hair">
-          <summary className="flex cursor-pointer list-none items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-text-faint hover:text-text-muted">
+          <summary className="flex min-h-11 cursor-pointer list-none items-center gap-hair font-ui text-[0.72rem] uppercase tracking-wide text-text-faint hover:text-text-muted lg:min-h-0">
             <ChevronRight className="size-3 transition-transform group-open:rotate-90" aria-hidden />
             Thinking
           </summary>

@@ -31,13 +31,13 @@ export function VerificationField({
             value={verifyDraft}
             onChange={(event) => onVerifyDraftChange(event.target.value)}
             onKeyDown={onVerifyKeyDown}
-            className="mt-hair w-full rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+            className="mt-hair w-full min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
           />
         </label>
         <button
           type="button"
           onClick={onAddVerifyChecks}
-          className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <Plus className="size-3.5" aria-hidden />
           Add check
@@ -54,7 +54,7 @@ export function VerificationField({
                   type="button"
                   onClick={() => onRemoveVerifyCheck(check)}
                   aria-label={`Remove verify check ${check}`}
-                  className="text-text-faint hover:text-unsupported"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center text-text-faint hover:text-unsupported lg:min-h-0 lg:min-w-0"
                 >
                   <X className="size-3" aria-hidden />
                 </button>
@@ -68,7 +68,7 @@ export function VerificationField({
         <input
           value={finalizer}
           onChange={(event) => onFinalizerChange(event.target.value)}
-          className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+          className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
         />
       </label>
     </section>

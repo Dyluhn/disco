@@ -975,9 +975,11 @@ class TestFrontendPublicApi:
         # v32 adds SectionContent's generated eyebrow slot; v36 adds the
         # bounded visual-inspection route on DefaultLLMRouter; the settings
         # correction adds the explicit capability fields on ProviderSettings
-        # and ModelEntry; records policy adds Entity; MCP diagnostics add McpPool.
+        # and ModelEntry; records policy adds Entity; MCP diagnostics add McpPool;
+        # the launch closeout widens WSClientFrame's `type` Literal with the
+        # explicit accept_finished stop-intent frame.
         assert {row["public_name"] for row in baseline["member_transitions"]} == {
-            "McpPool", "HttpVerifyClient",
+            "WSClientFrame", "McpPool", "HttpVerifyClient",
             "DefaultToolExecutor",
             "ConfigState",
             "ConfigStore",

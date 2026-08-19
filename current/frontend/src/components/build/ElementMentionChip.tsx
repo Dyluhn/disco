@@ -20,7 +20,7 @@ export function ElementMentionChip({
         type="button"
         onClick={onRemove}
         aria-label="Remove mentioned element"
-        className="shrink-0 rounded p-px text-text-faint transition-colors hover:text-text"
+        className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded p-px text-text-faint transition-colors hover:text-text lg:min-h-0 lg:min-w-0"
       >
         <X className="size-3" aria-hidden />
       </button>

@@ -20,7 +20,11 @@ export function ToggleSwitch({
       disabled={busy}
       onClick={onClick}
       className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors disabled:opacity-60",
+        // The pill itself must stay this exact size (it's a recognizable
+        // on/off shape) — the mobile tap target grows via an invisible
+        // ::after hit-slop instead of resizing the visible control. Gone
+        // entirely at lg: (content-none), so desktop is untouched.
+        "relative h-5 w-9 shrink-0 rounded-full border transition-colors after:absolute after:-inset-x-1 after:-inset-y-3 after:content-[''] disabled:opacity-60 lg:after:content-none",
         checked
           ? "border-accent/50 bg-accent/30"
           : "border-hairline bg-surface-2",

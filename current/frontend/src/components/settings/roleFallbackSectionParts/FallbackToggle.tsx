@@ -16,7 +16,7 @@ export function FallbackToggle({
   onChange: (enabled: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-start gap-inline">
+    <label className="flex min-h-11 cursor-pointer items-start gap-inline lg:min-h-0">
       <input
         type="checkbox"
         checked={enabled}

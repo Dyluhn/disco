@@ -1,6 +1,7 @@
 import { useId } from "react";
 import { useSecrets } from "@/hooks/useSecrets";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 
 const DEFAULT_FIELD_CLASS =
   "w-full rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
@@ -50,7 +51,7 @@ export function StoredCredentialField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className={cn(DEFAULT_FIELD_CLASS, inputClassName)}
+        className={cn(DEFAULT_FIELD_CLASS, TAP_TARGET, inputClassName)}
       />
       <datalist id={listId}>
         {names.map((name) => (

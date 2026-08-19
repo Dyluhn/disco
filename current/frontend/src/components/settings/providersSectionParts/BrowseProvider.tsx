@@ -1,5 +1,7 @@
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import {
   useDisableProviderModel,
   useEnableProviderModel,
@@ -129,7 +131,7 @@ export function BrowseProvider({
           onChange={(e) => setQ(e.target.value)}
           aria-label={`Search ${provider.label} models`}
           placeholder="Search models"
-          className={FIELD}
+          className={cn(FIELD, TAP_TARGET)}
         />
       </div>
       {isLoading && (

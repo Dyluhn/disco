@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from disco.core import ConversationStatus, MessageEvent
+from disco.core import MessageEvent
 from disco.core.appkit import BuildBrief
 from disco.core.verification import VerificationRequirementsDirective
 
@@ -13,28 +13,26 @@ from .build_contract_service import BuildContractService
 from .build_kernel import BuildKernel
 from .control_ops import ControlOps
 from .resume_service import ResumeService
-from .run_controller import RunController
-from .run_registry import CancellationRegistry, KernelPinRegistry, RunRegistry
+from .run_registry import KernelPinRegistry
 
 
 class ConversationControlService:
-    """Own the stable kernel pin and all run-control ingress policy."""
+    """Own the stable kernel pin and all run-control ingress policy.
+
+    Live-run lifecycle (pause/cancel/resume/kill) lives on
+    ``RunLifecycleService`` — those operations never take a kernel
+    continuation, so they are not ingress policy.
+    """
 
     def __init__(
         self,
         contract: BuildContractService,
         pins: KernelPinRegistry,
-        runs: RunRegistry,
-        cancellations: CancellationRegistry,
-        controller: RunController,
         controls: ControlOps,
         resume: ResumeService,
     ) -> None:
         self._contract = contract
         self._pins = pins
-        self._runs = runs
-        self._cancellations = cancellations
-        self._controller = controller
         self._controls = controls
         self._resume = resume
 
@@ -128,25 +126,12 @@ class ConversationControlService:
             lambda kernel: kernel.pick_alternative(conversation_id, option_id),
         )
 
-    async def pause(self, conversation_id: str) -> None:
-        await self._controls.pause(conversation_id)
-
-    async def cancel(self, conversation_id: str) -> None:
-        await self._controls.cancel(conversation_id)
-
-    async def resume(self, conversation_id: str) -> None:
-        self._cancellations.clear(conversation_id)
-        self._controller.kick(conversation_id)
+    async def accept_finished(self, conversation_id: str, text: str = "") -> None:
+        """Explicit `accept_finished` frame: authoritative stop-intent on a
+        FINISHED build. Delegates straight to ControlOps (like pause/cancel) —
+        no kernel continuation, because accepting the result runs nothing."""
+        await self._controls.accept_finished(conversation_id, text)
 
     async def resume_conversation(self, conversation_id: str) -> dict[str, object]:
         await self._contract._fold_contract_from_history(conversation_id)
         return dict(await self._resume.resume_conversation(conversation_id))
-
-    async def kill(self, conversation_id: str) -> None:
-        generation = self._runs.generation(conversation_id)
-        self._contract._emit_toolscope_audit_summary(
-            conversation_id,
-            ConversationStatus.IDLE,
-        )
-        self._pins.clear_if_current(conversation_id, generation, self._runs)
-        await self._controls.kill(conversation_id, generation)

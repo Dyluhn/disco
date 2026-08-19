@@ -642,10 +642,15 @@ class TestMappingStatic:
             # Pre-launch fixes: 16 new Python ids across the MCP/probe/image
             # repairs, and two new frontend suites guarding the hidden Assist
             # control (2 files / 4 ids).
-            "python_test_file_count": 848,
-            "python_static_test_id_count": 10442,
-            "typescript_test_file_count": 249,
-            "typescript_static_test_id_count": 1247,
+            # The verify-secret resolution adds four same-file Python ids.
+            # The launch closeout adds one Python test file for the explicit
+            # accept_finished frame (7 static ids; parametrization expands them
+            # to 9 collected package cases) plus two frontend suites for the
+            # Mark-done control (2 files / 3 ids).
+            "python_test_file_count": 849,
+            "python_static_test_id_count": 10449,
+            "typescript_test_file_count": 251,
+            "typescript_static_test_id_count": 1250,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -678,8 +683,9 @@ class TestMappingStatic:
         baseline = test_inventory.load_test_inventory(REPO_ROOT)
         fixtures = baseline["mapping_static"]["fixtures"]
         # The Build Soak client cleanup and shared loop-store cleanup owners are
-        # autouse fixtures.
-        assert len(fixtures) == 179
+        # autouse fixtures. The launch closeout's accept_finished suite adds
+        # one fixture.
+        assert len(fixtures) == 180
         assert fixtures == sorted(fixtures, key=_canonical_row)
         assert len({_canonical_row(row) for row in fixtures}) == len(fixtures)
         assert all(
@@ -775,12 +781,12 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1194, 185)
+            == (1197, 187)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1194
-        assert len(set(frontend["vitest_files_list"])) == 185
+        assert len(set(frontend["vitest_ids_list"])) == 1197
+        assert len(set(frontend["vitest_files_list"])) == 187
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
             assert len(authority["ids"]) == authority["id_count"]
@@ -1038,7 +1044,11 @@ class TestCollectedCounts:
             # Three.js trace correction adds six more in existing files.
             # C18 trace-only projection adds two more in existing files.
             # The records policy correction adds seven non-parametrized package ids.
-            "packages": 10845,
+            # The verify-secret resolution adds four non-parametrized package ids.
+            # The launch closeout adds nine package ids in one new file for the
+            # explicit accept_finished frame (seven definitions; the not-FINISHED
+            # no-op case is parametrized three ways).
+            "packages": 10854,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1168,7 +1178,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12683 == sum(expected.values())
+        assert collected["total"] == 12692 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1184,7 +1194,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12683}
+        assert result == {"collected_total": 12692}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1203,9 +1213,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10442,
-            "typescript_static_ids": 1247,
-            "collected_total": 12683,
+            "python_static_ids": 10449,
+            "typescript_static_ids": 1250,
+            "collected_total": 12692,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

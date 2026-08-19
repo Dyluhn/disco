@@ -27,6 +27,44 @@ export default tseslint.config(
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
   },
 
+  // ---- Tailwind v4 gradient utilities ----------------------------------------
+  // Tailwind v4 renamed the gradient utilities: `bg-gradient-to-*` (v3) became
+  // `bg-linear-to-*`. The old names still pass typecheck, build, and every
+  // test — they simply emit NO CSS under v4, so the element silently loses its
+  // gradient. Until now the only guard was a comment in
+  // `src/components/ScrollFade.tsx`; a comment is not an invariant, so this
+  // rule holds it mechanically. AST-based (string literals + template chunks),
+  // so prose in comments — like ScrollFade's — doesn't trip it.
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Literal[value=/bg-gradient-to-/]",
+          message:
+            "Tailwind v4 renamed `bg-gradient-to-*` to `bg-linear-to-*`; the " +
+            "v3 name compiles but emits no CSS, so the gradient silently " +
+            "disappears. Use `bg-linear-to-*`.",
+        },
+        {
+          selector: "TemplateElement[value.raw=/bg-gradient-to-/]",
+          message:
+            "Tailwind v4 renamed `bg-gradient-to-*` to `bg-linear-to-*`; the " +
+            "v3 name compiles but emits no CSS, so the gradient silently " +
+            "disappears. Use `bg-linear-to-*`.",
+        },
+        {
+          selector: "JSXText[value=/bg-gradient-to-/]",
+          message:
+            "Tailwind v4 renamed `bg-gradient-to-*` to `bg-linear-to-*`; the " +
+            "v3 name compiles but emits no CSS, so the gradient silently " +
+            "disappears. Use `bg-linear-to-*`.",
+        },
+      ],
+    },
+  },
+
   // ---- api/client funnel (Amendment A3) --------------------------------------
   // `src/api/client.ts` states its own invariant in its header: it is "the ONE
   // place that talks to the backend; components never import this — only the api

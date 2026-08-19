@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET_ICON } from "@/lib/tapTarget";
 import {
   useCreateSkill,
   useDeleteSkill,
@@ -34,7 +35,11 @@ function Switch({
       aria-label={label}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
+        // The pill itself must stay this exact size (it's a recognizable
+        // on/off shape) — the mobile tap target grows via an invisible
+        // ::after hit-slop instead of resizing the visible control. Gone
+        // entirely at lg: (content-none), so desktop is untouched.
+        "relative h-5 w-9 shrink-0 rounded-full border transition-colors after:absolute after:-inset-x-1 after:-inset-y-3 after:content-[''] lg:after:content-none",
         checked
           ? "border-accent/50 bg-accent/30"
           : "border-hairline bg-surface-2",
@@ -118,14 +123,14 @@ function SkillEditor({
         onChange={(e) => setDraft({ ...draft, name: e.target.value })}
         placeholder="Skill name (e.g. Yahoo Finance API)"
         aria-label="Skill name"
-        className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent"
+        className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.88rem] text-text outline-none focus:border-accent lg:min-h-0"
       />
       <input
         value={draft.description}
         onChange={(e) => setDraft({ ...draft, description: e.target.value })}
         placeholder="One-line description (what this skill is for)"
         aria-label="Skill description"
-        className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+        className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
       />
       <textarea
         value={draft.body}
@@ -160,7 +165,7 @@ function SkillEditor({
                   })
                 }
                 className={cn(
-                  "rounded-full border px-inline py-hair font-ui text-[0.76rem] transition-colors",
+                  "min-h-11 rounded-full border px-inline py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
                   on
                     ? "border-accent/50 bg-accent/15 text-text"
                     : "border-hairline text-text-faint hover:text-text",
@@ -176,7 +181,7 @@ function SkillEditor({
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+          className="min-h-11 rounded-control px-inline py-hair font-ui text-[0.8rem] text-text-muted hover:text-text lg:min-h-0"
         >
           Cancel
         </button>
@@ -185,7 +190,7 @@ function SkillEditor({
           data-disco-control="settings.skill-save"
           disabled={!canSave || busy}
           onClick={() => onSave(draft)}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.8rem] font-medium text-bg transition-opacity disabled:opacity-40 lg:min-h-0"
         >
           {busy ? "Saving…" : "Save skill"}
         </button>
@@ -224,7 +229,7 @@ export function SkillsSection() {
             type="button"
             data-disco-control="settings.skill-new"
             onClick={() => setCreating(true)}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text lg:min-h-0"
           >
             <Plus className="size-3.5" aria-hidden />
             New skill
@@ -343,7 +348,10 @@ export function SkillsSection() {
                   data-disco-control="settings.skill-edit"
                   onClick={() => setEditingId(s.id)}
                   aria-label={`Edit ${s.name}`}
-                  className="text-text-faint transition-colors hover:text-text"
+                  className={cn(
+                    "text-text-faint transition-colors hover:text-text",
+                    TAP_TARGET_ICON,
+                  )}
                 >
                   <Pencil className="size-3.5" aria-hidden />
                 </button>
@@ -352,7 +360,10 @@ export function SkillsSection() {
                   data-disco-control="settings.skill-delete"
                   onClick={() => remove.mutate(s.id)}
                   aria-label={`Delete ${s.name}`}
-                  className="text-text-faint transition-colors hover:text-unsupported"
+                  className={cn(
+                    "text-text-faint transition-colors hover:text-unsupported",
+                    TAP_TARGET_ICON,
+                  )}
                 >
                   <Trash2 className="size-3.5" aria-hidden />
                 </button>

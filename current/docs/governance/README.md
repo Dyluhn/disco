@@ -14,7 +14,7 @@ When two sources disagree, the higher entry wins.
 | 2 | [`ENGINEERING-STANDARDS.md`](./ENGINEERING-STANDARDS.md) | How work is done. Sealed. |
 | 3 | [`ARCHITECTURE-BOUNDARIES.md`](./ARCHITECTURE-BOUNDARIES.md) | Invariants a change may not break. Sealed. |
 | 4 | [`CAMPAIGN-PLAN.md`](./CAMPAIGN-PLAN.md) | The finite current campaign and its acceptance contract. Change-controlled. |
-| 5 | [`CURRENT-STATE.md`](./CURRENT-STATE.md) / [`CAMPAIGN-STATUS.md`](./CAMPAIGN-STATUS.md) | What is true right now. Mutable. |
+| 5 | [`CURRENT-STATE.md`](./CURRENT-STATE.md) / [`CAMPAIGN-STATUS.md`](./CAMPAIGN-STATUS.md) / [`LAUNCH-CHECKLIST.md`](./LAUNCH-CHECKLIST.md) | What is true right now. Mutable. |
 | 6 | [`ARCHITECTURE-ROADMAP.md`](./ARCHITECTURE-ROADMAP.md) | What comes after the current campaign. Mutable. |
 | 7 | [`RELIABILITY-PATTERNS.md`](./RELIABILITY-PATTERNS.md) / [`SELF-REVIEWS.md`](./SELF-REVIEWS.md) | Learned patterns and the review log. Append-only. |
 | 8 | Design/code contracts in the repository root | Durable design authority for their subject. |
@@ -33,6 +33,7 @@ no status of its own.
 | `ARCHITECTURE-BOUNDARIES.md` | Stable architectural invariants, reconciled against real code. | **SEALED** — hash-gated, owner-only rebaseline. |
 | `ARCHITECTURE-ROADMAP.md` | Post-campaign architectural sequence (Tier A/B/C) and carried-forward research/owner gates. | Mutable. |
 | `CURRENT-STATE.md` | Concise, evidence-linked current tree/branch state and honest known limitations. | Mutable. |
+| `LAUNCH-CHECKLIST.md` | Release readiness, item by item: DONE / PARTIAL / OPEN with evidence pointers. | Mutable. |
 | `CAMPAIGN-PLAN.md` | The finite current campaign: epics, acceptance criteria, scope boundary. | Change-controlled once reconciled. |
 | `CAMPAIGN-STATUS.md` | The standing operational ledger. Current snapshot on top, append-only log below. | Mutable, updated constantly. |
 | `RELIABILITY-PATTERNS.md` | Evidence-backed recurring bug patterns and their structural remedies. | Append-only. |

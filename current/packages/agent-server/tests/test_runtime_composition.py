@@ -41,7 +41,8 @@ def test_run_owners_form_an_explicit_construction_graph() -> None:
     assert runtime._run_kills._resources is runtime._run_resources
     assert runtime._control._controller is runtime.run_controller
     assert runtime.conversation_control._pins is runtime._kernel_pins
-    assert runtime.conversation_control._runs is runtime.run_registry
+    assert runtime._run_lifecycle._pins is runtime._kernel_pins
+    assert runtime._run_lifecycle._runs is runtime.run_registry
     assert runtime._run_finalizer._kernels is runtime._kernel_pins
     assert runtime.run_sweep._completion is runtime._run_finalizer
     assert runtime.deep_research._state is runtime._research_state

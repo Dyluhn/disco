@@ -54,7 +54,7 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
           type="button"
           onClick={handleRun}
           disabled={runPending}
-          className="inline-flex items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {runPending ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -82,14 +82,14 @@ export function WorkflowRunSchedule({ workflow }: { workflow: WorkflowReview }) 
               setCron(event.target.value);
               setScheduleSaved(false);
             }}
-            className="w-[9rem] rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.76rem] text-text outline-none focus:border-accent"
+            className="min-h-11 w-[9rem] rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.76rem] text-text outline-none focus:border-accent lg:min-h-0"
           />
         </label>
         <button
           type="button"
           onClick={handleSchedule}
           disabled={schedulePending || !cron.trim()}
-          className="inline-flex items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex min-h-11 items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
         >
           {schedulePending ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />

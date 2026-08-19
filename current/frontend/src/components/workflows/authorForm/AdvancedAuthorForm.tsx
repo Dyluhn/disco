@@ -57,7 +57,7 @@ export function AdvancedAuthorForm({
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+            className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
           >
             <X className="size-3.5" aria-hidden />
             Close
@@ -90,7 +90,7 @@ export function AdvancedAuthorForm({
                 aria-label="Name"
                 value={draftFields.name}
                 onChange={(event) => draftFields.setName(event.target.value)}
-                className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+                className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
               />
             </label>
             <label className="flex flex-col gap-hair font-ui text-[0.8rem] text-text-muted">
@@ -100,7 +100,7 @@ export function AdvancedAuthorForm({
                 value={draftFields.card}
                 onChange={(event) => draftFields.setCard(event.target.value)}
                 rows={3}
-                className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"
+                className="min-h-11 rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent lg:min-h-0"
               />
               <span className={draftFields.cardHasBlankLine ? "text-unsupported" : "text-text-faint"}>
                 One paragraph only; blank lines are rejected.
@@ -181,7 +181,7 @@ export function AdvancedAuthorForm({
           <button
             type="submit"
             disabled={!canSubmit}
-            className="inline-flex w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex min-h-11 w-fit items-center justify-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-accent/60 hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:min-h-0"
           >
             {authorIsPending ? (
               <Loader2 className="size-3.5 animate-spin" aria-hidden />

@@ -12,7 +12,7 @@ import {
 import { ProbeButton } from "./ProbeButton";
 
 const field =
-  "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
+  "min-h-11 w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong lg:min-h-0";
 
 // An env-var-style name (matches the server's validation). Shown inline so the
 // user knows WHY a name was rejected before the request round-trips.
@@ -71,7 +71,7 @@ function StoredKeyRow({
               setEditing(false);
               setDraft("");
             }}
-            className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+            className="min-h-11 shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60 lg:min-h-0"
           >
             Save
           </button>
@@ -82,7 +82,7 @@ function StoredKeyRow({
               setDraft("");
             }}
             aria-label="Cancel edit"
-            className="shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted hover:text-text"
+            className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted hover:text-text lg:min-h-0 lg:min-w-0"
           >
             <X className="size-3.5" aria-hidden />
           </button>
@@ -117,7 +117,7 @@ function StoredKeyRow({
           <button
             type="button"
             onClick={() => setEditing(true)}
-            className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
+            className="flex min-h-11 items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text lg:min-h-0"
           >
             <Pencil className="size-3" aria-hidden />{" "}
             {locked ? "Re-enter" : "Edit"}
@@ -126,7 +126,7 @@ function StoredKeyRow({
             type="button"
             data-disco-control="settings.provider-key-clear"
             onClick={onClear}
-            className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+            className="min-h-11 font-ui text-[0.8rem] text-text-muted hover:text-unsupported lg:min-h-0"
           >
             Clear
           </button>
@@ -300,7 +300,7 @@ export function ProviderKeysSection() {
                     <button
                       type="button"
                       onClick={() => prefill(n)}
-                      className="font-ui text-[0.78rem] text-accent hover:underline"
+                      className="min-h-11 font-ui text-[0.78rem] text-accent hover:underline lg:min-h-0"
                     >
                       Add key
                     </button>
@@ -334,7 +334,7 @@ export function ProviderKeysSection() {
             type="submit"
             data-disco-control="settings.provider-key-add"
             disabled={setSecret.isPending || !name.trim() || !value.trim()}
-            className="shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60"
+            className="min-h-11 shrink-0 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg disabled:opacity-60 lg:min-h-0"
           >
             {setSecret.isPending ? "Saving…" : "Add key"}
           </button>

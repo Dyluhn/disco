@@ -122,6 +122,7 @@ if TYPE_CHECKING:
     from .project_runtime_service import ProjectRuntimeService
     from .resume_service import ResumeService
     from .run_controller import RunController
+    from .run_lifecycle_service import RunLifecycleService
     from .run_registry import RunRegistry
     from .run_stranded_sweep import RunStrandedSweep
     from .run_supervisor import (
@@ -235,6 +236,7 @@ class ConversationRuntime:
         _loop_factory: BuildLoopFactory
         _resume: ResumeService
         _run_execution: RunPersistenceSupervisor
+        _run_lifecycle: RunLifecycleService
         _run_supervisor: RunSupervisor
         _secret_store: SecretStore
         _skill_store: SkillStore
@@ -467,16 +469,16 @@ class ConversationRuntime:
         await self.conversation_control.pick_alternative(conversation_id, option_id)
 
     async def pause(self, conversation_id: str) -> None:
-        await self.conversation_control.pause(conversation_id)
+        await self._run_lifecycle.pause(conversation_id)
 
     async def cancel(self, conversation_id: str) -> None:
-        await self.conversation_control.cancel(conversation_id)
+        await self._run_lifecycle.cancel(conversation_id)
 
     async def resume(self, conversation_id: str) -> None:
-        await self.conversation_control.resume(conversation_id)
+        await self._run_lifecycle.resume(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
-        await self.conversation_control.kill(conversation_id)
+        await self._run_lifecycle.kill(conversation_id)
 
     async def aclose(self) -> None:
         await self._run_supervisor.cancel_runs()

@@ -48,7 +48,7 @@ function isMalformed(f: TweakFieldView): boolean {
   return false;
 }
 
-const INPUT_CLS = "rounded border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.74rem] text-text";
+const INPUT_CLS = "min-h-11 rounded border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.74rem] text-text lg:min-h-0";
 
 function Unsupported() {
   return <span className="font-ui text-[0.72rem] text-text-faint">unsupported control</span>;
@@ -101,6 +101,7 @@ function Control({
           step={field.step}
           value={typeof value === "number" ? value : field.min}
           onChange={(e) => onTweak(key, Number(e.target.value))}
+          className="min-h-11 lg:min-h-0"
         />
       );
     case "color":
@@ -110,11 +111,12 @@ function Control({
           aria-label={label}
           value={typeof value === "string" ? value : "#000000"}
           onChange={(e) => onTweak(key, e.target.value)}
+          className="min-h-11 min-w-11 lg:min-h-0 lg:min-w-0"
         />
       );
     case "palette":
       return (
-        <div role="group" aria-label={label} className="flex gap-hair">
+        <div role="group" aria-label={label} className="flex flex-wrap gap-hair">
           {field.colors!.map((c) => (
             <button
               key={c}
@@ -124,7 +126,7 @@ function Control({
               onClick={() => onTweak(key, c)}
               style={{ backgroundColor: c }}
               className={cn(
-                "h-5 w-5 rounded-control border",
+                "h-11 w-11 rounded-control border lg:h-5 lg:w-5",
                 value === c ? "ring-2 ring-accent" : "border-hairline",
               )}
             />

@@ -1,5 +1,5 @@
 // Capture the Build surface in both themes against the offline fixture trace.
-// Usage: dev server on :5173, then `node development/scripts/screenshots.mjs`.
+// Usage: dev server on :5173, then `node scripts/screenshots.mjs`.
 // NOTE: uses Playwright's Firefox — the bundled chromium fails to rasterize text on
 // this host (renders blank glyphs); Firefox uses the system fonts cleanly.
 import { firefox } from "playwright";

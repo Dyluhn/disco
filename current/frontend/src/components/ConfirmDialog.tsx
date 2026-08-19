@@ -51,7 +51,7 @@ export function ConfirmDialog({
                 type="button"
                 data-disco-control="confirm-dialog.cancel"
                 data-confirm-context={confirmContext}
-                className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+                className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
               >
                 Cancel
               </button>
@@ -64,7 +64,7 @@ export function ConfirmDialog({
               }}
               data-disco-control="confirm-dialog.confirm"
               data-confirm-context={confirmContext}
-              className="rounded-control bg-unsupported px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
+              className="min-h-11 rounded-control bg-unsupported px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 lg:min-h-0"
             >
               {confirmLabel}
             </button>

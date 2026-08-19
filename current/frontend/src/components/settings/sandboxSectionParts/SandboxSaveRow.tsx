@@ -35,7 +35,7 @@ export function SandboxSaveRow({
           data-disco-control="settings.sandbox-save"
           onClick={onSave}
           disabled={!dirty || savePending || testPending}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50 lg:min-h-0"
         >
           {savePending ? "Saving…" : dirty ? "Save sandbox" : "Saved"}
         </button>
@@ -47,7 +47,7 @@ export function SandboxSaveRow({
             data-disco-control="settings.sandbox-test"
             onClick={onTest}
             disabled={testPending || savePending}
-            className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-50"
+            className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text transition-colors hover:border-hairline-strong disabled:opacity-50 lg:min-h-0"
           >
             {testPending ? "Testing…" : "Test connection"}
           </button>

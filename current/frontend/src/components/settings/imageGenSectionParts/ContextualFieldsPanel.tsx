@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { OpenRouterModel } from "@/types/models";
 import { ComfyWorkflowField } from "./ComfyWorkflowField";
 import { ModelField } from "./ModelField";
@@ -79,7 +81,7 @@ export function ContextualFieldsPanel({
                 ? "https://api.openai.com  — or ImageRouter's full URL https://api.imagerouter.io/v1/openai/images/generations"
                 : "http://host:8188  (required for ComfyUI)"
             }
-            className={FIELD_CLASS}
+            className={cn(FIELD_CLASS, TAP_TARGET)}
           />
         </label>
       )}

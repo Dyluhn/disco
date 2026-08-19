@@ -1,3 +1,5 @@
+import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { FIELD_CLASS } from "./styles";
 
 export function EndpointUrlField({
@@ -28,7 +30,7 @@ export function EndpointUrlField({
             ? "https://api.openai.com  (empty = OpenAI default)"
             : "http://host:port  (empty = server default)"
         }
-        className={FIELD_CLASS}
+        className={cn(FIELD_CLASS, TAP_TARGET)}
       />
     </label>
   );

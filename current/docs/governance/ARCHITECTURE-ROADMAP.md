@@ -134,10 +134,13 @@ weaken the current Build reliability campaign.**
   is, replay follows for free. It should not be reverse-engineered to serve a
   diagnostic convenience.
 
-- **Architecture-budget debt.** **[PLANNED]** — `development/scripts/check_arch_budget.py`
-  fails on `stable-main` itself with 26 violations. Epic 5 requires it to pass,
-  so it needs either honest decomposition or an explicitly justified, owner-
-  visible cap rebaseline. See `CAMPAIGN-STATUS.md`.
+- **Architecture-budget debt.** **[OBSERVED]** — resolved. The historical 26
+  violations on `stable-main` were worked off rather than rebaselined:
+  `development/architecture/debt.json` is empty (`[]`), and
+  `development/scripts/check_arch_budget.py` passes on `main` — 0 active debt
+  rows, 0 violations across 2222 Python and 592 TypeScript modules (verified
+  2026-08-19 at `f724188a`). The check remains a landing gate; new debt rows
+  need the same honest-decomposition-or-owner-visible-rebaseline treatment.
 
 ## Accepted planning backbone
 

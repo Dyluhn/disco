@@ -88,6 +88,7 @@ from .resume_service import ResumeService
 from .run_completion import DeferredRunCompletion
 from .run_controller import RunController
 from .run_kill_service import RunKillService
+from .run_lifecycle_service import RunLifecycleService
 from .run_registry import (
     CancellationRegistry,
     KernelPinRegistry,
@@ -573,11 +574,16 @@ def _wire_run_control(rt: _RuntimeWiringSchema) -> DeferredRunCompletion:
     rt.conversation_control = ConversationControlService(
         rt.contract,
         rt._kernel_pins,
+        rt._control,
+        rt._resume,
+    )
+    rt._run_lifecycle = RunLifecycleService(
+        rt.contract,
+        rt._kernel_pins,
         rt.run_registry,
         rt._cancellations,
         rt.run_controller,
         rt._control,
-        rt._resume,
     )
     return completion
 

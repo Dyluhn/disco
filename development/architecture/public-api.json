@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
+  "source_identity": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -4048,7 +4048,7 @@
             "option_id: str | None",
             "selection_ref: dict[str, Any] | None",
             "steer_text: str | None",
-            "type: Literal['send_message', 'confirm', 'reject', 'steer', 'pause', 'resume', 'cancel', 'ping', 'approve_plan', 'request_plan', 'pick_alternative', 'inject_source', 'selection_edit']",
+            "type: Literal['send_message', 'confirm', 'reject', 'steer', 'pause', 'resume', 'cancel', 'ping', 'approve_plan', 'request_plan', 'accept_finished', 'pick_alternative', 'inject_source', 'selection_edit']",
             "verification_requirements: VerificationRequirementsDirective | None"
           ]
         },
@@ -22964,7 +22964,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "BuildStream",
-          "signature": "export interface BuildStream extends BuildStreamState { pendingAction: ActionEvent | null; pendingAlternatives: AlternativesEvent | null; /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */ pendingQuestion: MessageEvent | null; /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */ pendingClarify: ClarifyEvent | null; /** The structured intake event, when status is AWAITING_USER_QUESTION via questions_v2. */ pendingQuestionsV2: QuestionsV2Event | null; plan: PlanView | null; planProgress: Map<number, StepState>; buildProgress: Map<number, StepState>; /** Honest provider-outage label for the current parked run, or null. */ driverOutage: DriverOutage | null; awaitingPlan: boolean; awaitingDecision: boolean; awaitingQuestion: boolean; confirm: () => void; reject: () => void; cancel: () => void; steer: (text: string) => void; /** P8 click-to-edit: apply a scoped change to exactly the selected element. */ selectionEdit: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; /** Answer the agent's free-form question \u2014 resumes the loop (alias of steer, * named for the Ask-gate so the AskPanel reads clearly). */ answer: (text: string) => void; approvePlan: () => void; requestPlan: (text: string) => void; pickAlternative: (optionId: string) => void; resume: () => void; /** True when the conversation is in a resumable state (PAUSED, or IDLE with an * unfinished approved plan). Used by the parent to decide whether to show the * Resume button for the interrupted-with-unfinished-plan case (BP-12). */ canResume: boolean; }"
+          "signature": "export interface BuildStream extends BuildStreamState { pendingAction: ActionEvent | null; pendingAlternatives: AlternativesEvent | null; /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */ pendingQuestion: MessageEvent | null; /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */ pendingClarify: ClarifyEvent | null; /** The structured intake event, when status is AWAITING_USER_QUESTION via questions_v2. */ pendingQuestionsV2: QuestionsV2Event | null; plan: PlanView | null; planProgress: Map<number, StepState>; buildProgress: Map<number, StepState>; /** Honest provider-outage label for the current parked run, or null. */ driverOutage: DriverOutage | null; awaitingPlan: boolean; awaitingDecision: boolean; awaitingQuestion: boolean; confirm: () => void; reject: () => void; cancel: () => void; steer: (text: string) => void; /** P8 click-to-edit: apply a scoped change to exactly the selected element. */ selectionEdit: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; /** Answer the agent's free-form question \u2014 resumes the loop (alias of steer, * named for the Ask-gate so the AskPanel reads clearly). */ answer: (text: string) => void; approvePlan: () => void; requestPlan: (text: string) => void; /** Explicit \"accept the finished build as-is\" (the Mark-done control): sends the * authoritative `accept_finished` frame \u2014 the server keeps the conversation * FINISHED with no replan, instead of guessing stop-intent from typed prose. */ acceptFinished: () => void; pickAlternative: (optionId: string) => void; resume: () => void; /** True when the conversation is in a resumable state (PAUSED, or IDLE with an * unfinished approved plan). Used by the parent to decide whether to show the * Resume button for the interrupted-with-unfinished-plan case (BP-12). */ canResume: boolean; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -25383,7 +25383,7 @@
         {
           "kind": "TypeAliasDeclaration",
           "name": "WSClientFrame",
-          "signature": "export type WSClientFrame = | { type: \"send_message\"; content: string; context?: string; build_brief?: Record<string, never> } | { type: \"steer\"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context) | { type: \"confirm\"; action_id?: string } | { type: \"reject\"; action_id?: string } | { type: \"approve_plan\" } // approve the pending plan \u2192 start building | { type: \"request_plan\"; content: string } // (re-)enter plan mode with an instruction | { type: \"pick_alternative\"; option_id: string } // structured recovery: pick a proposed alternative | { type: \"pause\" } // cooperative Build/Agent stop at the next step boundary; resumable | { type: \"cancel\" } | { type: \"resume\" } // continue a stopped/incomplete run (explicit, never on open) | { type: \"ping\" } | { type: \"inject_source\"; inject_source_text: string } // P8: the user clicked one preview element and described a change. The host // builds the scoped-edit directive (core/selection_edit.py) and steers the loop. | { type: \"selection_edit\"; selection_ref: SelectionRef; edit_instruction: string; human_label?: string; };"
+          "signature": "export type WSClientFrame = | { type: \"send_message\"; content: string; context?: string; build_brief?: Record<string, never> } | { type: \"steer\"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context) | { type: \"confirm\"; action_id?: string } | { type: \"reject\"; action_id?: string } | { type: \"approve_plan\" } // approve the pending plan \u2192 start building | { type: \"request_plan\"; content: string } // (re-)enter plan mode with an instruction // F-3 follow-up: the EXPLICIT \"accept the finished build as-is\" action (the // Mark-done control). The UI states stop-intent; the server treats it as // authoritative \u2014 the conversation stays FINISHED, no replan, no kick. The // server-side free-text heuristic remains only for plain typed messages. // Optional `content` is echoed to the log as a user note, never intent-matched. | { type: \"accept_finished\"; content?: string } | { type: \"pick_alternative\"; option_id: string } // structured recovery: pick a proposed alternative | { type: \"pause\" } // cooperative Build/Agent stop at the next step boundary; resumable | { type: \"cancel\" } | { type: \"resume\" } // continue a stopped/incomplete run (explicit, never on open) | { type: \"ping\" } | { type: \"inject_source\"; inject_source_text: string } // P8: the user clicked one preview element and described a change. The host // builds the scoped-edit directive (core/selection_edit.py) and steers the loop. | { type: \"selection_edit\"; selection_ref: SelectionRef; edit_instruction: string; human_label?: string; };"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -26190,8 +26190,8 @@
     },
     {
       "path": "current/frontend/package.json",
-      "sha256": "a563167291cb92389e163fc61f3459f2083c40720810b9d49c0bc459db2a4e10",
-      "bytes": 2522
+      "sha256": "05d4abcb3541e4df0c880d83b060d3991f3bd995f34fdbbdcee1343744469f21",
+      "bytes": 2498
     },
     {
       "path": "current/packages/agent-server/pyproject.toml",
@@ -30013,6 +30013,30 @@
       "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
       "target_sha256": "2dce15c744272407bcfd9e16df2d10f51ead0a0c83b0e1c16dedcf45a88b99b2",
       "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useBuildStream.ts",
+      "public_name": "BuildStream",
+      "target_sha256": "2a40dd112f24c4d2ce9006483fefb18b9c8f7088dc31b95ab153960de1de0460",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "reason": "BuildStream gains acceptFinished(): the hook seam the Mark-done control uses to send the authoritative accept_finished frame."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSClientFrame",
+      "target_sha256": "362af48e6f6edb60c8d840a34244ad836bd540ea0afd3e5fa3206a0a5b3c9413",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "reason": "The client frame union gains { type: \"accept_finished\"; content?: string }: the Mark-done control's authoritative stop-intent frame, mirroring the Python wire union."
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "WSClientFrame",
+      "target_sha256": "8f5069108ed4ae9ef30db6e814b16b4752961bd5fcdab636de391d6fd1b2f4bc",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "reason": "WSClientFrame's type Literal gains 'accept_finished': the UI's Mark-done control states stop-intent explicitly on a FINISHED build instead of the ship-it prose heuristic guessing it from free text."
     }
   ],
   "compatibility_bridges": [],
@@ -30228,6 +30252,23 @@
       "owner_package": "PKG-19-V30-INTEGRATION",
       "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
       "accepting_receipt": "2026-07-28/STATUS.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "WSClientFrame",
+      "origin": "disco.core.wire.WSClientFrame",
+      "removed_members": [
+        "type: Literal['send_message', 'confirm', 'reject', 'steer', 'pause', 'resume', 'cancel', 'ping', 'approve_plan', 'request_plan', 'pick_alternative', 'inject_source', 'selection_edit']"
+      ],
+      "added_members": [
+        "type: Literal['send_message', 'confirm', 'reject', 'steer', 'pause', 'resume', 'cancel', 'ping', 'approve_plan', 'request_plan', 'accept_finished', 'pick_alternative', 'inject_source', 'selection_edit']"
+      ],
+      "old_signature_sha256": "bc8b67f32b7e0c4237249cc5f005c04be0ab60340387dd1e80c8dadad3b67538",
+      "new_signature_sha256": "e500701ebb15cecceae359ffdc2b86028e03d6b026714798c408ce4ecc411588",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "accepting_commit": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
+      "accepting_receipt": "automation/runtime/boundary-20260819-launch-closeout/BOUNDARY-RECEIPT.md"
     },
     {
       "surface": "python",
@@ -30660,6 +30701,32 @@
       "owner_package": "PKG-03-EDIT-EVIDENCE",
       "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
       "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useBuildStream.ts",
+      "public_name": "BuildStream",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface BuildStream extends BuildStreamState { pendingAction: ActionEvent | null; pendingAlternatives: AlternativesEvent | null; /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */ pendingQuestion: MessageEvent | null; /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */ pendingClarify: ClarifyEvent | null; /** The structured intake event, when status is AWAITING_USER_QUESTION via questions_v2. */ pendingQuestionsV2: QuestionsV2Event | null; plan: PlanView | null; planProgress: Map<number, StepState>; buildProgress: Map<number, StepState>; /** Honest provider-outage label for the current parked run, or null. */ driverOutage: DriverOutage | null; awaitingPlan: boolean; awaitingDecision: boolean; awaitingQuestion: boolean; confirm: () => void; reject: () => void; cancel: () => void; steer: (text: string) => void; /** P8 click-to-edit: apply a scoped change to exactly the selected element. */ selectionEdit: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; /** Answer the agent's free-form question \u2014 resumes the loop (alias of steer, * named for the Ask-gate so the AskPanel reads clearly). */ answer: (text: string) => void; approvePlan: () => void; requestPlan: (text: string) => void; pickAlternative: (optionId: string) => void; resume: () => void; /** True when the conversation is in a resumable state (PAUSED, or IDLE with an * unfinished approved plan). Used by the parent to decide whether to show the * Resume button for the interrupted-with-unfinished-plan case (BP-12). */ canResume: boolean; }",
+      "new_signature": "export interface BuildStream extends BuildStreamState { pendingAction: ActionEvent | null; pendingAlternatives: AlternativesEvent | null; /** The agent's free-form question, when status is AWAITING_USER_QUESTION. */ pendingQuestion: MessageEvent | null; /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */ pendingClarify: ClarifyEvent | null; /** The structured intake event, when status is AWAITING_USER_QUESTION via questions_v2. */ pendingQuestionsV2: QuestionsV2Event | null; plan: PlanView | null; planProgress: Map<number, StepState>; buildProgress: Map<number, StepState>; /** Honest provider-outage label for the current parked run, or null. */ driverOutage: DriverOutage | null; awaitingPlan: boolean; awaitingDecision: boolean; awaitingQuestion: boolean; confirm: () => void; reject: () => void; cancel: () => void; steer: (text: string) => void; /** P8 click-to-edit: apply a scoped change to exactly the selected element. */ selectionEdit: (ref: SelectionRef, instruction: string, humanLabel?: string) => void; /** Answer the agent's free-form question \u2014 resumes the loop (alias of steer, * named for the Ask-gate so the AskPanel reads clearly). */ answer: (text: string) => void; approvePlan: () => void; requestPlan: (text: string) => void; /** Explicit \"accept the finished build as-is\" (the Mark-done control): sends the * authoritative `accept_finished` frame \u2014 the server keeps the conversation * FINISHED with no replan, instead of guessing stop-intent from typed prose. */ acceptFinished: () => void; pickAlternative: (optionId: string) => void; resume: () => void; /** True when the conversation is in a resumable state (PAUSED, or IDLE with an * unfinished approved plan). Used by the parent to decide whether to show the * Resume button for the interrupted-with-unfinished-plan case (BP-12). */ canResume: boolean; }",
+      "old_target_sha256": "37d017de3cf178bcce0d48841fc413473228404f289c9aaf9ee40e7c0f4d2f22",
+      "new_target_sha256": "2a40dd112f24c4d2ce9006483fefb18b9c8f7088dc31b95ab153960de1de0460",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "accepting_commit": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
+      "accepting_receipt": "automation/runtime/boundary-20260819-launch-closeout/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/agent.ts",
+      "public_name": "WSClientFrame",
+      "declaration_kind": "TypeAliasDeclaration",
+      "old_signature": "export type WSClientFrame = | { type: \"send_message\"; content: string; context?: string; build_brief?: Record<string, never> } | { type: \"steer\"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context) | { type: \"confirm\"; action_id?: string } | { type: \"reject\"; action_id?: string } | { type: \"approve_plan\" } // approve the pending plan \u2192 start building | { type: \"request_plan\"; content: string } // (re-)enter plan mode with an instruction | { type: \"pick_alternative\"; option_id: string } // structured recovery: pick a proposed alternative | { type: \"pause\" } // cooperative Build/Agent stop at the next step boundary; resumable | { type: \"cancel\" } | { type: \"resume\" } // continue a stopped/incomplete run (explicit, never on open) | { type: \"ping\" } | { type: \"inject_source\"; inject_source_text: string } // P8: the user clicked one preview element and described a change. The host // builds the scoped-edit directive (core/selection_edit.py) and steers the loop. | { type: \"selection_edit\"; selection_ref: SelectionRef; edit_instruction: string; human_label?: string; };",
+      "new_signature": "export type WSClientFrame = | { type: \"send_message\"; content: string; context?: string; build_brief?: Record<string, never> } | { type: \"steer\"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context) | { type: \"confirm\"; action_id?: string } | { type: \"reject\"; action_id?: string } | { type: \"approve_plan\" } // approve the pending plan \u2192 start building | { type: \"request_plan\"; content: string } // (re-)enter plan mode with an instruction // F-3 follow-up: the EXPLICIT \"accept the finished build as-is\" action (the // Mark-done control). The UI states stop-intent; the server treats it as // authoritative \u2014 the conversation stays FINISHED, no replan, no kick. The // server-side free-text heuristic remains only for plain typed messages. // Optional `content` is echoed to the log as a user note, never intent-matched. | { type: \"accept_finished\"; content?: string } | { type: \"pick_alternative\"; option_id: string } // structured recovery: pick a proposed alternative | { type: \"pause\" } // cooperative Build/Agent stop at the next step boundary; resumable | { type: \"cancel\" } | { type: \"resume\" } // continue a stopped/incomplete run (explicit, never on open) | { type: \"ping\" } | { type: \"inject_source\"; inject_source_text: string } // P8: the user clicked one preview element and described a change. The host // builds the scoped-edit directive (core/selection_edit.py) and steers the loop. | { type: \"selection_edit\"; selection_ref: SelectionRef; edit_instruction: string; human_label?: string; };",
+      "old_target_sha256": "c39ef7659c6168a9009641ab16c13dcf4e51f59b6ec66c62e4ddda1077f98190",
+      "new_target_sha256": "362af48e6f6edb60c8d840a34244ad836bd540ea0afd3e5fa3206a0a5b3c9413",
+      "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
+      "accepting_commit": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
+      "accepting_receipt": "automation/runtime/boundary-20260819-launch-closeout/BOUNDARY-RECEIPT.md"
     },
     {
       "surface": "frontend",

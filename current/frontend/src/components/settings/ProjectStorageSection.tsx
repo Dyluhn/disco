@@ -119,7 +119,7 @@ export function ProjectStorageSection() {
             placeholder="/home/you/disco-projects"
             spellCheck={false}
             onChange={(e) => setDraft(e.target.value)}
-            className="flex-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong"
+            className="min-h-11 flex-1 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-mono text-[0.82rem] text-text outline-none transition-colors focus:border-hairline-strong lg:min-h-0"
           />
           <PathPickerDialog
             initialPath={draft}
@@ -127,7 +127,7 @@ export function ProjectStorageSection() {
             trigger={
               <button
                 type="button"
-                className="flex items-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+                className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
               >
                 <FolderSearch className="size-3.5" aria-hidden />
                 Browse…
@@ -179,7 +179,7 @@ export function ProjectStorageSection() {
             save.mutate({ projects_root: draft.trim(), status: "unset" })
           }
           disabled={!dirty || save.isPending}
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="min-h-11 rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50 lg:min-h-0"
         >
           {save.isPending ? "Saving…" : dirty ? "Save path" : "Saved"}
         </button>

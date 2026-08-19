@@ -89,7 +89,7 @@ export function TerminalPane({
             type="button"
             onClick={() => setSelectedName(s.name)}
             className={cn(
-              "flex shrink-0 items-center gap-hair rounded px-inline py-px font-mono text-[0.72rem] transition-colors",
+              "flex min-h-11 shrink-0 items-center gap-hair rounded px-inline py-px font-mono text-[0.72rem] transition-colors lg:min-h-0",
               s.name === selectedName
                 ? "bg-white/10 text-text"
                 : "text-text-faint hover:text-text",

@@ -47,7 +47,7 @@ export function McpMountsField({
                   aria-label={`MCP mount ${index + 1} server`}
                   value={mount.server}
                   onChange={(event) => onUpdateServer(index, event.target.value)}
-                  className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+                  className="min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent lg:min-h-0"
                 >
                   {mcpServers.map((item) => (
                     <option key={item.server} value={item.server}>
@@ -74,7 +74,7 @@ export function McpMountsField({
                   type="button"
                   onClick={() => onRemove(index)}
                   aria-label={`Remove MCP mount ${index + 1}`}
-                  className="inline-flex items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted hover:text-unsupported"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-control border border-hairline px-inline py-hair text-text-muted hover:text-unsupported lg:min-h-0 lg:min-w-0"
                 >
                   <Trash2 className="size-4" aria-hidden />
                 </button>
@@ -93,7 +93,7 @@ export function McpMountsField({
         <button
           type="button"
           onClick={() => onAdd(mcpServers[0]?.server)}
-          className="inline-flex w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text"
+          className="inline-flex min-h-11 w-fit items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:text-text lg:min-h-0"
         >
           <Plus className="size-3.5" aria-hidden />
           Add MCP mount

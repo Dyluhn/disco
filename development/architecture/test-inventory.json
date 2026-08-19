@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
+  "source_identity": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
   "collected": {
     "counts": {
-      "packages": 10845,
+      "packages": 10854,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12683,
+    "total": 12692,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1093,6 +1093,15 @@
         "packages/agent-server/tests/test_capture_skip_is_observable.py::test_it_says_nothing_was_persisted",
         "packages/agent-server/tests/test_capture_skip_is_observable.py::test_the_capture_path_reports_through_it",
         "packages/agent-server/tests/test_capture_skip_is_observable.py::test_the_reporter_returns_the_skip_value_so_the_call_site_stays_one_line",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[AWAITING_PLAN_APPROVAL]",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[None]",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[RUNNING]",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_stays_finished_no_events_without_text",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_conflicting_prose",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_ship_it_prose_too",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_same_prose_via_request_plan_still_replans",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_dispatches_to_conversation_control",
+        "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_refused_for_imported_conversation",
         "packages/agent-server/tests/test_control_ops_ship_it.py::test_bare_publish_post_finish_still_replans",
         "packages/agent-server/tests/test_control_ops_ship_it.py::test_is_ship_it_intent_matches_stop_phrases[  publish it and be done  ]",
         "packages/agent-server/tests/test_control_ops_ship_it.py::test_is_ship_it_intent_matches_stop_phrases[Publish It And Be Done]",
@@ -12704,9 +12713,9 @@
     }
   },
   "mapping_static": {
-    "identity": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
-    "python_test_file_count": 848,
-    "python_static_test_id_count": 10442,
+    "identity": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
+    "python_test_file_count": 849,
+    "python_static_test_id_count": 10449,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12853,6 +12862,7 @@
       "packages/agent-server/tests/test_build_surface.py",
       "packages/agent-server/tests/test_capture_retains_session_authority.py",
       "packages/agent-server/tests/test_capture_skip_is_observable.py",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py",
       "packages/agent-server/tests/test_control_ops_ship_it.py",
       "packages/agent-server/tests/test_conversation_delete_cleanup.py",
       "packages/agent-server/tests/test_conversation_title_sanitize.py",
@@ -15439,6 +15449,13 @@
       "packages/agent-server/tests/test_capture_skip_is_observable.py::test_it_says_nothing_was_persisted",
       "packages/agent-server/tests/test_capture_skip_is_observable.py::test_the_capture_path_reports_through_it",
       "packages/agent-server/tests/test_capture_skip_is_observable.py::test_the_reporter_returns_the_skip_value_so_the_call_site_stays_one_line",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_stays_finished_no_events_without_text",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_conflicting_prose",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_ship_it_prose_too",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_same_prose_via_request_plan_still_replans",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_dispatches_to_conversation_control",
+      "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_refused_for_imported_conversation",
       "packages/agent-server/tests/test_control_ops_ship_it.py::test_bare_publish_post_finish_still_replans",
       "packages/agent-server/tests/test_control_ops_ship_it.py::test_is_ship_it_intent_matches_stop_phrases",
       "packages/agent-server/tests/test_control_ops_ship_it.py::test_is_ship_it_intent_rejects_ambiguous_and_change_intents",
@@ -24001,8 +24018,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 249,
-    "typescript_static_test_id_count": 1247,
+    "typescript_test_file_count": 251,
+    "typescript_static_test_id_count": 1250,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24083,6 +24100,7 @@
       "frontend/src/api/downloadProject.binding.test.ts",
       "frontend/src/api/projects.import.test.ts",
       "frontend/src/components/AnswerDocument.test.tsx",
+      "frontend/src/components/BuildSurface.markdone.test.tsx",
       "frontend/src/components/BuildSurface.recovery.test.tsx",
       "frontend/src/components/BuildSurface.scroll.test.tsx",
       "frontend/src/components/BuildSurface.test.tsx",
@@ -24188,6 +24206,7 @@
       "frontend/src/hooks/useBuild.lazy.test.tsx",
       "frontend/src/hooks/useBuild.modelswitch.test.tsx",
       "frontend/src/hooks/useBuildNotifications.test.ts",
+      "frontend/src/hooks/useBuildStream.acceptFinished.test.ts",
       "frontend/src/hooks/useBuildStream.agent.test.ts",
       "frontend/src/hooks/useBuildStream.askgate.test.ts",
       "frontend/src/hooks/useBuildStream.driverOutage.test.ts",
@@ -24428,6 +24447,8 @@
       "frontend/src/components/AnswerDocument.test.tsx::WALK-01: the blinking caret is present alongside the markdown output",
       "frontend/src/components/AnswerDocument.test.tsx::does not render the streaming block once it has moved into blocks[]",
       "frontend/src/components/AnswerDocument.test.tsx::renders plain streaming text without a markdown token",
+      "frontend/src/components/BuildSurface.markdone.test.tsx::emits the explicit signal (b.acceptFinished), never the free-text replan path",
+      "frontend/src/components/BuildSurface.markdone.test.tsx::renders only on FINISHED \u2014 a live or merely-settled run has nothing to accept",
       "frontend/src/components/BuildSurface.recovery.test.tsx::closes the blank popup when an isolated handoff cannot be minted",
       "frontend/src/components/BuildSurface.recovery.test.tsx::exposes the model picker in the ERROR state so the user can switch before retrying",
       "frontend/src/components/BuildSurface.recovery.test.tsx::falls back to a TRUNCATED first task when no stored title exists",
@@ -25045,6 +25066,7 @@
       "frontend/src/hooks/useBuildNotifications.test.ts::does not request permission outside a user gesture",
       "frontend/src/hooks/useBuildNotifications.test.ts::fires an OS Notification when permission is granted and the tab is hidden",
       "frontend/src/hooks/useBuildNotifications.test.ts::restores the pristine title when the tab refocuses",
+      "frontend/src/hooks/useBuildStream.acceptFinished.test.ts::sends the authoritative accept_finished frame, with no prose to guess from",
       "frontend/src/hooks/useBuildStream.agent.test.ts::keeps standalone Agent ingress artifact-neutral",
       "frontend/src/hooks/useBuildStream.agent.test.ts::retains explicit contract activation for Build",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::clears the question gate when the loop resumes RUNNING",
@@ -25699,6 +25721,12 @@
       {
         "path": "packages/agent-server/tests/test_control_ops_ship_it.py",
         "line": 51,
+        "fixture": "_deploy_lock_dir",
+        "scope": "pytest.fixture(autouse=True)"
+      },
+      {
+        "path": "packages/agent-server/tests/test_control_ops_accept_finished.py",
+        "line": 56,
         "fixture": "_deploy_lock_dir",
         "scope": "pytest.fixture(autouse=True)"
       },
@@ -26430,7 +26458,7 @@
       },
       {
         "path": "packages/agent-server/tests/test_build_kernel_interface.py",
-        "line": 46,
+        "line": 47,
         "fixture": "store",
         "scope": "pytest.fixture"
       },
@@ -27250,8 +27278,8 @@
         ]
       }
     },
-    "vitest_ids": 1194,
-    "vitest_files": 185,
+    "vitest_ids": 1197,
+    "vitest_files": 187,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -27331,6 +27359,8 @@
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > WALK-01: the blinking caret is present alongside the markdown output",
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > does not render the streaming block once it has moved into blocks[]",
       "frontend/src/components/AnswerDocument.test.tsx::AnswerDocument \u2014 streaming block > renders plain streaming text without a markdown token",
+      "frontend/src/components/BuildSurface.markdone.test.tsx::Mark done \u2014 the explicit accept-as-is control > emits the explicit signal (b.acceptFinished), never the free-text replan path",
+      "frontend/src/components/BuildSurface.markdone.test.tsx::Mark done \u2014 the explicit accept-as-is control > renders only on FINISHED \u2014 a live or merely-settled run has nothing to accept",
       "frontend/src/components/BuildSurface.recovery.test.tsx::Assist tier badge \u2014 deprecated, stays hidden (regression guard) > never renders the Assist/Standard execution-tier pill, even though b.assist is still a real field",
       "frontend/src/components/BuildSurface.recovery.test.tsx::CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt > falls back to a TRUNCATED first task when no stored title exists",
       "frontend/src/components/BuildSurface.recovery.test.tsx::CLEAN TITLE ON RESUME: the H1 is never the giant raw prompt > leaves a FRESH (non-resumed) run's task untouched",
@@ -27955,6 +27985,7 @@
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > does not request permission outside a user gesture",
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > fires an OS Notification when permission is granted and the tab is hidden",
       "frontend/src/hooks/useBuildNotifications.test.ts::useBuildNotifications > restores the pristine title when the tab refocuses",
+      "frontend/src/hooks/useBuildStream.acceptFinished.test.ts::useBuildStream \u2014 explicit accept-as-is (F-3 follow-up) > sends the authoritative accept_finished frame, with no prose to guess from",
       "frontend/src/hooks/useBuildStream.agent.test.ts::useBuildStream \u2014 surface-specific first send > keeps standalone Agent ingress artifact-neutral",
       "frontend/src/hooks/useBuildStream.agent.test.ts::useBuildStream \u2014 surface-specific first send > retains explicit contract activation for Build",
       "frontend/src/hooks/useBuildStream.askgate.test.ts::useBuildStream \u2014 Ask-gate > clears the question gate when the loop resumes RUNNING",
@@ -28464,6 +28495,7 @@
       "frontend/src/api/downloadProject.binding.test.ts",
       "frontend/src/api/projects.import.test.ts",
       "frontend/src/components/AnswerDocument.test.tsx",
+      "frontend/src/components/BuildSurface.markdone.test.tsx",
       "frontend/src/components/BuildSurface.recovery.test.tsx",
       "frontend/src/components/BuildSurface.scroll.test.tsx",
       "frontend/src/components/BuildSurface.test.tsx",
@@ -28569,6 +28601,7 @@
       "frontend/src/hooks/useBuild.lazy.test.tsx",
       "frontend/src/hooks/useBuild.modelswitch.test.tsx",
       "frontend/src/hooks/useBuildNotifications.test.ts",
+      "frontend/src/hooks/useBuildStream.acceptFinished.test.ts",
       "frontend/src/hooks/useBuildStream.agent.test.ts",
       "frontend/src/hooks/useBuildStream.askgate.test.ts",
       "frontend/src/hooks/useBuildStream.driverOutage.test.ts",
@@ -32996,6 +33029,60 @@
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
         "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-26-LAUNCH-CLOSEOUT",
+      "root": "packages",
+      "source_identity_before": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
+      "source_identity_after": "5bbb3c195d0a4f4c87e47caf2fdeca29a14c1464",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10845,
+          "after_count": 10854,
+          "added_ids": [
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[AWAITING_PLAN_APPROVAL]",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[None]",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished[RUNNING]",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_stays_finished_no_events_without_text",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_conflicting_prose",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_ship_it_prose_too",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_same_prose_via_request_plan_still_replans",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_dispatches_to_conversation_control",
+            "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_refused_for_imported_conversation"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_control_ops_accept_finished.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_noop_when_not_finished",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_stays_finished_no_events_without_text",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_conflicting_prose",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_accept_finished_wins_over_ship_it_prose_too",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_same_prose_via_request_plan_still_replans",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_dispatches_to_conversation_control",
+          "packages/agent-server/tests/test_control_ops_accept_finished.py::test_ws_accept_finished_refused_for_imported_conversation"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/BuildSurface.markdone.test.tsx",
+          "frontend/src/hooks/useBuildStream.acceptFinished.test.ts"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/BuildSurface.markdone.test.tsx::emits the explicit signal (b.acceptFinished), never the free-text replan path",
+          "frontend/src/components/BuildSurface.markdone.test.tsx::renders only on FINISHED \u2014 a live or merely-settled run has nothing to accept",
+          "frontend/src/hooks/useBuildStream.acceptFinished.test.ts::sends the authoritative accept_finished frame, with no prose to guess from"
+        ],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_control_ops_accept_finished.py",
+            "line": 56,
+            "fixture": "_deploy_lock_dir",
+            "scope": "pytest.fixture(autouse=True)"
+          }
+        ]
       }
     },
     {

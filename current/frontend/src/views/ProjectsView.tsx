@@ -88,7 +88,7 @@ function EmptyProjects() {
       <button
         type="button"
         onClick={() => navigate("/")}
-        className="mt-inline rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
+        className="mt-inline min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
       >
         Start a build
       </button>
@@ -116,7 +116,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
         onClick={() =>
           navigate(project.surface === "agent" ? `/agent/${project.id}` : `/build/${project.id}`)
         }
-        className="group min-w-0 flex-1 text-left"
+        className="group min-h-11 min-w-0 flex-1 text-left lg:min-h-0"
       >
         <div className="flex items-center gap-inline">
           <span className="truncate font-ui text-[0.9rem] text-text transition-colors group-hover:text-accent">
@@ -175,7 +175,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
           disabled={project.files_missing || download.isPending}
           aria-label={`Download source: ${project.title}`}
           title={project.files_missing ? "Files missing — nothing to download" : "Download source"}
-          className="grid size-8 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+          className="grid size-11 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50 lg:size-8"
         >
           <Download className="size-4" aria-hidden />
         </button>
@@ -189,7 +189,7 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
             <button
               type="button"
               aria-label={`Delete project: ${project.title}`}
-              className="grid size-8 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported"
+              className="grid size-11 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:border-unsupported/50 hover:text-unsupported lg:size-8"
             >
               <Trash2 className="size-4" aria-hidden />
             </button>
@@ -231,7 +231,7 @@ export function ProjectsView() {
         )}
 
         {showProjectsContent && (
-          <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
+          <div className="flex min-h-11 items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong lg:min-h-0">
             <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
             <input
               type="search"
@@ -257,7 +257,7 @@ export function ProjectsView() {
             <button
               type="button"
               onClick={() => refetch()}
-              className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="min-h-11 rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Try again
             </button>

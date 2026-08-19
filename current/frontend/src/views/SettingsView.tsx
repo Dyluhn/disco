@@ -289,7 +289,7 @@ export function SettingsView() {
               </SettingsItem>
               <SettingsItem id="model-resilience">
                 <details className="rounded-control border border-hairline bg-surface-1/30 px-body py-inline">
-                  <summary className="cursor-pointer font-ui text-[0.84rem] font-medium text-text">
+                  <summary className="cursor-pointer py-3 font-ui text-[0.84rem] font-medium text-text lg:py-0">
                     Advanced model resilience
                   </summary>
                   <div className="mt-inline">

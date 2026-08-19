@@ -20,8 +20,10 @@ from .workspace_service import WorkspaceCoordinator
 # Matched case-insensitively against the full (stripped) user text.
 # ONLY whole-intent stop phrases are listed — bare "publish it", "deploy it",
 # or any real change/deploy intent intentionally fall through to the replan path.
-# TODO: the cleaner long-term signal is an explicit UI `accept_finished`/
-# `mark_done` frame action rather than free-text matching. This is a stopgap.
+# The clean signal now exists: the explicit `accept_finished` client frame
+# (wire.py → `ControlOps.accept_finished`), sent by the UI's Mark-done control,
+# states stop-intent without any guessing. This free-text heuristic is KEPT as
+# the fallback for plain typed messages ("ship it" in the re-plan composer).
 # SUBSTRING-safe: specific, terminal multi-word phrases that do not precede a new
 # instruction, so they are matched ANYWHERE in the message — this catches the real
 # traced phrasing "stop troubleshooting, publish it and be done" (a leading clause +
@@ -115,6 +117,32 @@ class ControlOps:
         await loop.approve_plan()
         self._controller.kick(conversation_id)  # start building the approved plan
 
+    async def accept_finished(self, conversation_id: str, text: str = "") -> None:
+        """Explicit UI stop-intent (the `accept_finished` frame): the user accepted
+        the FINISHED build as-is. AUTHORITATIVE — the text is never inspected for
+        intent, so it always wins over conflicting prose (a note like "add a
+        footer" riding this frame is an acknowledgment, not a replan request; a
+        typed replan goes through `request_plan` instead).
+
+        Mirrors the F-3 ship-it branch of `request_plan` under the same workspace
+        lock: append the optional user note (resolving any optimistic UI echo)
+        and leave the conversation FINISHED — no planning ingress, no run-intent,
+        no kick. A no-op when the conversation is NOT FINISHED: there is nothing
+        to accept, and this control must never wind down or redirect a live run
+        (`pause`/`cancel` own that)."""
+        async with self._workspace.lock(conversation_id):
+            state = await self._store.get_state(conversation_id)
+            if state.execution_status != ConversationStatus.FINISHED:
+                return
+            if text.strip():
+                await self._store.append(
+                    conversation_id,
+                    MessageEvent(
+                        source=EventSource.USER,
+                        message=LLMMessage(role="user", content=text),
+                    ),
+                )
+
     async def request_plan(self, conversation_id: str, text: str = "") -> None:
         """(Re-)enter plan mode with the user's instruction — the first plan AND the
         re-plan after a build, so focused diff-style changes are planned and re-approved
@@ -124,7 +152,9 @@ class ControlOps:
         is a clear 'stop, accept as-is' intent (_SHIP_IT_PHRASES), append the user
         message (resolving the optimistic UI echo) but skip enter_planning() and
         kick() — the build stays FINISHED. Any ambiguous text falls through to the
-        existing replan path unchanged.
+        existing replan path unchanged. (The UI's Mark-done control states the
+        same intent explicitly via `accept_finished` above — this heuristic is
+        the fallback for plain typed messages only.)
 
         Composes the loop lazily (`_loop_for`, same as `kick`) — a fresh
         conversation or one whose loop died with a server restart has no entry in

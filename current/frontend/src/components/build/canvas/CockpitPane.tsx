@@ -121,7 +121,7 @@ function CockpitShellSection({
                 type="button"
                 onClick={() => setSelectedName(s.name)}
                 className={cn(
-                  "flex shrink-0 items-center gap-hair rounded px-inline py-px transition-colors",
+                  "flex min-h-11 shrink-0 items-center gap-hair rounded px-inline py-px transition-colors lg:min-h-0",
                   s.name === selectedName
                     ? "bg-surface-2 text-text"
                     : "text-text-faint hover:text-text",

@@ -75,7 +75,7 @@ export function EditAffordance({ targetLabel, rect, onApply, onCancel }: Props) 
         <button
           type="button"
           onClick={onCancel}
-          className="rounded px-inline py-px font-ui text-[0.72rem] text-text-muted transition-colors hover:text-text"
+          className="min-h-11 rounded px-inline py-px font-ui text-[0.72rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
         >
           Cancel
         </button>
@@ -85,7 +85,7 @@ export function EditAffordance({ targetLabel, rect, onApply, onCancel }: Props) 
           disabled={!trimmed}
           aria-label="Apply this edit — steer the agent to change the source"
           data-disco-control="build.edit-apply"
-          className="rounded bg-accent px-inline py-px font-ui text-[0.72rem] text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="min-h-11 rounded bg-accent px-inline py-px font-ui text-[0.72rem] text-white transition-opacity hover:opacity-90 disabled:opacity-40 lg:min-h-0"
         >
           Apply
         </button>
