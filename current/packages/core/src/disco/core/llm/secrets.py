@@ -62,6 +62,12 @@ _ENV_SECRET_READ_KEYS = "DISCO_SECRET_READ_KEYS"
 _ENV_PATH = "DISCO_SECRETS"
 _ENV_PATH_LEGACY = "PMX_SECRETS"
 _APP_SECRET_FILENAME = "secret-key"
+# The container entrypoint bootstraps the very same secret under a different
+# name. A process that skips the entrypoint (notably `compose exec`, which the
+# self-host docs use to run disco-verify) must adopt that file rather than mint
+# a second key — two keys in one data dir means settings encrypted by the server
+# cannot be decrypted by the CLI, which reads as "your setup is broken".
+_ENTRYPOINT_SECRET_FILENAME = ".secret_key"
 # Legacy default: the encrypted secrets lived in the CWD, i.e. the repo root when a
 # server is launched from the checkout. That put credential ciphertext inside the
 # project tree — undesirable defense-in-depth-wise (anything granted read of the
@@ -97,6 +103,10 @@ def ensure_process_secret_key(path: str | os.PathLike[str] | None = None) -> str
         return existing
 
     secret_path = Path(path) if path is not None else _default_app_secret_path()
+    if path is None and not secret_path.exists():
+        entrypoint_path = secret_path.parent / _ENTRYPOINT_SECRET_FILENAME
+        if entrypoint_path.exists():
+            secret_path = entrypoint_path
     try:
         secret = secret_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
