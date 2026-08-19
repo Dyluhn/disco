@@ -7,6 +7,7 @@ only usable with the right app secret (else the store is `locked` and yields Non
 from __future__ import annotations
 
 import stat
+import os
 import sys
 from pathlib import Path
 
@@ -263,3 +264,74 @@ def test_process_secret_file_is_owner_only(monkeypatch, tmp_path):
     dir_mode = stat.S_IMODE(path.parent.stat().st_mode)
     assert file_mode == 0o600
     assert dir_mode == 0o700
+
+
+# --- the app secret must survive a launch that skipped the container entrypoint ---
+# The entrypoint bootstraps the secret as `$DATA/.secret_key`; this module's own
+# default is `$DATA/secret-key`. `compose exec` (which the self-host docs use to
+# run disco-verify) does NOT run the entrypoint, so the CLI resolves the secret
+# itself. If it minted a fresh key instead of adopting the entrypoint's, the data
+# dir would hold two keys and settings encrypted by the server would stop
+# decrypting — a silent, data-affecting divergence, not a loud failure.
+
+
+def test_entrypoint_secret_is_adopted_rather_than_a_second_key_minted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("DISCO_DATA_DIR", str(data))
+    entrypoint_key = data / ".secret_key"
+    entrypoint_key.write_text("entrypoint-bootstrapped-secret\n", encoding="utf-8")
+
+    resolved = ensure_process_secret_key()
+
+    assert resolved == "entrypoint-bootstrapped-secret"
+    assert os.environ["DISCO_SECRET_KEY"] == "entrypoint-bootstrapped-secret"
+    # the whole point: no rival key appears beside the entrypoint's
+    assert not (data / "secret-key").exists()
+
+
+def test_canonical_key_wins_when_both_files_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("DISCO_DATA_DIR", str(data))
+    (data / "secret-key").write_text("canonical\n", encoding="utf-8")
+    (data / ".secret_key").write_text("entrypoint\n", encoding="utf-8")
+
+    assert ensure_process_secret_key() == "canonical"
+
+
+def test_explicit_path_never_falls_back_to_the_entrypoint_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A caller naming a path means that path — the fallback must not override it."""
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / ".secret_key").write_text("entrypoint\n", encoding="utf-8")
+    explicit = data / "chosen-key"
+
+    resolved = ensure_process_secret_key(explicit)
+
+    assert resolved != "entrypoint"
+    assert explicit.read_text().strip() == resolved
+
+
+def test_operator_supplied_env_still_wins_over_both_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("DISCO_DATA_DIR", str(data))
+    (data / ".secret_key").write_text("entrypoint\n", encoding="utf-8")
+    monkeypatch.setenv("DISCO_SECRET_KEY", "operator-pinned")
+
+    assert ensure_process_secret_key() == "operator-pinned"

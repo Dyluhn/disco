@@ -46,6 +46,7 @@ from disco.core.llm.types import (
     ToolSpec,
 )
 from disco.tools.behavior import declares
+from disco.core.llm.secrets import ensure_process_secret_key
 
 Status = Literal["PASS", "FAIL", "SKIP"]
 
@@ -300,6 +301,13 @@ def main() -> None:
         help="skip checks that need outbound internet (same as --quick today)",
     )
     args = ap.parse_args()
+    # The servers get their app secret from the container entrypoint, but this CLI
+    # is documented as `compose exec … disco-verify`, and exec does NOT run the
+    # entrypoint. Without the secret the encrypted provider keys cannot be
+    # decrypted and every check fails on a perfectly healthy install. Resolve it
+    # the same way the servers do so the verdict reflects the deployment, not how
+    # this process happened to be launched.
+    ensure_process_secret_key()
     results = asyncio.run(run_checks(quick=args.quick, network=not args.no_network))
     raise SystemExit(_render(results))
 

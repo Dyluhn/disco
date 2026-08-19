@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+  "source_identity": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
   "collected": {
     "counts": {
-      "packages": 10841,
+      "packages": 10845,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12679,
+    "total": 12683,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -6909,13 +6909,17 @@
         "packages/core/tests/test_secret_rotation.py::test_writes_during_rotation_survive_rollback_under_rollback_writer",
         "packages/core/tests/test_secrets.py::test_box_round_trips_and_ciphertext_is_not_plaintext",
         "packages/core/tests/test_secrets.py::test_cannot_store_without_app_secret",
+        "packages/core/tests/test_secrets.py::test_canonical_key_wins_when_both_files_exist",
         "packages/core/tests/test_secrets.py::test_clear_removes_the_key",
         "packages/core/tests/test_secrets.py::test_default_path_honors_legacy_in_tree_file",
         "packages/core/tests/test_secrets.py::test_default_path_is_under_xdg_config",
         "packages/core/tests/test_secrets.py::test_default_path_xdg_wins_over_legacy",
+        "packages/core/tests/test_secrets.py::test_entrypoint_secret_is_adopted_rather_than_a_second_key_minted",
         "packages/core/tests/test_secrets.py::test_explicit_path_and_env_override_default",
+        "packages/core/tests/test_secrets.py::test_explicit_path_never_falls_back_to_the_entrypoint_key",
         "packages/core/tests/test_secrets.py::test_generic_named_secrets_round_trip",
         "packages/core/tests/test_secrets.py::test_openrouter_wrappers_use_the_reserved_slot",
+        "packages/core/tests/test_secrets.py::test_operator_supplied_env_still_wins_over_both_files",
         "packages/core/tests/test_secrets.py::test_process_secret_autogen_persists_and_reloads_stable",
         "packages/core/tests/test_secrets.py::test_process_secret_env_precedence",
         "packages/core/tests/test_secrets.py::test_process_secret_file_is_owner_only",
@@ -12700,9 +12704,9 @@
     }
   },
   "mapping_static": {
-    "identity": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+    "identity": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
     "python_test_file_count": 848,
-    "python_static_test_id_count": 10438,
+    "python_static_test_id_count": 10442,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -20346,13 +20350,17 @@
       "packages/core/tests/test_secret_rotation.py::test_writes_during_rotation_survive_rollback_under_rollback_writer",
       "packages/core/tests/test_secrets.py::test_box_round_trips_and_ciphertext_is_not_plaintext",
       "packages/core/tests/test_secrets.py::test_cannot_store_without_app_secret",
+      "packages/core/tests/test_secrets.py::test_canonical_key_wins_when_both_files_exist",
       "packages/core/tests/test_secrets.py::test_clear_removes_the_key",
       "packages/core/tests/test_secrets.py::test_default_path_honors_legacy_in_tree_file",
       "packages/core/tests/test_secrets.py::test_default_path_is_under_xdg_config",
       "packages/core/tests/test_secrets.py::test_default_path_xdg_wins_over_legacy",
+      "packages/core/tests/test_secrets.py::test_entrypoint_secret_is_adopted_rather_than_a_second_key_minted",
       "packages/core/tests/test_secrets.py::test_explicit_path_and_env_override_default",
+      "packages/core/tests/test_secrets.py::test_explicit_path_never_falls_back_to_the_entrypoint_key",
       "packages/core/tests/test_secrets.py::test_generic_named_secrets_round_trip",
       "packages/core/tests/test_secrets.py::test_openrouter_wrappers_use_the_reserved_slot",
+      "packages/core/tests/test_secrets.py::test_operator_supplied_env_still_wins_over_both_files",
       "packages/core/tests/test_secrets.py::test_process_secret_autogen_persists_and_reloads_stable",
       "packages/core/tests/test_secrets.py::test_process_secret_env_precedence",
       "packages/core/tests/test_secrets.py::test_process_secret_file_is_owner_only",
@@ -26589,7 +26597,7 @@
       {
         "framework": "pytest",
         "path": "packages/core/tests/test_secrets.py",
-        "line": 131,
+        "line": 132,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -26659,7 +26667,7 @@
       {
         "framework": "pytest",
         "path": "packages/core/tests/test_secrets.py",
-        "line": 254,
+        "line": 255,
         "marker": "pytest.mark.skipif",
         "source": ""
       },
@@ -31277,6 +31285,46 @@
             "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_bad_key_is_credential_failure",
             "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_puts_key_in_json_body",
             "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_response_format_conditional_on_model"
+          ]
+        },
+        "harness": {
+          "before_count": 1433,
+          "after_count": 1433,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-25-VERIFY-SECRET-RESOLUTION",
+      "root": "multiple",
+      "source_identity_before": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "source_identity_after": "ffc1b6b2462a90ce8df4f7ab8e9009bc5c7431df",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10841,
+          "after_count": 10845,
+          "added_ids": [
+            "packages/core/tests/test_secrets.py::test_canonical_key_wins_when_both_files_exist",
+            "packages/core/tests/test_secrets.py::test_entrypoint_secret_is_adopted_rather_than_a_second_key_minted",
+            "packages/core/tests/test_secrets.py::test_explicit_path_never_falls_back_to_the_entrypoint_key",
+            "packages/core/tests/test_secrets.py::test_operator_supplied_env_still_wins_over_both_files"
           ]
         },
         "harness": {
