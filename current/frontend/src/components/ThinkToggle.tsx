@@ -30,7 +30,7 @@ export function ThinkToggle({ value, onChange }: Props) {
       data-disco-control="search.think-toggle"
       onClick={() => onChange(!value)}
       className={cn(
-        "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors",
+        "flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
         value
           ? "border-accent/50 bg-surface-1 text-accent"
           : "border-hairline text-text-muted hover:text-text",

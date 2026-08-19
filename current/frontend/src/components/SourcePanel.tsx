@@ -126,7 +126,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
               <Tabs.Trigger
                 key={v as string}
                 value={v as string}
-                className="-mb-px border-b-2 border-transparent py-inline font-ui text-[0.82rem] text-text-muted transition-colors data-[state=active]:border-accent data-[state=active]:text-text"
+                className="-mb-px flex min-h-11 items-center border-b-2 border-transparent py-inline font-ui text-[0.82rem] text-text-muted transition-colors data-[state=active]:border-accent data-[state=active]:text-text lg:min-h-0"
               >
                 {label as string}
                 <span className="ml-hair text-text-faint">{count as number}</span>
@@ -139,7 +139,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
               onClick={() => onReScope({ drop_weak: true })}
               disabled={!hasWeak}
               data-disco-control="search.drop-weak"
-              className="flex items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+              className="flex min-h-11 items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-40 lg:min-h-0"
             >
               <Filter className="size-3" aria-hidden />
               Drop weak
@@ -148,7 +148,7 @@ export function SourcePanel({ answer, onReScope }: Props) {
               type="button"
               onClick={() => onReScope({})}
               data-disco-control="search.rescope"
-              className="flex items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              className="flex min-h-11 items-center gap-hair rounded-control px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               <RefreshCw className="size-3" aria-hidden />
               Re-synthesize
@@ -170,10 +170,13 @@ export function SourcePanel({ answer, onReScope }: Props) {
                   data-disco-control="search.rescope-domain"
                   data-domain-index={i}
                   className={cn(
-                    "ml-inline shrink-0 rounded-control p-hair font-ui text-[0.68rem] transition-colors",
+                    // Always visible on mobile (there's no hover state on
+                    // touch, so a hover-only reveal is unreachable there);
+                    // desktop keeps the original hover-to-reveal behavior.
+                    "ml-inline flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-control p-hair font-ui text-[0.68rem] transition-colors lg:min-h-0 lg:min-w-0",
                     denied.includes(cleanDomain(hit.url))
                       ? "text-warn"
-                      : "text-text-faint opacity-0 hover:text-text group-hover:opacity-100",
+                      : "text-text-faint opacity-100 hover:text-text lg:opacity-0 lg:group-hover:opacity-100",
                   )}
                 >
                   filter

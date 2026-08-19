@@ -55,7 +55,7 @@ export function SourcePicker({
               data-source-id={id}
               onClick={() => toggle(id)}
               className={cn(
-                "inline-flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors",
+                "inline-flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
                 active
                   ? "border-accent/50 bg-accent/10 text-accent"
                   : "border-hairline text-text-muted hover:text-text",

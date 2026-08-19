@@ -95,7 +95,7 @@ export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
                 type="button"
                 onClick={onTryExhaustive}
                 data-disco-control="dr.retry-exhaustive"
-                className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent hover:text-bg"
+                className="flex min-h-11 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent hover:text-bg lg:min-h-0"
               >
                 <Zap className="size-3" aria-hidden />
                 Run on Exhaustive tier

@@ -71,7 +71,7 @@ export function SuggestionChips({
           data-suggestion-id={suggestion.id}
           data-suggestion-index={index}
           title={suggestion.text}
-          className="max-w-[21rem] truncate rounded-full border border-hairline bg-transparent px-4 py-1.5 font-ui text-[0.8rem] text-text-faint transition-colors hover:bg-surface-1 hover:text-text-muted"
+          className="max-w-[21rem] truncate rounded-full border border-hairline bg-transparent px-4 py-3.5 font-ui text-[0.8rem] text-text-faint transition-colors hover:bg-surface-1 hover:text-text-muted lg:py-1.5"
         >
           {suggestion.text}
         </button>

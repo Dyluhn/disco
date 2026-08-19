@@ -48,7 +48,7 @@ export function RecencySelector({ value, onChange, disabled }: Props) {
           aria-label={`Recency filter: ${active.label}`}
           data-disco-control="dr.recency"
           className={cn(
-            "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-50",
+            "flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-50 lg:min-h-0",
           )}
         >
           <CalendarDays className="size-3.5 text-text-faint" aria-hidden />
@@ -70,7 +70,7 @@ export function RecencySelector({ value, onChange, disabled }: Props) {
                 key={String(opt.id)}
                 onSelect={() => onChange(opt.id)}
                 className={cn(
-                  "flex cursor-pointer items-start gap-inline rounded-control px-inline py-inline outline-none transition-colors",
+                  "flex min-h-11 cursor-pointer items-start gap-inline rounded-control px-inline py-inline outline-none transition-colors lg:min-h-0",
                   "text-text data-[highlighted]:bg-surface-1",
                 )}
               >

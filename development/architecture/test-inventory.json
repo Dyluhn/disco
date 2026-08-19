@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
+  "source_identity": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
   "collected": {
     "counts": {
-      "packages": 10837,
+      "packages": 10841,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12675,
+    "total": 12679,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -9727,6 +9727,7 @@
         "packages/tools/tests/test_planner_readonly.py::test_readonly_tool_names_matches_the_classification",
         "packages/tools/tests/test_podman.py::test_config_is_podman_and_crun_and_cli_url",
         "packages/tools/tests/test_podman.py::test_create_exec_close_over_the_socket",
+        "packages/tools/tests/test_podman.py::test_engine_default_runtimes_carry_no_isolation_promise_to_enforce",
         "packages/tools/tests/test_podman.py::test_expose_port_inherits_base_impl_no_stub",
         "packages/tools/tests/test_podman.py::test_expose_port_reads_sidecar_binding_for_filtered",
         "packages/tools/tests/test_podman.py::test_failed_native_probe_never_constructs_leaky_sdk_client",
@@ -9749,6 +9750,9 @@
         "packages/tools/tests/test_podman.py::test_policy_sidecar_requires_a_verified_internal_ip[raise]",
         "packages/tools/tests/test_podman.py::test_policy_sidecar_requires_a_verified_internal_ip[stopped]",
         "packages/tools/tests/test_podman.py::test_preview_host_derived_from_cli_url",
+        "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_dropped_entirely_is_refused",
+        "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_silently_became_the_default_is_refused",
+        "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_took_effect_is_allowed",
         "packages/tools/tests/test_podman.py::test_sealed_control_sidecar_start_failure_is_typed_and_leak_free",
         "packages/tools/tests/test_podman.py::test_sealed_default_open_when_granted",
         "packages/tools/tests/test_podman.py::test_sealed_sandbox_maps_only_internal_control_port_from_sidecar",
@@ -12696,9 +12700,9 @@
     }
   },
   "mapping_static": {
-    "identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
+    "identity": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
     "python_test_file_count": 848,
-    "python_static_test_id_count": 10434,
+    "python_static_test_id_count": 10438,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -22683,6 +22687,7 @@
       "packages/tools/tests/test_planner_readonly.py::test_readonly_tool_names_matches_the_classification",
       "packages/tools/tests/test_podman.py::test_config_is_podman_and_crun_and_cli_url",
       "packages/tools/tests/test_podman.py::test_create_exec_close_over_the_socket",
+      "packages/tools/tests/test_podman.py::test_engine_default_runtimes_carry_no_isolation_promise_to_enforce",
       "packages/tools/tests/test_podman.py::test_expose_port_inherits_base_impl_no_stub",
       "packages/tools/tests/test_podman.py::test_expose_port_reads_sidecar_binding_for_filtered",
       "packages/tools/tests/test_podman.py::test_failed_native_probe_never_constructs_leaky_sdk_client",
@@ -22703,6 +22708,9 @@
       "packages/tools/tests/test_podman.py::test_podman_unreachable_is_typed_error",
       "packages/tools/tests/test_podman.py::test_policy_sidecar_requires_a_verified_internal_ip",
       "packages/tools/tests/test_podman.py::test_preview_host_derived_from_cli_url",
+      "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_dropped_entirely_is_refused",
+      "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_silently_became_the_default_is_refused",
+      "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_took_effect_is_allowed",
       "packages/tools/tests/test_podman.py::test_sealed_control_sidecar_start_failure_is_typed_and_leak_free",
       "packages/tools/tests/test_podman.py::test_sealed_default_open_when_granted",
       "packages/tools/tests/test_podman.py::test_sealed_sandbox_maps_only_internal_control_port_from_sidecar",
@@ -23985,8 +23993,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 248,
-    "typescript_static_test_id_count": 1245,
+    "typescript_test_file_count": 249,
+    "typescript_static_test_id_count": 1247,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24044,6 +24052,7 @@
       "frontend/e2e/export-track1-closeout/selfhost-not-web.spec.ts",
       "frontend/e2e/imagegen-comfy-workflow.spec.ts",
       "frontend/e2e/plan-drafting.spec.ts",
+      "frontend/e2e/plan-gate-mobile.spec.ts",
       "frontend/e2e/report-export.spec.ts",
       "frontend/e2e/research.spec.ts",
       "frontend/e2e/runtime-env.spec.ts",
@@ -24320,6 +24329,8 @@
       "frontend/e2e/export-track1-closeout/selfhost-not-web.spec.ts::Build surface: a finished non-web run shows the honest not_web panel",
       "frontend/e2e/imagegen-comfy-workflow.spec.ts::Settings \u2192 Image generation: ComfyUI custom-workflow textarea",
       "frontend/e2e/plan-drafting.spec.ts::a 'Drafting a plan\u2026' skeleton shows between submit and the plan gate",
+      "frontend/e2e/plan-gate-mobile.spec.ts::Approve & build / Revise\u2026 meet the 44px touch-target minimum @ ${vp.name}",
+      "frontend/e2e/plan-gate-mobile.spec.ts::the \"needs your approval\" pill and revision chip never overlap the heading @ ${vp.name}",
       "frontend/e2e/report-export.spec.ts::MD active, PDF disabled-with-note (offline capability default)",
       "frontend/e2e/research.spec.ts::a query renders a cited answer with sources",
       "frontend/e2e/runtime-env.spec.ts::Vite serves the runtime bootstrap without a failed-script console warning",
@@ -28618,8 +28629,8 @@
     ],
     "playwright_configs": {
       "playwright.config.ts": {
-        "id_count": 33,
-        "file_count": 21,
+        "id_count": 37,
+        "file_count": 22,
         "ids": [
           "frontend/e2e/ask-gate.spec.ts::Build \u2192 free-form Ask-gate \u203a the agent's question pauses with an AskPanel; answering resumes",
           "frontend/e2e/autonomous-toggle.spec.ts::Autonomous mode \u2014 composer toggle \u203a toggle is off by default and flips on with an accessible switch",
@@ -28643,6 +28654,10 @@
           "frontend/e2e/export-track1-closeout/selfhost-not-web.spec.ts::WO-C3 \u00a77.12 \u2014 SelfHostPanel not_web (frozen Firefox proof) \u203a Build surface: a finished non-web run shows the honest not_web panel",
           "frontend/e2e/imagegen-comfy-workflow.spec.ts::Settings \u2192 Image generation: ComfyUI custom-workflow textarea",
           "frontend/e2e/plan-drafting.spec.ts::a 'Drafting a plan\u2026' skeleton shows between submit and the plan gate",
+          "frontend/e2e/plan-gate-mobile.spec.ts::plan-gate header, mobile @ 375x667 \u203a Approve & build / Revise\u2026 meet the 44px touch-target minimum @ 375x667",
+          "frontend/e2e/plan-gate-mobile.spec.ts::plan-gate header, mobile @ 375x667 \u203a the \"needs your approval\" pill and revision chip never overlap the heading @ 375x667",
+          "frontend/e2e/plan-gate-mobile.spec.ts::plan-gate header, mobile @ 430x932 \u203a Approve & build / Revise\u2026 meet the 44px touch-target minimum @ 430x932",
+          "frontend/e2e/plan-gate-mobile.spec.ts::plan-gate header, mobile @ 430x932 \u203a the \"needs your approval\" pill and revision chip never overlap the heading @ 430x932",
           "frontend/e2e/report-export.spec.ts::Deep Research \u2192 export controls \u203a MD active, PDF disabled-with-note (offline capability default)",
           "frontend/e2e/research.spec.ts::Research \u2192 grounded answer \u203a a query renders a cited answer with sources",
           "frontend/e2e/runtime-env.spec.ts::Vite serves the runtime bootstrap without a failed-script console warning",
@@ -28670,6 +28685,7 @@
           "frontend/e2e/export-track1-closeout/selfhost-not-web.spec.ts",
           "frontend/e2e/imagegen-comfy-workflow.spec.ts",
           "frontend/e2e/plan-drafting.spec.ts",
+          "frontend/e2e/plan-gate-mobile.spec.ts",
           "frontend/e2e/report-export.spec.ts",
           "frontend/e2e/research.spec.ts",
           "frontend/e2e/runtime-env.spec.ts",
@@ -28878,8 +28894,8 @@
         ]
       }
     },
-    "playwright_hermetic_ids": 33,
-    "playwright_hermetic_files": 21,
+    "playwright_hermetic_ids": 37,
+    "playwright_hermetic_files": 22,
     "playwright_live_ids": 38,
     "playwright_live_files": 36,
     "policy_ids": 2,
@@ -31261,6 +31277,46 @@
             "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_bad_key_is_credential_failure",
             "packages/app-server/tests/test_probe_routes.py::test_probe_tavily_search_puts_key_in_json_body",
             "packages/tools/tests/test_image_gen_binary.py::test_openai_backend_response_format_conditional_on_model"
+          ]
+        },
+        "harness": {
+          "before_count": 1433,
+          "after_count": 1433,
+          "added_ids": []
+        },
+        "integrations": {
+          "before_count": 9,
+          "after_count": 9,
+          "added_ids": []
+        },
+        "tests": {
+          "before_count": 396,
+          "after_count": 396,
+          "added_ids": []
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "root": "multiple",
+      "source_identity_before": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
+      "source_identity_after": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10837,
+          "after_count": 10841,
+          "added_ids": [
+            "packages/tools/tests/test_podman.py::test_engine_default_runtimes_carry_no_isolation_promise_to_enforce",
+            "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_dropped_entirely_is_refused",
+            "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_silently_became_the_default_is_refused",
+            "packages/tools/tests/test_podman.py::test_requested_sandbox_runtime_that_took_effect_is_allowed"
           ]
         },
         "harness": {

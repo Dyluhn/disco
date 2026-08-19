@@ -52,7 +52,7 @@ export function ConnectionsStrip() {
       })}
       <Link
         to="/settings"
-        className="flex items-center gap-hair rounded-full border border-dashed border-hairline px-inline py-px font-ui text-[0.72rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+        className="flex max-lg:min-h-11 items-center gap-hair rounded-full border border-dashed border-hairline px-inline py-px font-ui text-[0.72rem] text-text-muted transition-colors hover:border-accent hover:text-text"
       >
         <Plus className="size-3" aria-hidden />
         {usable.length === 0 ? "Connect tools" : "Add"}

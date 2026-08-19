@@ -13,6 +13,7 @@ import { useState } from "react";
 import { CornerDownLeft, MessageCircleQuestion } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 
 export interface ClarifyQuestionItem {
   id: string;
@@ -89,6 +90,7 @@ export function ClarifyPanel({
                   <label
                     key={opt}
                     className={cn(
+                      TAP_TARGET,
                       "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.82rem] cursor-pointer transition-colors",
                       answers[it.id] === opt
                         ? "border-accent bg-accent/10 text-text"
@@ -149,7 +151,8 @@ export function ClarifyPanel({
           disabled={!allAnswered}
           data-disco-control="submit-clarify"
           className={cn(
-            "flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.82rem] text-accent transition-colors",
+            TAP_TARGET,
+            "flex w-full items-center justify-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.82rem] text-accent transition-colors lg:w-auto",
             "hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed",
           )}
         >

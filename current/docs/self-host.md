@@ -250,12 +250,28 @@ DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
   docker compose up -d --build
 ```
 
-gVisor remains an optional stronger tier for hosts where `runsc` is installed and
-registered. Select it without changing the backend persistence model:
+gVisor is an optional stronger tier, but **not on the rootless-Podman default
+path.** Podman's Docker-compatible API silently drops the requested runtime when
+creating a container, so asking for `runsc` there produced an ordinary `crun`
+container with no isolation upgrade and no error. The sandbox now inspects the
+runtime it actually received and refuses to run when it does not match the one
+requested — you get a typed failure instead of a boundary you only believed in.
+
+For a real gVisor boundary, install `runsc` per
+[gVisor's instructions](https://gvisor.dev/docs/user_guide/install/) and use
+**rootful Docker**, which honours the runtime:
 
 ```bash
-DISCO_LOCAL_RUNTIME=runsc podman compose up -d --build
+DISCO_LOCAL_ENGINE=docker DISCO_SANDBOX_SOCKET=/var/run/docker.sock \
+  DISCO_LOCAL_RUNTIME=runsc docker compose up -d --build
 ```
+
+Note that `/var/run/docker.sock` is root-equivalent, so this trades one boundary
+for another; the remote `gvisor` backend avoids that trade. Also be aware that
+`runsc` under a rootless engine currently fails on cgroup delegation
+(`/sys/fs/cgroup/cgroup.subtree_control: permission denied`), and the
+`--runtime-flag ignore-cgroups` workaround disables the memory/CPU/pids limits
+this project treats as load-bearing.
 
 The unisolated `process` backend is development-only and fails closed unless both
 `DISCO_SANDBOX=process` and `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1` are explicit.

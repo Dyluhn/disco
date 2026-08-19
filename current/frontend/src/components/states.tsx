@@ -39,8 +39,8 @@ export function EmptyState({
             aria-pressed={m.id === mode}
             className={
               m.id === mode
-                ? "rounded-full border border-hairline-strong bg-surface-1 px-4 py-1 font-ui text-[0.8rem] text-text"
-                : "rounded-full border border-transparent px-4 py-1 font-ui text-[0.8rem] text-text-faint transition-colors hover:text-text-muted"
+                ? "flex min-h-11 items-center justify-center rounded-full border border-hairline-strong bg-surface-1 px-4 py-1 font-ui text-[0.8rem] text-text lg:min-h-0"
+                : "flex min-h-11 items-center justify-center rounded-full border border-transparent px-4 py-1 font-ui text-[0.8rem] text-text-faint transition-colors hover:text-text-muted lg:min-h-0"
             }
           >
             {m.label}
@@ -81,7 +81,7 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry: () 
         <button
           type="button"
           onClick={onRetry}
-          className="rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text"
+          className="flex min-h-11 items-center justify-center rounded-control border border-hairline px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
         >
           Try again
         </button>

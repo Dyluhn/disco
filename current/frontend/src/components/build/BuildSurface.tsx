@@ -110,7 +110,7 @@ export function UploadComposer({ cid, onUploaded, ensureCid }: UploadComposerPro
         title="Upload files to uploads/"
         data-disco-control="upload-files"
         className={cn(
-          "flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40",
+          "flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40",
           busy && "opacity-50",
         )}
       >

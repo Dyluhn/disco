@@ -149,7 +149,9 @@ export function QueryInput({
           aria-label="Ask"
           data-disco-control={controlId}
           className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-control bg-accent text-bg transition-opacity",
+            // Mobile: 44px minimum touch target. Desktop is pixel-identical
+            // (lg:size-9 restores the original size exactly).
+            "grid size-11 shrink-0 place-items-center rounded-control bg-accent text-bg transition-opacity lg:size-9",
             canSend ? "hover:opacity-90" : "opacity-50",
           )}
         >

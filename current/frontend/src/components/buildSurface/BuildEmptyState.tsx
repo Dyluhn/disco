@@ -57,7 +57,7 @@ export function BuildEmptyState({
                 onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
                 title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
                 className={cn(
-                  "flex items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                  "flex max-lg:min-h-11 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
                   b.autonomousChoice
                     ? "border-accent/50 bg-accent/5 text-accent"
                     : "border-hairline text-text-faint hover:text-text-muted",

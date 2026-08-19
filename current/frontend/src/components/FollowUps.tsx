@@ -16,7 +16,7 @@ export function FollowUps({ items, onPick }: { items: string[]; onPick: (q: stri
             onClick={() => onPick(q)}
             data-disco-control="search.followup"
             data-followup-index={i}
-            className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-body py-hair font-ui text-[0.84rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
           >
             {q}
             <ArrowUpRight className="size-3 text-text-faint" aria-hidden />

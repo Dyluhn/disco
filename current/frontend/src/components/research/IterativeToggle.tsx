@@ -29,7 +29,7 @@ export function IterativeToggle({ value, onChange, disabled }: Props) {
       title="Re-searches weakly-grounded claims and re-checks, up to 3 rounds — slower, better-grounded"
       onClick={() => onChange(!value)}
       className={cn(
-        "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors disabled:opacity-50",
+        "flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors disabled:opacity-50 lg:min-h-0",
         value
           ? "border-accent bg-surface-1 text-text"
           : "border-hairline bg-surface-1 text-text-muted hover:text-text",

@@ -190,7 +190,7 @@ export function SelfHostPanel({
           aria-label="Download source"
           title="Download the project source (.zip)"
           data-disco-control="build.download-source"
-          className="flex items-center gap-hair rounded-control border border-accent/50 px-inline py-hair font-ui text-[0.8rem] font-medium text-accent transition-colors hover:bg-accent/10"
+          className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-accent/50 px-inline py-hair font-ui text-[0.8rem] font-medium text-accent transition-colors hover:bg-accent/10"
         >
           <Download className="size-3.5" aria-hidden />
           Download source

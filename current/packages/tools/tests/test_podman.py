@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tarfile
 
+from types import SimpleNamespace
+
 import pytest
 from disco.tools.anatomy import Capability
 from disco.tools.sandbox import (
@@ -947,3 +949,54 @@ async def test_instance_preview_host_set_from_cli_url():
     svc, _client, _cli = _svc()
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert inst._preview_host == "localhost"  # default podman_url is the local rootless socket
+
+
+# --- runtime honesty: a requested sandbox runtime must actually take effect ----
+# Podman's Docker-compat API advertises runsc in /info from a static candidate
+# path even when the binary is absent, and drops HostConfig.Runtime on create
+# without erroring. A pre-flight check therefore cannot tell the truth here; only
+# inspecting what was actually assigned can. These pin that behaviour.
+
+
+def _runtime_guard(requested: str, effective: str | None):
+    """Drive the post-create guard with a container reporting `effective`."""
+    from disco.tools.sandbox.podman_parts.container_start import _assert_effective_runtime
+
+    class _Svc:
+        _cfg = SimpleNamespace(runtime=requested)
+
+    class _Container:
+        def __init__(self) -> None:
+            self.attrs: dict = {}
+            if effective is not None:
+                self.attrs = {"HostConfig": {"Runtime": effective}}
+
+        def reload(self) -> None:
+            pass
+
+    return _assert_effective_runtime(_Svc(), _Container())
+
+
+def test_requested_sandbox_runtime_that_silently_became_the_default_is_refused():
+    """The headline case: ask for gVisor, get crun, and be told — not sandboxed."""
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        _runtime_guard("runsc", "crun")
+    assert "refusing to run unsandboxed" in str(excinfo.value)
+    assert "runsc" in str(excinfo.value)
+
+
+def test_requested_sandbox_runtime_dropped_entirely_is_refused():
+    """Podman's compat API drops the field rather than rejecting it."""
+    with pytest.raises(SandboxUnavailableError):
+        _runtime_guard("runsc", None)
+
+
+def test_requested_sandbox_runtime_that_took_effect_is_allowed():
+    _runtime_guard("runsc", "runsc")  # must not raise
+
+
+def test_engine_default_runtimes_carry_no_isolation_promise_to_enforce():
+    """runc/crun ARE the defaults — asking for one claims nothing to verify."""
+    _runtime_guard("crun", None)
+    _runtime_guard("runc", None)
+    _runtime_guard("", None)

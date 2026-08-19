@@ -164,12 +164,14 @@ services:
       MALLOC_ARENA_MAX: "2"
       # Where the agent-server reaches sandbox-published preview ports (host-gateway).
       DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-${PMX_PREVIEW_HOST:-host.docker.internal}}"
-      # gVisor: DISCO_LOCAL_RUNTIME=runsc runs every spawned sandbox container
-      # under gVisor (host prereq: runsc installed + registered in the selected
-      # Podman/Docker daemon's runtimes — https://gvisor.dev/docs/user_guide/install/).
-      # Default runc
-      # keeps today's behavior:
-      #   DISCO_LOCAL_RUNTIME=runsc podman compose up -d
+      # gVisor: DISCO_LOCAL_RUNTIME names the OCI runtime for spawned sandboxes.
+      # NOT SUPPORTED on this rootless-Podman default path. Podman's Docker-compat
+      # API drops the runtime on create without erroring, so a container asked to
+      # run under runsc silently gets crun instead; the sandbox now inspects what
+      # it actually received and REFUSES rather than run with a weaker boundary
+      # than requested. For a real gVisor boundary use rootful Docker with runsc
+      # registered, or the remote `gvisor` backend.
+      # https://gvisor.dev/docs/user_guide/install/
       DISCO_LOCAL_RUNTIME: "${DISCO_LOCAL_RUNTIME:-runc}"
       # The socket target is intentionally engine-neutral. Preserve the host
       # daemon identity so rootless Podman uses its native exec transport rather

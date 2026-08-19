@@ -32,6 +32,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import { Markdown } from "@/components/Markdown";
 import { defaultPlanPanelExpanded } from "@/components/build/planPanelState";
 import { planProgressSummary } from "@/lib/buildTrace";
@@ -246,7 +247,14 @@ function PlanPanelHeader({
         aria-controls={`plan-panel-body-${plan.id}`}
         aria-label={expanded ? "Collapse plan" : "Expand plan"}
         data-disco-control="plan-panel-toggle"
-        className="-mx-hair flex min-w-0 flex-1 items-center gap-inline rounded-control px-hair py-hair text-left transition-colors hover:bg-surface-2/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        // Mobile (<lg): the row WRAPS instead of overflowing — the fixed-width
+        // badges (revision chip, step figure) drop to their own line the moment
+        // the title + chevron + icon don't leave them room, so nothing ever
+        // paints on top of the "Review the plan" heading. `min-h-11` keeps the
+        // whole toggle a real 44px touch target even when it's one short line
+        // (e.g. the collapsed read-only "Plan" state). lg+: reverts to the
+        // original single-line, fixed-height row — pixel-identical to before.
+        className="-mx-hair flex min-h-11 min-w-0 flex-1 flex-wrap items-center gap-x-inline gap-y-hair rounded-control px-hair py-hair text-left transition-colors hover:bg-surface-2/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent lg:min-h-0 lg:flex-nowrap"
       >
         {expanded ? (
           <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
@@ -254,13 +262,18 @@ function PlanPanelHeader({
           <ChevronRight className="size-3.5 shrink-0 text-text-faint" aria-hidden />
         )}
         <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
-        <span className="min-w-fit shrink-0 whitespace-nowrap font-ui text-[0.9rem] font-medium text-text">
+        {/* Mobile: the title can shrink/truncate as a last-resort safety net
+            instead of forcing the row wider than the viewport — it never
+            needs to in practice ("Review the plan"/"Plan" are short, fixed
+            strings), but the row must never rely on that. lg+: back to the
+            original fixed-width, non-wrapping label. */}
+        <span className="min-w-0 shrink truncate font-ui text-[0.9rem] font-medium text-text lg:min-w-fit lg:shrink-0 lg:whitespace-nowrap">
           {gate ? "Review the plan" : "Plan"}
         </span>
         <span className="shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
           revision {plan.revision}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-inline">
+        <span className="flex shrink-0 items-center gap-inline lg:ml-auto">
           {stepSummary && (
             <span className="flex items-center gap-hair">
               <span className="font-mono text-[0.72rem] text-text-faint">
@@ -362,11 +375,18 @@ function PlanApprovalGate({
           placeholder="Describe the changes you want in the plan…"
           className="w-full resize-none rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
         />
-        <div className="flex items-center justify-end gap-inline">
+        {/* Mobile: full-width, stacked, thumb-sized actions — Send (primary)
+            on top via flex-col-reverse (it's the later DOM child), Cancel
+            below. lg+: reverts to the original single-line right-aligned
+            row of auto-width buttons. */}
+        <div className="flex flex-col-reverse gap-inline lg:flex-row lg:items-center lg:justify-end">
           <button
             type="button"
             onClick={onCancelRevise}
-            className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+            className={cn(
+              TAP_TARGET,
+              "w-full rounded-control border border-hairline px-body py-hair text-center font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:w-auto",
+            )}
           >
             Cancel
           </button>
@@ -375,7 +395,10 @@ function PlanApprovalGate({
             onClick={onSubmitRevise}
             disabled={!text.trim()}
             data-disco-control="revise-plan"
-            className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+            className={cn(
+              TAP_TARGET,
+              "w-full rounded-control bg-accent px-body py-hair text-center font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40 lg:w-auto",
+            )}
           >
             Send revision
           </button>
@@ -384,12 +407,19 @@ function PlanApprovalGate({
     );
   }
   return (
-    <div className="mt-body flex items-center justify-end gap-inline">
+    // Mobile: full-width, stacked, thumb-sized actions — Approve (primary)
+    // on top via flex-col-reverse (it's the later DOM child), Revise below
+    // as the clearly-secondary outline button. lg+: reverts to the original
+    // single-line right-aligned row of auto-width buttons.
+    <div className="mt-body flex flex-col-reverse gap-inline lg:flex-row lg:items-center lg:justify-end">
       <button
         type="button"
         onClick={onStartRevise}
         data-disco-control="revise-plan-open"
-        className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+        className={cn(
+          TAP_TARGET,
+          "w-full rounded-control border border-hairline px-body py-hair text-center font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:w-auto",
+        )}
       >
         Revise…
       </button>
@@ -397,7 +427,10 @@ function PlanApprovalGate({
         type="button"
         onClick={onApprove}
         data-disco-control="approve-plan"
-        className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
+        className={cn(
+          TAP_TARGET,
+          "w-full rounded-control bg-accent px-body py-hair text-center font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 lg:w-auto",
+        )}
       >
         {approveLabel ?? "Approve & build"}
       </button>

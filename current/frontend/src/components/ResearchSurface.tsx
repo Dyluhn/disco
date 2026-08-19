@@ -153,8 +153,14 @@ export function ResearchSurface() {
           <SuggestionChips surface="search" onPick={setDraft} />
         </main>
       ) : (
-        <main className="flex flex-1 flex-col gap-section pb-major">
-          <div className="mx-auto w-full max-w-doc px-body">
+        <main className="flex flex-1 flex-col gap-section pb-56 lg:pb-major">
+          {/* Follow-up composer. Below `lg:` it's bottom-anchored (fixed,
+              full-width, thumb reach) so it stays reachable without
+              scrolling back to the top of a long answer — the shared mobile
+              spec's "composer is always within thumb reach". At `lg:` and up
+              it reverts to the original in-flow placement at the top of the
+              answer, pixel-identical to before. */}
+          <div className="fixed inset-x-0 bottom-0 z-20 border-t border-hairline bg-surface-1 px-body py-inline pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:static lg:inset-auto lg:z-auto lg:mx-auto lg:w-full lg:max-w-doc lg:border-0 lg:bg-transparent lg:px-body lg:py-0 lg:pb-0">
             <div className="mx-auto max-w-measure">
               <QueryInput
                 onSubmit={submit}

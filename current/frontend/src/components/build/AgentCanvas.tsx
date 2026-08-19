@@ -108,13 +108,17 @@ export function AgentCanvas({
       onValueChange={(v) => setTab(v as TabId)}
       className="flex h-full min-h-0 flex-col"
     >
-      <Tabs.List className="flex shrink-0 items-center gap-px border-b border-hairline px-inline">
+      {/* overflow-x-auto: the tab set grows to 5 with the Edit/Export Slides tab
+          (deck builds) — on a phone-width viewport that's wider than the
+          screen, so it becomes ONE deliberate horizontal scroller rather than
+          wrapping or clipping (mirrors ExecutionCanvas's identical fix). */}
+      <Tabs.List className="flex shrink-0 items-center gap-px overflow-x-auto border-b border-hairline px-inline">
         {tabs.map((t) => (
           <Tabs.Trigger
             key={t.id}
             value={t.id}
             className={cn(
-              "flex items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
+              "flex max-lg:min-h-11 shrink-0 items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
               "border-b-2 border-transparent hover:text-text",
               "data-[state=active]:border-accent data-[state=active]:text-text",
             )}

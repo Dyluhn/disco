@@ -155,7 +155,7 @@ function DriverModelMenu({
       <Dropdown.Trigger
         disabled={disabled}
         aria-label="Choose the model that runs the agent"
-        className="flex max-w-[15rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
+        className="flex max-w-[15rem] max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
       >
         <Cpu className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate">

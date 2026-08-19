@@ -37,7 +37,7 @@ export function AudioModeDialog({ open, onOpenChange, onChoose }: AudioModeDialo
               <button
                 type="button"
                 aria-label="Close audio mode dialog"
-                className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+                className="grid size-11 place-items-center rounded-control text-text-faint transition-colors hover:text-text lg:size-auto lg:p-hair"
               >
                 <X className="size-4" aria-hidden />
               </button>

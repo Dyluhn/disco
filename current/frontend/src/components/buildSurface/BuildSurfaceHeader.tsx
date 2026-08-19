@@ -67,7 +67,7 @@ export function BuildSurfaceHeader({
               aria-label="Download source"
               data-disco-control="build.export-zip"
               title="Download the project source (.zip)"
-              className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
+              className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
             >
               <Download className="size-3.5" aria-hidden />
               {download.isPending ? "Preparing…" : "Download source"}

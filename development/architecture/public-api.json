@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "e5ecc3b8879b11e15d87fa6bda61ae4b8cd64911",
+  "source_identity": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -19669,6 +19669,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/ScrollFade.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "ScrollFadeEdges",
+          "signature": "export function ScrollFadeEdges({ showLeft, showRight, className, }: { showLeft: boolean; showRight: boolean; className?: string; })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/SourcePanel.tsx",
       "public_declarations": [
         {
@@ -21194,7 +21204,7 @@
         {
           "kind": "variable",
           "name": "CTRL_BTN_BASE",
-          "signature": "export const CTRL_BTN_BASE = \"flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors\";"
+          "signature": "export const CTRL_BTN_BASE = \"flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors lg:min-h-0\";"
         },
         {
           "kind": "variable",
@@ -21204,7 +21214,7 @@
         {
           "kind": "variable",
           "name": "KILL_BTN",
-          "signature": "export const KILL_BTN = \"flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10\";"
+          "signature": "export const KILL_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10 lg:min-h-0\";"
         },
         {
           "kind": "variable",
@@ -21214,7 +21224,7 @@
         {
           "kind": "variable",
           "name": "PENDING_BTN",
-          "signature": "export const PENDING_BTN = \"flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed\";"
+          "signature": "export const PENDING_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed lg:min-h-0\";"
         }
       ]
     },
@@ -21414,12 +21424,12 @@
         {
           "kind": "variable",
           "name": "ACTIVE_BTN",
-          "signature": "export const ACTIVE_BTN = \"flex items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent\";"
+          "signature": "export const ACTIVE_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent lg:min-h-0\";"
         },
         {
           "kind": "variable",
           "name": "CTRL_BTN",
-          "signature": "export const CTRL_BTN = \"flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text\";"
+          "signature": "export const CTRL_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text lg:min-h-0\";"
         }
       ]
     },
@@ -23529,6 +23539,16 @@
       ]
     },
     {
+      "path": "frontend/src/hooks/useScrollFade.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "useScrollFade",
+          "signature": "export function useScrollFade(ref: RefObject<HTMLElement | null>)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/hooks/useSecrets.ts",
       "public_declarations": [
         {
@@ -24880,6 +24900,21 @@
           "kind": "variable",
           "name": "STATUS_LABEL",
           "signature": "export const STATUS_LABEL: Record<ExtractStatus, string> = { ok: \"Read\", paywalled: \"Paywalled\", blocked: \"Blocked\", not_found: \"Not found\", error: \"Failed\", };"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/tapTarget.ts",
+      "public_declarations": [
+        {
+          "kind": "variable",
+          "name": "TAP_TARGET_ICON",
+          "signature": "export const TAP_TARGET_ICON = `inline-flex items-center justify-center ${TAP_TARGET}`;"
+        },
+        {
+          "kind": "variable",
+          "name": "TAP_TARGET",
+          "signature": "export const TAP_TARGET = \"min-h-11 min-w-11 lg:min-h-0 lg:min-w-0\";"
         }
       ]
     },
@@ -27927,7 +27962,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
       "public_name": "CTRL_BTN_BASE",
-      "target_sha256": "5b5646c51b1239a0b40de9d95be91df1ec35477f52746f801ec26c758cea2e6c",
+      "target_sha256": "c8f6a023ea7be46ae4fe35655eccc3546c065f070393693d45ed3f2341e41c00",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -27935,7 +27970,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
       "public_name": "KILL_BTN",
-      "target_sha256": "b6c0d2b2a978b484359d592f9c0592558e2980fdaaa99cf76f160e3403395a1b",
+      "target_sha256": "0f8b6483b5c84e4038aa7454aa31276729e5127999a8c4a3a741c0e75b57fa5c",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -27951,7 +27986,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
       "public_name": "PENDING_BTN",
-      "target_sha256": "78f2cf03481ea689fa45173a95b8f78cbd1b0ddfc1bd200a2d1454b93ceaac55",
+      "target_sha256": "142426ec6a7c2b57b59f1cda0e2fc52681f2f0b50632dd5184eb4229c55c198b",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28167,7 +28202,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
       "public_name": "ACTIVE_BTN",
-      "target_sha256": "3a220e76b2107082d0835c309dbd1a87419a2bdf3ae6706787f153816681c03d",
+      "target_sha256": "25ca4be23715fd7cc217ce3c197cc9a263bfcc5bfcc89fc6f7bdc6a29a3f6170",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -28175,7 +28210,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
       "public_name": "CTRL_BTN",
-      "target_sha256": "1735254dff480dabbaa826de12603d6f2ce4c619e9cdd1d243c9412c8f094e86",
+      "target_sha256": "0bbc15e5e8af91da47c9f0846a6fef9bd8de71a3157a0499afba471ca97f14d2",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -29946,6 +29981,38 @@
       "owner_package": "PKG-23-PRELAUNCH-FIXES",
       "target_sha256": "10d6479ddcd6d0f8fde25d94cdab07fa3c2d0384c03b8ff901562b99685e7939",
       "reason": "McpPool gains server_diagnostics(): stdio MCP connect failures now carry the same {code, attempts, exception_type} diagnostic that streamable_http failures already did, instead of a bare error status."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/ScrollFade.tsx",
+      "public_name": "ScrollFadeEdges",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "target_sha256": "a401091abdbbebcc9938231ba8b5e96a020d80a24bcee7178a01a0dc17286ed2",
+      "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useScrollFade.ts",
+      "public_name": "useScrollFade",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "target_sha256": "0b466a9bbb678c079569d3f4e9abeb1449793c9f214a2b67b9883b619d517612",
+      "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/tapTarget.ts",
+      "public_name": "TAP_TARGET",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "target_sha256": "f3d4afd5ab3f647cb9f71f836513386ed0c7d6df5764d6a71ae51421601f7541",
+      "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/tapTarget.ts",
+      "public_name": "TAP_TARGET_ICON",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "target_sha256": "2dce15c744272407bcfd9e16df2d10f51ead0a0c83b0e1c16dedcf45a88b99b2",
+      "reason": "Mobile-first-class pass: shared tap-target and scroll-fade primitives so every surface converges on one mobile idiom instead of four."
     }
   ],
   "compatibility_bridges": [],
@@ -30425,6 +30492,71 @@
     }
   ],
   "frontend_declaration_transitions": [
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
+      "public_name": "ACTIVE_BTN",
+      "declaration_kind": "variable",
+      "old_signature": "export const ACTIVE_BTN = \"flex items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent\";",
+      "new_signature": "export const ACTIVE_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-accent/60 bg-accent/5 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent lg:min-h-0\";",
+      "old_target_sha256": "3a220e76b2107082d0835c309dbd1a87419a2bdf3ae6706787f153816681c03d",
+      "new_target_sha256": "25ca4be23715fd7cc217ce3c197cc9a263bfcc5bfcc89fc6f7bdc6a29a3f6170",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/needMoreCardParts/styles.ts",
+      "public_name": "CTRL_BTN",
+      "declaration_kind": "variable",
+      "old_signature": "export const CTRL_BTN = \"flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text\";",
+      "new_signature": "export const CTRL_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text lg:min-h-0\";",
+      "old_target_sha256": "1735254dff480dabbaa826de12603d6f2ce4c619e9cdd1d243c9412c8f094e86",
+      "new_target_sha256": "0bbc15e5e8af91da47c9f0846a6fef9bd8de71a3157a0499afba471ca97f14d2",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "CTRL_BTN_BASE",
+      "declaration_kind": "variable",
+      "old_signature": "export const CTRL_BTN_BASE = \"flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors\";",
+      "new_signature": "export const CTRL_BTN_BASE = \"flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors lg:min-h-0\";",
+      "old_target_sha256": "5b5646c51b1239a0b40de9d95be91df1ec35477f52746f801ec26c758cea2e6c",
+      "new_target_sha256": "c8f6a023ea7be46ae4fe35655eccc3546c065f070393693d45ed3f2341e41c00",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "KILL_BTN",
+      "declaration_kind": "variable",
+      "old_signature": "export const KILL_BTN = \"flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10\";",
+      "new_signature": "export const KILL_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10 lg:min-h-0\";",
+      "old_target_sha256": "b6c0d2b2a978b484359d592f9c0592558e2980fdaaa99cf76f160e3403395a1b",
+      "new_target_sha256": "0f8b6483b5c84e4038aa7454aa31276729e5127999a8c4a3a741c0e75b57fa5c",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/research/deepResearchSurfaceParts/styles.ts",
+      "public_name": "PENDING_BTN",
+      "declaration_kind": "variable",
+      "old_signature": "export const PENDING_BTN = \"flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed\";",
+      "new_signature": "export const PENDING_BTN = \"flex min-h-11 items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed lg:min-h-0\";",
+      "old_target_sha256": "78f2cf03481ea689fa45173a95b8f78cbd1b0ddfc1bd200a2d1454b93ceaac55",
+      "new_target_sha256": "142426ec6a7c2b57b59f1cda0e2fc52681f2f0b50632dd5184eb4229c55c198b",
+      "owner_package": "PKG-24-MOBILE-AND-RUNTIME-HONESTY",
+      "accepting_commit": "05b2484c4fe16b0c54c3082dc73f4175c5b82716",
+      "accepting_receipt": "automation/runtime/boundary-20260818-mobile-first-class/BOUNDARY-RECEIPT.md"
+    },
     {
       "surface": "frontend",
       "path": "frontend/src/lib/buildTrace.ts",

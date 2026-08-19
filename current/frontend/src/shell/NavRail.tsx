@@ -95,7 +95,7 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
                 aria-label={badge > 0 ? `${item.label} (${badge} running)` : item.label}
                 className={({ isActive }) =>
                   cn(
-                    "relative flex items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors",
+                    "relative flex min-h-11 items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] transition-colors lg:min-h-0",
                     collapsed && "justify-center",
                     isActive
                       ? "bg-surface-2 text-accent"
@@ -132,7 +132,7 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
           aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
           aria-pressed={collapsed}
           className={cn(
-            "flex w-full items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.82rem] text-text-muted transition-colors hover:bg-surface-2 hover:text-text",
+            "flex min-h-11 w-full items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.82rem] text-text-muted transition-colors hover:bg-surface-2 hover:text-text lg:min-h-0",
             collapsed && "justify-center",
           )}
         >

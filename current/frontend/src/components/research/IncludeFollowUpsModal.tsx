@@ -158,7 +158,7 @@ export function IncludeFollowUpsModal({
                 type="button"
                 aria-label="Close dialog"
                 data-disco-control="dr.include-followups.close"
-                className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+                className="grid size-11 place-items-center rounded-control text-text-faint transition-colors hover:text-text lg:size-auto lg:p-hair"
               >
                 <X className="size-4" aria-hidden />
               </button>
@@ -241,7 +241,7 @@ export function IncludeFollowUpsModal({
               type="button"
               onClick={handleSkip}
               data-disco-control="dr.include-followups.skip"
-              className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+              className="flex min-h-11 items-center rounded-control border border-hairline px-inline py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:min-h-0"
             >
               Skip
             </button>
@@ -249,7 +249,7 @@ export function IncludeFollowUpsModal({
               type="button"
               onClick={handleConfirm}
               data-disco-control="dr.include-followups.confirm"
-              className="rounded-control border border-accent/60 bg-accent/10 px-inline py-hair font-ui text-[0.82rem] font-medium text-accent transition-colors hover:bg-accent/20"
+              className="flex min-h-11 items-center rounded-control border border-accent/60 bg-accent/10 px-inline py-hair font-ui text-[0.82rem] font-medium text-accent transition-colors hover:bg-accent/20 lg:min-h-0"
             >
               {selected.size > 0
                 ? `${actionLabel} with ${selected.size} follow-up${selected.size === 1 ? "" : "s"}`

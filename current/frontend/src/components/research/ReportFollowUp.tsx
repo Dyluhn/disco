@@ -69,7 +69,7 @@ export function ReportFollowUp({
           aria-label="Ask follow-up"
           data-disco-control="dr.follow-up"
           className={cn(
-            "shrink-0 pb-hair text-accent transition-colors hover:opacity-80 disabled:opacity-40",
+            "grid size-11 shrink-0 place-items-center text-accent transition-colors hover:opacity-80 disabled:opacity-40 lg:size-auto lg:pb-hair",
             busy && "animate-pulse",
           )}
         >
