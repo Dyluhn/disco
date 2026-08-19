@@ -6,6 +6,7 @@
 
 import { ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { ActionEvent, SecurityRisk } from "@/types/agent";
 
 const RISK_STYLE: Record<SecurityRisk, { box: string; text: string; label: string }> = {
@@ -72,12 +73,19 @@ export function ConfirmationPanel({
         </p>
       )}
 
-      <div className="mt-body flex items-center justify-end gap-inline">
+      {/* Mobile: full-width, stacked, thumb-sized actions — Approve (primary)
+          on top via flex-col-reverse (it's the later DOM child), Reject
+          below as the clearly-secondary outline button. lg+: reverts to the
+          original single-line right-aligned row of auto-width buttons. */}
+      <div className="mt-body flex flex-col-reverse gap-inline lg:flex-row lg:items-center lg:justify-end">
         <button
           type="button"
           onClick={onReject}
           data-disco-control="reject-action"
-          className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+          className={cn(
+            TAP_TARGET,
+            "w-full rounded-control border border-hairline px-body py-hair text-center font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text lg:w-auto",
+          )}
         >
           Reject
         </button>
@@ -85,7 +93,10 @@ export function ConfirmationPanel({
           type="button"
           onClick={onApprove}
           data-disco-control="approve-action"
-          className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
+          className={cn(
+            TAP_TARGET,
+            "w-full rounded-control bg-accent px-body py-hair text-center font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 lg:w-auto",
+          )}
         >
           Approve &amp; run
         </button>

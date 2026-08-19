@@ -69,7 +69,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
           type="button"
           aria-label="Choose the model that leads this conversation"
           data-disco-control="search.model-pill"
-          className="flex max-w-[14rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+          className="flex min-h-11 max-w-[14rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
         >
           {effective && isFree(effective) ? (
             <Cpu className="size-3.5 shrink-0 text-text-faint" aria-hidden />
@@ -111,7 +111,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
               onClick={() => pick(null)}
               data-model-id="__default__"
               className={cn(
-                "flex w-full items-center justify-between gap-inline rounded-control border px-inline py-inline text-left transition-colors",
+                "flex min-h-11 w-full items-center justify-between gap-inline rounded-control border px-inline py-inline text-left transition-colors lg:min-h-0",
                 value === null
                   ? "border-accent/50 bg-surface-1"
                   : "border-transparent hover:bg-surface-1",
@@ -142,7 +142,7 @@ export function ModelLeaderPill({ value, onChange }: Props) {
                             onClick={() => pick(m.id)}
                             data-model-id={m.id}
                             className={cn(
-                              "flex w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors",
+                              "flex min-h-11 w-full flex-col gap-hair rounded-control border px-inline py-inline text-left transition-colors lg:min-h-0",
                               active
                                 ? "border-accent/50 bg-surface-1"
                                 : "border-transparent hover:bg-surface-1",

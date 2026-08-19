@@ -109,7 +109,7 @@ export function AudioPlayer({ src, className }: AudioPlayerProps) {
         type="button"
         onClick={togglePlay}
         aria-label={playing ? "Pause audio overview" : "Play audio overview"}
-        className="shrink-0 rounded-control p-hair text-text transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        className="grid size-11 shrink-0 place-items-center rounded-control text-text transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent lg:size-auto lg:p-hair"
       >
         {playing ? (
           <Pause className="size-4" aria-hidden />

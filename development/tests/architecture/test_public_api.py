@@ -870,7 +870,10 @@ class TestFrontendPublicApi:
         # existing declaration's signature.
         # 401 after the Settings simplification extracted `SandboxRuntimeSection`
         # and `StoredCredentialField` as independently owned public components.
-        assert len(live["frontend_modules"]) == 401
+        # 404 after the mobile-first-class pass added three shared primitives
+        # (tapTarget, useScrollFade, ScrollFade) so every surface converges on
+        # one mobile idiom. Additive: 0 deleted, 0 renamed.
+        assert len(live["frontend_modules"]) == 404
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

@@ -71,7 +71,7 @@ export function DeliverablePanel({
           aria-label="Export the project manifest (JSON)"
           title="Export manifest (files + deliverable metadata)"
           data-disco-control="build.export-manifest"
-          className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+          className="flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
         >
           <FileJson className="size-3.5" aria-hidden />
           Manifest
@@ -88,7 +88,7 @@ export function DeliverablePanel({
           aria-label="Download source"
           title="Download the project source (.zip)"
           data-disco-control="build.download-site-zip"
-          className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+          className="flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
         >
           <Download className="size-3.5" aria-hidden />
           Download source
@@ -102,7 +102,7 @@ export function DeliverablePanel({
           rel="noopener noreferrer"
           aria-label={`Open the deployed app at ${deployUrl}`}
           title={deployUrl}
-          className="flex shrink-0 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent/10"
+          className="flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:bg-accent/10"
         >
           <Globe className="size-3.5" aria-hidden />
           Deployed
@@ -117,7 +117,7 @@ export function DeliverablePanel({
           aria-label={`Download the deliverable: ${deliverable.title}`}
           title={`Download ${deliverable.title}`}
           data-disco-control="build.download-artifact"
-          className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90"
+          className="flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90"
         >
           <Download className="size-3.5" aria-hidden />
           Download
@@ -130,7 +130,7 @@ export function DeliverablePanel({
           aria-label={`${primaryActionLabel} the deliverable: ${deliverable.title}`}
           title={`${primaryActionLabel} ${deliverable.title}`}
           data-disco-control={primaryActionControlId}
-          className="flex shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-control bg-accent px-inline py-hair font-ui text-[0.8rem] font-medium text-surface-0 transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <PrimaryActionIcon className="size-3.5" aria-hidden />
           {primaryActionLabel}

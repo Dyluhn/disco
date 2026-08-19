@@ -57,7 +57,7 @@ export function ScopeControl({ value, onChange }: Props) {
           type="button"
           aria-label={`Scope: ${current.label}`}
           data-disco-control="search.scope"
-          className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+          className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
         >
           <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
           <span className="truncate">{current.label}</span>
@@ -82,7 +82,7 @@ export function ScopeControl({ value, onChange }: Props) {
                 disabled={o.dormant}
                 onSelect={() => onChange(o.id)}
                 className={cn(
-                  "flex cursor-pointer items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.82rem] outline-none transition-colors",
+                  "flex min-h-11 cursor-pointer items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.82rem] outline-none transition-colors lg:min-h-0",
                   o.dormant
                     ? "cursor-not-allowed text-text-faint"
                     : "text-text data-[highlighted]:bg-surface-1",

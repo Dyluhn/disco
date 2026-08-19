@@ -158,7 +158,7 @@ export function ExecutionCanvas({
               key={t.id}
               value={t.id}
               className={cn(
-                "flex items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
+                "flex max-lg:min-h-11 items-center gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted transition-colors",
                 "border-b-2 border-transparent hover:text-text",
                 "data-[state=active]:border-accent data-[state=active]:text-text",
               )}
@@ -189,7 +189,7 @@ export function ExecutionCanvas({
           data-disco-control="build.snap-to-action-toggle"
           onClick={() => setSnapToAction(!snapToAction)}
           className={cn(
-            "ml-auto flex shrink-0 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem] transition-colors",
+            "ml-auto flex max-lg:min-h-11 shrink-0 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.7rem] transition-colors",
             snapToAction
               ? "border-accent/50 bg-accent/5 text-accent"
               : "border-hairline text-text-faint hover:text-text-muted",

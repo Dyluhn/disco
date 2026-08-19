@@ -14,6 +14,7 @@
 
 import { AlertTriangle, ArrowRight, PlayCircle, Terminal } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 import type { AlternativesEvent } from "@/types/agent";
 
 const CONTINUE_ID = "__continue__";
@@ -70,7 +71,10 @@ export function AlternativesGate({
                 type="button"
                 onClick={() => onPick(opt.id)}
                 data-disco-control={`alternative.${opt.id}`}
-                className="group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2"
+                className={cn(
+                  TAP_TARGET,
+                  "group flex h-full w-full flex-col gap-hair rounded-control border border-hairline bg-surface-1 p-inline text-left transition-colors hover:border-accent hover:bg-surface-2",
+                )}
               >
                 <span className="flex items-baseline gap-hair">
                   <span className="font-mono text-[0.7rem] text-text-faint">
@@ -110,7 +114,10 @@ export function AlternativesGate({
             type="button"
             onClick={() => onPick(CONTINUE_ID)}
             data-disco-control="build.alternatives-continue"
-            className="flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+            className={cn(
+              TAP_TARGET,
+              "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-accent hover:text-text",
+            )}
           >
             <PlayCircle className="size-3.5" aria-hidden />
             Continue anyway — let the agent keep going
@@ -122,7 +129,7 @@ export function AlternativesGate({
           <button
             type="button"
             onClick={onSteer}
-            className="font-ui text-[0.78rem] text-text-faint underline-offset-2 hover:underline"
+            className={cn(TAP_TARGET, "flex items-center font-ui text-[0.78rem] text-text-faint underline-offset-2 hover:underline")}
           >
             or steer manually
           </button>

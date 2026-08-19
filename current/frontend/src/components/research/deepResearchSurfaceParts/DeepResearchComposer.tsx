@@ -74,7 +74,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
                 aria-controls="deep-research-options-panel"
                 data-disco-control="dr.options"
                 onClick={() => setOptionsOpen((open) => !open)}
-                className="flex min-w-0 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+                className="flex min-h-11 min-w-0 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
               >
                 <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
                 <span className="shrink-0">Research options</span>

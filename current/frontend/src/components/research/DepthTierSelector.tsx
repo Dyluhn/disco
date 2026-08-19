@@ -45,7 +45,7 @@ export function DepthTierSelector({ value, onChange, disabled }: Props) {
           aria-label={`Depth tier: ${active.label}`}
           data-disco-control="dr.depth-tier"
           className={cn(
-            "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-50",
+            "flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-50 lg:min-h-0",
           )}
         >
           <Gauge className="size-3.5 text-text-faint" aria-hidden />
@@ -67,7 +67,7 @@ export function DepthTierSelector({ value, onChange, disabled }: Props) {
                 key={t.id}
                 onSelect={() => onChange(t.id)}
                 className={cn(
-                  "flex cursor-pointer items-start gap-inline rounded-control px-inline py-inline outline-none transition-colors",
+                  "flex min-h-11 cursor-pointer items-start gap-inline rounded-control px-inline py-inline outline-none transition-colors lg:min-h-0",
                   "text-text data-[highlighted]:bg-surface-1",
                 )}
               >

@@ -6,11 +6,22 @@
  *   - clamped min/max so neither pane ever fully starves the other
  *   - persistent width + collapsed state via localStorage (survives reloads)
  *
- * Mobile/narrow viewports fall back to stacked vertical layout (no handle).
+ * Below `lg` this is NOT a shrunk side-by-side split (that squeezed the inspector
+ * to a fixed 280px on phones — the bug this file used to have). Mobile gets its
+ * own idiom: the chat pane (live activity feed + the composer) fills the phone's
+ * full height, WITH THE SAME internal-scroll shape the desktop chat pane already
+ * has — the feed scrolls, the composer stays pinned at the bottom, always
+ * reachable without hunting for it. Files/Terminal/Preview/Cockpit (or the Agent
+ * surface's Browser/Artifacts/Console) are occasional-use, so they're tucked
+ * behind a small "Inspector" toggle and open as a full-screen sheet over the chat
+ * — reachable in one tap, but never competing with the feed/composer for the
+ * phone's limited vertical space by default. One `inspector` subtree is mounted
+ * ONCE (never duplicated between a desktop copy and a mobile copy) — only its
+ * position/visibility differs per breakpoint, via CSS.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PanelRightClose, PanelRightOpen, GripVertical } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, GripVertical, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const STORAGE_KEY = "pmx.build.inspectorWidth";
@@ -52,6 +63,9 @@ export function ResizableSplit({
   const [inspectorFrac, setInspectorFrac] = useState(readPersistedFraction);
   const [collapsed, setCollapsed] = useState(readPersistedCollapsed);
   const [dragging, setDragging] = useState(false);
+  // Mobile-only sheet visibility — deliberately NOT persisted (unlike `collapsed`
+  // above): every run/visit starts on the chat pane, the moment-to-moment view.
+  const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
 
   // Persist state changes (debounced naturally — only on commit, not every move).
   useEffect(() => {
@@ -131,15 +145,31 @@ export function ResizableSplit({
   return (
     <div
       ref={containerRef}
-      className="relative flex min-h-0 flex-col lg:h-full lg:flex-row"
+      className="relative flex h-full min-h-0 flex-col lg:flex-row"
     >
       <aside
         className={cn(
-          "flex min-h-0 flex-col border-hairline lg:shrink-0 lg:overflow-hidden lg:border-r",
+          "flex h-full min-h-0 flex-1 flex-col border-hairline lg:shrink-0 lg:overflow-hidden lg:border-r",
           "lg:min-w-[var(--chat-min-w)] lg:flex-1",
         )}
         style={{ "--chat-min-w": `${MIN_CHAT_PX}px` } as React.CSSProperties}
       >
+        {/* Mobile-only entry point to the occasional stuff (files, terminal,
+            preview, cockpit / browser, artifacts, console). A small utility
+            strip, not a heavy chrome band — the feed + composer stay the
+            hero. Gone entirely at lg (the inline split pane takes over). */}
+        <div className="flex shrink-0 items-center justify-end px-body py-hair lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileInspectorOpen(true)}
+            aria-label="Open inspector — files, terminal, preview"
+            data-disco-control="build.mobile-inspector-open"
+            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:bg-surface-2 hover:text-text"
+          >
+            <PanelRightOpen className="size-3.5" aria-hidden />
+            Inspector
+          </button>
+        </div>
         {chat}
       </aside>
 
@@ -168,22 +198,41 @@ export function ResizableSplit({
         </div>
       )}
 
+      {/* ONE mount of `inspector` — below `lg` it's a full-screen sheet over the
+          chat pane (positioned `absolute` within this relatively-positioned
+          container, so it covers the surface but not the shell's nav/mode
+          chrome above it); at `lg`+ it's the inline split pane. Never both a
+          desktop copy AND a mobile copy — that would double-mount whatever
+          live polling/tab-state `inspector` owns. */}
       <section
         className={cn(
-          "flex min-h-[55vh] w-full flex-col border-t border-hairline lg:min-h-0 lg:w-[var(--ins-w)] lg:min-w-[var(--ins-min-w)] lg:border-t-0",
-          collapsed && "lg:hidden",
+          "absolute inset-0 z-30 flex-col bg-bg",
+          mobileInspectorOpen ? "flex" : "hidden",
+          "lg:static lg:inset-auto lg:z-auto lg:min-h-0 lg:w-[var(--ins-w)] lg:min-w-[var(--ins-min-w)] lg:border-t-0",
+          collapsed ? "lg:hidden" : "lg:flex",
         )}
         style={inspectorVars}
       >
-        <div className="flex items-center justify-between border-b border-hairline px-body py-hair">
+        <div className="flex shrink-0 items-center justify-between border-b border-hairline px-body py-hair">
           <span className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
             Inspector
           </span>
+          {/* Mobile: close the sheet, back to chat. Desktop: collapse the
+              inline pane (chat takes the full width; a re-open tab remains). */}
+          <button
+            type="button"
+            onClick={() => setMobileInspectorOpen(false)}
+            aria-label="Close inspector — back to chat"
+            className="flex min-h-11 items-center gap-hair rounded-control px-hair py-px font-ui text-[0.74rem] text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:hidden"
+          >
+            <X className="size-4" aria-hidden />
+            Close
+          </button>
           <button
             type="button"
             onClick={() => setCollapsed(true)}
             aria-label="Collapse inspector pane — chat takes the full width"
-            className="flex items-center gap-hair rounded-control px-hair py-px font-ui text-[0.74rem] text-text-faint transition-colors hover:bg-surface-2 hover:text-text"
+            className="hidden items-center gap-hair rounded-control px-hair py-px font-ui text-[0.74rem] text-text-faint transition-colors hover:bg-surface-2 hover:text-text lg:flex"
           >
             <PanelRightClose className="size-3.5" aria-hidden />
             Collapse

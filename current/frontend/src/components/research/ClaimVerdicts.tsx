@@ -56,7 +56,7 @@ export function ClaimVerdicts({ claims, passages }: ClaimVerdictsProps) {
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
       className="group mt-section rounded-card border border-hairline bg-surface-1/50"
     >
-      <summary className="flex cursor-pointer items-center gap-inline px-body py-inline font-ui text-[0.82rem] text-text-muted select-none">
+      <summary className="flex min-h-11 cursor-pointer items-center gap-inline px-body py-inline font-ui text-[0.82rem] text-text-muted select-none lg:min-h-0">
         <span className="transition-transform group-open:rotate-90">
           {open ? (
             <ChevronDown className="size-3.5" aria-hidden />

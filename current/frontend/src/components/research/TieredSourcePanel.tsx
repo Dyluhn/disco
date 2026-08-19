@@ -194,7 +194,7 @@ export function TieredSourcePanel({ tiers }: Props) {
               key={t.id}
               value={t.id}
               title={t.note}
-              className="-mb-px border-b-2 border-transparent py-inline font-ui text-[0.82rem] text-text-muted transition-colors data-[state=active]:border-accent data-[state=active]:text-text"
+              className="-mb-px flex min-h-11 items-center border-b-2 border-transparent py-inline font-ui text-[0.82rem] text-text-muted transition-colors data-[state=active]:border-accent data-[state=active]:text-text lg:min-h-0"
             >
               {t.label}
               <span className="ml-hair text-text-faint">{t.count}</span>

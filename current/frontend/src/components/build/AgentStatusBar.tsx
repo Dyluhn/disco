@@ -308,7 +308,7 @@ function ResumeButton({
       onClick={onResume}
       aria-label={`Resume the agent — continue this ${surface === "agent" ? "task" : "build"} where it left off`}
       data-disco-control="resume"
-      className="flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
+      className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.78rem] text-accent transition-colors hover:border-accent hover:bg-accent/5"
     >
       <Play className="size-3.5" aria-hidden />
       Resume
@@ -352,7 +352,7 @@ function StopButton({
       // (the loop settled to PAUSED/IDLE and this button unmounts) — asserted
       // via the status label + Resume affordance, never a lying live Stop.
       data-stop-state={stopping ? "stopping" : "idle"}
-      className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
+      className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-text-muted hover:text-text disabled:opacity-60"
     >
       {stopping ? (
         <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -389,7 +389,7 @@ function KillControl({
           onClick={onConfirm}
           aria-label="Confirm kill: stop, tear down the sandbox, revoke its access"
           data-disco-control="kill-confirm"
-          className="flex items-center gap-hair rounded-control border border-unsupported bg-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity hover:opacity-90"
+          className="flex max-lg:min-h-11 items-center gap-hair rounded-control border border-unsupported bg-unsupported px-inline py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity hover:opacity-90"
         >
           <OctagonX className="size-3.5" aria-hidden />
           Confirm
@@ -398,7 +398,7 @@ function KillControl({
           type="button"
           onClick={onCancel}
           aria-label="Cancel — keep the run"
-          className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
+          className="max-lg:min-h-11 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text"
         >
           Cancel
         </button>
@@ -413,7 +413,7 @@ function KillControl({
       aria-label="Kill the agent: stop, tear down the sandbox, revoke its access"
       data-disco-control="kill"
       className={cn(
-        "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
+        "flex max-lg:min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] font-medium transition-colors",
         active
           ? "border-unsupported text-unsupported hover:bg-unsupported hover:text-bg"
           : "cursor-not-allowed border-hairline text-text-faint",

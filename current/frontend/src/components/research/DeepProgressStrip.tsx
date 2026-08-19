@@ -180,7 +180,7 @@ export function DeepProgressStrip({ plan, progress, trace, stats, status, follow
           <button
             type="button"
             onClick={() => setExpandedWhenFinished(false)}
-            className="grid size-7 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text"
+            className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text lg:size-7"
             aria-label="Collapse progress"
           >
             <ChevronDown className="size-3.5" aria-hidden />

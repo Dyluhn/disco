@@ -16,6 +16,7 @@ import { useState } from "react";
 import { CornerDownLeft, MessageCircleQuestion } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET_ICON } from "@/lib/tapTarget";
 
 export function AskPanel({
   question,
@@ -76,7 +77,10 @@ export function AskPanel({
           disabled={!text.trim()}
           aria-label="Send answer"
           data-disco-control="answer-question"
-          className="shrink-0 pb-hair text-accent transition-colors hover:opacity-80 disabled:opacity-40"
+          className={cn(
+            TAP_TARGET_ICON,
+            "shrink-0 pb-hair text-accent transition-colors hover:opacity-80 disabled:opacity-40",
+          )}
         >
           <CornerDownLeft className="size-4" aria-hidden />
         </button>

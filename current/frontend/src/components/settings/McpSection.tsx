@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET_ICON } from "@/lib/tapTarget";
 import { agentIsLive } from "@/api/liveness";
 import { isApiFailure } from "@/api/errors";
 import { testMcpConnection } from "@/api/config";
@@ -49,7 +50,11 @@ function Switch({
       aria-label={label}
       onClick={() => onChange(!checked)}
       className={cn(
-        "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
+        // The pill itself must stay this exact size (it's a recognizable
+        // on/off shape) — the mobile tap target grows via an invisible
+        // ::after hit-slop instead of resizing the visible control. Gone
+        // entirely at lg: (content-none), so desktop is untouched.
+        "relative h-5 w-9 shrink-0 rounded-full border transition-colors after:absolute after:-inset-x-1 after:-inset-y-3 after:content-[''] lg:after:content-none",
         checked
           ? "border-accent/50 bg-accent/30"
           : "border-hairline bg-surface-2",
@@ -342,7 +347,11 @@ export function McpSection() {
               key={c.id}
               className="flex flex-col border-b border-hairline last:border-b-0"
             >
-              <div className="flex items-center justify-between gap-section px-body py-inline">
+              {/* Below `lg` the name/URL column and the action cluster stack
+                  instead of sharing one row — cramming a 44px-tall switch +
+                  two 44px icon buttons into a `min-w-0` remainder next to the
+                  connection name left no room for either on a phone. */}
+              <div className="flex flex-col gap-inline px-body py-inline lg:flex-row lg:items-center lg:justify-between lg:gap-section">
                 <div className="min-w-0">
                   <div className="font-ui text-[0.88rem] font-medium text-text">
                     {c.name}
@@ -365,7 +374,7 @@ export function McpSection() {
                     </p>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-inline">
+                <div className="flex flex-wrap shrink-0 items-center gap-inline">
                   <span
                     data-mcp-status={c.status}
                     className="flex shrink-0 items-center gap-hair font-ui text-[0.76rem] text-text-muted"
@@ -383,7 +392,10 @@ export function McpSection() {
                       onClick={() => setApprovingServer(c.id)}
                       aria-label={`Re-approve ${c.name}`}
                       title="Review required MCP approval"
-                      className="text-text-faint transition-colors hover:text-accent font-ui text-[0.72rem]"
+                      className={cn(
+                        "text-text-faint transition-colors hover:text-accent font-ui text-[0.72rem]",
+                        TAP_TARGET_ICON,
+                      )}
                     >
                       Review
                     </button>
@@ -405,7 +417,10 @@ export function McpSection() {
                       onClick={() => revoke.mutate(c.id)}
                       aria-label={`Revoke approvals for ${c.name}`}
                       title="Revoke configuration, tool, and egress approvals"
-                      className="text-text-faint transition-colors hover:text-unsupported"
+                      className={cn(
+                        "rounded-control text-text-faint transition-colors hover:text-unsupported",
+                        TAP_TARGET_ICON,
+                      )}
                     >
                       <ShieldOff className="size-3.5" aria-hidden />
                     </button>
@@ -415,7 +430,10 @@ export function McpSection() {
                     data-disco-control="settings.mcp-remove"
                     onClick={() => remove.mutate(c.id)}
                     aria-label={`Remove ${c.name}`}
-                    className="text-text-faint transition-colors hover:text-unsupported"
+                    className={cn(
+                      "rounded-control text-text-faint transition-colors hover:text-unsupported",
+                      TAP_TARGET_ICON,
+                    )}
                   >
                     <Trash2 className="size-3.5" aria-hidden />
                   </button>

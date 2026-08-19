@@ -31,7 +31,19 @@ export function BuildActivityFeed({
   children: ReactNode;
 }) {
   return (
-    <div className="mt-section flex min-h-0 flex-1 flex-col px-body">
+    // Mobile floor: below `lg` the chat pane is now a bounded, internally-
+    // scrolling column (ResizableSplit fills the phone's height so the
+    // composer stays put at the bottom — see that file's header comment). A
+    // tall footer (the finished-handoff self-host card + the schedule
+    // section) can otherwise squeeze this flex-1 wrapper to ~0px, and a
+    // `position: sticky` child (the plan tracker) painted outside that
+    // collapsed box rather than clipping cleanly — the feed looked like it
+    // was overlapping the footer below it. A sane minimum height keeps the
+    // feed always legible; if the footer still doesn't fit under it, IT
+    // overflows the pane instead (reachable via the ordinary page scroll),
+    // which reads as "scroll a bit further," not "broken." `lg:min-h-0`
+    // restores the exact desktop behavior (untouched) at `lg`+.
+    <div className="mt-section flex min-h-[16rem] flex-1 flex-col px-body lg:min-h-0">
       <div className="flex items-baseline justify-between">
         <h2 className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
           Activity
@@ -67,7 +79,7 @@ export function BuildActivityFeed({
             aria-label="Scroll to latest activity"
             title="Scroll to latest activity"
             data-disco-control="build.scroll-to-bottom"
-            className="flex items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
+            className="flex max-lg:size-11 items-center justify-center rounded-full border border-hairline bg-surface-1 p-inline text-text-muted shadow-sm transition-colors hover:bg-surface-2 hover:text-text"
           >
             <ChevronDown className="size-4" aria-hidden />
           </button>

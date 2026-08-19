@@ -7,6 +7,7 @@ import { useState } from "react";
 import { CornerDownLeft, ListChecks } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { cn } from "@/lib/cn";
+import { TAP_TARGET } from "@/lib/tapTarget";
 
 export interface QuestionsV2Item {
   id: string;
@@ -92,6 +93,7 @@ export function QuestionsV2Panel({
                   <label
                     key={option}
                     className={cn(
+                      TAP_TARGET,
                       "flex cursor-pointer items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.82rem] transition-colors",
                       choices[item.id] === option
                         ? "border-accent bg-accent/10 text-text"
@@ -138,7 +140,8 @@ export function QuestionsV2Panel({
           disabled={!allAnswered}
           data-disco-control="submit-questions-v2"
           className={cn(
-            "flex items-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.82rem] text-accent transition-colors",
+            TAP_TARGET,
+            "flex w-full items-center justify-center gap-hair rounded-control border border-accent/40 px-inline py-hair font-ui text-[0.82rem] text-accent transition-colors lg:w-auto",
             "hover:bg-accent/10 disabled:cursor-not-allowed disabled:opacity-40",
           )}
         >

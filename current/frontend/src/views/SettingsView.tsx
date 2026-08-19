@@ -1,5 +1,8 @@
 import { AlertTriangle } from "lucide-react";
+import { useRef } from "react";
 import type { ReactNode } from "react";
+import { ScrollFadeEdges } from "@/components/ScrollFade";
+import { useScrollFade } from "@/hooks/useScrollFade";
 import { AudioSection } from "@/components/settings/AudioSection";
 import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
@@ -217,6 +220,9 @@ function SettingsItem({ id, children }: { id?: string; children: ReactNode }) {
  * this view owns information architecture and navigation.
  */
 export function SettingsView() {
+  const navScrollRef = useRef<HTMLElement>(null);
+  const { showLeft, showRight } = useScrollFade(navScrollRef);
+
   return (
     <div className="mx-auto w-full max-w-[76rem] px-body py-section">
       <div className="flex flex-col gap-major">
@@ -233,6 +239,7 @@ export function SettingsView() {
 
         <div className="grid gap-section lg:grid-cols-[13rem_minmax(0,1fr)] lg:items-start">
           <nav
+            ref={navScrollRef}
             aria-label="Settings sections"
             className="sticky top-0 z-10 -mx-body flex gap-hair overflow-x-auto border-y border-hairline bg-bg/95 px-body py-inline backdrop-blur lg:top-section lg:mx-0 lg:flex-col lg:overflow-visible lg:border-y-0 lg:border-r lg:py-hair lg:pr-body"
           >
@@ -240,11 +247,17 @@ export function SettingsView() {
               <a
                 key={item.id}
                 href={`#${item.id}`}
-                className="whitespace-nowrap rounded-control px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:bg-surface-1 hover:text-text"
+                className="flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-control px-inline py-hair font-ui text-[0.78rem] text-text-muted hover:bg-surface-1 hover:text-text lg:min-h-0"
               >
                 {item.label}
               </a>
             ))}
+            {/* Mobile-only scroll affordance — the strip overflows below `lg`
+                (five section labels never fit 375–430px), and a plain
+                overflow-x-auto gives no visual hint that "Extensions &
+                Storage" is one swipe away. lg:hidden because desktop switches
+                to the non-scrolling vertical sidebar layout above. */}
+            <ScrollFadeEdges showLeft={showLeft} showRight={showRight} className="lg:hidden" />
           </nav>
 
           <div className="flex min-w-0 flex-col gap-major">

@@ -48,7 +48,7 @@ export function TemplatePicker({
           title={current?.description}
           data-disco-control={dataControl}
           className={cn(
-            "rounded-control border border-hairline bg-surface-1 px-inline py-px font-ui text-[0.74rem] text-text",
+            "min-h-11 rounded-control border border-hairline bg-surface-1 px-inline py-px font-ui text-[0.74rem] text-text lg:min-h-0",
             "focus:border-hairline-strong focus:outline-none",
             disabled && "opacity-60",
           )}

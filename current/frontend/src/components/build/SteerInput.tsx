@@ -53,7 +53,7 @@ export function SteerInput({
           disabled={disabled || !text.trim()}
           aria-label="Send steer"
           data-disco-control="steer"
-          className="shrink-0 text-text-faint transition-colors hover:text-text disabled:opacity-40"
+          className="flex shrink-0 items-center justify-center text-text-faint transition-colors hover:text-text disabled:opacity-40 max-lg:min-h-11 max-lg:min-w-11"
         >
           <CornerDownLeft className="size-3.5" aria-hidden />
         </button>

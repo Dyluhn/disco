@@ -90,9 +90,12 @@ export function ModeSlider() {
             title={m.dormant ? `${m.label} — coming soon` : undefined}
             onClick={() => switchTo(m.id)}
             className={cn(
-              // min-h-9 (36px) gives a finger-friendly touch target on phones; on
-              // sm+ it collapses back to the tight desktop pill height (py-hair).
-              "flex min-h-9 items-center gap-hair rounded-full px-body py-hair font-ui text-[0.8rem] transition-colors sm:min-h-0",
+              // min-h-11 (44px, the shared mobile-spec floor) gives a real
+              // touch target on phones; at lg+ it collapses back to the tight
+              // desktop pill height (py-hair) — matches the app's lg: mobile
+              // boundary rather than an earlier sm: cutoff that left the
+              // 640–1024px range on the too-small 36px pill.
+              "flex min-h-11 items-center gap-hair rounded-full px-body py-hair font-ui text-[0.8rem] transition-colors lg:min-h-0",
               active && "bg-surface-2 text-text",
               !active && !m.dormant && "text-text-muted hover:text-text",
               m.dormant && "cursor-not-allowed text-text-faint",

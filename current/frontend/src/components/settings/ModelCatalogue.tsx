@@ -5,6 +5,7 @@ import { isApiFailure } from "@/api/errors";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
+import { TAP_TARGET_ICON } from "@/lib/tapTarget";
 import {
   useCreateModel,
   useDeleteModel,
@@ -425,7 +426,11 @@ export function ModelCatalogue() {
                 <div className="font-ui text-[0.86rem] font-medium text-text">
                   {m.label}
                 </div>
-                <p className="truncate font-mono text-[0.72rem] text-text-faint">
+                {/* Wraps on mobile so the id is fully readable (no room for a
+                    hover tooltip on touch); lg:truncate restores the original
+                    single-line ellipsis once the desktop sidebar gives it a
+                    fixed, comfortably wide column. */}
+                <p className="break-words font-mono text-[0.72rem] text-text-faint lg:truncate">
                   {m.id} · {m.note}
                 </p>
               </div>
@@ -450,7 +455,10 @@ export function ModelCatalogue() {
                   onClick={() =>
                     setDialog({ mode: "edit", initial: toUpsert(m) })
                   }
-                  className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
+                  className={cn(
+                    "rounded-control p-hair text-text-faint transition-colors hover:text-text",
+                    TAP_TARGET_ICON,
+                  )}
                 >
                   <Pencil className="size-3.5" aria-hidden />
                 </button>
@@ -467,7 +475,10 @@ export function ModelCatalogue() {
                       data-disco-control="settings.model-delete"
                       data-model-id={m.id}
                       aria-label={`Remove ${m.id}`}
-                      className="rounded-control p-hair text-text-faint transition-colors hover:text-unsupported"
+                      className={cn(
+                        "rounded-control p-hair text-text-faint transition-colors hover:text-unsupported",
+                        TAP_TARGET_ICON,
+                      )}
                     >
                       <Trash2 className="size-3.5" aria-hidden />
                     </button>

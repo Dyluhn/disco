@@ -65,7 +65,7 @@ export function Shell() {
               data-disco-control="shell.drawer-open"
               aria-label="Open navigation"
               onClick={() => setDrawerOpen(true)}
-              className="grid size-9 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text lg:hidden"
+              className="grid size-11 shrink-0 place-items-center rounded-control border border-hairline text-text-muted transition-colors hover:text-text lg:hidden"
             >
               <Menu className="size-4" aria-hidden />
             </button>

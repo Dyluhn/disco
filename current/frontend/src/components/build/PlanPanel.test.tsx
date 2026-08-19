@@ -53,10 +53,15 @@ describe("PlanPanel — no-steps render", () => {
 
   it("defaults expanded while awaiting approval and collapsed while running", () => {
     const { rerender } = render(<PlanPanel plan={WITH_STEPS} onApprove={() => {}} />);
+    // Mobile-first: the title can shrink/truncate instead of forcing an
+    // overflow (BUG-fix — the "needs your approval" pill and revision chip
+    // used to render on top of this heading at 375/430px). lg+ restores the
+    // original fixed-width, non-wrapping label via the lg: variants.
+    expect(screen.getByText("Review the plan")).toHaveClass("min-w-0", "shrink", "truncate");
     expect(screen.getByText("Review the plan")).toHaveClass(
-      "min-w-fit",
-      "shrink-0",
-      "whitespace-nowrap",
+      "lg:min-w-fit",
+      "lg:shrink-0",
+      "lg:whitespace-nowrap",
     );
     expect(screen.getByRole("button", { name: /collapse plan/i })).toHaveAttribute(
       "aria-expanded",
