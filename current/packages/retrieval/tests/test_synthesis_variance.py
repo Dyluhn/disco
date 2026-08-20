@@ -414,6 +414,121 @@ def test_successful_summary_preserves_existing_markdown_paragraphs():
     )
 
 
+# ---------------------------------------------------------------------------
+# Empty-evidence honesty: the junk filter and the honest fallback paragraph.
+# Junk rows are REAL fragments from an exported report that shipped as
+# executive-summary prose before the filter existed.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("fragment", "is_junk"),
+    [
+        # scrape metadata stub (also ends in an ellipsis)
+        ("    Last verified: August 19, 2026 ….", True),
+        # site-navigation boilerplate with an escaped relative-path link
+        (
+            "For more details including relating to our methodology, "
+            "see our \\[FAQs.\\](/faq)",
+            True,
+        ),
+        # raw scraped-table fragments ('|' debris)
+        ("| Vendor | Q2 revenue | Growth |", True),
+        ("Owner | Fleet size | 12", True),
+        # mid-sentence truncation stubs
+        ("…and the remainder of the fleet was retrofitted by June", True),
+        ("which is why the market cannot yet be sized before 2030", True),
+        ("The market grew rapidly in the first half and …", True),
+        # too short to inform
+        ("Read more", True),
+        # subscribe/cookie boilerplate
+        ("Subscribe to our newsletter for weekly updates on the sector.", True),
+        ("Accept all cookies to continue reading this article.", True),
+        # genuine findings must all survive
+        ("Muse Glimmer was released", False),
+        ("The repository includes model weights", False),
+        ("> **As of August 16, 2026**, the release is public", False),
+        (
+            "Samsung announced a solid-state battery with a claimed 600-mile range",
+            False,
+        ),
+    ],
+)
+def test_junk_evidence_filter(fragment: str, is_junk: bool):
+    from disco.retrieval.deep_research._summary import _is_junk_evidence
+
+    assert _is_junk_evidence(fragment) is is_junk
+
+
+def test_fallback_summary_drops_junk_findings_but_keeps_genuine_ones():
+    from disco.retrieval.deep_research._summary import (
+        _fallback_findings,
+        _SupportedFinding,
+    )
+
+    findings = [
+        _SupportedFinding(
+            text="Last verified: August 19, 2026 ….",
+            cited_ids=("nav1",),
+            section_index=0,
+            published_at=None,
+        ),
+        _SupportedFinding(
+            text="| Vendor | Q2 revenue | Growth |",
+            cited_ids=("tbl1",),
+            section_index=0,
+            published_at=None,
+        ),
+        _SupportedFinding(
+            text="The repository includes model weights",
+            cited_ids=("weights",),
+            section_index=1,
+            published_at=datetime.date(2026, 8, 16),
+        ),
+    ]
+
+    summary = _fallback_findings(findings, _ReleaseNLI(), None)
+
+    assert "The repository includes model weights" in summary
+    assert "[[weights]]" in summary
+    assert "Last verified" not in summary
+    assert "|" not in summary
+
+
+def test_fallback_summary_with_only_junk_findings_is_one_honest_paragraph():
+    from disco.retrieval.deep_research._summary import (
+        _UNGROUNDED_SUMMARY_FALLBACK,
+        _fallback_findings,
+        _SupportedFinding,
+    )
+
+    findings = [
+        _SupportedFinding(
+            text=(
+                "For more details including relating to our methodology, "
+                "see our \\[FAQs.\\](/faq)"
+            ),
+            cited_ids=("faq",),
+            section_index=0,
+            published_at=None,
+        ),
+        _SupportedFinding(
+            text="…and the remainder of the fleet was retrofitted by June",
+            cited_ids=("stub",),
+            section_index=1,
+            published_at=None,
+        ),
+    ]
+
+    summary = _fallback_findings(findings, _ReleaseNLI(), None)
+
+    assert summary == _UNGROUNDED_SUMMARY_FALLBACK
+    assert summary.startswith("The research could not ground an executive summary")
+    assert "per-section detail" in summary
+    assert "FAQs" not in summary
+    assert not summary.startswith("Sources disagree")
+
+
 def test_fallback_conflict_checks_are_bounded_without_dropping_unchecked_findings():
     from disco.retrieval.deep_research._summary import (
         _MAX_FALLBACK_CONFLICT_CHECKS,

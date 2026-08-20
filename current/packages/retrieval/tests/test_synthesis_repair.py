@@ -473,6 +473,142 @@ async def test_synthesis_exception_preserves_cited_evidence() -> None:
     assert emitted[-1][1]["reason"] == "exception:RuntimeError"
 
 
+async def test_extractive_fallback_frames_preserved_quotes_honestly() -> None:
+    """A section whose synthesis produced nothing must open with the honest
+    framing sentence (added AFTER grounding so the claim gate cannot strip it)
+    and carry clean quotes — never a bare quote-stub list."""
+    router = _ScriptedRouter([("", "stop"), ("", "stop")])
+    sub = SubQuestionResult(
+        subq=SubQuestion(title="Historical context?"),
+        passages=[_passage()],
+    )
+
+    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=4,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_frame"),
+        ),
+    )
+
+    assert section.markdown.startswith(
+        "*(No synthesized answer to this sub-question could be grounded in the "
+        "1 retrieved source; the closest passages are preserved below without "
+        "interpretation.)*"
+    )
+    assert "> Alpha scored 90" in section.markdown
+    assert "[[p1]]" in section.markdown
+    assert section.confidence == "low"
+
+
+async def test_extractive_fallback_with_only_junk_passages_is_one_honest_line() -> None:
+    """Junk-only evidence (nav boilerplate, metadata stubs, table debris —
+    real fragments from an exported report) must yield ONE honest no-evidence
+    sentence, never block-quoted snippet soup."""
+    router = _ScriptedRouter([("", "stop"), ("", "stop")])
+    junk_passages = [
+        Passage(
+            id="nav1",
+            source_url="http://example.test/nav",
+            source_title="Nav junk",
+            text=(
+                "Last verified: August 19, 2026 …. For more details including "
+                "relating to our methodology, see our [FAQs.](/faq)"
+            ),
+        ),
+        Passage(
+            id="tbl1",
+            source_url="http://example.test/table",
+            source_title="Table junk",
+            text="| Vendor | Q2 revenue | Growth | | Alpha | 12.3 | 4.5 |",
+        ),
+    ]
+    sub = SubQuestionResult(
+        subq=SubQuestion(title="Market sizing?"),
+        passages=junk_passages,
+    )
+
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def _emit(kind: str, payload: dict[str, Any]) -> None:
+        emitted.append((kind, payload))
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=4,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_junk"),
+        ),
+    )
+
+    assert section.markdown == (
+        "*(No evidence answering this sub-question was found in the "
+        "2 retrieved sources.)*"
+    )
+    assert ">" not in section.markdown  # no quote stubs
+    assert section.cited_passage_ids == []
+    assert section.confidence == "low"
+    assert emitted[-1][1]["passages_preserved"] == 0
+
+
+async def test_extractive_fallback_preserves_at_most_three_clean_quotes() -> None:
+    router = _ScriptedRouter([("", "stop"), ("", "stop")])
+    passages = [
+        Passage(
+            id=f"p{index}",
+            source_url=f"http://example.test/{index}",
+            source_title=f"Source {index}",
+            text=f"Vendor {index} shipped its flagship model in August 2026.",
+        )
+        for index in range(5)
+    ]
+    sub = SubQuestionResult(subq=SubQuestion(title="Who shipped?"), passages=passages)
+
+    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
+        return None
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=8,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_cap"),
+        ),
+    )
+
+    assert section.markdown.count("> ") == 3  # capped at three quotes
+    assert section.markdown.count("[[") == 3
+
+
 async def test_truncation_guard_is_bounded() -> None:
     """A model that keeps returning `length` is bounded: the guard continues at
     most twice (3 router calls total), then stops with the accumulated text."""

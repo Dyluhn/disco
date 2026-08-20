@@ -18,7 +18,10 @@ this path), so it needs `weasyprint` importable wherever the agent-server runs.
 `export_capabilities()` reports which formats are actually usable so the UI
 never offers a button that 500s.
 
-The MD path is UNCHANGED (byte-identical to the pre-DR-2 baseline).
+Both paths first run the shared passage-text normalization seam
+(_normalized_report): escaped-link cleanup and table-shape repair over the
+summary and section bodies. Clean input is untouched, so the MD path stays
+byte-identical to the pre-DR-2 baseline for well-formed reports.
 """
 
 from __future__ import annotations
@@ -49,6 +52,13 @@ from disco.core.brand.tokens import Theme
 from disco.core.events import report_truncation
 from disco.core.think import strip_think_spans
 
+from ._report_normalize import (
+    _is_table_separator,
+    _normalize_passage_text,  # noqa: F401  (re-export: test seam + shared alg)
+    _normalized_report,
+    _split_table_row,
+)
+
 logger = logging.getLogger(__name__)
 
 # ---- Markdown serializer (ported verbatim from deepResearch.ts:88-127) ----
@@ -77,6 +87,7 @@ def serialize_markdown(
     falls back to ``report.query`` (byte-identical to the baseline — the
     byte-parity test passes ``title=None``).
     """
+    report = _normalized_report(report)
     display_title = (title or "").strip() or report.query
     lines: list[str] = []
     lines.append(f"# Deep Research: {display_title}")
@@ -182,7 +193,6 @@ _CITE_RE = re.compile(r"\[\[([^\]]+)\]\]")
 # ```chart fences hold a JSON chart spec the frontend lifts into a Chart.js canvas;
 # the PDF path renders them to inline SVG (or a table) instead of a raw code block.
 _CHART_FENCE_RE = re.compile(r"```chart[^\n]*\n(.*?)```", re.DOTALL)
-_TABLE_ALIGN_RE = re.compile(r"^:?-{3,}:?$")
 
 
 def _citation_map(report: ReportEvent) -> dict[str, int]:
@@ -211,39 +221,6 @@ def _render_chart_block(raw_json: str, pal: Palette | None) -> str:
     svg = render_chart_svg(spec, pal) if pal is not None else None
     inner = svg if svg else render_chart_table(spec)
     return f'<figure class="chart-figure">{inner}</figure>'
-
-
-def _split_table_row(line: str) -> list[str]:
-    """Split a pipe-table row while preserving escaped pipes inside cells."""
-    row = line.strip()
-    if row.startswith("|"):
-        row = row[1:]
-    if row.endswith("|"):
-        row = row[:-1]
-
-    cells: list[str] = []
-    buf: list[str] = []
-    escaped = False
-    for ch in row:
-        if escaped:
-            buf.append(ch)
-            escaped = False
-        elif ch == "\\":
-            escaped = True
-        elif ch == "|":
-            cells.append("".join(buf).strip())
-            buf = []
-        else:
-            buf.append(ch)
-    if escaped:
-        buf.append("\\")
-    cells.append("".join(buf).strip())
-    return cells
-
-
-def _is_table_separator(line: str) -> bool:
-    cells = _split_table_row(line)
-    return bool(cells) and all(_TABLE_ALIGN_RE.fullmatch(c.strip()) for c in cells)
 
 
 def _strip_wrapping_paragraph(rendered: str) -> str:
@@ -577,6 +554,7 @@ def _build_pdf_html(
     TOC is emitted when sections > 10.
     Sources appendix uses 2-col class when passages > 30.
     """
+    report = _normalized_report(report)
     sections = report.sections
     passages = report.passages
     n_passages = len(passages)

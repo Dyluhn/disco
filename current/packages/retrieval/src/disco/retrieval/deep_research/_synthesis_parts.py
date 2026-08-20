@@ -220,6 +220,26 @@ async def continue_truncated_section(
     return markdown
 
 
+def frame_extractive_fallback(
+    markdown: str, cited_ids: list[str], *, source_count: int
+) -> tuple[str, list[str]]:
+    """Honest framing for a section whose only content is preserved quotes.
+
+    Called AFTER the claim gate on an extractive-fallback section: quotes that
+    survived grounding get one clear framing sentence ahead of them; a section
+    with no surviving quotes collapses to a single honest no-evidence line —
+    never a bare quote-stub list.
+    """
+    if markdown == _synthesis._NO_SUPPORTED_SYNTHESIS or not cited_ids:
+        return _synthesis._no_evidence_markdown(source_count), []
+    note = (
+        "*(No synthesized answer to this sub-question could be grounded in "
+        f"the {source_count} {_synthesis._source_noun(source_count)}; the "
+        "closest passages are preserved below without interpretation.)*"
+    )
+    return f"{note}\n\n{markdown}", cited_ids
+
+
 async def fallback_section_or_markdown(
     passages: list[Passage],
     *,
@@ -227,11 +247,11 @@ async def fallback_section_or_markdown(
     title: str,
     emit: EmitFn,
     reason: str,
-    empty_markdown: str,
 ) -> tuple[str, ReportSection | None]:
     """Grounded extractive fallback + telemetry. If the fallback is ALSO
-    empty, returns the honest-failure `ReportSection` so the caller can
-    short-circuit; never erases evidence to report the telemetry."""
+    empty (no passage survived the junk filter), returns the honest
+    no-evidence `ReportSection` so the caller can short-circuit; never
+    erases evidence to report the telemetry."""
     markdown = _synthesis._grounded_extractive_fallback(passages)
     try:
         await emit(
@@ -239,13 +259,21 @@ async def fallback_section_or_markdown(
             {
                 "section": title,
                 "reason": reason,
-                "passages_preserved": min(len(passages), 3),
+                # One "[[id]]" per preserved quote — the junk filter may keep
+                # fewer than the old min(len(passages), 3), or none at all.
+                "passages_preserved": markdown.count("[["),
             },
         )
     except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
         pass
     if not markdown:
+        prefix = ""
+        if reason.startswith("exception:"):
+            prefix = f"Section synthesis failed ({reason.removeprefix('exception:')}). "
         return "", ReportSection(
-            id=section_id, title=title, markdown=empty_markdown, confidence="low"
+            id=section_id,
+            title=title,
+            markdown=_synthesis._no_evidence_markdown(len(passages), prefix=prefix),
+            confidence="low",
         )
     return markdown, None
