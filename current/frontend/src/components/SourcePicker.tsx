@@ -40,7 +40,7 @@ export function SourcePicker({
 
   return (
     <div className="flex min-w-0 items-center gap-hair" aria-label="Research sources">
-      <span className="shrink-0 font-ui text-[0.74rem] text-text-faint">
+      <span className="shrink-0 font-ui text-[0.76rem] text-text-faint">
         Sources
       </span>
       <div className="flex min-w-0 flex-wrap items-center gap-hair">

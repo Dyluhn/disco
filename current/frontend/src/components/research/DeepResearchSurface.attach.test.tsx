@@ -92,7 +92,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
   it("UploadComposer is immediately actionable without creating a cid on mount", async () => {
     renderSurface();
 
-    fireEvent.click(screen.getByRole("button", { name: /Research options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled();
     const { createDeepResearchConversation } = await import("@/api/deepResearch");
@@ -103,7 +103,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
     agentLiveMock.mockReturnValue(false);
     renderSurface();
 
-    fireEvent.click(screen.getByRole("button", { name: /Research options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
     // With agentLive false no lazy cid callback is exposed, so the affordance
     // is disabled instead of vanishing once the secondary options are opened.
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
@@ -117,7 +117,7 @@ describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
     const { uploadFiles } = await import("@/api/agent");
     renderSurface();
 
-    fireEvent.click(screen.getByRole("button", { name: /Research options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
     const input = document.querySelector(
       '[data-disco-control="build.upload-input"]',
     ) as HTMLInputElement;

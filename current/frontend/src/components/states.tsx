@@ -1,5 +1,5 @@
 import { AlertTriangle } from "lucide-react";
-import { MODES, useMode } from "@/shell/mode";
+import { MODES } from "@/shell/mode";
 
 /** The default hero copy is the standard Research framing. Other surfaces pass
  * their own descriptor so the caption names the active surface. */
@@ -7,9 +7,10 @@ const DEFAULT_TITLE = "Research";
 const DEFAULT_SUBTITLE = "Sourced answers on anything.";
 
 /** Pre-first-query empty state. The brand is the constant — the Disco wordmark
- * with its Latin dictionary entry — and the active surface reads as a quiet
- * subchip row beneath it (the surfaces are framings of Disco, not separate
- * products). `title`/`subtitle` name the active surface and its descriptor. */
+ * with its Latin dictionary entry — with the surface's tagline directly under
+ * it. Mode switching is the top bar's job alone (the old subchip row here
+ * duplicated it exactly). `title`/`subtitle` name the active surface and its
+ * descriptor. */
 export function EmptyState({
   title = DEFAULT_TITLE,
   subtitle = DEFAULT_SUBTITLE,
@@ -17,7 +18,6 @@ export function EmptyState({
   title?: string;
   subtitle?: string;
 } = {}) {
-  const { mode, setMode } = useMode();
   return (
     <div className="flex flex-col items-center text-center">
       <h1 className="font-display text-[3rem] font-light tracking-tight text-text">Disco</h1>
@@ -29,24 +29,6 @@ export function EmptyState({
         <span className="mx-2 text-text-faint">·</span>
         I learn; I become acquainted with.
       </p>
-      {/* surface subchips — the active framing, switchable in place */}
-      <div className="mt-6 flex items-center gap-2" data-disco-control="splash.surface-chips">
-        {MODES.filter((m) => !m.dormant).map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => setMode(m.id)}
-            aria-pressed={m.id === mode}
-            className={
-              m.id === mode
-                ? "flex min-h-11 items-center justify-center rounded-full border border-hairline-strong bg-surface-1 px-4 py-1 font-ui text-[0.8rem] text-text lg:min-h-0"
-                : "flex min-h-11 items-center justify-center rounded-full border border-transparent px-4 py-1 font-ui text-[0.8rem] text-text-faint transition-colors hover:text-text-muted lg:min-h-0"
-            }
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
       <p className="mt-3 max-w-measure font-reading text-[0.95rem] leading-relaxed text-text-muted">
         {title === DEFAULT_TITLE || MODES.some((m) => m.label === title.toLowerCase())
           ? subtitle

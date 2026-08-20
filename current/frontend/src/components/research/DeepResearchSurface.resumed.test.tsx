@@ -81,6 +81,10 @@ vi.mock("@/api/agent", () => ({
     return { send: () => {}, cancel: () => {} };
   },
   killConversation: () => Promise.resolve(),
+  // DriverModelNotice (composer) resolves its label from the driver catalogue;
+  // the resume path never renders the composer but the hooks still mount.
+  listDriverModels: () => Promise.resolve({ models: [], default: null }),
+  getLastSelectedModel: () => Promise.resolve(null),
 }));
 
 function renderResumeSurface() {

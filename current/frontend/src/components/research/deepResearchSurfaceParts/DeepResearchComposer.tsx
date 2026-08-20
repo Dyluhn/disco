@@ -43,17 +43,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
     ((next: ScopeId) => {
       if (next === "standard") navigate("/");
     });
-  const recencyLabel =
-    r.recencyWindow === "week"
-      ? "Past week"
-      : r.recencyWindow === "month"
-        ? "Past month"
-        : "Any time";
   const depthLabel = DEPTH_TRIGGER_LABELS[r.depthTier as Tier];
-  const sourceLabel =
-    r.selectedSources.length === 0
-      ? "Configured sources"
-      : `${r.selectedSources.length} added source${r.selectedSources.length === 1 ? "" : "s"}`;
 
   // Same catalogue read as ModelLeaderPill: the explicit pick, else the
   // Settings default — the notice mirrors what would actually lead the run.
@@ -90,10 +80,9 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
                 className="flex min-h-11 min-w-0 items-center gap-hair px-hair py-hair font-ui text-[0.78rem] font-medium text-text-muted transition-colors hover:text-text lg:min-h-0"
               >
                 <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-                <span className="shrink-0">Research options</span>
-                <span className="hidden truncate text-text-faint sm:inline">
-                  · {depthLabel} · {recencyLabel} · {sourceLabel}
-                </span>
+                <span className="shrink-0">Options</span>
+                {/* One summary token only: the depth choice hidden in the menu. */}
+                <span className="shrink-0 text-text-faint">· {depthLabel}</span>
                 <ChevronDown
                   className={cn(
                     "size-3 shrink-0 text-text-faint transition-transform",
@@ -109,27 +98,24 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
               {optionsOpen && (
                 <div
                   id="deep-research-options-panel"
-                  className="flex flex-col gap-inline border-t border-hairline pt-inline"
+                  className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
                 >
-                  <div className="flex flex-wrap items-center gap-inline">
-                    <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
-                    <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
-                    <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
-                  </div>
-                  <div className="flex flex-wrap items-center justify-between gap-inline">
-                    <SourcePicker
-                      selected={r.selectedSources}
-                      onChange={r.setSelectedSources}
-                    />
-                    {/* G1/DR-4: opening options mounts the upload affordance. It
-                        creates a conversation only after a real file selection. */}
-                    <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
-                  </div>
+                  <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
+                  <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
+                  <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                  <SourcePicker
+                    selected={r.selectedSources}
+                    onChange={r.setSelectedSources}
+                  />
+                  {/* G1/DR-4: opening options mounts the upload affordance. It
+                      creates a conversation only after a real file selection. */}
+                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
                 </div>
               )}
               <div className="flex justify-end">
                 <DriverModelNotice
                   label={noticeModel?.label ?? null}
+                  modelId={noticeModel?.id ?? null}
                   controlId="dr.driver-model"
                   onReveal={() => {
                     setOptionsOpen(true);

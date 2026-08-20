@@ -2,11 +2,11 @@
  * The Build surface's pre-start landing view: hero + the task composer +
  * suggestion chips. Extracted verbatim from BuildSurface.tsx's `!b.started`
  * branch (PKG-12-FE-BUILD), then re-anchored on the composer: everything
- * optional — model picker, Autonomous toggle, attach/import, the sandbox hint,
- * and (agent framing) the connections strip — lives in the click-to-expand
- * options panel inside the card. Outside the panel the card holds only the
- * textarea, the send button, the menu trigger, and the driver-model notice,
- * matching the Search and Deep Research composers' grammar.
+ * optional — model picker, Autonomous toggle, attach/import, and (agent
+ * framing) the tools control — lives in the click-to-expand options panel
+ * inside the card. Outside the panel the card holds only the textarea, the
+ * send button, the "Options" trigger, and the driver-model notice, matching
+ * the Search and Deep Research composers' grammar.
  *
  * The Assist tier toggle that used to sit next to Autonomous is deliberately
  * hidden (deprecated control, not removed — see the comment at its old call
@@ -76,9 +76,7 @@ export function BuildEmptyState({
                 className="flex min-h-11 items-center gap-hair px-hair py-hair font-ui text-[0.78rem] font-medium text-text-muted transition-colors hover:text-text lg:min-h-0"
               >
                 <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-                <span className="shrink-0">
-                  {framing === "agent" ? "Task options" : "Build options"}
-                </span>
+                <span className="shrink-0">Options</span>
                 <ChevronDown
                   className={cn(
                     "size-3 shrink-0 text-text-faint transition-transform",
@@ -93,51 +91,41 @@ export function BuildEmptyState({
                 {optionsOpen && (
                   <div
                     id="build-options-panel"
-                    className="flex flex-col gap-inline border-t border-hairline pt-inline"
+                    className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
                   >
-                    <div className="flex flex-wrap items-center gap-inline">
-                      <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
-                      {/* Assist tier toggle deliberately hidden at launch (deprecated
-                          control) — b.assistChoice/setAssistChoice still exist and
-                          still drive the create/patch payload at its default (off);
-                          only the render is gone. See AgentStatusBar.tsx for the
-                          matching read-only badge removal. */}
-                      {/* Same control grammar as the search/DR menu toggles
-                          (ThinkToggle): rounded-control pill, icon + label,
-                          accent when on. */}
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={b.autonomousChoice}
-                        aria-label="Autonomous mode (headless run)"
-                        data-disco-control="build.autonomous-toggle"
-                        onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
-                        title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks turn it off so the agent can ask."
-                        className={cn(
-                          "flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
-                          b.autonomousChoice
-                            ? "border-accent/50 bg-surface-1 text-accent"
-                            : "border-hairline text-text-muted hover:text-text",
-                        )}
-                      >
-                        <Zap className="size-3.5 shrink-0" aria-hidden />
-                        Autonomous
-                      </button>
-                    </div>
+                    <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
+                    {/* Assist tier toggle deliberately hidden at launch (deprecated
+                        control) — b.assistChoice/setAssistChoice still exist and
+                        still drive the create/patch payload at its default (off);
+                        only the render is gone. See AgentStatusBar.tsx for the
+                        matching read-only badge removal. */}
+                    {/* Same control grammar as the search/DR menu toggles
+                        (ThinkToggle): rounded-control pill, icon + label,
+                        accent when on. */}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={b.autonomousChoice}
+                      aria-label="Autonomous mode (headless run)"
+                      data-disco-control="build.autonomous-toggle"
+                      onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
+                      title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks turn it off so the agent can ask."
+                      className={cn(
+                        "flex min-h-11 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.76rem] transition-colors lg:min-h-0",
+                        b.autonomousChoice
+                          ? "border-accent/50 bg-surface-1 text-accent"
+                          : "border-hairline text-text-muted hover:text-text",
+                      )}
+                    >
+                      <Zap className="size-3.5 shrink-0" aria-hidden />
+                      Autonomous
+                    </button>
                     {/* G1/DR-4 + W-07: the upload affordance mounts with the menu
                         and self-enables via ensureCid — Attach is usable before a
                         cid exists, lazily creating the build conversation the
                         first message will run. */}
-                    <div className="flex items-center gap-inline">
-                      <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
-                      {framing === "build" && <ImportProjectDialog />}
-                    </div>
-                    <p className="font-ui text-[0.78rem] text-text-faint">
-                      The agent works in a sandbox and shows its plan.{" "}
-                      {b.autonomousChoice
-                        ? "It runs headless — risky steps auto-approve and it won't stop to ask."
-                        : "Risky steps pause for your approval."}
-                    </p>
+                    <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
+                    {framing === "build" && <ImportProjectDialog />}
                     {/* Agent surface: foreground the MCP tools it can reach (its
                         reason for being). */}
                     {framing === "agent" && <ConnectionsStrip />}
@@ -146,6 +134,7 @@ export function BuildEmptyState({
                 <div className="flex justify-end">
                   <DriverModelNotice
                     label={noticeLabel}
+                    modelId={effectiveModelId}
                     controlId="build.driver-model"
                     onReveal={() => {
                       setOptionsOpen(true);

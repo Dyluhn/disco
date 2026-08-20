@@ -106,11 +106,7 @@ describe("BuildEmptyState — Assist tier toggle stays hidden", () => {
       );
 
       // The relocated config controls live behind the options disclosure now.
-      fireEvent.click(
-        screen.getByRole("button", {
-          name: framing === "agent" ? /task options/i : /build options/i,
-        }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
 
       // The deprecated control is gone from render output, not just visually
       // hidden — no role, no label, no data hook, no leftover on/off text.
@@ -140,20 +136,17 @@ describe("BuildEmptyState — composer-anchored config (no controls above the bo
       );
 
       // Nothing optional renders outside the menu: no config controls above
-      // the box, no sandbox hint or connections strip below it.
+      // the box, no connections strip below it, and the old sandbox
+      // boilerplate is gone for good (the plan gate says it when it matters).
       expect(screen.queryByTestId("stub-model-picker")).not.toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: /autonomous mode/i })).not.toBeInTheDocument();
       expect(screen.queryByText(/works in a sandbox/i)).not.toBeInTheDocument();
       expect(screen.queryByTestId("stub-connections-strip")).not.toBeInTheDocument();
 
       // …and everything reappears, functional, inside the expandable options area.
-      fireEvent.click(
-        screen.getByRole("button", {
-          name: framing === "agent" ? /task options/i : /build options/i,
-        }),
-      );
+      fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
       expect(screen.getByTestId("stub-model-picker")).toBeInTheDocument();
-      expect(screen.getByText(/works in a sandbox/i)).toBeInTheDocument();
+      expect(screen.queryByText(/works in a sandbox/i)).not.toBeInTheDocument();
       // ConnectionsStrip is the Agent framing's tool signal — menu-only, and
       // only there.
       if (framing === "agent") {

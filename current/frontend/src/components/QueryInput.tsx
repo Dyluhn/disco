@@ -127,7 +127,10 @@ export function QueryInput({
         className="max-h-52 min-h-[3rem] w-full resize-none bg-transparent font-ui text-[1.05rem] leading-snug text-text outline-none placeholder:text-text-faint"
       />
 
-      <div className="flex items-end justify-between gap-inline">
+      {/* items-center (not -end): with a short text-only cluster the old
+          bottom-alignment left a dead band above the row — centering keeps the
+          same vertical rhythm on every surface. */}
+      <div className="flex items-center justify-between gap-inline">
         {/* the control cluster — quiet, hairline-bordered, chroma only when active */}
         <div className="flex min-w-0 flex-wrap items-center gap-inline">
           {controls && (
