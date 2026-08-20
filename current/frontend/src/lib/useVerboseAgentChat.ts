@@ -1,7 +1,7 @@
 /**
  * W-43 — "Verbose Agent Chat" preference.
  *
- * Default ON. When ON the Build/Agent control pane shows the full step-by-step
+ * Default OFF (quiet mode is the default). When ON the Build/Agent control pane shows the full step-by-step
  * ActivityFeed. When OFF (and once the first plan is approved) the feed collapses to
  * a compact AgentStageCard (planning/reading/executing/… with a click-to-expand),
  * while the gates (confirm/decision/question) and the deliverable/download affordances
@@ -28,14 +28,15 @@ function emit(): void {
   for (const cb of listeners) cb();
 }
 
-/** Read the current preference. Default ON (true) when unset or unreadable. */
+/** Read the current preference. Default OFF (false — quiet) when unset or
+ * unreadable. */
 export function readVerboseAgentChat(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
-    return v == null ? true : v === "1";
+    return v == null ? false : v === "1";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -50,7 +51,7 @@ export function setVerboseAgentChat(on: boolean): void {
 }
 
 export function useVerboseAgentChat(): { verbose: boolean; setVerbose: (on: boolean) => void } {
-  const verbose = useSyncExternalStore(subscribe, readVerboseAgentChat, () => true);
+  const verbose = useSyncExternalStore(subscribe, readVerboseAgentChat, () => false);
   const setVerbose = useCallback((on: boolean) => setVerboseAgentChat(on), []);
   return { verbose, setVerbose };
 }

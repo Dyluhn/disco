@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
+  "source_identity": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
   "collected": {
     "counts": {
       "packages": 10899,
@@ -12758,7 +12758,7 @@
     }
   },
   "mapping_static": {
-    "identity": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
+    "identity": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
     "python_test_file_count": 851,
     "python_static_test_id_count": 10471,
     "python_test_files": [
@@ -24405,7 +24405,7 @@
       "frontend/e2e-policy/live-trace-off.spec.ts::an authenticated live failure does not retain a trace",
       "frontend/e2e-policy/preview-cookie-toss.spec.ts::a generated child can send parent-domain duplicates that auth must not trust",
       "frontend/e2e/ask-gate.spec.ts::the agent's question pauses with an AskPanel; answering resumes",
-      "frontend/e2e/autonomous-toggle.spec.ts::toggle is off by default and flips on with an accessible switch",
+      "frontend/e2e/autonomous-toggle.spec.ts::toggle is on by default and flips with an accessible switch",
       "frontend/e2e/build-controls.spec.ts::Kill arms an inline confirm before the destructive teardown",
       "frontend/e2e/build-controls.spec.ts::the chevron has a non-overlapping dock across width, zoom, and streaming changes",
       "frontend/e2e/build-controls.spec.ts::the plan stays pinned while the activity feed scrolls beneath it",
@@ -24950,7 +24950,7 @@
       "frontend/src/components/build/latestEditableDeckBase.test.ts::returns null when there is no slides deck at all",
       "frontend/src/components/build/latestEditableDeckBase.test.ts::returns the base when the latest render is editable",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::shows the driver-model notice in the card and expands the options panel on click",
-      "frontend/src/components/composerRedesign.test.tsx::the depth dropdown renders only while Deep Research is selected",
+      "frontend/src/components/composerRedesign.test.tsx::the depth control exists only under Deep Research, inside the options menu",
       "frontend/src/components/composerRedesign.test.tsx::the driver-model notice names the model and expands the options area on click",
       "frontend/src/components/composerRedesign.test.tsx::the in-box slider switches between Search and Deep Research",
       "frontend/src/components/controls.test.tsx::holds three live modes \u2014 Search (active), Build, and Agent \u2014 selectable, nothing else",
@@ -25004,7 +25004,7 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::deriveStats counts sources from observation events",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps secondary research controls behind one disclosure and quiets suggestions after typing",
-      "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with a depth tier selector",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::the fixture report carries the honest signals",
       "frontend/src/components/research/FollowUpStatus.test.tsx::renders a spinner element when follow-up is in-flight",
@@ -25529,7 +25529,7 @@
       "frontend/src/lib/useReplay.test.ts::stepFwd clamps at max",
       "frontend/src/lib/useTheme.test.ts::should initialize with dark if no preference or storage",
       "frontend/src/lib/useTheme.test.ts::should toggle theme and persist to localStorage",
-      "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to ON (true) when unset",
+      "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to OFF (quiet mode) when unset",
       "frontend/src/lib/useVerboseAgentChat.test.ts::persists OFF and reads back false",
       "frontend/src/lib/useVerboseAgentChat.test.ts::updates subscribed components live when toggled",
       "frontend/src/runtimeEnvHtml.test.ts::keeps the deploy-generated classic script external to Vite's module graph",
@@ -27884,7 +27884,7 @@
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > keeps the model picker and Autonomous toggle inside the options panel (agent framing)",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > keeps the model picker and Autonomous toggle inside the options panel (build framing)",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > shows the driver-model notice in the card and expands the options panel on click",
-      "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the depth dropdown renders only while Deep Research is selected",
+      "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the depth control exists only under Deep Research, inside the options menu",
       "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the driver-model notice names the model and expands the options area on click",
       "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the in-box slider switches between Search and Deep Research",
       "frontend/src/components/controls.test.tsx::Mode slider (the sole mode control) > holds three live modes \u2014 Search (active), Build, and Agent \u2014 selectable, nothing else",
@@ -27937,7 +27937,7 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > after submit, shows the plan gate with editable sub-questions",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > keeps secondary research controls behind one disclosure and quiets suggestions after typing",
-      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > opens the empty state with a depth tier selector",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > opens the empty state with the depth tier inside the options menu",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-02 planning loader > WALK-02: the empty-state surface does not show a planning loader (no session)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-08 stale follow-up guard > WALK-08: the follow-up panel is invisible until the run is FINISHED with a report",
@@ -28494,7 +28494,7 @@
       "frontend/src/lib/useReplay.test.ts::useReplay > stepFwd clamps at max",
       "frontend/src/lib/useTheme.test.ts::useTheme > should initialize with dark if no preference or storage",
       "frontend/src/lib/useTheme.test.ts::useTheme > should toggle theme and persist to localStorage",
-      "frontend/src/lib/useVerboseAgentChat.test.ts::useVerboseAgentChat > defaults to ON (true) when unset",
+      "frontend/src/lib/useVerboseAgentChat.test.ts::useVerboseAgentChat > defaults to OFF (quiet mode) when unset",
       "frontend/src/lib/useVerboseAgentChat.test.ts::useVerboseAgentChat > persists OFF and reads back false",
       "frontend/src/lib/useVerboseAgentChat.test.ts::useVerboseAgentChat > updates subscribed components live when toggled",
       "frontend/src/runtimeEnvHtml.test.ts::runtime env bootstrap > keeps the deploy-generated classic script external to Vite's module graph",
@@ -28767,7 +28767,7 @@
         "file_count": 22,
         "ids": [
           "frontend/e2e/ask-gate.spec.ts::Build \u2192 free-form Ask-gate \u203a the agent's question pauses with an AskPanel; answering resumes",
-          "frontend/e2e/autonomous-toggle.spec.ts::Autonomous mode \u2014 composer toggle \u203a toggle is off by default and flips on with an accessible switch",
+          "frontend/e2e/autonomous-toggle.spec.ts::Autonomous mode \u2014 composer toggle \u203a toggle is on by default and flips with an accessible switch",
           "frontend/e2e/build-controls.spec.ts::Build controls \u2014 Kill confirmation \u203a Kill arms an inline confirm before the destructive teardown",
           "frontend/e2e/build-controls.spec.ts::Build surface \u2014 scroll-to-latest accessibility \u203a the chevron has a non-overlapping dock across width, zoom, and streaming changes",
           "frontend/e2e/build-controls.spec.ts::Build surface \u2014 sticky plan tracker \u203a the plan stays pinned while the activity feed scrolls beneath it",
@@ -33527,7 +33527,6 @@
         "typescript_static_test_ids": [
           "frontend/src/components/BuildSurface.test.tsx::shows the model picker (which model runs the agent) in the composer options",
           "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::shows the driver-model notice in the card and expands the options panel on click",
-          "frontend/src/components/composerRedesign.test.tsx::the depth dropdown renders only while Deep Research is selected",
           "frontend/src/components/composerRedesign.test.tsx::the driver-model notice names the model and expands the options area on click",
           "frontend/src/components/composerRedesign.test.tsx::the in-box slider switches between Search and Deep Research"
         ],
@@ -36243,6 +36242,25 @@
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-29-COMPOSER-MENU-CORRECTION",
+      "root": "multiple",
+      "source_identity_before": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
+      "source_identity_after": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/e2e/autonomous-toggle.spec.ts::toggle is on by default and flips with an accessible switch",
+          "frontend/src/components/composerRedesign.test.tsx::the depth control exists only under Deep Research, inside the options menu",
+          "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
+          "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to OFF (quiet mode) when unset"
+        ],
         "fixtures": []
       }
     },

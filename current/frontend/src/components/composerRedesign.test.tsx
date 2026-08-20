@@ -77,15 +77,23 @@ describe("composer redesign — search-type slider + depth tier", () => {
     expect(await screen.findByPlaceholderText(/ask anything/i)).toBeInTheDocument();
   });
 
-  it("the depth dropdown renders only while Deep Research is selected", async () => {
+  it("the depth control exists only under Deep Research, inside the options menu", async () => {
     await act(() => {
       renderSurface();
     });
     const user = userEvent.setup();
 
+    // Standard search: no depth control anywhere — not even inside the menu.
+    await user.click(screen.getByRole("button", { name: /search options/i }));
     expect(screen.queryByRole("button", { name: /depth tier/i })).not.toBeInTheDocument();
 
+    // Deep Research: the trigger summarizes the depth; the control itself is
+    // in the menu, not the primary row.
     await user.click(screen.getByRole("radio", { name: "Deep Research" }));
+    const options = await screen.findByRole("button", { name: /research options/i });
+    expect(options).toHaveTextContent(/· Standard ·/);
+    expect(screen.queryByRole("button", { name: /depth tier/i })).not.toBeInTheDocument();
+    await user.click(options);
     expect(
       await screen.findByRole("button", { name: /depth tier: Standard/i }),
     ).toBeInTheDocument();

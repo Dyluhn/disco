@@ -48,12 +48,20 @@ describe("Deep Research surface — full lifecycle", () => {
   // state rather than picking up the previous test's stashed cid.
   beforeEach(() => window.localStorage.clear());
 
-  it("opens the empty state with a depth tier selector", () => {
+  it("opens the empty state with the depth tier inside the options menu", async () => {
+    const user = userEvent.setup();
     renderSurface();
     expect(
       screen.getByPlaceholderText(/ask a research question/i),
     ).toBeInTheDocument();
-    // depth tier selector — default standard_deep (displayed as "Standard")
+    // Collapsed: the depth choice is summarized on the menu trigger, not a
+    // control of its own in the primary row.
+    const options = screen.getByRole("button", { name: /Research options/i });
+    expect(options).toHaveTextContent(/· Standard ·/);
+    expect(screen.queryByRole("button", { name: /Depth tier/i })).not.toBeInTheDocument();
+    // Expanded: depth tier selector — default standard_deep (displayed as
+    // "Standard") — leads the menu.
+    await user.click(options);
     expect(screen.getByRole("button", { name: /Depth tier: Standard/i })).toBeInTheDocument();
   });
 
@@ -70,6 +78,7 @@ describe("Deep Research surface — full lifecycle", () => {
       "true",
     );
     expect(screen.getByRole("radio", { name: "Search" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Depth tier/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Recency filter/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Attach files/i })).not.toBeInTheDocument();
 
@@ -79,6 +88,7 @@ describe("Deep Research surface — full lifecycle", () => {
 
     await user.click(options);
     expect(options).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: /Depth tier: Standard/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Recency filter: Any time/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Attach files/i })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^(Web|News|arXiv|Semantic Scholar)$/i })).toHaveLength(4);

@@ -149,7 +149,9 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
         "agent",
         true,
         null,
-        false,
+        // quiet rides the chat-verbosity preference, which now defaults to
+        // quiet-on (verbose off).
+        true,
       ),
     );
     expect(screen.getByTestId("mode-probe")).toHaveTextContent("agent");
