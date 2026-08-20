@@ -75,7 +75,8 @@ function makeController(): BuildController {
   return {
     modelId: null,
     setModelId: vi.fn(),
-    autonomousChoice: false,
+    // Mirrors useBuild's default: autonomous ON for new conversations.
+    autonomousChoice: true,
     setAutonomousChoice: vi.fn(),
     // The deprecated tier choice — still present on the controller, still
     // flowing into submit()'s payload elsewhere (useBuild.ts); this test only
@@ -138,21 +139,32 @@ describe("BuildEmptyState — composer-anchored config (no controls above the bo
         <BuildEmptyState framing={framing} copy={copy} b={b} draft="" setDraft={() => {}} />,
       );
 
-      // Nothing renders between the hero and the composer card: the config
-      // controls are gone from the header area…
+      // Nothing optional renders outside the menu: no config controls above
+      // the box, no sandbox hint or connections strip below it.
       expect(screen.queryByTestId("stub-model-picker")).not.toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: /autonomous mode/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/works in a sandbox/i)).not.toBeInTheDocument();
+      expect(screen.queryByTestId("stub-connections-strip")).not.toBeInTheDocument();
 
-      // …and reappear, functional, inside the expandable options area.
+      // …and everything reappears, functional, inside the expandable options area.
       fireEvent.click(
         screen.getByRole("button", {
           name: framing === "agent" ? /task options/i : /build options/i,
         }),
       );
       expect(screen.getByTestId("stub-model-picker")).toBeInTheDocument();
+      expect(screen.getByText(/works in a sandbox/i)).toBeInTheDocument();
+      // ConnectionsStrip is the Agent framing's tool signal — menu-only, and
+      // only there.
+      if (framing === "agent") {
+        expect(screen.getByTestId("stub-connections-strip")).toBeInTheDocument();
+      } else {
+        expect(screen.queryByTestId("stub-connections-strip")).not.toBeInTheDocument();
+      }
       const autonomous = screen.getByRole("switch", { name: /autonomous mode/i });
+      expect(autonomous).toHaveAttribute("aria-checked", "true");
       fireEvent.click(autonomous);
-      expect(b.setAutonomousChoice).toHaveBeenCalledWith(true);
+      expect(b.setAutonomousChoice).toHaveBeenCalledWith(false);
     },
   );
 

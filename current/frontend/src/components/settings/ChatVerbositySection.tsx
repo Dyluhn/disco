@@ -1,7 +1,7 @@
 /**
  * Settings → Chat → Verbose Agent Chat (W-43).
  *
- * A simple on/off preference (default ON), persisted in localStorage via
+ * A simple on/off preference (default OFF — quiet), persisted in localStorage via
  * `useVerboseAgentChat`. When OFF, the Build/Agent control pane collapses the
  * step-by-step Activity Feed to a compact stage card once the first plan is approved.
  * The gates (confirm/decision/question), the deliverable download/open panel, and the
@@ -34,13 +34,13 @@ export function ChatVerbositySection() {
             {
               on: true,
               Icon: MessageSquare,
-              label: "Verbose (default)",
+              label: "Verbose",
               help: "Show the full Activity Feed — every message, tool call, and output as it happens.",
             },
             {
               on: false,
               Icon: MessageSquareDashed,
-              label: "Quiet",
+              label: "Quiet (default)",
               help: "Once the plan is approved, collapse the feed to a compact stage card (Planning / Reading / Building / …). Gates, downloads, and the full history (card expand + the inspector's “Agent History” tab) stay available.",
             },
           ] as const

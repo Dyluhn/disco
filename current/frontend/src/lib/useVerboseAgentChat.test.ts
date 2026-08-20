@@ -18,10 +18,10 @@ afterEach(() => {
 });
 
 describe("useVerboseAgentChat", () => {
-  it("defaults to ON (true) when unset", () => {
-    expect(readVerboseAgentChat()).toBe(true);
+  it("defaults to OFF (quiet mode) when unset", () => {
+    expect(readVerboseAgentChat()).toBe(false);
     const { result } = renderHook(() => useVerboseAgentChat());
-    expect(result.current.verbose).toBe(true);
+    expect(result.current.verbose).toBe(false);
   });
 
   it("persists OFF and reads back false", () => {
@@ -32,10 +32,10 @@ describe("useVerboseAgentChat", () => {
 
   it("updates subscribed components live when toggled", () => {
     const { result } = renderHook(() => useVerboseAgentChat());
-    expect(result.current.verbose).toBe(true);
-    act(() => result.current.setVerbose(false));
     expect(result.current.verbose).toBe(false);
     act(() => result.current.setVerbose(true));
     expect(result.current.verbose).toBe(true);
+    act(() => result.current.setVerbose(false));
+    expect(result.current.verbose).toBe(false);
   });
 });

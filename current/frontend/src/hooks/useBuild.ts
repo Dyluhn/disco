@@ -187,8 +187,10 @@ export function useBuild(
   const [session, setSession] = useState<BuildSession | null>(null);
   const { modelId, setModelId, modelTouched } = useModelSelection(resumeCid);
   // Create-time choice: run this build headless (no questions, auto-approve plan).
-  // Off by default. Locked once the conversation is created (it's a per-run mode).
-  const [autonomousChoice, setAutonomousChoice] = useState(false);
+  // ON by default — the hands-off run is the primary flow; the composer menu's
+  // toggle opts back into interactive mode for tricky tasks. Locked once the
+  // conversation is created (it's a per-run mode).
+  const [autonomousChoice, setAutonomousChoice] = useState(true);
   // Create-time choice: the weak-model ASSIST tier. EXPLICIT opt-in only — never
   // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
   // Off by default; the user flips it for a genuinely weak model. Locked once work begins.

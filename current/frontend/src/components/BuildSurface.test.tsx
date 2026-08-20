@@ -77,6 +77,10 @@ describe("Build surface (plan gate → build → action gate)", () => {
   });
 
   it("after plan approval, shows the activity feed and pauses at the per-action gate", async () => {
+    // This test pins the VERBOSE feed. Quiet is the default now (W-43 flip),
+    // so opt into verbose explicitly; cleared below so the rest of the file
+    // keeps the real default.
+    window.localStorage.setItem("verboseAgentChat", "1");
     await enterBuildSubmitAndApprovePlan();
     await waitFor(
       () =>
@@ -94,6 +98,7 @@ describe("Build surface (plan gate → build → action gate)", () => {
     // entry is the load-bearing assertion (the canvas shows the real run output).
     expect(screen.getAllByText(/FizzBuzz/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByRole("button", { name: /kill the agent/i })).toBeEnabled();
+    window.localStorage.removeItem("verboseAgentChat");
   });
 
   it("Approve resumes the loop to a finished answer rendered as markdown", async () => {
@@ -129,6 +134,12 @@ describe("Build surface (plan gate → build → action gate)", () => {
     await waitFor(
       () => expect(screen.getAllByText("Qwen3.6-27B").length).toBeGreaterThan(0),
       { timeout: 5000 },
+    );
+    // The autonomous toggle (real useBuild state) defaults ON for new
+    // conversations — the hands-off run is the primary flow.
+    expect(screen.getByRole("switch", { name: /autonomous mode/i })).toHaveAttribute(
+      "aria-checked",
+      "true",
     );
   }, 15000);
 

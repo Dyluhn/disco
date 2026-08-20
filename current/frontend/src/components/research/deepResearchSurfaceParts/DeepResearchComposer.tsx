@@ -25,6 +25,16 @@ interface Props {
   onScopeChange?: (next: ScopeId) => void;
 }
 
+// Display twin of DepthTierSelector's labels — keeps the collapsed trigger
+// honest about the depth choice hidden inside the menu. A module-level lookup
+// (not a ternary chain): the tier union is closed, and this adds zero decision
+// points to the component (McCabe budget).
+const DEPTH_TRIGGER_LABELS: Record<Tier, string> = {
+  quick: "Quick",
+  standard_deep: "Standard",
+  exhaustive: "Thorough",
+};
+
 export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChange }: Props) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const navigate = useNavigate();
@@ -39,6 +49,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
       : r.recencyWindow === "month"
         ? "Past month"
         : "Any time";
+  const depthLabel = DEPTH_TRIGGER_LABELS[r.depthTier as Tier];
   const sourceLabel =
     r.selectedSources.length === 0
       ? "Configured sources"
@@ -64,24 +75,24 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
           placeholder="Ask a research question that deserves a multi-page report…"
           showControls={false}
           // Deep Research has no per-run reasoning-effort flag, so there is no
-          // Think toggle. Model, scope, recency, sources, and uploads live in
-          // the disclosure below rather than crowding this primary row.
+          // Think toggle. Only the search-type slider and the menu trigger sit
+          // in this primary row; depth, model, recency, sources, and uploads
+          // all live in the disclosure below.
           extraControls={
             <>
               <SearchTypeSlider value="deep_research" onChange={changeScope} />
-              <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
               <button
                 type="button"
                 aria-expanded={optionsOpen}
                 aria-controls="deep-research-options-panel"
                 data-disco-control="dr.options"
                 onClick={() => setOptionsOpen((open) => !open)}
-                className="flex min-h-11 min-w-0 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
+                className="flex min-h-11 min-w-0 items-center gap-hair px-hair py-hair font-ui text-[0.78rem] font-medium text-text-muted transition-colors hover:text-text lg:min-h-0"
               >
                 <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
                 <span className="shrink-0">Research options</span>
                 <span className="hidden truncate text-text-faint sm:inline">
-                  · {recencyLabel} · {sourceLabel}
+                  · {depthLabel} · {recencyLabel} · {sourceLabel}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -101,6 +112,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
                   className="flex flex-col gap-inline border-t border-hairline pt-inline"
                 >
                   <div className="flex flex-wrap items-center gap-inline">
+                    <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                     <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
                     <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
                   </div>
