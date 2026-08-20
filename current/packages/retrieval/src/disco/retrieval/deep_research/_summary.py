@@ -97,6 +97,63 @@ _CONFLICT_CANDIDATES_PER_FINDING = 4
 _MAX_FALLBACK_CONFLICT_CHECKS = 256
 _SUMMARY_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*_`])")
 
+# --- Evidence junk filter -----------------------------------------------
+# NLI grounding proves a fragment is FAITHFUL to a source; it cannot prove the
+# fragment is a FINDING. Scraped page furniture ("Last verified: …", FAQ/nav
+# links, raw table rows) entails itself verbatim, so it sails through the
+# claim gate and — before this filter — shipped as executive-summary prose or
+# bare section quotes. These rules judge presentation-worthiness only; the
+# verification machinery upstream is untouched.
+_QUOTE_MARKER = re.compile(r"(?m)^\s*>\s?")
+_EVIDENCE_MARKUP = re.compile(r"[*`#_~>\\]+")
+_EVIDENCE_WORD = re.compile(r"[A-Za-z][\w'-]*")
+_ELLIPSIS_EDGE = re.compile(r"^[\s\"'(\[]*(?:\.\.\.|…)|(?:\.\.\.|…)[\s.\"')\]]*$")
+_METADATA_STUB = re.compile(
+    r"^\s*(?:last\s+(?:verified|updated|modified|reviewed)"
+    r"|published|updated|posted|page\s+\d+)\s*[:\-–—]",
+    re.IGNORECASE,
+)
+_NAV_BOILERPLATE = re.compile(
+    r"\b(?:faqs?|cookies?|subscribe|newsletter|sign\s+(?:up|in)|log\s+in"
+    r"|click\s+here|read\s+more|learn\s+more|see\s+our|our\s+methodology"
+    r"|privacy\s+policy|terms\s+of\s+(?:service|use)|all\s+rights\s+reserved"
+    r"|skip\s+to\s+content|related\s+articles?|share\s+this)\b",
+    re.IGNORECASE,
+)
+_SITE_RELATIVE_LINK = re.compile(r"\]\s*\(\s*/")
+_MIN_EVIDENCE_CHARS = 20
+_MIN_EVIDENCE_WORDS = 3
+
+_UNGROUNDED_SUMMARY_FALLBACK = (
+    "The research could not ground an executive summary in the retrieved "
+    "sources: no verified finding was substantive enough to summarize. The "
+    "per-section detail below records what each sub-question's sources did "
+    "and did not establish."
+)
+
+
+def _is_junk_evidence(text: str) -> bool:
+    """True when a supported fragment is scrape debris, not a finding.
+
+    Rules, in order: too short to inform (< 20 chars or < 3 words of plain
+    text); a mid-sentence truncation stub (leading lowercase, or an ellipsis
+    at either edge); scrape metadata ("Last verified: …"); site-navigation
+    boilerplate (FAQ / methodology / cookie / subscribe patterns, or a
+    markdown link to a site-relative path); table debris ('|' cells).
+    """
+    plain = _EVIDENCE_MARKUP.sub("", _QUOTE_MARKER.sub("", text)).strip()
+    words = _EVIDENCE_WORD.findall(plain)
+    if len(plain) < _MIN_EVIDENCE_CHARS or len(words) < _MIN_EVIDENCE_WORDS:
+        return True
+    if plain[0].islower() or _ELLIPSIS_EDGE.search(plain):
+        return True
+    if _METADATA_STUB.match(plain):
+        return True
+    if _NAV_BOILERPLATE.search(plain) or _SITE_RELATIVE_LINK.search(text):
+        return True
+    pipes = plain.count("|")
+    return pipes >= 2 or (pipes == 1 and len(words) < 10)
+
 
 @dataclass(frozen=True)
 class _SupportedFinding:
@@ -358,6 +415,10 @@ def _reject_conflicting_summary_claims(
 def _fallback_findings(
     findings: list[_SupportedFinding], nli: Any, recency_window: str | None
 ) -> str:
+    # Presentation hygiene, not verification: a junk fragment is faithfully
+    # grounded (it's verbatim source text) but is page furniture, not a
+    # finding — never paragraphize it into the executive summary.
+    findings = [finding for finding in findings if not _is_junk_evidence(finding.text)]
     dropped: set[int] = set()
     unresolved = False
     for left_index, right_index in _fallback_conflict_candidates(findings):
@@ -377,7 +438,9 @@ def _fallback_findings(
     kept = [finding for index, finding in enumerate(findings) if index not in dropped]
     paragraphs = _paragraphize([_fallback_sentence(finding) for finding in kept])
     if not paragraphs:
-        return ""
+        # Nothing survived the junk filter (or conflict pruning). Say so
+        # honestly instead of shipping an empty summary or snippet soup.
+        return _UNGROUNDED_SUMMARY_FALLBACK
     # Keep the mechanically grounded fallback readable without asking another
     # model to rewrite it. Four contiguous paragraphs preserve finding order and
     # prevent Markdown markers or a long claim ledger from becoming one wall.

@@ -647,10 +647,13 @@ class TestMappingStatic:
             # accept_finished frame (7 static ids; parametrization expands them
             # to 9 collected package cases) plus two frontend suites for the
             # Mark-done control (2 files / 3 ids).
-            "python_test_file_count": 849,
-            "python_static_test_id_count": 10449,
+            # The research report-quality fixes add one retrieval file for query
+            # compression (3 static ids) plus eleven Python ids in existing
+            # export/synthesis files and three vitest ids in deepResearch.
+            "python_test_file_count": 850,
+            "python_static_test_id_count": 10463,
             "typescript_test_file_count": 251,
-            "typescript_static_test_id_count": 1250,
+            "typescript_static_test_id_count": 1253,
         }
         assert mapping["identity"] == baseline["source_identity"]
         assert {key: mapping[key] for key in expected_counts} == expected_counts
@@ -781,11 +784,11 @@ class TestFrontendCollection:
                 len(frontend["vitest_files_list"]),
             )
             == (frontend["vitest_ids"], frontend["vitest_files"])
-            == (1197, 187)
+            == (1200, 187)
         )
         assert frontend["vitest_ids_list"] == sorted(frontend["vitest_ids_list"])
         assert frontend["vitest_files_list"] == sorted(frontend["vitest_files_list"])
-        assert len(set(frontend["vitest_ids_list"])) == 1197
+        assert len(set(frontend["vitest_ids_list"])) == 1200
         assert len(set(frontend["vitest_files_list"])) == 187
         assert set(frontend["playwright_configs"]) == set(test_inventory.PLAYWRIGHT_CONFIGS)
         for config, authority in frontend["playwright_configs"].items():
@@ -1048,7 +1051,10 @@ class TestCollectedCounts:
             # The launch closeout adds nine package ids in one new file for the
             # explicit accept_finished frame (seven definitions; the not-FINISHED
             # no-op case is parametrized three ways).
-            "packages": 10854,
+            # The research report-quality fixes add 37 collected package ids
+            # (14 definitions; the compression table and junk filter are
+            # parametrized).
+            "packages": 10891,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1178,7 +1184,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12692 == sum(expected.values())
+        assert collected["total"] == 12729 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1194,7 +1200,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12692}
+        assert result == {"collected_total": 12729}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1213,9 +1219,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10449,
-            "typescript_static_ids": 1250,
-            "collected_total": 12692,
+            "python_static_ids": 10463,
+            "typescript_static_ids": 1253,
+            "collected_total": 12729,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

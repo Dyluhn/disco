@@ -55,6 +55,9 @@ from ._summary import (
     _coherence_outline as _summary_coherence_outline,
 )
 from ._summary import (
+    _is_junk_evidence,
+)
+from ._summary import (
     coherence_pass as _summary_coherence_pass,
 )
 from .evidence import EVIDENCE_SYSTEM_PROMPT as _EVIDENCE_SYSTEM_PROMPT
@@ -354,35 +357,63 @@ def _format_passages(passages: list[Passage]) -> str:
     return "\n\n".join(parts)
 
 
+def _first_clean_sentence(text: str) -> str | None:
+    """First complete sentence of a passage that passes the junk filter.
+
+    A single sentence — not a 500-char slice — because the downstream claim
+    gate keeps only the sentence a [[id]] cluster cites; a multi-sentence
+    quote would be stripped back to its tail and re-create the mid-sentence
+    stubs this fix removes. Bounded to the first 8 sentences per passage.
+    """
+    for sentence in re.split(r"(?<=[.!?])\s+", " ".join(text.split()))[:8]:
+        sentence = sentence.strip()
+        if sentence and len(sentence) <= 500 and not _is_junk_evidence(sentence):
+            return sentence
+    return None
+
+
 def _grounded_extractive_fallback(passages: list[Passage]) -> str:
     """Preserve citable evidence when the synthesis model returns no prose.
 
     This is deliberately extractive: it does not invent a summary or keep
-    spending model calls after the bounded retry. Source text is escaped so it
-    cannot inject markdown/citation syntax; the only live citation marker is the
-    passage id appended by us.
+    spending model calls after the bounded retry. Each preserved quote is one
+    clean, junk-filtered sentence (never a truncation stub, nav boilerplate,
+    or table debris), capped at three quotes. Source text is escaped so it
+    cannot inject markdown/citation syntax; the only live citation marker is
+    the passage id appended by us. The honest framing sentence is added by
+    `_ground_section_markdown` AFTER the claim gate — an uncited meta-sentence
+    placed here would (correctly) be stripped by it.
     """
 
-    blocks = [
-        "The synthesis model returned no usable prose after a bounded retry. "
-        "The gathered evidence is preserved below without added interpretation."
-    ]
-    for passage in passages[:3]:
-        excerpt = " ".join(passage.text.split())
-        if not excerpt:
+    blocks: list[str] = []
+    for passage in passages:
+        sentence = _first_clean_sentence(passage.text)
+        if sentence is None:
             continue
-        if len(excerpt) > 500:
-            excerpt = excerpt[:497].rsplit(" ", 1)[0].rstrip() + " …"
-        title = passage.source_title or passage.source_url
         # Escape source-controlled markdown, especially bracket pairs that
         # could masquerade as citations in the report contract.
-        title = re.sub(r"([\\`*_[\]<>])", r"\\\1", title[:120])
-        excerpt = re.sub(r"([\\`*_[\]<>])", r"\\\1", excerpt)
-        blocks.append(f"**Evidence from {title}:**\n\n> {excerpt} [[{passage.id}]]")
-    return "\n\n".join(blocks) if len(blocks) > 1 else ""
+        escaped = re.sub(r"([\\`*_[\]<>])", r"\\\1", sentence)
+        blocks.append(f"> {escaped} [[{passage.id}]]")
+        if len(blocks) == 3:
+            break
+    return "\n\n".join(blocks)
 
 
 _Confidence = Literal["high", "mixed", "low"]
+
+_NO_SUPPORTED_SYNTHESIS = "*(No source-supported synthesis could be produced for this section.)*"
+
+
+def _source_noun(source_count: int) -> str:
+    return "retrieved source" if source_count == 1 else "retrieved sources"
+
+
+def _no_evidence_markdown(source_count: int, *, prefix: str = "") -> str:
+    """The honest empty-section sentence — one clear statement, no stub list."""
+    return (
+        f"*({prefix}No evidence answering this sub-question was found in the "
+        f"{source_count} {_source_noun(source_count)}.)*"
+    )
 
 
 def _confidence_from_claims(claims: list[dict]) -> tuple[_Confidence, int]:
@@ -595,7 +626,7 @@ async def _ground_section_markdown(
     passages: list[Passage],
     nli: Any,
     *,
-    force_low_confidence: bool,
+    extractive_fallback: bool,
 ) -> tuple[str, _Confidence, int, list[str], list[str]]:
     """Verify, filter, and summarize the grounding state of one section."""
     by_id = {p.id: p for p in passages}
@@ -605,12 +636,18 @@ async def _ground_section_markdown(
     # honestly-cited claims visible under the section confidence label.
     markdown = (
         _retain_claim_verdicts(markdown, claims, frozenset({"supported", "weak"}))
-        or "*(No source-supported synthesis could be produced for this section.)*"
+        or _NO_SUPPORTED_SYNTHESIS
     )
     disputed_notes = _extract_disputed_notes(markdown)
     cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})
-    if force_low_confidence:
+    if extractive_fallback:
+        # Quotes are not an answer: frame them honestly AFTER the claim gate
+        # (which would strip an uncited framing sentence — exactly how the old
+        # fallback degraded into a bare quote-stub list), and force `low`.
         confidence = "low"
+        markdown, cited_ids = _synthesis_parts.frame_extractive_fallback(
+            markdown, cited_ids, source_count=len(passages)
+        )
     return markdown, confidence, unsupported, disputed_notes, cited_ids
 
 
@@ -691,7 +728,6 @@ async def synthesize_section(
             title=sub_result.subq.title,
             emit=emit,
             reason=f"exception:{type(exc).__name__}",
-            empty_markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
         )
         used_extractive_fallback = bool(markdown)
         if early_return is not None:
@@ -711,7 +747,6 @@ async def synthesize_section(
             title=sub_result.subq.title,
             emit=emit,
             reason="empty_after_retry",
-            empty_markdown="*(This section could not be generated from the gathered sources.)*",
         )
         used_extractive_fallback = bool(markdown)
         if early_return is not None:
@@ -721,7 +756,7 @@ async def synthesize_section(
         markdown,
         passages,
         nli,
-        force_low_confidence=used_extractive_fallback,
+        extractive_fallback=used_extractive_fallback,
     )
 
     return ReportSection(

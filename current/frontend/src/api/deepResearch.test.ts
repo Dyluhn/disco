@@ -335,3 +335,78 @@ describe("serializeReportToMarkdown — WALK-03 disputed_notes [[id]] stripping"
     expect(md).not.toContain("_Conflicts noted:");
   });
 });
+
+// ---- Passage-text normalization (mirrors report_export.py's shared seam) ----
+
+describe("serializeReportToMarkdown — passage-text normalization", () => {
+  it("converts escaped markdown links to clean text (external keeps url)", () => {
+    const report = makeMinimalReport({
+      sections: [
+        {
+          id: "s1",
+          title: "Escaped links",
+          markdown:
+            "The code is \\[proprietary\\](https://en.wikipedia.org/wiki/Proprietary\\_software) per the vendor.\n\n" +
+            "See the \\[FAQs.\\](/faq) and the \\[Model\\](/models/grok-4-6) card.",
+          cited_passage_ids: [],
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+    });
+
+    const md = serializeReportToMarkdown(report);
+    expect(md).toContain(
+      "proprietary (https://en.wikipedia.org/wiki/Proprietary_software)",
+    );
+    expect(md).toContain("See the FAQs. and the Model card.");
+    expect(md).not.toContain("\\[");
+    expect(md).not.toContain("\\_");
+  });
+
+  it("strips pseudo-table pipe debris and pads ragged table rows", () => {
+    const report = makeMinimalReport({
+      sections: [
+        {
+          id: "s1",
+          title: "Table debris",
+          markdown:
+            "Metric | Value | Metric | Value | Metric | Value\n\n" +
+            "| Model | Params | License |\n|---|---|---|\n| Grok | 314B |\n| Llama | 405B | open |",
+          cited_passage_ids: [],
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+    });
+
+    const md = serializeReportToMarkdown(report);
+    expect(md).toContain("Metric; Value; Metric; Value; Metric; Value");
+    expect(md).not.toContain("Metric | Value");
+    expect(md).toContain("| Grok | 314B |  |");
+    expect(md).toContain("| Llama | 405B | open |");
+  });
+
+  it("leaves well-formed links, inline pipes, and code fences untouched", () => {
+    const report = makeMinimalReport({
+      summary: "A [real](https://example.com/a) link and `a | b` inline.",
+      sections: [
+        {
+          id: "s1",
+          title: "Fenced",
+          markdown: "```\nx | y | z | w | v\n```",
+          cited_passage_ids: [],
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+    });
+
+    const md = serializeReportToMarkdown(report);
+    expect(md).toContain("A [real](https://example.com/a) link and `a | b` inline.");
+    expect(md).toContain("```\nx | y | z | w | v\n```");
+  });
+});

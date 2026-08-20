@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from ._query_compression import compress_search_query
 from .models import ExtractedDoc, Passage, RetrievalRequest, RetrievalResult, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker, reciprocal_rank_fusion
@@ -102,12 +103,22 @@ class DefaultRetrievalEngine:
         self._candidate_cap = candidate_cap
 
     async def _transform(self, req: RetrievalRequest) -> list[str]:
-        """Stage 1: query transformation by depth (§3 step 1)."""
+        """Stage 1: query transformation by depth (§3 step 1).
+
+        Every query leaving this stage is compressed into keyword form
+        (``_query_compression``) so ALL search providers — keyed and keyless —
+        see engine-friendly queries instead of full interrogative sentences.
+        ``req.query`` itself stays uncompressed: reranking, corpus embedding
+        (`_corpus_passages`), and everything downstream of retrieval
+        (gap reasoning, synthesis, judging) still see the full sub-question.
+        """
         if req.depth == "shallow" or self._rewriter is None:
-            return [req.query]
+            return [compress_search_query(req.query)]
         if req.depth == "standard":
-            return await self._rewriter.rewrite(req.query, n=1)
-        return await self._rewriter.rewrite(req.query, n=4)  # deep → multi-query
+            rewritten = await self._rewriter.rewrite(req.query, n=1)
+        else:
+            rewritten = await self._rewriter.rewrite(req.query, n=4)  # deep → multi-query
+        return [compress_search_query(q) for q in rewritten]
 
     async def _discover(self, req: RetrievalRequest, queries: list[str]) -> list[SearchHit]:
         """Stage 2: broad retrieval across queries, RRF-fused for multi-query."""

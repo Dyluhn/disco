@@ -595,6 +595,108 @@ def test_templates_endpoint_lists_catalog() -> None:
     asyncio.run(run())
 
 
+# ---- Passage-text normalization (shared MD/PDF seam) ------------------------
+
+
+def _make_junk_report() -> ReportEvent:
+    """A report whose section bodies carry the scraped-passage junk observed in
+    a real export: escaped markdown links, a one-line pseudo-table, and a
+    genuine table with a ragged row."""
+    return ReportEvent(
+        source=EventSource.AGENT,
+        query="Junk handling",
+        summary="Clean summary.",
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Escaped links",
+                markdown=(
+                    "The code is \\[proprietary\\](https://en.wikipedia.org/wiki/"
+                    "Proprietary\\_software) per the vendor.\n\n"
+                    "See the \\[FAQs.\\](/faq) and the \\[Model\\](/models/grok-4-6) card."
+                ),
+                cited_passage_ids=[],
+                confidence="high",
+                disputed_notes=[],
+            ),
+            ReportSection(
+                id="s1",
+                title="Table debris",
+                markdown=(
+                    "Metric | Value | Metric | Value | Metric | Value\n\n"
+                    "| Model | Params | License |\n"
+                    "|---|---|---|\n"
+                    "| Grok | 314B |\n"
+                    "| Llama | 405B | open |"
+                ),
+                cited_passage_ids=[],
+                confidence="high",
+                disputed_notes=[],
+            ),
+        ],
+        passages=[],
+        all_hits=[],
+    )
+
+
+def test_markdown_escaped_links_become_clean_text() -> None:
+    """Escaped ``\\[text\\](url)`` links in passage text export as clean prose:
+    external informative urls keep ``text (url)``, site-relative links reduce
+    to their anchor text."""
+    result = serialize_markdown(_make_junk_report())
+    assert "proprietary (https://en.wikipedia.org/wiki/Proprietary_software)" in result
+    assert "See the FAQs. and the Model card." in result
+    assert "\\[" not in result
+    assert "\\]" not in result
+    assert "\\_" not in result
+
+
+def test_markdown_pseudo_table_line_stripped_to_text() -> None:
+    """A non-table line dense with ' | ' separators is flattened to readable
+    text instead of a one-line pseudo-table."""
+    result = serialize_markdown(_make_junk_report())
+    assert "Metric; Value; Metric; Value; Metric; Value" in result
+    assert "Metric | Value" not in result
+
+
+def test_markdown_ragged_table_rows_padded_to_header_width() -> None:
+    """Genuine pipe tables are normalized so every row matches the header's
+    column count (short rows padded, long rows truncated)."""
+    result = serialize_markdown(_make_junk_report())
+    assert "| Grok | 314B |  |" in result
+    assert "| Grok | 314B |\n" not in result
+    assert "| Llama | 405B | open |" in result
+
+
+def test_pdf_html_inherits_passage_normalization() -> None:
+    """The PDF path shares the same normalization seam: no escaped-bracket
+    noise and no ragged table rows in the structured HTML."""
+    from disco.agent_server.report_export import _build_pdf_html
+    from disco.core.brand import resolve_theme
+
+    html = _build_pdf_html(_make_junk_report(), None, resolve_theme("disco", "light"))
+    assert "proprietary (https://en.wikipedia.org/wiki/Proprietary_software)" in html
+    assert "See the FAQs. and the Model card." in html
+    assert "\\[" not in html
+    assert "Metric; Value; Metric; Value; Metric; Value" in html
+    # The genuine table renders with three cells in every body row.
+    assert "<td>Grok</td><td>314B</td><td></td>" in html
+    assert "<td>Llama</td><td>405B</td><td>open</td>" in html
+
+
+def test_normalization_leaves_real_links_and_code_fences_alone() -> None:
+    """Well-formed markdown links and fenced code blocks pass through
+    untouched; a clean report stays byte-identical."""
+    from disco.agent_server.report_export import _normalize_passage_text
+
+    clean = "A [real](https://example.com/a) link and `a | b` inline.\n"
+    assert _normalize_passage_text(clean) == clean
+    fenced = "```\nx | y | z | w | v\n```"
+    assert _normalize_passage_text(fenced) == fenced
+    baseline = serialize_markdown(_make_sample_report())
+    assert baseline == CAPTURED_MARKDOWN
+
+
 # ---- W-10: export cover/title page uses the generated title ----------------
 
 
