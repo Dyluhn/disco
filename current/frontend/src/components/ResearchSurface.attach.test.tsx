@@ -82,7 +82,7 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     renderResearchSurface();
 
     // Uploads live in the click-to-expand options panel inside the card.
-    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
 
     // The UploadComposer is in the DOM with the group role.
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
@@ -102,7 +102,7 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     mocked.mockReturnValue(makeResearchReturn(null));
 
     renderResearchSurface();
-    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
 
     // runthru-v2 #9: the composer is ALWAYS rendered inline (it no longer unmounts
     // on `r.preCid && …`) so the paperclip doesn't flicker out during the brief
@@ -119,7 +119,7 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     // Verify the composer appears in the right structural slot (the card footer)
     // by checking it's a sibling/descendant of the search input.
     renderResearchSurface();
-    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Options/ }));
 
     const searchInput = screen.getByPlaceholderText(/ask anything/i);
     expect(searchInput).toBeInTheDocument();

@@ -35,11 +35,11 @@ function deriveNoticeModel(
   models: ReturnType<typeof useModels>["data"],
   assignments: ReturnType<typeof useAssignments>["data"],
   effectiveLeaderId: string | null,
-): ReturnType<typeof findModel> {
-  return (
+): { label: string | null; id: string | null } {
+  const model =
     findModel(models, effectiveLeaderId) ??
-    findModel(models, assignments?.default_model ?? null)
-  );
+    findModel(models, assignments?.default_model ?? null);
+  return { label: model?.label ?? null, id: model?.id ?? null };
 }
 
 export function ResearchSurface() {
@@ -163,7 +163,7 @@ export function ResearchSurface() {
                     className="flex min-h-11 items-center gap-hair px-hair py-hair font-ui text-[0.78rem] font-medium text-text-muted transition-colors hover:text-text lg:min-h-0"
                   >
                     <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-                    <span className="shrink-0">Search options</span>
+                    <span className="shrink-0">Options</span>
                     <ChevronDown
                       className={cn(
                         "size-3 shrink-0 text-text-faint transition-transform",
@@ -189,7 +189,8 @@ export function ResearchSurface() {
                   )}
                   <div className="flex justify-end">
                     <DriverModelNotice
-                      label={noticeModel?.label ?? null}
+                      label={noticeModel.label}
+                      modelId={noticeModel.id}
                       controlId="search.driver-model"
                       onReveal={() => {
                         setOptionsOpen(true);

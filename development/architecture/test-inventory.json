@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
+  "source_identity": "577c569269df06983fb122833db59f31f5b8241a",
   "collected": {
     "counts": {
       "packages": 10899,
@@ -12758,7 +12758,7 @@
     }
   },
   "mapping_static": {
-    "identity": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
+    "identity": "577c569269df06983fb122833db59f31f5b8241a",
     "python_test_file_count": 851,
     "python_static_test_id_count": 10471,
     "python_test_files": [
@@ -25004,8 +25004,8 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::deriveStats counts sources from observation events",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps secondary research controls behind one disclosure and quiets suggestions after typing",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps the trigger minimal \u2014 one depth token, no recency/source echo",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
-      "frontend/src/components/research/DeepResearchSurface.test.tsx::summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::the fixture report carries the honest signals",
       "frontend/src/components/research/FollowUpStatus.test.tsx::renders a spinner element when follow-up is in-flight",
       "frontend/src/components/research/FollowUpStatus.test.tsx::renders nothing when followUpStatus is follow_up_complete",
@@ -25117,7 +25117,7 @@
       "frontend/src/components/settings/SandboxSection.test.tsx::podman is temporarily NOT offered in the picker (commented out \u2014 no live host here)",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx::preserves a preset's human label and browser timezone through preview and save",
       "frontend/src/components/settings/StoredCredentialField.test.tsx::suggests stored names while preserving custom environment names",
-      "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry with surface subchips",
+      "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry, with NO duplicate mode chips",
       "frontend/src/components/states.test.tsx::error state shows the message and retries",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::keeps detailed authoring behind the advanced affordance",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::renders the describe-first workflow creator",
@@ -27937,8 +27937,8 @@
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > after submit, shows the plan gate with editable sub-questions",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > keeps secondary research controls behind one disclosure and quiets suggestions after typing",
+      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > keeps the trigger minimal \u2014 one depth token, no recency/source echo",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > opens the empty state with the depth tier inside the options menu",
-      "frontend/src/components/research/DeepResearchSurface.test.tsx::Deep Research surface \u2014 full lifecycle > summarizes configured and per-query sources without exposing all source chips",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-02 planning loader > WALK-02: the empty-state surface does not show a planning loader (no session)",
       "frontend/src/components/research/DeepResearchSurface.test.tsx::DeepResearchSurface \u2014 WALK-08 stale follow-up guard > WALK-08: the follow-up panel is invisible until the run is FINISHED with a report",
       "frontend/src/components/research/FollowUpStatus.test.tsx::FollowUpStatus > renders a spinner element when follow-up is in-flight",
@@ -28051,7 +28051,7 @@
       "frontend/src/components/settings/SandboxSection.test.tsx::SandboxSection \u2014 W-49 progressive disclosure > podman is temporarily NOT offered in the picker (commented out \u2014 no live host here)",
       "frontend/src/components/settings/ScheduleSection.timezone.test.tsx::ScheduleSection local-time contract > preserves a preset's human label and browser timezone through preview and save",
       "frontend/src/components/settings/StoredCredentialField.test.tsx::StoredCredentialField > suggests stored names while preserving custom environment names",
-      "frontend/src/components/states.test.tsx::states > empty state carries the brand + Latin entry with surface subchips",
+      "frontend/src/components/states.test.tsx::states > empty state carries the brand + Latin entry, with NO duplicate mode chips",
       "frontend/src/components/states.test.tsx::states > error state shows the message and retries",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::WorkflowAuthorForm > keeps detailed authoring behind the advanced affordance",
       "frontend/src/components/workflows/WorkflowAuthorForm.test.tsx::WorkflowAuthorForm > renders the describe-first workflow creator",
@@ -33472,7 +33472,6 @@
           "frontend/e2e/visual.spec.ts::deep research splash \u2014 both themes",
           "frontend/src/components/research/DeepProgressStrip.test.tsx::collapses completed research by default while preserving an explicit expansion",
           "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps secondary research controls behind one disclosure and quiets suggestions after typing",
-          "frontend/src/components/research/DeepResearchSurface.test.tsx::summarizes configured and per-query sources without exposing all source chips",
           "frontend/src/components/research/deepResearchSurfaceParts/DeepResearchReportView.test.tsx::locks follow-up submission for exactly the active follow-up phase",
           "frontend/src/components/research/groundedAnswer.test.ts::makes cited and reviewed report passages resolvable, cited-first and deduplicated",
           "frontend/src/components/settings/DataSourcesSection.test.tsx::persists Brave with a selected stored credential name",
@@ -36260,6 +36259,23 @@
           "frontend/src/components/composerRedesign.test.tsx::the depth control exists only under Deep Research, inside the options menu",
           "frontend/src/components/research/DeepResearchSurface.test.tsx::opens the empty state with the depth tier inside the options menu",
           "frontend/src/lib/useVerboseAgentChat.test.ts::defaults to OFF (quiet mode) when unset"
+        ],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-30-COMPOSER-POLISH",
+      "root": "multiple",
+      "source_identity_before": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
+      "source_identity_after": "577c569269df06983fb122833db59f31f5b8241a",
+      "collected_roots": {},
+      "mapping_static_additions": {
+        "python_test_files": [],
+        "python_static_test_ids": [],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [
+          "frontend/src/components/research/DeepResearchSurface.test.tsx::keeps the trigger minimal \u2014 one depth token, no recency/source echo",
+          "frontend/src/components/states.test.tsx::empty state carries the brand + Latin entry, with NO duplicate mode chips"
         ],
         "fixtures": []
       }

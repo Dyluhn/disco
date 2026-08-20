@@ -56,8 +56,8 @@ describe("Deep Research surface — full lifecycle", () => {
     ).toBeInTheDocument();
     // Collapsed: the depth choice is summarized on the menu trigger, not a
     // control of its own in the primary row.
-    const options = screen.getByRole("button", { name: /Research options/i });
-    expect(options).toHaveTextContent(/· Standard ·/);
+    const options = screen.getByRole("button", { name: /^Options/ });
+    expect(options).toHaveTextContent(/· Standard/);
     expect(screen.queryByRole("button", { name: /Depth tier/i })).not.toBeInTheDocument();
     // Expanded: depth tier selector — default standard_deep (displayed as
     // "Standard") — leads the menu.
@@ -69,7 +69,7 @@ describe("Deep Research surface — full lifecycle", () => {
     const user = userEvent.setup();
     renderSurface();
 
-    const options = screen.getByRole("button", { name: /Research options/i });
+    const options = screen.getByRole("button", { name: /^Options/ });
     expect(options).toHaveAttribute("aria-expanded", "false");
     // The search-type slider stays outside the disclosure (in the box's control
     // row) so Standard Search is always reachable.
@@ -97,15 +97,18 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(document.querySelector('[data-suggestion-surface="deep_research"]')).toBeNull();
   });
 
-  it("summarizes configured and per-query sources without exposing all source chips", async () => {
+  it("keeps the trigger minimal — one depth token, no recency/source echo", async () => {
     const user = userEvent.setup();
     renderSurface();
 
-    const options = screen.getByRole("button", { name: /Research options/i });
-    expect(options).toHaveTextContent(/Configured sources/i);
+    // Collapsed: exactly "Options · <depth>", nothing else.
+    const options = screen.getByRole("button", { name: /^Options/ });
+    expect(options).toHaveTextContent(/^Options· Standard$/);
+    // Selecting a per-query source must NOT grow the trigger back into a
+    // sentence — the old "· Any time · 1 added source" echo stays dead.
     await user.click(options);
     await user.click(screen.getByRole("button", { name: /^News$/i }));
-    expect(options).toHaveTextContent(/1 added source/i);
+    expect(options).toHaveTextContent(/^Options· Standard$/);
   });
 
   it("does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)", () => {

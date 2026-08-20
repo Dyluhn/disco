@@ -46,6 +46,8 @@ vi.mock("@/hooks/useResearch", () => ({
 
 vi.mock("@/hooks/useDriverModels", () => ({
   useLastSelectedModel: () => ({ data: null }),
+  // DriverModelNotice resolves its display label from the driver catalogue.
+  useDriverModels: () => ({ data: undefined }),
 }));
 
 vi.mock("@/components/ModelLeaderPill", () => ({

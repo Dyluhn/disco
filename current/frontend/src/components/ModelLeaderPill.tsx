@@ -3,6 +3,7 @@ import { Check, ChevronDown, Cpu, Globe } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
 import { costLabel, costTag } from "@/lib/cost";
+import { useDriverModels } from "@/hooks/useDriverModels";
 import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import { isFree, isMetered, type ModelInfo, type ModelProvider } from "@/types/models";
 import { CapabilityBadges } from "./CapabilityBadges";
@@ -25,10 +26,23 @@ const GROUP_LABEL: Record<ModelProvider, string> = {
   openrouter: "Overflow — paid",
 };
 
+/** The pill face shows the same short name the driver catalogue (and the
+ * DriverModelNotice) uses for this model; the surface catalogue's label, role
+ * prefix stripped, is only the fallback for models the driver list omits. */
+function faceName(
+  drivers: ReturnType<typeof useDriverModels>["data"],
+  effective: ModelInfo | null,
+): string | null {
+  if (!effective) return null;
+  const short = drivers?.models.find((m) => m.id === effective.id)?.label;
+  return short ?? effective.label.replace(/^Driver\s[^—]*—\s*/u, "");
+}
+
 export function ModelLeaderPill({ value, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const { data: models } = useModels();
   const { data: assignments } = useAssignments();
+  const { data: driverModels } = useDriverModels();
   const toast = useToast();
 
   const defaultModel = findModel(models, assignments?.default_model ?? null);
@@ -78,9 +92,11 @@ export function ModelLeaderPill({ value, onChange }: Props) {
           )}
           {/* Fresh install honesty: an EMPTY catalogue means there is no default to
               fall back to — say "Configure model" (mirrors BuildModelPicker) instead
-              of implying a working default that doesn't exist. */}
+              of implying a working default that doesn't exist. The face strips the
+              catalogue's "Driver Local — " role prefix (the dialog rows keep it);
+              the pill names the model, not the assignment slot. */}
           <span className="truncate">
-            {effective?.label ??
+            {faceName(driverModels, effective) ??
               ((models?.length ?? 0) === 0 ? "Configure model" : "Default model")}
           </span>
           {effective && (

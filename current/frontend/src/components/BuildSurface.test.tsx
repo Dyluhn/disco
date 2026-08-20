@@ -120,7 +120,7 @@ describe("Build surface (plan gate → build → action gate)", () => {
     await user.click(screen.getByRole("radio", { name: "build" }));
     // the picker lives in the composer's expandable options area now
     await user.click(
-      await screen.findByRole("button", { name: /build options/i }, { timeout: 5000 }),
+      await screen.findByRole("button", { name: /^Options/ }, { timeout: 5000 }),
     );
     // the picker trigger is present and shows the default model from the catalogue
     expect(

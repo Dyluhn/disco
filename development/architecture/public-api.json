@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "c273a5a62d6c4ce1eb0712e095dc811a9fbb606e",
+  "source_identity": "577c569269df06983fb122833db59f31f5b8241a",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -19574,7 +19574,7 @@
         {
           "kind": "function",
           "name": "DriverModelNotice",
-          "signature": "export function DriverModelNotice({ label, controlId, onReveal }: Props)"
+          "signature": "export function DriverModelNotice({ label, modelId, controlId, onReveal }: Props)"
         }
       ]
     },
@@ -30077,7 +30077,7 @@
       "surface": "frontend",
       "path": "frontend/src/components/DriverModelNotice.tsx",
       "public_name": "DriverModelNotice",
-      "target_sha256": "a9381336c9cf8b81beb51b6abf5151bc88e94850a920849ae61b249cfedb7377",
+      "target_sha256": "319fa3c21338c873e242045e67cf2404544e9920891f38cd7804d9b9f2569c6d",
       "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
       "reason": "Faint driver-model notice: names the active driver model on the composer and expands the options panel to the real control on click."
     },
@@ -30768,6 +30768,19 @@
       "owner_package": "PKG-03-EDIT-EVIDENCE",
       "accepting_commit": "54c8b28417f4db79b02f1130d99d112995f9ebb9",
       "accepting_receipt": "2026-07-28/automation/runtime/boundary-20260805o-pkg03-edit-evidence/REVIEW-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/DriverModelNotice.tsx",
+      "public_name": "DriverModelNotice",
+      "declaration_kind": "function",
+      "old_signature": "export function DriverModelNotice({ label, controlId, onReveal }: Props)",
+      "new_signature": "export function DriverModelNotice({ label, modelId, controlId, onReveal }: Props)",
+      "old_target_sha256": "a9381336c9cf8b81beb51b6abf5151bc88e94850a920849ae61b249cfedb7377",
+      "new_target_sha256": "319fa3c21338c873e242045e67cf2404544e9920891f38cd7804d9b9f2569c6d",
+      "owner_package": "PKG-30-COMPOSER-POLISH",
+      "accepting_commit": "577c569269df06983fb122833db59f31f5b8241a",
+      "accepting_receipt": "automation/runtime/boundary-20260819-composer-polish/BOUNDARY-RECEIPT.md"
     },
     {
       "surface": "frontend",

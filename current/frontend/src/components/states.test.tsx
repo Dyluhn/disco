@@ -5,7 +5,7 @@ import { EmptyState, ErrorState } from "./states";
 import { ModeProvider } from "@/shell/ModeProvider";
 
 describe("states", () => {
-  it("empty state carries the brand + Latin entry with surface subchips", () => {
+  it("empty state carries the brand + Latin entry, with NO duplicate mode chips", () => {
     render(
       <ModeProvider>
         <EmptyState />
@@ -13,9 +13,11 @@ describe("states", () => {
     );
     expect(screen.getByRole("heading", { name: "Disco" })).toBeInTheDocument();
     expect(screen.getByText(/I learn; I become acquainted with/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "search", pressed: true })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "build", pressed: false })).toBeInTheDocument();
     expect(screen.getByText(/sourced answers/i)).toBeInTheDocument();
+    // The subchip row duplicated the top-bar mode switcher — removed.
+    expect(screen.queryByRole("button", { name: "search" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "build" })).not.toBeInTheDocument();
+    expect(document.querySelector('[data-disco-control="splash.surface-chips"]')).toBeNull();
   });
 
   it("error state shows the message and retries", async () => {
