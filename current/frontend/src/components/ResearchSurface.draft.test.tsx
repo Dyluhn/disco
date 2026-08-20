@@ -28,26 +28,6 @@ vi.mock("@/api/client", async (importOriginal) => ({
   agentLive: () => agentLiveMock(),
 }));
 
-// ScopeControl's Radix menu is covered independently in controls.test.tsx. This
-// parent-state test needs only its value/callback contract.
-vi.mock("@/components/ScopeControl", () => ({
-  ScopeControl: ({
-    value,
-    onChange,
-  }: {
-    value: "standard" | "deep_research";
-    onChange: (scope: "standard" | "deep_research") => void;
-  }) => (
-    <button
-      type="button"
-      aria-label={`Scope: ${value === "standard" ? "Standard" : "Deep Research"}`}
-      onClick={() => onChange(value === "standard" ? "deep_research" : "standard")}
-    >
-      Change scope
-    </button>
-  ),
-}));
-
 function renderSurface() {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -84,16 +64,17 @@ describe("W-06 — draft persists across Search ↔ Deep Research toggle", () =>
     await user.type(stdInput, DRAFT);
     expect(stdInput).toHaveValue(DRAFT);
 
-    // Toggle scope → Deep Research. The standard input unmounts; DR mounts its
-    // OWN QueryInput. The draft must still be there (shared parent state).
-    await user.click(screen.getByRole("button", { name: /Scope: Standard/i }));
+    // Toggle the in-box search-type slider → Deep Research. The standard input
+    // unmounts; DR mounts its OWN QueryInput. The draft must still be there
+    // (shared parent state).
+    await user.click(screen.getByRole("radio", { name: "Deep Research" }));
 
     const drInput = await screen.findByPlaceholderText(/multi-page report/i);
     expect(drInput).toHaveValue(DRAFT);
 
     // Toggle back → standard; the draft still persists across the second swap.
-    // The route back is persistent; it must not be hidden behind Research options.
-    await user.click(screen.getByRole("button", { name: /Scope: Deep Research/i }));
+    // The route back is the slider's Search segment — always visible in the box.
+    await user.click(screen.getByRole("radio", { name: "Search" }));
 
     expect(await screen.findByPlaceholderText(/ask anything/i)).toHaveValue(DRAFT);
   });

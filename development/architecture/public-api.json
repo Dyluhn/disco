@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "33a451df7b39c84e842a5be050eb08b761028334",
+  "source_identity": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -19569,6 +19569,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/DriverModelNotice.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "DriverModelNotice",
+          "signature": "export function DriverModelNotice({ label, controlId, onReveal }: Props)"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/FollowUps.tsx",
       "public_declarations": [
         {
@@ -19675,6 +19685,21 @@
           "kind": "function",
           "name": "ScrollFadeEdges",
           "signature": "export function ScrollFadeEdges({ showLeft, showRight, className, }: { showLeft: boolean; showRight: boolean; className?: string; })"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/components/SearchTypeSlider.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "SearchTypeSlider",
+          "signature": "export function SearchTypeSlider({ value, onChange }: Props)"
+        },
+        {
+          "kind": "reexport",
+          "name": "export",
+          "signature": "export type { SearchType };"
         }
       ]
     },
@@ -24300,6 +24325,16 @@
           "kind": "variable",
           "name": "KNOWN_EVENT_KINDS",
           "signature": "export const KNOWN_EVENT_KINDS = [ \"message\", \"action\", \"observation\", \"agent_error\", \"condensation\", \"status\", \"workspace_version\", \"workspace_restored\", \"workspace_mutation\", \"build_platform_admission\", \"appkit_ejection\", \"error\", \"plan\", \"report\", \"alternatives\", \"knowledge\", \"runtime_constraint\", \"datasource\", \"deliverable\", \"verifier_started\", \"verifier_verdict\", \"verifier_shadow\", \"schedule\", \"schedule_run\", \"clarify\", \"questions_v2\", \"context_resolved\", \"context_summary\", ] as const;"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/lib/focusModelControl.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "focusModelControl",
+          "signature": "export function focusModelControl(panelId: string)"
         }
       ]
     },
@@ -30037,6 +30072,38 @@
       "target_sha256": "8f5069108ed4ae9ef30db6e814b16b4752961bd5fcdab636de391d6fd1b2f4bc",
       "owner_package": "PKG-26-LAUNCH-CLOSEOUT",
       "reason": "WSClientFrame's type Literal gains 'accept_finished': the UI's Mark-done control states stop-intent explicitly on a FINISHED build instead of the ship-it prose heuristic guessing it from free text."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/DriverModelNotice.tsx",
+      "public_name": "DriverModelNotice",
+      "target_sha256": "a9381336c9cf8b81beb51b6abf5151bc88e94850a920849ae61b249cfedb7377",
+      "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
+      "reason": "Faint driver-model notice: names the active driver model on the composer and expands the options panel to the real control on click."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/SearchTypeSlider.tsx",
+      "public_name": "SearchTypeSlider",
+      "target_sha256": "15b348d5010cc6afbb24a3336d9d7ed38a716434018e3b8ced30f3d820d2a3d9",
+      "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
+      "reason": "In-box Search|Deep Research slider: the shared composer control that replaces the above-box mode toggles across all three composers."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/SearchTypeSlider.tsx",
+      "public_name": "export",
+      "target_sha256": "5314617edd85ca43f91563cfc54f36280f917fa47c9ae9ffc1ce7f19c19aa5fd",
+      "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
+      "reason": "SearchType union re-export: the slider position type the composers and tests consume alongside the control itself."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/lib/focusModelControl.ts",
+      "public_name": "focusModelControl",
+      "target_sha256": "0120aecef6bdd4b9e5b231c8424102c7897bf6416220ee038325ab950bcc6992",
+      "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
+      "reason": "Panel-focus helper the driver-model notice uses to reveal and focus the real model control inside the expandable options panel."
     }
   ],
   "compatibility_bridges": [],

@@ -78,12 +78,11 @@ describe("Main surface — empty state + reactive provider errors", () => {
     await user.click(screen.getByRole("radio", { name: "search" }));
     await user.click(
       await screen.findByRole(
-        "button",
-        { name: /Scope: Standard/i },
+        "radio",
+        { name: "Deep Research" },
         { timeout: SURFACE_LOAD_TIMEOUT },
       ),
     );
-    await user.click(screen.getByRole("menuitem", { name: /Deep Research/i }));
     expect(
       await screen.findByText(
         "Deep Research — Multi-step reports with cited evidence.",

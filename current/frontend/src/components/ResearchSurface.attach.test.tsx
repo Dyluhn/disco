@@ -14,7 +14,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
@@ -81,6 +81,9 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     // useResearch returns preCid = "cid_test_research" (default mock above)
     renderResearchSurface();
 
+    // Uploads live in the click-to-expand options panel inside the card.
+    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
+
     // The UploadComposer is in the DOM with the group role.
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
     // The attach-files button is enabled — cid is wired.
@@ -91,12 +94,15 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
 
   it("UploadComposer renders but self-disables when preCid is null (offline / re-create window)", async () => {
     // Override to simulate no preCid — offline or the brief pre-create window.
+    // mockReturnValue (not …Once): the surface re-renders when the model
+    // catalogue resolves for the driver notice, and every render must see the
+    // null preCid.
     const { useResearch } = await import("@/hooks/useResearch");
-    (useResearch as ReturnType<typeof vi.fn>).mockReturnValueOnce(
-      makeResearchReturn(null),
-    );
+    const mocked = useResearch as ReturnType<typeof vi.fn>;
+    mocked.mockReturnValue(makeResearchReturn(null));
 
     renderResearchSurface();
+    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
 
     // runthru-v2 #9: the composer is ALWAYS rendered inline (it no longer unmounts
     // on `r.preCid && …`) so the paperclip doesn't flicker out during the brief
@@ -104,12 +110,16 @@ describe("ResearchSurface — G1/DR-4 attach (empty state)", () => {
     // rather than disappearing.
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /attach files/i })).toBeDisabled();
+
+    // hand the default (preCid set) back to the remaining tests
+    mocked.mockReturnValue(makeResearchReturn("cid_test_research"));
   });
 
   it("UploadComposer is rendered inside QueryInput's footer slot", () => {
     // Verify the composer appears in the right structural slot (the card footer)
     // by checking it's a sibling/descendant of the search input.
     renderResearchSurface();
+    fireEvent.click(screen.getByRole("button", { name: /Search options/i }));
 
     const searchInput = screen.getByPlaceholderText(/ask anything/i);
     expect(searchInput).toBeInTheDocument();

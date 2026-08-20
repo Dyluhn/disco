@@ -5,8 +5,7 @@ test.describe("Contradiction surfacing — support meter + claim verdicts", () =
     await page.goto("/");
 
     // Enter Deep Research scope from the research surface.
-    await page.getByRole("button", { name: /^scope:/i }).click();
-    await page.getByRole("menuitem", { name: /deep research/i }).click();
+    await page.getByRole("radio", { name: "Deep Research" }).click();
 
     const input = page.getByPlaceholder(/ask a research question/i);
     await expect(input).toBeVisible();

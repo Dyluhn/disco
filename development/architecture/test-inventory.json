@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "33a451df7b39c84e842a5be050eb08b761028334",
+  "source_identity": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
   "collected": {
     "counts": {
-      "packages": 10891,
+      "packages": 10899,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12729,
+    "total": 12737,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -2255,6 +2255,14 @@
         "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_ample_ram_no_encoder_unavailable_frame",
         "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_encoder_unavailable_emits_error_frame",
         "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_error_frame_message_contains_tier_hint",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_collision_suffix_gets_its_own_manifest_entry",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_context_pack_renders_resources_block_from_manifest",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_manifest_bookkeeping_failure_never_fails_the_upload",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_multi_file_batch_folds_every_file",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_reupload_same_rel_path_upserts_in_place",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_second_upload_merges_without_dropping_first",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_terminal_fold_marker_declares_resource_manifest_path",
+        "packages/agent-server/tests/test_resource_manifest_fold.py::test_upload_folds_resource_ref_with_contract_fields",
         "packages/agent-server/tests/test_restore_session_race.py::test_restore_reacquire_never_reuses_the_failed_session",
         "packages/agent-server/tests/test_restore_session_race.py::test_restore_retry_is_bounded_and_failure_is_logged",
         "packages/agent-server/tests/test_restore_session_race.py::test_restore_survives_a_dying_session_by_reacquiring_once",
@@ -12750,9 +12758,9 @@
     }
   },
   "mapping_static": {
-    "identity": "33a451df7b39c84e842a5be050eb08b761028334",
-    "python_test_file_count": 850,
-    "python_static_test_id_count": 10463,
+    "identity": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
+    "python_test_file_count": 851,
+    "python_static_test_id_count": 10471,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -12982,6 +12990,7 @@
       "packages/agent-server/tests/test_report_followup.py",
       "packages/agent-server/tests/test_research.py",
       "packages/agent-server/tests/test_research_ws_B3.py",
+      "packages/agent-server/tests/test_resource_manifest_fold.py",
       "packages/agent-server/tests/test_restore_session_race.py",
       "packages/agent-server/tests/test_resume.py",
       "packages/agent-server/tests/test_resume_condensation.py",
@@ -16502,6 +16511,14 @@
       "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_ample_ram_no_encoder_unavailable_frame",
       "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_encoder_unavailable_emits_error_frame",
       "packages/agent-server/tests/test_research_ws_B3.py::test_research_ws_error_frame_message_contains_tier_hint",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_collision_suffix_gets_its_own_manifest_entry",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_context_pack_renders_resources_block_from_manifest",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_manifest_bookkeeping_failure_never_fails_the_upload",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_multi_file_batch_folds_every_file",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_reupload_same_rel_path_upserts_in_place",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_second_upload_merges_without_dropping_first",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_terminal_fold_marker_declares_resource_manifest_path",
+      "packages/agent-server/tests/test_resource_manifest_fold.py::test_upload_folds_resource_ref_with_contract_fields",
       "packages/agent-server/tests/test_restore_session_race.py::test_restore_reacquire_never_reuses_the_failed_session",
       "packages/agent-server/tests/test_restore_session_race.py::test_restore_retry_is_bounded_and_failure_is_logged",
       "packages/agent-server/tests/test_restore_session_race.py::test_restore_survives_a_dying_session_by_reacquiring_once",
@@ -24070,8 +24087,8 @@
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_slides_degrade_to_image_less_when_image_backend_unconfigured",
       "tests/unbiased_gate/test_authorB_models_imagegen.py::test_w50_unconfigured_image_backend_fails_loudly_instead_of_procedural_fallback"
     ],
-    "typescript_test_file_count": 251,
-    "typescript_static_test_id_count": 1253,
+    "typescript_test_file_count": 252,
+    "typescript_static_test_id_count": 1257,
     "typescript_test_files": [
       "frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts",
       "frontend/e2e-full/scenarios/per-surface.full.spec.ts",
@@ -24220,6 +24237,7 @@
       "frontend/src/components/build/editor/SlideThumbnail.test.tsx",
       "frontend/src/components/build/latestEditableDeckBase.test.ts",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx",
+      "frontend/src/components/composerRedesign.test.tsx",
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
@@ -24529,7 +24547,7 @@
       "frontend/src/components/BuildSurface.test.tsx::derivePlan returns the latest plan and derivePlanProgress tracks plan_step reports",
       "frontend/src/components/BuildSurface.test.tsx::deriveTerminal pairs commands with their output",
       "frontend/src/components/BuildSurface.test.tsx::pauses on a plan-approval gate FIRST, showing the proposed steps + rationale",
-      "frontend/src/components/BuildSurface.test.tsx::shows the model picker (which model runs the agent) on the empty state",
+      "frontend/src/components/BuildSurface.test.tsx::shows the model picker (which model runs the agent) in the composer options",
       "frontend/src/components/BuildSurface.test.tsx::shows the risk rationale and wires Approve/Reject",
       "frontend/src/components/BuildSurface.test.tsx::two-way Ask-gate: a free-form question pauses with an AskPanel; answering resumes",
       "frontend/src/components/BuildSurface.verbose.test.tsx::collapses the feed to the stage card, but the confirm gate still renders",
@@ -24931,6 +24949,10 @@
       "frontend/src/components/build/latestEditableDeckBase.test.ts::returns null when the latest render of the base is a non-editable Marp regen",
       "frontend/src/components/build/latestEditableDeckBase.test.ts::returns null when there is no slides deck at all",
       "frontend/src/components/build/latestEditableDeckBase.test.ts::returns the base when the latest render is editable",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::shows the driver-model notice in the card and expands the options panel on click",
+      "frontend/src/components/composerRedesign.test.tsx::the depth dropdown renders only while Deep Research is selected",
+      "frontend/src/components/composerRedesign.test.tsx::the driver-model notice names the model and expands the options area on click",
+      "frontend/src/components/composerRedesign.test.tsx::the in-box slider switches between Search and Deep Research",
       "frontend/src/components/controls.test.tsx::holds three live modes \u2014 Search (active), Build, and Agent \u2014 selectable, nothing else",
       "frontend/src/components/controls.test.tsx::is a switch that toggles and is honestly labeled (reasoning effort, not a fake in-progress)",
       "frontend/src/components/controls.test.tsx::opens a cost-legible picker grouped local vs overflow and selects a model",
@@ -26272,6 +26294,12 @@
         "scope": "pytest.fixture"
       },
       {
+        "path": "packages/agent-server/tests/test_resource_manifest_fold.py",
+        "line": 298,
+        "fixture": "event_store",
+        "scope": "pytest.fixture"
+      },
+      {
         "path": "packages/agent-server/tests/test_final_workspace_commit.py",
         "line": 52,
         "fixture": "event_store",
@@ -27333,8 +27361,8 @@
         ]
       }
     },
-    "vitest_ids": 1200,
-    "vitest_files": 187,
+    "vitest_ids": 1206,
+    "vitest_files": 188,
     "vitest_ids_list": [
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > New preserves the active mode, then a mode chip lands on that mode's splash",
       "frontend/src/App.moderesume.test.tsx::A2 \u2014 fresh sessions and resume targets > does not resume a just-killed conversation id from the mode chip",
@@ -27440,7 +27468,7 @@
       "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > after FINISHED, the bottom input becomes the 'Plan a change' box (re-enter plan mode)",
       "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > after plan approval, shows the activity feed and pauses at the per-action gate",
       "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > pauses on a plan-approval gate FIRST, showing the proposed steps + rationale",
-      "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > shows the model picker (which model runs the agent) on the empty state",
+      "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > shows the model picker (which model runs the agent) in the composer options",
       "frontend/src/components/BuildSurface.test.tsx::Build surface (plan gate \u2192 build \u2192 action gate) > two-way Ask-gate: a free-form question pauses with an AskPanel; answering resumes",
       "frontend/src/components/BuildSurface.test.tsx::ConfirmationPanel > shows the risk rationale and wires Approve/Reject",
       "frontend/src/components/BuildSurface.test.tsx::event \u2192 view selectors (buildTrace) > deriveActivity gives plain labels, skips plan-mode meta tools, flags the pending action",
@@ -27853,6 +27881,12 @@
       "frontend/src/components/build/latestEditableDeckBase.test.ts::latestEditableDeckBase > returns the base when the latest render is editable",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 Assist tier toggle stays hidden > renders the Autonomous toggle but no Assist toggle (agent framing)",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 Assist tier toggle stays hidden > renders the Autonomous toggle but no Assist toggle (build framing)",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > keeps the model picker and Autonomous toggle inside the options panel (agent framing)",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > keeps the model picker and Autonomous toggle inside the options panel (build framing)",
+      "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::BuildEmptyState \u2014 composer-anchored config (no controls above the box) > shows the driver-model notice in the card and expands the options panel on click",
+      "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the depth dropdown renders only while Deep Research is selected",
+      "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the driver-model notice names the model and expands the options area on click",
+      "frontend/src/components/composerRedesign.test.tsx::composer redesign \u2014 search-type slider + depth tier > the in-box slider switches between Search and Deep Research",
       "frontend/src/components/controls.test.tsx::Mode slider (the sole mode control) > holds three live modes \u2014 Search (active), Build, and Agent \u2014 selectable, nothing else",
       "frontend/src/components/controls.test.tsx::Model leader pill (model-only) > opens a cost-legible picker grouped local vs overflow and selects a model",
       "frontend/src/components/controls.test.tsx::Model leader pill (model-only) > shows the settings default on the pill face, cost-legible, with no mode options",
@@ -28621,6 +28655,7 @@
       "frontend/src/components/build/editor/SlideThumbnail.test.tsx",
       "frontend/src/components/build/latestEditableDeckBase.test.ts",
       "frontend/src/components/buildSurface/BuildEmptyState.test.tsx",
+      "frontend/src/components/composerRedesign.test.tsx",
       "frontend/src/components/controls.test.tsx",
       "frontend/src/components/mainSurface.test.tsx",
       "frontend/src/components/research/AudioPlayer.test.tsx",
@@ -33449,6 +33484,61 @@
           "frontend/src/views/settings.test.tsx::separates interface, models, research, runtime, and extensions"
         ],
         "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-28-COMPOSER-RESOURCE-HOOK",
+      "root": "packages",
+      "source_identity_before": "33a451df7b39c84e842a5be050eb08b761028334",
+      "source_identity_after": "b13bb841f868c8fd770faf9f062dc3e8230131dc",
+      "collected_roots": {
+        "packages": {
+          "before_count": 10891,
+          "after_count": 10899,
+          "added_ids": [
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_collision_suffix_gets_its_own_manifest_entry",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_context_pack_renders_resources_block_from_manifest",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_manifest_bookkeeping_failure_never_fails_the_upload",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_multi_file_batch_folds_every_file",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_reupload_same_rel_path_upserts_in_place",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_second_upload_merges_without_dropping_first",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_terminal_fold_marker_declares_resource_manifest_path",
+            "packages/agent-server/tests/test_resource_manifest_fold.py::test_upload_folds_resource_ref_with_contract_fields"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_resource_manifest_fold.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_collision_suffix_gets_its_own_manifest_entry",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_context_pack_renders_resources_block_from_manifest",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_manifest_bookkeeping_failure_never_fails_the_upload",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_multi_file_batch_folds_every_file",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_reupload_same_rel_path_upserts_in_place",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_second_upload_merges_without_dropping_first",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_terminal_fold_marker_declares_resource_manifest_path",
+          "packages/agent-server/tests/test_resource_manifest_fold.py::test_upload_folds_resource_ref_with_contract_fields"
+        ],
+        "typescript_test_files": [
+          "frontend/src/components/composerRedesign.test.tsx"
+        ],
+        "typescript_static_test_ids": [
+          "frontend/src/components/BuildSurface.test.tsx::shows the model picker (which model runs the agent) in the composer options",
+          "frontend/src/components/buildSurface/BuildEmptyState.test.tsx::shows the driver-model notice in the card and expands the options panel on click",
+          "frontend/src/components/composerRedesign.test.tsx::the depth dropdown renders only while Deep Research is selected",
+          "frontend/src/components/composerRedesign.test.tsx::the driver-model notice names the model and expands the options area on click",
+          "frontend/src/components/composerRedesign.test.tsx::the in-box slider switches between Search and Deep Research"
+        ],
+        "fixtures": [
+          {
+            "path": "packages/agent-server/tests/test_resource_manifest_fold.py",
+            "line": 298,
+            "fixture": "event_store",
+            "scope": "pytest.fixture"
+          }
+        ]
       }
     },
     {

@@ -1,15 +1,22 @@
 /**
- * The Build surface's pre-start landing view: hero + model picker + autonomous
- * toggle + the task composer + suggestion chips. Extracted verbatim from
- * BuildSurface.tsx's `!b.started` branch (PKG-12-FE-BUILD).
+ * The Build surface's pre-start landing view: hero + the task composer +
+ * suggestion chips. Extracted verbatim from BuildSurface.tsx's `!b.started`
+ * branch (PKG-12-FE-BUILD), then re-anchored on the composer: the model picker
+ * and the Autonomous toggle no longer sit above the box — they live in the
+ * click-to-expand options panel inside the card, matching the Search and Deep
+ * Research composers' grammar.
  *
  * The Assist tier toggle that used to sit next to Autonomous is deliberately
  * hidden (deprecated control, not removed — see the comment at its old call
  * site below).
  */
 
+import { ChevronDown, SlidersHorizontal } from "lucide-react";
+import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { EmptyState } from "@/components/states";
+import { DriverModelNotice } from "@/components/DriverModelNotice";
+import { focusModelControl } from "@/lib/focusModelControl";
 import { QueryInput } from "@/components/QueryInput";
 import { BuildModelPicker } from "@/components/build/BuildModelPicker";
 // NOTE: this is `components/build/BuildSurface.tsx` (the OTHER file) — not the
@@ -19,6 +26,7 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { ImportProjectDialog } from "@/components/build/ImportProjectDialog";
 import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { SuggestionChips } from "@/components/SuggestionChips";
+import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
 import type { BuildFraming } from "@/components/BuildSurface";
 import type { BuildController, FramingCopy } from "./types";
 
@@ -35,38 +43,20 @@ export function BuildEmptyState({
   draft: string;
   setDraft: (value: string) => void;
 }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  // The driver-model notice reads the same sources BuildModelPicker resolves
+  // its face from: explicit pick → last-selected → agent-server default.
+  const { data: driverData } = useDriverModels();
+  const { data: lastSelected } = useLastSelectedModel();
+  const effectiveModelId = b.modelId ?? lastSelected ?? driverData?.default ?? null;
+  const noticeLabel =
+    driverData?.models.find((m) => m.id === effectiveModelId)?.label ?? null;
+
   return (
     <div className="flex min-h-full flex-col pt-section">
       <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
         <EmptyState title={copy.heroTitle} subtitle={copy.heroSubtitle} />
         <div className="w-full max-w-measure">
-          <div className="mb-inline flex items-center justify-between gap-inline">
-            <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
-            <div className="flex items-center gap-hair">
-              {/* Assist tier toggle deliberately hidden at launch (deprecated
-                  control) — b.assistChoice/setAssistChoice still exist and
-                  still drive the create/patch payload at its default (off);
-                  only the render is gone. See AgentStatusBar.tsx for the
-                  matching read-only badge removal. */}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={b.autonomousChoice}
-                aria-label="Autonomous mode (headless run)"
-                data-disco-control="build.autonomous-toggle"
-                onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
-                title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
-                className={cn(
-                  "flex max-lg:min-h-11 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
-                  b.autonomousChoice
-                    ? "border-accent/50 bg-accent/5 text-accent"
-                    : "border-hairline text-text-faint hover:text-text-muted",
-                )}
-              >
-                {b.autonomousChoice ? "autonomous: on" : "autonomous: off"}
-              </button>
-            </div>
-          </div>
           <QueryInput
             onSubmit={b.submit}
             busy={b.submitting}
@@ -74,16 +64,80 @@ export function BuildEmptyState({
             placeholder={copy.placeholder}
             value={draft}
             onValueChange={setDraft}
+            extraControls={
+              <button
+                type="button"
+                aria-expanded={optionsOpen}
+                aria-controls="build-options-panel"
+                data-disco-control="build.options"
+                onClick={() => setOptionsOpen((open) => !open)}
+                className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
+              >
+                <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+                <span className="shrink-0">
+                  {framing === "agent" ? "Task options" : "Build options"}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "size-3 shrink-0 text-text-faint transition-transform",
+                    optionsOpen && "rotate-180",
+                  )}
+                  aria-hidden
+                />
+              </button>
+            }
             footer={
-              /* G1/DR-4 + W-07: UploadComposer in the empty state. Always
-                 rendered (no longer gated on preCid, which HID the attach while
-                 the eager mount-create was in flight). It self-enables via
-                 ensureCid — Attach is usable before a cid exists, lazily
-                 creating the build conversation the first message will run. */
-              <div className="flex items-center gap-inline">
-                <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
-                {framing === "build" && <ImportProjectDialog />}
-              </div>
+              <>
+                {/* G1/DR-4 + W-07: UploadComposer in the empty state. Always
+                   rendered (no longer gated on preCid, which HID the attach while
+                   the eager mount-create was in flight). It self-enables via
+                   ensureCid — Attach is usable before a cid exists, lazily
+                   creating the build conversation the first message will run. */}
+                <div className="flex items-center gap-inline">
+                  <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
+                  {framing === "build" && <ImportProjectDialog />}
+                </div>
+                {optionsOpen && (
+                  <div
+                    id="build-options-panel"
+                    className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
+                  >
+                    <BuildModelPicker value={b.modelId} onChange={b.setModelId} surface={framing} />
+                    {/* Assist tier toggle deliberately hidden at launch (deprecated
+                        control) — b.assistChoice/setAssistChoice still exist and
+                        still drive the create/patch payload at its default (off);
+                        only the render is gone. See AgentStatusBar.tsx for the
+                        matching read-only badge removal. */}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={b.autonomousChoice}
+                      aria-label="Autonomous mode (headless run)"
+                      data-disco-control="build.autonomous-toggle"
+                      onClick={() => b.setAutonomousChoice(!b.autonomousChoice)}
+                      title="Autonomous: the agent runs headless — it won't ask you questions, auto-approves its own plan, and stops cleanly instead of waiting for you. Best for unattended runs; for tricky tasks leave it off so the agent can ask."
+                      className={cn(
+                        "flex max-lg:min-h-11 items-center gap-hair rounded-full border px-inline py-px font-ui text-[0.72rem] transition-colors",
+                        b.autonomousChoice
+                          ? "border-accent/50 bg-accent/5 text-accent"
+                          : "border-hairline text-text-faint hover:text-text-muted",
+                      )}
+                    >
+                      {b.autonomousChoice ? "autonomous: on" : "autonomous: off"}
+                    </button>
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <DriverModelNotice
+                    label={noticeLabel}
+                    controlId="build.driver-model"
+                    onReveal={() => {
+                      setOptionsOpen(true);
+                      focusModelControl("build-options-panel");
+                    }}
+                  />
+                </div>
+              </>
             }
           />
           <p className="mt-inline text-center font-ui text-[0.78rem] text-text-faint">

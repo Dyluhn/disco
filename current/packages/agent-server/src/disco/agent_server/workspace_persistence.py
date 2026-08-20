@@ -94,7 +94,10 @@ async def _publish_terminal_pipeline(
             conversation_id,
             WorkspaceMutationEvent(
                 operation="agent.artifact-manifest-fold",
-                paths=(".disco/context/artifact_manifest.json",),
+                paths=(
+                    ".disco/context/artifact_manifest.json",
+                    ".disco/context/resource_manifest.json",
+                ),
                 agent_view_id=terminal_event.agent_view_id,
             ),
         )

@@ -7,8 +7,7 @@ test.describe("Deep Research → plan → report", () => {
     await page.goto("/");
 
     // Enter Deep Research scope from the research surface.
-    await page.getByRole("button", { name: /^scope:/i }).click();
-    await page.getByRole("menuitem", { name: /deep research/i }).click();
+    await page.getByRole("radio", { name: "Deep Research" }).click();
 
     const input = page.getByPlaceholder(/ask a research question/i);
     await expect(input).toBeVisible();
@@ -32,8 +31,7 @@ test.describe("Deep Research → plan → report", () => {
 
   test("a running deep-research run offers a Stop control", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("button", { name: /^scope:/i }).click();
-    await page.getByRole("menuitem", { name: /deep research/i }).click();
+    await page.getByRole("radio", { name: "Deep Research" }).click();
     const input = page.getByPlaceholder(/ask a research question/i);
     await input.fill(
       "What is the current state of solid-state battery commercialization?",
