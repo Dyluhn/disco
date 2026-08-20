@@ -52,26 +52,6 @@ vi.mock("@/components/ModelLeaderPill", () => ({
   ModelLeaderPill: () => <button type="button">Model</button>,
 }));
 
-// The real Radix scope menu has its own component coverage. W-06 needs only its
-// public value/callback contract while it verifies ResearchSurface state ownership.
-vi.mock("@/components/ScopeControl", () => ({
-  ScopeControl: ({
-    value,
-    onChange,
-  }: {
-    value: "standard" | "deep_research";
-    onChange: (scope: "standard" | "deep_research") => void;
-  }) => (
-    <button
-      type="button"
-      aria-label={`Scope: ${value === "standard" ? "Standard" : "Deep Research"}`}
-      onClick={() => onChange(value === "standard" ? "deep_research" : "standard")}
-    >
-      Change scope
-    </button>
-  ),
-}));
-
 function renderWithProviders(ui: React.ReactElement) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -127,11 +107,10 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
     const draft = "compare battery commercialization timelines";
     await user.type(screen.getByLabelText("Ask Disco a question"), draft);
 
-    await user.click(screen.getByRole("button", { name: /scope: standard/i }));
+    await user.click(screen.getByRole("radio", { name: "Deep Research" }));
     expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
 
-    await user.click(screen.getByRole("button", { name: /research options/i }));
-    await user.click(screen.getByRole("button", { name: /scope: deep research/i }));
+    await user.click(screen.getByRole("radio", { name: "Search" }));
     expect(await screen.findByLabelText("Ask Disco a question")).toHaveValue(draft);
   });
 

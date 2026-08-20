@@ -306,7 +306,10 @@ class _ShadowFold:
         marker = persisted[-1]
         assert isinstance(marker, WorkspaceMutationEvent)
         assert marker.operation == "agent.artifact-manifest-fold"
-        assert marker.paths == (".disco/context/artifact_manifest.json",)
+        assert marker.paths == (
+            ".disco/context/artifact_manifest.json",
+            ".disco/context/resource_manifest.json",
+        )
         assert marker.agent_view_id == "aview-shadow"
         assert not any(
             isinstance(event, StatusEvent) and event.status is ConversationStatus.FINISHED

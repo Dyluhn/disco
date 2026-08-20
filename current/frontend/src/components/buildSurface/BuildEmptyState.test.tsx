@@ -18,7 +18,8 @@
  * exercised here (that's covered elsewhere).
  */
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { BuildEmptyState } from "./BuildEmptyState";
 import type { BuildController, FramingCopy } from "./types";
@@ -26,8 +27,22 @@ import type { BuildController, FramingCopy } from "./types";
 vi.mock("@/components/states", () => ({
   EmptyState: () => <div data-testid="stub-hero" />,
 }));
+// The stub renders the in-card slots (extraControls + footer) so the options
+// toggle, the relocated config controls, and the driver notice — all of which
+// live INSIDE the composer card now — stay assertable here.
 vi.mock("@/components/QueryInput", () => ({
-  QueryInput: () => <div data-testid="stub-query-input" />,
+  QueryInput: ({ extraControls, footer }: { extraControls?: ReactNode; footer?: ReactNode }) => (
+    <div data-testid="stub-query-input">
+      {extraControls}
+      {footer}
+    </div>
+  ),
+}));
+vi.mock("@/hooks/useDriverModels", () => ({
+  useDriverModels: () => ({
+    data: { models: [{ id: "drv-1", label: "Test Driver" }], default: "drv-1" },
+  }),
+  useLastSelectedModel: () => ({ data: null }),
 }));
 vi.mock("@/components/build/BuildModelPicker", () => ({
   BuildModelPicker: () => <div data-testid="stub-model-picker" />,
@@ -89,6 +104,13 @@ describe("BuildEmptyState — Assist tier toggle stays hidden", () => {
         />,
       );
 
+      // The relocated config controls live behind the options disclosure now.
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: framing === "agent" ? /task options/i : /build options/i,
+        }),
+      );
+
       // The deprecated control is gone from render output, not just visually
       // hidden — no role, no label, no data hook, no leftover on/off text.
       expect(screen.queryByRole("switch", { name: /assist/i })).not.toBeInTheDocument();
@@ -105,4 +127,52 @@ describe("BuildEmptyState — Assist tier toggle stays hidden", () => {
       expect(autonomous).toHaveAttribute("data-disco-control", "build.autonomous-toggle");
     },
   );
+});
+
+describe("BuildEmptyState — composer-anchored config (no controls above the box)", () => {
+  it.each(["build", "agent"] as const)(
+    "keeps the model picker and Autonomous toggle inside the options panel (%s framing)",
+    (framing) => {
+      const b = makeController();
+      render(
+        <BuildEmptyState framing={framing} copy={copy} b={b} draft="" setDraft={() => {}} />,
+      );
+
+      // Nothing renders between the hero and the composer card: the config
+      // controls are gone from the header area…
+      expect(screen.queryByTestId("stub-model-picker")).not.toBeInTheDocument();
+      expect(screen.queryByRole("switch", { name: /autonomous mode/i })).not.toBeInTheDocument();
+
+      // …and reappear, functional, inside the expandable options area.
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: framing === "agent" ? /task options/i : /build options/i,
+        }),
+      );
+      expect(screen.getByTestId("stub-model-picker")).toBeInTheDocument();
+      const autonomous = screen.getByRole("switch", { name: /autonomous mode/i });
+      fireEvent.click(autonomous);
+      expect(b.setAutonomousChoice).toHaveBeenCalledWith(true);
+    },
+  );
+
+  it("shows the driver-model notice in the card and expands the options panel on click", () => {
+    render(
+      <BuildEmptyState
+        framing="build"
+        copy={copy}
+        b={makeController()}
+        draft=""
+        setDraft={() => {}}
+      />,
+    );
+
+    const notice = screen.getByRole("button", { name: /driver model: Test Driver/i });
+    expect(notice).toHaveAttribute("data-disco-control", "build.driver-model");
+    expect(notice).toHaveTextContent("Test Driver");
+    expect(screen.queryByTestId("stub-model-picker")).not.toBeInTheDocument();
+
+    fireEvent.click(notice);
+    expect(screen.getByTestId("stub-model-picker")).toBeInTheDocument();
+  });
 });

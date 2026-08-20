@@ -1,14 +1,18 @@
-import { Square } from "lucide-react";
+import { ChevronDown, SlidersHorizontal, Square } from "lucide-react";
 import { useCallback, useState } from "react";
+import { cn } from "@/lib/cn";
 import { useResearch } from "@/hooks/useResearch";
 import { useLastSelectedModel } from "@/hooks/useDriverModels";
+import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import type { ScopeId } from "@/shell/mode";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AnswerDocument } from "./AnswerDocument";
+import { DriverModelNotice } from "./DriverModelNotice";
+import { focusModelControl } from "@/lib/focusModelControl";
 import { FollowUps } from "./FollowUps";
 import { QueryInput } from "./QueryInput";
 import { ModelLeaderPill } from "./ModelLeaderPill";
-import { ScopeControl } from "./ScopeControl";
+import { SearchTypeSlider } from "./SearchTypeSlider";
 import { SourcePanel } from "./SourcePanel";
 import { SourcePicker } from "./SourcePicker";
 import { SuggestionChips } from "./SuggestionChips";
@@ -22,6 +26,21 @@ import {
   deriveResearchPhase,
   deriveStreamState,
 } from "./researchSurfaceParts/derive";
+
+// Module-private on purpose: the notice model is this composer's own
+// derivation (the explicit pick, else the Settings default), the same
+// catalogue read the pill makes — not a shared public seam. Types are
+// inferred from the hooks so this file adds no new context edge.
+function deriveNoticeModel(
+  models: ReturnType<typeof useModels>["data"],
+  assignments: ReturnType<typeof useAssignments>["data"],
+  effectiveLeaderId: string | null,
+): ReturnType<typeof findModel> {
+  return (
+    findModel(models, effectiveLeaderId) ??
+    findModel(models, assignments?.default_model ?? null)
+  );
+}
 
 export function ResearchSurface() {
   const r = useResearch();
@@ -49,9 +68,19 @@ export function ResearchSurface() {
   // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
   // read/write this one string, so toggling scope preserves what the user typed.
   const [draft, setDraft] = useState("");
+  // The click-to-expand options disclosure under the composer (sources,
+  // recency-style extras, uploads). The slider + driver notice live in the box;
+  // the detail controls stay behind this toggle.
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   const { data: lastSelected } = useLastSelectedModel();
   const effectiveLeaderId = deriveEffectiveLeaderId(leaderId, lastSelected);
+
+  // The driver-model notice reads the same catalogue the pill does: the
+  // explicit pick, else the Settings default.
+  const { data: models } = useModels();
+  const { data: assignments } = useAssignments();
+  const noticeModel = deriveNoticeModel(models, assignments, effectiveLeaderId);
 
   const submit = useCallback(
     (query: string) =>
@@ -115,12 +144,6 @@ export function ResearchSurface() {
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
           <EmptyState />
           <div className="flex w-full max-w-measure flex-col gap-inline">
-            <div className="flex items-center justify-between gap-inline px-hair">
-              <span className="font-ui text-[0.76rem] font-medium text-text-faint">
-                Search type
-              </span>
-              <ScopeControl value={scope} onChange={setScope} />
-            </div>
             <QueryInput
               onSubmit={submit}
               busy={r.submitting}
@@ -128,18 +151,53 @@ export function ResearchSurface() {
               value={draft}
               onValueChange={setDraft}
               showControls={false}
+              extraControls={
+                <>
+                  <SearchTypeSlider value="standard" onChange={setScope} />
+                  <button
+                    type="button"
+                    aria-expanded={optionsOpen}
+                    aria-controls="search-options-panel"
+                    data-disco-control="search.options"
+                    onClick={() => setOptionsOpen((open) => !open)}
+                    className="flex min-h-11 items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text lg:min-h-0"
+                  >
+                    <SlidersHorizontal className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+                    <span className="shrink-0">Search options</span>
+                    <ChevronDown
+                      className={cn(
+                        "size-3 shrink-0 text-text-faint transition-transform",
+                        optionsOpen && "rotate-180",
+                      )}
+                      aria-hidden
+                    />
+                  </button>
+                </>
+              }
               footer={
-                <details className="border-t border-hairline pt-inline">
-                  <summary className="cursor-pointer py-3 font-ui text-[0.78rem] font-medium text-text-muted hover:text-text lg:py-0">
-                    Search options
-                  </summary>
-                  <div className="mt-inline flex flex-wrap items-center gap-inline">
-                    <ModelLeaderPill value={effectiveLeaderId} onChange={setLeaderId} />
-                    <ThinkToggle value={think} onChange={setThink} />
-                    <SourcePicker selected={sources} onChange={setSources} />
-                    <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                <>
+                  {optionsOpen && (
+                    <div
+                      id="search-options-panel"
+                      className="flex flex-wrap items-center gap-inline border-t border-hairline pt-inline"
+                    >
+                      <ModelLeaderPill value={effectiveLeaderId} onChange={setLeaderId} />
+                      <ThinkToggle value={think} onChange={setThink} />
+                      <SourcePicker selected={sources} onChange={setSources} />
+                      <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                    </div>
+                  )}
+                  <div className="flex justify-end">
+                    <DriverModelNotice
+                      label={noticeModel?.label ?? null}
+                      controlId="search.driver-model"
+                      onReveal={() => {
+                        setOptionsOpen(true);
+                        focusModelControl("search-options-panel");
+                      }}
+                    />
                   </div>
-                </details>
+                </>
               }
             />
             {r.submitError && (

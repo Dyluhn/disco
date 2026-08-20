@@ -123,6 +123,7 @@
           ["frontend/src/components/buildSurface/BuildDeliverableSection.tsx", "build", "@/components/build/DeliverablePanel", "frontend/src/components/build/DeliverablePanel.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildDeliverableSection.tsx", "build", "@/components/build/SelfHostPanel", "frontend/src/components/build/SelfHostPanel.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildDeliverableSection.tsx", "build", "@/components/toastApi", "frontend/src/components/toastApi.ts", "shell"],
+          ["frontend/src/components/buildSurface/BuildEmptyState.tsx", "build", "@/components/DriverModelNotice", "frontend/src/components/DriverModelNotice.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildEmptyState.tsx", "build", "@/components/QueryInput", "frontend/src/components/QueryInput.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildEmptyState.tsx", "build", "@/components/SuggestionChips", "frontend/src/components/SuggestionChips.tsx", "shell"],
           ["frontend/src/components/buildSurface/BuildEmptyState.tsx", "build", "@/components/build/BuildModelPicker", "frontend/src/components/build/BuildModelPicker.tsx", "shell"],

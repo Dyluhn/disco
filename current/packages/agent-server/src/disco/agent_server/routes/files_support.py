@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import logging
 import posixpath
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,8 @@ from disco.core import (
     MessageEvent,
     StatusEvent,
 )
+from disco.core.context.ledger import ResourceRef
+from disco.core.context.store import ArtifactMemoryStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from fastapi import UploadFile
@@ -31,7 +36,55 @@ from ._common import (
     _sanitize_name,
 )
 
+_LOG = logging.getLogger(__name__)
+
 _MAX_ARTIFACT_BYTES = 50 * 1024 * 1024
+
+# CXT-2 resource-import hook: uploads become durable ResourceRefs in the
+# resource manifest (the READ side is ContextLedger.resource_manifest → the
+# ContextPack "Resources:" section). Same file the ArtifactMemoryStore owns via
+# path_for(ArtifactMemoryKind.RESOURCE_MANIFEST); spelled out here so the
+# mutation declaration matches workspace_persistence's manifest handling.
+_RESOURCE_MANIFEST_PATH = ".disco/context/resource_manifest.json"
+
+
+async def _fold_upload_resource_ref(
+    session: Any,
+    conversation_id: str,
+    final_name: str,
+    data: bytes,
+) -> None:
+    """Upsert this upload into the durable resource manifest, best effort.
+
+    ``record_resources`` is whole-list-replace, so this reads the current
+    manifest, replaces the entry with the same ``rel_path`` (or appends), and
+    writes the merged list back. Runs under the caller's workspace fence, which
+    serializes manifest read-merge-write per conversation. Manifest bookkeeping
+    must never fail an upload: any error is logged and swallowed (matching
+    ArtifactManifestShadow's failure posture).
+    """
+    try:
+        memory = ArtifactMemoryStore(session)
+        ref = ResourceRef(
+            rel_path=f"uploads/{final_name}",
+            source=f"upload://{conversation_id}/{final_name}",
+            sha256=hashlib.sha256(data).hexdigest(),
+            copied_at=datetime.now(UTC),
+        )
+        merged = list(await memory.read_resources())
+        for i, existing in enumerate(merged):
+            if existing.rel_path == ref.rel_path:
+                merged[i] = ref
+                break
+        else:
+            merged.append(ref)
+        await memory.record_resources(tuple(merged))
+    except Exception:  # noqa: BLE001 — manifest bookkeeping never fails an upload
+        _LOG.exception(
+            "resource-manifest fold failed for %s (uploads/%s)",
+            conversation_id,
+            final_name,
+        )
 
 
 @dataclass(frozen=True)
@@ -107,10 +160,11 @@ async def _store_upload(
         await runtime.workspace.record_mutation_locked(
             conversation_id,
             "upload.write",
-            paths=(upload_path,),
+            paths=(_RESOURCE_MANIFEST_PATH, upload_path),
         )
         await session.write_file(upload_path, data)
         runtime.uploads.store(conversation_id, final_name, data)
+        await _fold_upload_resource_ref(session, conversation_id, final_name, data)
         return final_name
 
 

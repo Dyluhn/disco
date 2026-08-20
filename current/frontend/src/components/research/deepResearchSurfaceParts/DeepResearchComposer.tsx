@@ -3,14 +3,17 @@ import { ChevronDown, SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { UploadComposer } from "@/components/build/BuildSurface";
+import { DriverModelNotice } from "@/components/DriverModelNotice";
+import { focusModelControl } from "@/lib/focusModelControl";
 import { ModelLeaderPill } from "@/components/ModelLeaderPill";
 import { QueryInput } from "@/components/QueryInput";
-import { ScopeControl } from "@/components/ScopeControl";
+import { SearchTypeSlider } from "@/components/SearchTypeSlider";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SourcePicker } from "@/components/SourcePicker";
 import { EmptyState } from "@/components/states";
 import { cn } from "@/lib/cn";
 import type { ScopeId } from "@/shell/mode";
+import { findModel, useAssignments, useModels } from "@/hooks/useModels";
 import type { useDeepResearch } from "@/hooks/useDeepResearch";
 import { DepthTierSelector, type Tier } from "../DepthTierSelector";
 import { RecencySelector } from "../RecencySelector";
@@ -41,19 +44,17 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
       ? "Configured sources"
       : `${r.selectedSources.length} added source${r.selectedSources.length === 1 ? "" : "s"}`;
 
+  // Same catalogue read as ModelLeaderPill: the explicit pick, else the
+  // Settings default — the notice mirrors what would actually lead the run.
+  const { data: models } = useModels();
+  const { data: assignments } = useAssignments();
+  const noticeModel =
+    findModel(models, r.leaderId) ?? findModel(models, assignments?.default_model ?? null);
+
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
       <EmptyState title="Deep Research" subtitle="Multi-step reports with cited evidence." />
       <div className="flex w-full max-w-measure flex-col gap-inline">
-        <div className="flex items-center justify-between gap-inline px-hair">
-          <span className="font-ui text-[0.76rem] font-medium text-text-faint">
-            Search type
-          </span>
-          <ScopeControl
-            value="deep_research"
-            onChange={changeScope}
-          />
-        </div>
         <QueryInput
           onSubmit={r.submit}
           busy={r.submitting}
@@ -67,6 +68,7 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
           // the disclosure below rather than crowding this primary row.
           extraControls={
             <>
+              <SearchTypeSlider value="deep_research" onChange={changeScope} />
               <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
               <button
                 type="button"
@@ -92,26 +94,38 @@ export function DeepResearchComposer({ r, draftValue, setDraftValue, onScopeChan
             </>
           }
           footer={
-            optionsOpen ? (
-              <div
-                id="deep-research-options-panel"
-                className="flex flex-col gap-inline border-t border-hairline pt-inline"
-              >
-                <div className="flex flex-wrap items-center gap-inline">
-                  <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
-                  <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+            <>
+              {optionsOpen && (
+                <div
+                  id="deep-research-options-panel"
+                  className="flex flex-col gap-inline border-t border-hairline pt-inline"
+                >
+                  <div className="flex flex-wrap items-center gap-inline">
+                    <ModelLeaderPill value={r.leaderId} onChange={r.setLeaderId} />
+                    <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-inline">
+                    <SourcePicker
+                      selected={r.selectedSources}
+                      onChange={r.setSelectedSources}
+                    />
+                    {/* G1/DR-4: opening options mounts the upload affordance. It
+                        creates a conversation only after a real file selection. */}
+                    <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-center justify-between gap-inline">
-                  <SourcePicker
-                    selected={r.selectedSources}
-                    onChange={r.setSelectedSources}
-                  />
-                  {/* G1/DR-4: opening options mounts the upload affordance. It
-                      creates a conversation only after a real file selection. */}
-                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
-                </div>
+              )}
+              <div className="flex justify-end">
+                <DriverModelNotice
+                  label={noticeModel?.label ?? null}
+                  controlId="dr.driver-model"
+                  onReveal={() => {
+                    setOptionsOpen(true);
+                    focusModelControl("deep-research-options-panel");
+                  }}
+                />
               </div>
-            ) : null
+            </>
           }
         />
         {r.submitError && (

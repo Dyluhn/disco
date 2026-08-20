@@ -10,6 +10,8 @@ import { cn } from "@/lib/cn";
 
 type Tier = "quick" | "standard_deep" | "exhaustive";
 
+// Display labels only — the tier ids are wire-level (create frame + telemetry)
+// and MUST NOT change here.
 const TIERS: Array<{ id: Tier; label: string; note: string }> = [
   {
     id: "quick",
@@ -18,12 +20,12 @@ const TIERS: Array<{ id: Tier; label: string; note: string }> = [
   },
   {
     id: "standard_deep",
-    label: "Standard-deep",
+    label: "Standard",
     note: "6 sub-questions · up to 4 rounds · ~5–10 min · the everyday tier",
   },
   {
     id: "exhaustive",
-    label: "Exhaustive",
+    label: "Thorough",
     note: "12 sub-questions · 5 rounds · 15–30 min · long-form survey",
   },
 ];

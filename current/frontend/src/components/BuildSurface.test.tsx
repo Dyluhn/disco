@@ -109,10 +109,14 @@ describe("Build surface (plan gate → build → action gate)", () => {
     expect(screen.queryByText(/\*\*fizzbuzz/)).not.toBeInTheDocument();
   });
 
-  it("shows the model picker (which model runs the agent) on the empty state", async () => {
+  it("shows the model picker (which model runs the agent) in the composer options", async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole("radio", { name: "build" }));
+    // the picker lives in the composer's expandable options area now
+    await user.click(
+      await screen.findByRole("button", { name: /build options/i }, { timeout: 5000 }),
+    );
     // the picker trigger is present and shows the default model from the catalogue
     expect(
       await screen.findByRole(
@@ -121,10 +125,12 @@ describe("Build surface (plan gate → build → action gate)", () => {
         { timeout: 5000 },
       ),
     ).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("Qwen3.6-27B")).toBeInTheDocument(), {
-      timeout: 5000,
-    });
-  });
+    // Appears on the picker face AND on the driver-model notice in the card.
+    await waitFor(
+      () => expect(screen.getAllByText("Qwen3.6-27B").length).toBeGreaterThan(0),
+      { timeout: 5000 },
+    );
+  }, 15000);
 
   it("Reject records a denial without executing the action", async () => {
     const user = await enterBuildSubmitAndApprovePlan();

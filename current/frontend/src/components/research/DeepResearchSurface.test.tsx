@@ -53,8 +53,8 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(
       screen.getByPlaceholderText(/ask a research question/i),
     ).toBeInTheDocument();
-    // depth tier selector — default standard_deep
-    expect(screen.getByRole("button", { name: /Depth tier: Standard-deep/i })).toBeInTheDocument();
+    // depth tier selector — default standard_deep (displayed as "Standard")
+    expect(screen.getByRole("button", { name: /Depth tier: Standard/i })).toBeInTheDocument();
   });
 
   it("keeps secondary research controls behind one disclosure and quiets suggestions after typing", async () => {
@@ -63,8 +63,13 @@ describe("Deep Research surface — full lifecycle", () => {
 
     const options = screen.getByRole("button", { name: /Research options/i });
     expect(options).toHaveAttribute("aria-expanded", "false");
-    // Search type stays outside the disclosure so Standard Search is always reachable.
-    expect(screen.getByRole("button", { name: /Scope: Deep Research/i })).toBeInTheDocument();
+    // The search-type slider stays outside the disclosure (in the box's control
+    // row) so Standard Search is always reachable.
+    expect(screen.getByRole("radio", { name: "Deep Research" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: "Search" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Recency filter/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Attach files/i })).not.toBeInTheDocument();
 

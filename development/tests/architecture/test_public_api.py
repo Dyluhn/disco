@@ -871,9 +871,9 @@ class TestFrontendPublicApi:
         # 401 after the Settings simplification extracted `SandboxRuntimeSection`
         # and `StoredCredentialField` as independently owned public components.
         # 404 after the mobile-first-class pass added three shared primitives
-        # (tapTarget, useScrollFade, ScrollFade) so every surface converges on
-        # one mobile idiom. Additive: 0 deleted, 0 renamed.
-        assert len(live["frontend_modules"]) == 404
+        # (tapTarget, useScrollFade, ScrollFade). 407 after the composer redesign
+        # (SearchTypeSlider, DriverModelNotice, focusModelControl). Additive both.
+        assert len(live["frontend_modules"]) == 407
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {
