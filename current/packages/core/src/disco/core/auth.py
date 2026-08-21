@@ -56,6 +56,7 @@ from .auth_parts.origin_policy import (
     origin_matches_request_host,
     origin_permitted,
     request_traversed_proxy,
+    session_cookie_secure,
 )
 from .auth_parts.preview_origin import (
     _is_generated_preview_label,
@@ -66,6 +67,7 @@ from .auth_parts.preview_origin import (
     validated_canonical_preview_url,
     validated_isolated_path_preview_url,
 )
+from .auth_parts.secret_strength import _warn_if_weak_auth_secret
 from .env import disco_env
 from .store.sqlite import DEFAULT_OWNER_ID
 
@@ -121,6 +123,7 @@ class PreviewIntentRedemptionStore(Protocol):
 def session_secret() -> str:
     configured = disco_env("AUTH_SECRET") or disco_env("SECRET_KEY")
     if configured:
+        _warn_if_weak_auth_secret(configured)
         return configured
     return _load_or_create_install_secret()
 
@@ -812,6 +815,7 @@ __all__ = [
     "origin_permitted",
     "path_preview_cookie_name",
     "request_traversed_proxy",
+    "session_cookie_secure",
     "urlunsplit",
     "validated_canonical_preview_url",
     "validated_isolated_path_preview_url",

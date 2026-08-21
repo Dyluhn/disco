@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "577c569269df06983fb122833db59f31f5b8241a",
+  "source_identity": "556f611040111ef9e5cfffc88abc5b1e3986de1c",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -18513,6 +18513,11 @@
         },
         {
           "kind": "function",
+          "name": "importMcpConfig",
+          "signature": "export async function importMcpConfig(text: string, dryRun: boolean): Promise<McpImportResult>"
+        },
+        {
+          "kind": "function",
           "name": "listMcpConnections",
           "signature": "export async function listMcpConnections(): Promise<McpConnection[]>"
         },
@@ -18660,6 +18665,16 @@
           "kind": "variable",
           "name": "FIXTURE_DEEP_CID",
           "signature": "export const FIXTURE_DEEP_CID = \"conv_deep_fixture\";"
+        }
+      ]
+    },
+    {
+      "path": "frontend/src/api/deepResearchParts/passageNormalize.ts",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "normalizePassageMarkdown",
+          "signature": "export function normalizePassageMarkdown(text: string): string"
         }
       ]
     },
@@ -21584,6 +21599,16 @@
       ]
     },
     {
+      "path": "frontend/src/components/settings/McpImportBox.tsx",
+      "public_declarations": [
+        {
+          "kind": "function",
+          "name": "McpImportBox",
+          "signature": "export function McpImportBox({ onClose }: { onClose: () => void })"
+        }
+      ]
+    },
+    {
       "path": "frontend/src/components/settings/McpSection.tsx",
       "public_declarations": [
         {
@@ -23040,6 +23065,11 @@
           "kind": "function",
           "name": "useDeleteSkill",
           "signature": "export function useDeleteSkill()"
+        },
+        {
+          "kind": "function",
+          "name": "useImportMcpConfig",
+          "signature": "export function useImportMcpConfig()"
         },
         {
           "kind": "function",
@@ -25444,6 +25474,21 @@
           "kind": "InterfaceDeclaration",
           "name": "McpConnection",
           "signature": "export interface McpConnection { id: string; name: string; url: string; status: McpStatus; // rung B optional fields \u2014 live pool projection transport?: string; // \"stdio\" | \"streamable_http\" risk_tier?: string; description_hash?: string; // SHA-256 of the LAST APPROVED tool descriptions (the old hash) // E6 (#10): the AUTHORITATIVE new_hash the live agent-server pool just // computed when it detected drift against `description_hash`. Surfaces // on the ApprovalDiff so the user sees the REAL fingerprint of the // changed tool set, not a stub of the stored hash. Absent when the // server is in sync (no drift) or has never been approved (first // connect) \u2014 the UI must not show a diff in that case. new_description_hash?: string; config_hash?: string; new_config_hash?: string; approved_at?: string; // ISO-8601 enabled?: boolean; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "McpImportResult",
+          "signature": "export interface McpImportResult { dry_run: boolean; ok: boolean; servers: McpImportServer[]; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "McpImportSecret",
+          "signature": "export interface McpImportSecret { ref: string; source_key: string; value_provided: boolean; already_configured: boolean; }"
+        },
+        {
+          "kind": "InterfaceDeclaration",
+          "name": "McpImportServer",
+          "signature": "export interface McpImportServer { name: string; transport?: string | null; url?: string | null; args?: string[] | null; env?: Record<string, string> | null; headers?: Record<string, string> | null; warnings: string[]; error?: string | null; created: boolean; secrets: McpImportSecret[]; }"
         },
         {
           "kind": "InterfaceDeclaration",
@@ -30104,6 +30149,62 @@
       "target_sha256": "0120aecef6bdd4b9e5b231c8424102c7897bf6416220ee038325ab950bcc6992",
       "owner_package": "PKG-28-COMPOSER-RESOURCE-HOOK",
       "reason": "Panel-focus helper the driver-model notice uses to reveal and focus the real model control inside the expandable options panel."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/config.ts",
+      "public_name": "importMcpConfig",
+      "target_sha256": "9643b9b00c6991a9e3115730c1d41593b160233f521f186d933143d6f1faa83e",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Data-layer call for the MCP paste-a-config endpoint; ships the raw pasted text plus the dry-run flag so the preview and the apply are the same server-side parse."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearchParts/passageNormalize.ts",
+      "public_name": "normalizePassageMarkdown",
+      "target_sha256": "dd3f32a21091eb102009af695a3cc8230833269657305223ddedc012651eb359",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Client-side passage normalizer mirroring the server export seam so the in-browser markdown serializer stays byte-identical to fmt=md for the same report; private decomposition of api/deepResearch.ts."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/components/settings/McpImportBox.tsx",
+      "public_name": "McpImportBox",
+      "target_sha256": "701d727747d768ed3e941224370151d62dbc5b6c0bdb55403a844135bbdf6ce7",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Paste-a-config MCP box in Settings: sends a pasted mcpServers JSON blob to the app-server, renders the parsed per-server preview (including warnings, errors and the secret refs that will be stored) and applies it through the existing MCP create path. Parsing stays server-side only."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useConfig.ts",
+      "public_name": "useImportMcpConfig",
+      "target_sha256": "76e4820a61eecb910dbd1b47ea1f25c169df8d0d4e2bc878ea0d0d3ca466c0a5",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Mutation hook behind the MCP paste-a-config box; invalidates the MCP connection list after a non-dry-run apply."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/config.ts",
+      "public_name": "McpImportResult",
+      "target_sha256": "f21be8900d8680c545c9c6e2d943365ac461ab94424fbb2b6f3fcf1c22803cd0",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Wire type for the MCP import response envelope: the dry-run flag, the overall ok, and the parsed server rows."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/config.ts",
+      "public_name": "McpImportSecret",
+      "target_sha256": "3a64d339f85a478118dc9b4cbdf74216d7e3fab7cfc75e1bbaca41563893d586",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Wire type for one secret ref the MCP import will store or already has; carries the ref name and provenance, never the secret value."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/config.ts",
+      "public_name": "McpImportServer",
+      "target_sha256": "da123800a4587268399ab8dff1ab3e8435cea5d4d5adecbf4705e7749fd94533",
+      "owner_package": "PKG-32-PRODUCTION-READINESS",
+      "reason": "Wire type for one parsed server row of the MCP import preview/apply response, including its warnings, per-server error and secret refs."
     }
   ],
   "compatibility_bridges": [],

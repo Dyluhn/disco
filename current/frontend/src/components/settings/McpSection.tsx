@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, ShieldOff, Trash2 } from "lucide-react";
+import { ClipboardPaste, Plus, ShieldOff, Trash2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { TAP_TARGET_ICON } from "@/lib/tapTarget";
 import { agentIsLive } from "@/api/liveness";
@@ -14,6 +14,7 @@ import {
   useUpdateMcpServer,
 } from "@/hooks/useConfig";
 import type { McpServerConfig, McpStatus } from "@/types/config";
+import { McpImportBox } from "./McpImportBox";
 import { ProbeButton } from "./ProbeButton";
 
 /**
@@ -236,6 +237,51 @@ function ApprovalDiff({
   );
 }
 
+const HEADER_ACTION_CLASS =
+  "flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-wait disabled:opacity-40 lg:min-h-0";
+
+function HeaderActions({
+  creating,
+  importing,
+  isLoading,
+  onImport,
+  onCreate,
+}: {
+  creating: boolean;
+  importing: boolean;
+  isLoading: boolean;
+  onImport: () => void;
+  onCreate: () => void;
+}) {
+  if (creating) return null;
+  return (
+    <div className="flex items-center gap-inline">
+      {!importing && (
+        <button
+          type="button"
+          data-disco-control="settings.mcp-import-open"
+          disabled={isLoading}
+          onClick={onImport}
+          className={HEADER_ACTION_CLASS}
+        >
+          <ClipboardPaste className="size-3.5" aria-hidden />
+          Paste config
+        </button>
+      )}
+      <button
+        type="button"
+        data-disco-control="settings.mcp-add"
+        disabled={isLoading}
+        onClick={onCreate}
+        className={HEADER_ACTION_CLASS}
+      >
+        <Plus className="size-3.5" aria-hidden />
+        {isLoading ? "Loading connections…" : "Add connection"}
+      </button>
+    </div>
+  );
+}
+
 export function McpSection() {
   const { data: connections, isLoading } = useMcpConnections();
   const create = useCreateMcpServer();
@@ -245,6 +291,7 @@ export function McpSection() {
   const revoke = useRevokeMcpServer();
 
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [approvingServer, setApprovingServer] = useState<string | null>(null);
   const mutationError =
     create.error ?? update.error ?? remove.error ?? approve.error ?? revoke.error;
@@ -291,18 +338,13 @@ export function McpSection() {
             Connections (MCP)
           </h3>
         </div>
-        {!creating && (
-          <button
-            type="button"
-            data-disco-control="settings.mcp-add"
-            disabled={isLoading}
-            onClick={() => setCreating(true)}
-            className="flex min-h-11 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-wait disabled:opacity-40 lg:min-h-0"
-          >
-            <Plus className="size-3.5" aria-hidden />
-            {isLoading ? "Loading connections…" : "Add connection"}
-          </button>
-        )}
+        <HeaderActions
+          creating={creating}
+          importing={importing}
+          isLoading={isLoading}
+          onImport={() => setImporting(true)}
+          onCreate={() => setCreating(true)}
+        />
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
         External tool servers. Add a connection to let the agent call tools from
@@ -315,6 +357,8 @@ export function McpSection() {
           Couldn't apply this change: {mcpErrorText(mutationError)}
         </p>
       )}
+
+      {importing && <McpImportBox onClose={() => setImporting(false)} />}
 
       {creating && (
         <ConnectionForm

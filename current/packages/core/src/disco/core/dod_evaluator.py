@@ -13,8 +13,15 @@ here but C1b does NOT add a new predicate kind.  An unwired subjective
 predicate is a HARD-FAIL (we never silently pass a check we did not run).
 
 Read-only contract: no ``disco.tools.*`` import, no ``EventStore`` write, no
-agent view mutation.  The command runner is a bounded subprocess; the HTTP
-probe is a read-only GET with loopback/RFC1918 egress by default.
+agent view mutation.
+
+The evaluator NEVER touches the host itself.  Every predicate is model-authored
+(a command string, a path, a URL), so all three checks run only through seams
+the caller injects — in production the sandbox's own ``exec_shell`` /
+``file_exists`` / in-box curl (see
+``loop/finish/content_gate_parts/dod_evaluator_build.py``).  With a seam
+missing, that predicate is UN-EVALUATABLE: a non-pass flagged ``unverifiable``,
+never a host ``subprocess(shell=True)``, a host filesystem read, or a host GET.
 
 The verdict's ``spec_fingerprint`` is a SHA-256 over the spec's JSON form so
 the audit trail can pair "agent tried to finish" with "evaluator checked this
@@ -23,14 +30,8 @@ exact spec" without re-deriving it.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
-import os
-import selectors
-import signal
-import subprocess
-import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,8 +46,7 @@ from .dod import (
     FileExistsPredicate,
     HTTPOkPredicate,
 )
-from .dod_util import _egress_allowed, _hard_deny_reason, tail
-from .host_egress import EgressDenied, guarded_get
+from .dod_util import tail
 
 # ---- result types ----------------------------------------------------------
 
@@ -139,13 +139,10 @@ class SubjectiveJudge(Protocol):
     async def judge(self, req: SubjectiveJudgeRequest) -> SubjectiveVerdict: ...
 
 
-# ---- default command runner (subprocess, with destructive-command gate) ---
+# ---- check budgets --------------------------------------------------------
 
 
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 30.0
-_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS = 1.0
-_COMMAND_CAPTURE_HEAD_BYTES = 64 * 1024
-_COMMAND_CAPTURE_TAIL_BYTES = 64 * 1024
 _DEFAULT_HTTP_TIMEOUT_SECONDS = 10.0
 
 # Egress allow-list for the HTTP probe. Loopback + private RFC1918 by default
@@ -165,236 +162,10 @@ _DEFAULT_HTTP_ALLOW_HOSTS = frozenset(
 )
 
 
-class _BoundedCapture:
-    """Bounded head+tail capture of one subprocess stream."""
-
-    def __init__(self, stream: str) -> None:
-        self.stream = stream
-        self.total = 0
-        self.small = bytearray()
-        self.head = bytearray()
-        self.tail = bytearray()
-
-    def feed(self, chunk: bytes) -> None:
-        self.total += len(chunk)
-        return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
-        if len(self.small) <= return_cap:
-            room = return_cap + 1 - len(self.small)
-            self.small.extend(chunk[:room])
-        if len(self.head) < _COMMAND_CAPTURE_HEAD_BYTES:
-            self.head.extend(chunk[: _COMMAND_CAPTURE_HEAD_BYTES - len(self.head)])
-        self.tail.extend(chunk)
-        if len(self.tail) > _COMMAND_CAPTURE_TAIL_BYTES:
-            del self.tail[:-_COMMAND_CAPTURE_TAIL_BYTES]
-
-    def render(self) -> str:
-        return_cap = _COMMAND_CAPTURE_HEAD_BYTES + _COMMAND_CAPTURE_TAIL_BYTES
-        if self.total <= return_cap:
-            data = bytes(self.small[: self.total])
-        else:
-            omitted = max(0, self.total - len(self.head) - len(self.tail))
-            marker = (
-                f"\n[disco: {self.stream} truncated; {self.total} bytes total, "
-                f"{omitted} omitted]\n"
-            ).encode()
-            data = bytes(self.head) + marker + bytes(self.tail)
-        return data.decode("utf-8", errors="replace")
-
-
-def _drain_streams(
-    proc: subprocess.Popen[bytes],
-    selector: selectors.DefaultSelector,
-    streams: dict[int, Any],
-    deadline: float,
-) -> bool:
-    """Drain stdout/stderr until the deadline or the process exits."""
-
-    while True:
-        if proc.poll() is not None and not selector.get_map():
-            return True
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return proc.poll() is not None and not selector.get_map()
-        for key, _mask in selector.select(timeout=min(remaining, 0.1)):
-            fd = key.fd
-            try:
-                chunk = os.read(fd, 64 * 1024)
-            except BlockingIOError:
-                continue
-            if chunk:
-                key.data.feed(chunk)
-            else:
-                selector.unregister(fd)
-                streams.pop(fd).close()
-
-
-def _run_command(
-    command: str,
-    cwd: Path,
-    timeout_seconds: float,
-) -> tuple[int | None, str, str, bool]:
-    """Run ``command`` in a fresh subprocess with bounded capture and timeout."""
-
-    proc = subprocess.Popen(  # noqa: S602 - model command is deny-gated above
-        command,
-        shell=True,
-        executable="/bin/bash",  # H342: match sandbox exec_shell
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-        env={"PATH": os.environ.get("PATH", "")},  # no leaked agent secrets
-    )
-    stdout_capture = _BoundedCapture("stdout")
-    stderr_capture = _BoundedCapture("stderr")
-    selector = selectors.DefaultSelector()
-    assert proc.stdout is not None and proc.stderr is not None
-    streams = {proc.stdout.fileno(): proc.stdout, proc.stderr.fileno(): proc.stderr}
-    selector.register(proc.stdout.fileno(), selectors.EVENT_READ, stdout_capture)
-    selector.register(proc.stderr.fileno(), selectors.EVENT_READ, stderr_capture)
-
-    timed_out = not _drain_streams(proc, selector, streams, time.monotonic() + timeout_seconds)
-    if timed_out:
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            try:
-                os.killpg(proc.pid, sig)
-            except ProcessLookupError:
-                pass
-            if _drain_streams(
-                proc, selector, streams,
-                time.monotonic() + _DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS,
-            ):
-                break
-    for key in list(selector.get_map().values()):
-        selector.unregister(key.fd)
-        streams.pop(key.fd).close()
-    selector.close()
-    if proc.poll() is None:
-        try:
-            proc.wait(timeout=_DEFAULT_COMMAND_TERMINATION_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.wait()
-    return (
-        None if timed_out else int(proc.returncode),
-        stdout_capture.render(),
-        stderr_capture.render(),
-        timed_out,
-    )
-
-
-async def _default_command_runner(
-    command: str,
-    *,
-    cwd: Path,
-    timeout_seconds: float,
-) -> CommandResult:
-    """Default command runner: bounded subprocess with hard timeout.
-
-    A denied command is ``denied=True`` with ``exit_code=None`` — "not run",
-    not "run and failed".
-    """
-    deny = _hard_deny_reason(command)
-    if deny is not None:
-        return CommandResult(
-            exit_code=None,
-            stdout="",
-            stderr="",
-            error_message=f"hard-denied: {deny}",
-            duration_seconds=0.0,
-            denied=True,
-            deny_reason=deny,
-        )
-    started = datetime.now(UTC).timestamp()
-
-    try:
-        exit_code, stdout, stderr, timed_out = await asyncio.to_thread(
-            _run_command, command, cwd, timeout_seconds
-        )
-    except Exception as exc:  # pragma: no cover - defensive executor surface
-        duration = datetime.now(UTC).timestamp() - started
-        return CommandResult(
-            exit_code=None,
-            stdout="",
-            stderr="",
-            error_message=f"executor error: {type(exc).__name__}: {exc}",
-            duration_seconds=duration,
-        )
-    duration = datetime.now(UTC).timestamp() - started
-    return CommandResult(
-        exit_code=exit_code,
-        stdout=stdout,
-        stderr=stderr,
-        error_message=f"timeout after {timeout_seconds}s" if timed_out else "",
-        duration_seconds=duration,
-        timed_out=timed_out,
-    )
-
-
-# ---- default http probe ----------------------------------------------------
-
-
-async def _default_http_probe(
-    url: str,
-    *,
-    expected_status: int,
-    timeout_seconds: float,
-    allow_hosts: frozenset[str],
-) -> HttpProbeResult:
-    """Default HTTP probe: read-only GET with egress gate checked before wire."""
-    allowed, reason = _egress_allowed(url, allow_hosts)
-    if not allowed:
-        return HttpProbeResult(
-            status_code=None,
-            error_message=f"egress denied: {reason}",
-            duration_seconds=0.0,
-            egress_denied=True,
-            egress_reason=reason,
-        )
-    started = datetime.now(UTC).timestamp()
-
-    try:
-        resp = await guarded_get(
-            url,
-            timeout_s=timeout_seconds,
-            allow_hosts=allow_hosts if allow_hosts else None,
-        )
-        status, err = resp.status_code, ""
-    except (EgressDenied, TimeoutError, OSError) as exc:
-        duration = datetime.now(UTC).timestamp() - started
-        denied = isinstance(exc, EgressDenied)
-        return HttpProbeResult(
-            status_code=None,
-            error_message=f"{type(exc).__name__}: {exc}",
-            duration_seconds=duration,
-            egress_denied=denied,
-            egress_reason=str(exc) if denied else "",
-        )
-    except Exception as exc:  # pragma: no cover - defensive executor surface
-        duration = datetime.now(UTC).timestamp() - started
-        return HttpProbeResult(
-            status_code=None,
-            error_message=f"probe error: {type(exc).__name__}: {exc}",
-            duration_seconds=duration,
-        )
-    duration = datetime.now(UTC).timestamp() - started
-    return HttpProbeResult(
-        status_code=status,
-        error_message=err,
-        duration_seconds=duration,
-    )
-
-
-# ---- the evaluator ---------------------------------------------------------
-
-
-# Dependency-injected seams — typed explicitly so the test can substitute.
-# Each default is the safe production implementation; the test substitutes
-# fakes to keep the unit test hermetic (no real subprocess, no real network).
+# ---- injected seams -------------------------------------------------------
+#
+# Every seam is Optional at construction and has NO host-side default: a missing
+# seam makes that predicate un-evaluatable (see the module docstring).
 CommandRunner = Callable[[str], Awaitable[CommandResult]]
 HttpProbe = Callable[[str, int], Awaitable[HttpProbeResult]]
 FileChecker = Callable[[FileExistsPredicate], Awaitable[DoDPredicateResult]]
@@ -460,12 +231,14 @@ def _http_reason(result: HttpProbeResult, expect_status: int) -> str:
 class DoDEvaluator:
     """The fresh-context, read-only judge for a ``DoDSpec``.
 
-    Construction is dependency-injected: ``command_runner``, ``http_probe``,
-    ``file_checker``, and ``subjective_judge`` seams default to safe production
-    implementations (bounded subprocess, loopback GET, ``Path.exists``, and
-    HARD-FAIL respectively).  The evaluator holds a ``workspace_root`` for
-    resolving ``file_exists`` paths and as ``cwd`` for command predicates;
-    path-escape attempts are a hard fail.
+    Construction is dependency-injected: ``http_probe``, ``file_checker`` and
+    ``subjective_judge`` seams default to safe production implementations
+    (loopback GET, ``Path.exists``, and HARD-FAIL respectively).
+    ``command_runner`` has NO default — with none injected, a ``command``
+    predicate is un-evaluatable (non-pass, ``unverifiable``) rather than a host
+    ``subprocess(shell=True)`` of a model-authored string.  The evaluator holds
+    a ``workspace_root`` for resolving ``file_exists`` paths; path-escape
+    attempts are a hard fail.
     """
 
     def __init__(
@@ -489,41 +262,16 @@ class DoDEvaluator:
         self._http_timeout_seconds = float(http_timeout_seconds)
         self._http_allow_hosts = frozenset(http_allow_hosts)
         # Then build the default seams (the closures capture the scalars
-        # above). If the caller injected a `command_runner` / `http_probe`,
-        # we use that and skip the default.
-        self._command_runner = command_runner or self._build_default_command_runner()
-        self._http_probe = http_probe or self._build_default_http_probe(
-            http_timeout_seconds=http_timeout_seconds,
-            http_allow_hosts=http_allow_hosts,
-        )
-
-    def _build_default_command_runner(self) -> CommandRunner:
-        cwd = self._workspace_root
-        timeout = self._command_timeout_seconds
-
-        async def runner(command: str) -> CommandResult:
-            return await _default_command_runner(command, cwd=cwd, timeout_seconds=timeout)
-
-        return runner
-
-    def _build_default_http_probe(
-        self,
-        *,
-        http_timeout_seconds: float,
-        http_allow_hosts: frozenset[str],
-    ) -> HttpProbe:
-        timeout = http_timeout_seconds
-        allow = http_allow_hosts
-
-        async def probe(url: str, expected_status: int) -> HttpProbeResult:
-            return await _default_http_probe(
-                url,
-                expected_status=expected_status,
-                timeout_seconds=timeout,
-                allow_hosts=allow,
-            )
-
-        return probe
+        # above). If the caller injected an `http_probe`, we use that and skip
+        # the default. `command_runner` deliberately has NO default: running a
+        # model-authored command is the injected caller's decision (production
+        # injects the sandbox's `exec_shell`), never this module's.
+        self._command_runner: CommandRunner | None = command_runner
+        # `http_probe` has NO default either: the deliverable's server binds the
+        # SANDBOX's localhost, not the agent-server's, so a host GET on a
+        # model-authored URL both grades the wrong machine and reaches out of the
+        # process. Production injects the sandbox's curl probe.
+        self._http_probe: HttpProbe | None = http_probe
 
     # ---- public surface -----------------------------------------------------
 
@@ -578,64 +326,50 @@ class DoDEvaluator:
     # ---- deterministic checks ---------------------------------------------
 
     async def _check_file_exists(self, predicate: FileExistsPredicate) -> DoDPredicateResult:
-        """Resolve the predicate's path against the workspace root and check
-        existence. A path-escape is a hard fail; a directory or empty file is
-        unmet (anti-gaming: a declared deliverable must be a non-empty regular file)."""
-        if self._file_checker is not None:
-            return await self._file_checker(predicate)
-        try:
-            resolved = resolve_under_workspace(self._workspace_root, predicate.path)
-        except PathEscapeError as exc:
+        """Grade the predicate with the INJECTED file checker (in production, the
+        sandbox's own `file_exists` + non-empty test).
+
+        There is no host-filesystem fallback: `predicate.path` is model-authored,
+        and answering it off the agent-server's own filesystem grades the wrong
+        machine (and discloses what is on it). With no checker injected the
+        predicate is UN-EVALUATABLE — a non-pass flagged `unverifiable`."""
+        if self._file_checker is None:
             return DoDPredicateResult(
                 predicate=predicate,
                 passed=False,
-                reason=f"path escapes workspace: {exc}",
+                unverifiable=True,
+                reason=(
+                    "file_exists not evaluated: no sandbox available to check it in "
+                    "(host filesystem access is not permitted)"
+                ),
                 details={
                     "kind": "file_exists",
                     "path": predicate.path,
-                    "workspace_root": str(self._workspace_root),
-                    "escape": True,
+                    "no_file_checker": True,
                 },
             )
-        exists = resolved.exists()
-        if exists:
-            stat = resolved.stat()
-            is_file = resolved.is_file()
-            if is_file and stat.st_size > 0:
-                return DoDPredicateResult(
-                    predicate=predicate,
-                    passed=True,
-                    reason=f"file exists at {resolved} ({stat.st_size} bytes)",
-                    details=_file_exists_details(
-                        predicate, resolved, size_bytes=stat.st_size
-                    ),
-                )
-            why = "is a directory" if not is_file else "is empty (0 bytes)"
+        return await self._file_checker(predicate)
+
+    async def _check_command_exit(self, predicate: CommandExitPredicate) -> DoDPredicateResult:
+        """Re-run the predicate's command through the INJECTED runner (in
+        production, the sandbox's `exec_shell`). A hard-denied command is "not
+        run", not "run and failed"; no runner at all is "not evaluated"."""
+        if self._command_runner is None:
             return DoDPredicateResult(
                 predicate=predicate,
                 passed=False,
+                unverifiable=True,
                 reason=(
-                    f"path exists but {why}: {predicate.path} — a declared deliverable "
-                    f"must be a non-empty regular file (write its real content)"
+                    "command not evaluated: no sandbox available to run it in "
+                    "(host execution is not permitted)"
                 ),
-                details=_file_exists_details(
-                    predicate,
-                    resolved,
-                    size_bytes=stat.st_size,
-                    is_file=is_file,
-                    empty_or_dir=True,
-                ),
+                details={
+                    "kind": "command",
+                    "cmd": predicate.cmd,
+                    "expect_exit": predicate.expect_exit,
+                    "no_command_runner": True,
+                },
             )
-        return DoDPredicateResult(
-            predicate=predicate,
-            passed=False,
-            reason=f"file does not exist: {predicate.path} (resolved {resolved})",
-            details=_file_exists_details(predicate, resolved, exists=False),
-        )
-
-    async def _check_command_exit(self, predicate: CommandExitPredicate) -> DoDPredicateResult:
-        """Re-run the predicate's command in a fresh subprocess. A hard-denied
-        command is "not run", not "run and failed"."""
         result = await self._command_runner(predicate.cmd)
         passed = (
             not result.denied
@@ -672,6 +406,22 @@ class DoDEvaluator:
     async def _check_http_ok(self, predicate: HTTPOkPredicate) -> DoDPredicateResult:
         """Probe the URL and compare to `expect_status`. An egress-denied URL
         is "not probed", not "probed and got a bad status"."""
+        if self._http_probe is None:
+            return DoDPredicateResult(
+                predicate=predicate,
+                passed=False,
+                unverifiable=True,
+                reason=(
+                    "http_ok not evaluated: no sandbox available to probe from "
+                    "(host network access is not permitted)"
+                ),
+                details={
+                    "kind": "http_ok",
+                    "url": predicate.url,
+                    "expect_status": predicate.expect_status,
+                    "no_http_probe": True,
+                },
+            )
         result = await self._http_probe(predicate.url, predicate.expect_status)
         passed = (
             not result.egress_denied

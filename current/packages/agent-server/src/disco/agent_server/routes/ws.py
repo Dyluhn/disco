@@ -73,6 +73,16 @@ _REVIVE_FRAME_TYPES = frozenset(
         # accept_finished never kicks, but it may append the user's acknowledgment
         # note — a write an imported (read-only) conversation must refuse too.
         "accept_finished",
+        # Every remaining LOOP-KICKING control frame `_handle_control_frame`
+        # dispatches. Their HTTP twins are all `_reject_if_imported`-guarded (e.g.
+        # POST /conversations/{cid}/resume); the WS mirror was not, so an imported
+        # bundle — a third party's event log — could still be driven through the
+        # agent with this instance's tools and credentials.
+        "approve_plan",
+        "request_plan",
+        "pick_alternative",
+        "resume",
+        # `pause`/`cancel` stay allowed: they only STOP work, never start it.
     }
 )
 

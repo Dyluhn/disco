@@ -109,6 +109,37 @@ def test_imported_conversation_is_read_only_at_every_kick_path(client: TestClien
     assert msg["detail"]["reason"] == "imported_read_only"
 
 
+def test_imported_conversation_refuses_fire_now_and_deck_writes(client: TestClient) -> None:
+    """SEC-C3: two more paths that wake a sandbox / write workspace files.
+    Creating a schedule was guarded but FIRING one was not, and the deck editor
+    PUT writes authored.json + html + pptx back into the workspace."""
+    _seed(client._store, "conv_src")  # type: ignore[attr-defined]
+    bundle = _export(client, "conv_src")
+    cid = client.post("/api/share/import", json=bundle).json()["conversation_id"]
+
+    fired = client.post(f"/api/conversations/{cid}/schedules/sched_nope/fire-now")
+    assert fired.status_code == 409
+    assert fired.json()["detail"]["reason"] == "imported_read_only"
+
+    patched = client.put(
+        f"/conversations/{cid}/deck/editor?path=deck",
+        json={"patch": []},
+    )
+    assert patched.status_code == 409
+    assert patched.json()["detail"]["reason"] == "imported_read_only"
+
+
+def test_import_guard_fails_closed_on_an_unknown_conversation(client: TestClient) -> None:
+    """`conversation_origin` answers None for BOTH "ordinary conversation" and
+    "no such row", so an unknown id used to sail straight past the guard."""
+    from disco.agent_server.routes._common import _reject_if_imported
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as excinfo:
+        _reject_if_imported(client._store, "conv_does_not_exist")  # type: ignore[attr-defined]
+    assert excinfo.value.status_code == 404
+
+
 # ---- fail-closed validation -------------------------------------------------
 
 

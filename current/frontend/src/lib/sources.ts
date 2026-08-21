@@ -21,8 +21,19 @@ export function sourceUrlKey(raw: string): string {
           !key.toLowerCase().startsWith("utm_") &&
           !TRACKING_QUERY_KEYS.has(key.toLowerCase()),
       )
+      // Codepoint order (NOT localeCompare) — the Python export mirror
+      // (_report_citations.py) sorts the same way, and the py↔ts parity of
+      // citation numbering depends on identical keys.
       .sort(([keyA, valueA], [keyB, valueB]) =>
-        keyA === keyB ? valueA.localeCompare(valueB) : keyA.localeCompare(keyB),
+        keyA === keyB
+          ? valueA < valueB
+            ? -1
+            : valueA > valueB
+              ? 1
+              : 0
+          : keyA < keyB
+            ? -1
+            : 1,
       );
     const suffix = query.length ? `?${new URLSearchParams(query).toString()}` : "";
     return `${authority}${path}${suffix}`;

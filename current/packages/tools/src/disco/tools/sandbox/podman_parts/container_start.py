@@ -27,6 +27,7 @@ from .._container import (
     nofile_ulimits,
     resolve_bounds,
 )
+from .._effective_config import assert_effective_limits, assert_effective_runtime
 from ..base import SandboxUnavailableError
 from ..capability_relay import RelayConfigurationError, parse_upstream
 
@@ -226,48 +227,30 @@ def _run_podman_container(
         runtime=svc._cfg.runtime,
     )
     _assert_effective_runtime(svc, resources["container"])
+    # Same "requested is not effective" reasoning as the runtime, applied to the
+    # cgroup bounds: an engine that drops a cap it does not support leaves the box
+    # unbounded while the caller believes it is capped. Only the fields this create
+    # actually asked for are asserted (Podman derives NanoCpus from the quota).
+    assert_effective_limits(
+        resources["container"],
+        {
+            "Memory": int(mem_mb) * 1024 * 1024,
+            "CpuQuota": int(cpu * _CPU_PERIOD),
+            "PidsLimit": int(pids),
+        },
+    )
     resources["container"].start()
 
 
 def _assert_effective_runtime(svc: PodmanSandboxService, container: Any) -> None:
-    """Fail CLOSED when the container did not actually get the configured runtime.
+    """Podman-side adapter for the shared post-create runtime guard.
 
-    A pre-flight "is this runtime registered?" check is not enough here. Podman's
-    Docker-compat ``/info`` advertises ``runsc`` from a static candidate path
-    whether or not the binary exists, and its create endpoint drops
-    ``HostConfig.Runtime`` without error — so a caller asking for gVisor could
-    silently receive a plain ``crun`` container and believe it was sandboxed.
-
-    Requesting a runtime and then verifying what was actually assigned is the
-    only check that survives a transport which lies. If they disagree, the
-    caller gets a typed refusal instead of a weaker isolation boundary it did
-    not ask for.
+    The reasoning, and the guard itself, live in
+    :mod:`disco.tools.sandbox._effective_config` so the docker-py backends that
+    reach the same daemon are held to the identical check.
     """
-    requested = (svc._cfg.runtime or "").strip()
-    # runc and crun ARE the engine defaults (Docker and Podman respectively) and
-    # promise no extra isolation, so asking for one is not a claim to enforce.
-    # Anything else — runsc, kata, … — is a request for a stronger boundary, and
-    # silently not getting it is the failure this guard exists to prevent.
-    if requested in ("", "runc", "crun"):
-        return
-    try:
-        container.reload()
-        effective = str(
-            (container.attrs.get("HostConfig") or {}).get("Runtime")
-            or container.attrs.get("OCIRuntime")
-            or ""
-        ).strip()
-    except Exception as exc:  # noqa: BLE001 - any inspect failure is fail-closed
-        raise SandboxUnavailableError(
-            f"could not verify the {requested!r} runtime took effect: {exc}"
-        ) from exc
-    if effective != requested:
-        raise SandboxUnavailableError(
-            f"refusing to run unsandboxed: requested the {requested!r} OCI runtime "
-            f"but the container was created with {effective or 'the engine default'!r}. "
-            "Podman's Docker-compatible API silently ignores the runtime field; use "
-            "the rootful Docker or remote gvisor backend for a gVisor boundary."
-        )
+    assert_effective_runtime(container, svc._cfg.runtime)
+
 
 def _cleanup_failed_podman_start(
     svc: PodmanSandboxService,

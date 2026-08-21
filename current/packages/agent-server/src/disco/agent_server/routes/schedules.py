@@ -167,7 +167,9 @@ def make_schedules_router(
         """Fire a schedule through its periodic execution path, or return 404."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        await require_owned_conversation(request, store, conversation_id)
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        # Firing wakes a sandbox and kicks the loop, exactly like creating one.
+        _reject_if_imported(store, conversation_id)
         return await _fire_schedule_now_response(runtime, schedule_id, current_owner_id(request))
 
     @router.post("/api/schedules/preview")

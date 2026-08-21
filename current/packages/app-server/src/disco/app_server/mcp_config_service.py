@@ -86,6 +86,14 @@ def _apply_launch_fields(updated: dict, patch: McpServerPatchDTO) -> None:
         # Command line text unchanged this patch — replace only the args,
         # keep the existing (already-split) command untouched.
         updated["args"] = patch.args
+    if patch.transport == "stdio":
+        # The mirror of the streamable_http pop above: a server flipped to
+        # stdio must not keep stale HTTP auth-header refs in its signed config.
+        updated.pop("headers", None)
+    if transport == "stdio" and "env" in patch.model_fields_set:
+        updated["env"] = patch.env
+    elif transport == "streamable_http" and "headers" in patch.model_fields_set:
+        updated["headers"] = patch.headers
 
 
 def _apply_server_patch(existing: dict, name: str, patch: McpServerPatchDTO) -> dict:
@@ -254,10 +262,10 @@ class McpConfigService:
             )
         return out
 
-    def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
-        cfg = self._mcp_config()
-        if body.name in cfg.servers:
-            raise ValueError(f"server {body.name!r} already exists")
+    def _server_dict_from_dto(self, body: McpServerConfigDTO) -> dict:
+        """The persisted server dict for a create body — ALSO the validation
+        mirror the paste-import preview runs, so a server that previews clean
+        cannot fail differently at create time."""
         srv: dict = {
             "transport": body.transport,
             "url": body.url,
@@ -269,9 +277,22 @@ class McpConfigService:
             command, args = _split_stdio_command(body.url, body.args)
             srv["command"] = command
             srv["args"] = args
+            if body.env:
+                # Secret-ref NAMES only (the DTO contract) — resolved by the
+                # pool at connect time via the SecretStore, never stored raw.
+                srv["env"] = dict(body.env)
+        elif body.headers:
+            srv["headers"] = dict(body.headers)
         from disco.tools.mcp.config import McpServerConfig
 
         McpServerConfig.model_validate({"name": body.name, **srv})
+        return srv
+
+    def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
+        cfg = self._mcp_config()
+        if body.name in cfg.servers:
+            raise ValueError(f"server {body.name!r} already exists")
+        srv = self._server_dict_from_dto(body)
         servers = {**cfg.servers, body.name: srv}
         # The Settings UI exposes per-connection switches, not a separate
         # top-level MCP switch.  A fresh install starts with ``mcp.enabled``
@@ -440,3 +461,100 @@ class McpConfigService:
             "approved_at": old["approved_at"],
             "approved_by": old["approved_by"],
         }
+
+    # ---- paste-a-config import ----------------------------------------------
+
+    def import_mcp_config(self, text: str, *, dry_run: bool = True) -> dict:
+        """Parse a pasted ``mcpServers`` blob; preview (dry_run) or create.
+
+        The parse itself lives in `mcp_import.parse_mcp_import`; every accepted
+        server goes through the SAME `_server_dict_from_dto` validation the
+        manual create path uses (the server never trusts a client-side parse).
+        Pasted literal env/header values are stored in the SecretStore under
+        generated refs on apply — the response NEVER echoes a secret value.
+        """
+        from .mcp_import import McpImportError, parse_mcp_import
+
+        try:
+            rows = parse_mcp_import(text)
+        except McpImportError as exc:
+            raise ValueError(str(exc)) from exc
+        out = [_import_one_server(self, row, dry_run=dry_run) for row in rows]
+        return {
+            "dry_run": dry_run,
+            "ok": bool(out) and all(row.get("error") is None for row in out),
+            "servers": out,
+        }
+
+
+def _project_import_secrets(service: McpConfigService, row: dict, result: dict) -> list[dict]:
+    """Fill `result` with the SANITIZED secret projection; return the raw
+    pending entries (with values) for the apply step only."""
+    pending = list(row.get("secrets") or [])
+    refs = {**(row.get("env") or {}), **(row.get("headers") or {})}
+    pending_refs = {p["ref"] for p in pending}
+    for key, ref in sorted(refs.items()):
+        if ref not in pending_refs and not service._secrets.has_secret(ref):
+            result["warnings"].append(f"secret {ref!r} (for {key!r}) is not configured yet")
+    result["secrets"] = [
+        {
+            "ref": p["ref"],
+            "source_key": p["source_key"],
+            "value_provided": True,
+            "already_configured": service._secrets.has_secret(p["ref"]),
+        }
+        for p in pending
+    ]
+    return pending
+
+
+def _apply_import_row(
+    service: McpConfigService, body: McpServerConfigDTO, pending: list[dict]
+) -> None:
+    """Store the pasted secret values, then create — the non-dry-run tail."""
+    if pending and not service._secrets.can_store:
+        raise ValueError(
+            "the secret store cannot save new secrets right now "
+            "(app secret missing); set the app secret and retry"
+        )
+    for p in pending:
+        service._secrets.set_secret(p["ref"], p["value"])
+    service.create_mcp_server(body)
+
+
+def _import_one_server(service: McpConfigService, row: dict, *, dry_run: bool) -> dict:
+    """Validate/create ONE parsed server; returns the sanitized result row."""
+    result: dict = {
+        "name": row.get("name", ""),
+        "transport": row.get("transport"),
+        "url": row.get("url"),
+        "args": row.get("args"),
+        "env": row.get("env"),
+        "headers": row.get("headers"),
+        "warnings": list(row.get("warnings") or []),
+        "error": row.get("error"),
+        "created": False,
+        "secrets": [],
+    }
+    if result["error"] is not None:
+        return result
+    pending = _project_import_secrets(service, row, result)
+    try:
+        body = McpServerConfigDTO(
+            name=result["name"],
+            url=result["url"] or "",
+            transport=result["transport"],
+            args=result["args"],
+            env=result["env"],
+            headers=result["headers"],
+        )
+        if body.name in service._mcp_config().servers:
+            raise ValueError(f"server {body.name!r} already exists")
+        service._server_dict_from_dto(body)  # the mirror validation
+        if not dry_run:
+            _apply_import_row(service, body, pending)
+            result["created"] = True
+    except ValueError as exc:
+        result["error"] = str(exc)
+    return result
+

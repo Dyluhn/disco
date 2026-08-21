@@ -13,7 +13,6 @@ and is re-exported here as the compatibility surface.
 from __future__ import annotations
 
 import logging
-import os
 import re  # noqa: F401 — compatibility facade binding
 import shlex
 from dataclasses import dataclass  # noqa: F401 — compatibility facade binding
@@ -587,10 +586,16 @@ async def _check_file_exists(
         if exists:
             return (True, f"file_exists({path_str}): found")
         return (False, f"file_exists({path_str}): missing")
-    p = Path(path_str)
-    if p.exists():
-        return (True, f"file_exists({path_str}): found")
-    return (False, f"file_exists({path_str}): missing")
+    # No sandbox file surface → UN-EVALUATABLE, never a host filesystem read.
+    # `predicate.path` is model-authored, and on this branch there is no
+    # workspace to clamp it to, so `Path(path_str).exists()` answered a
+    # model-chosen absolute path against the agent-server's own filesystem —
+    # the wrong machine's evidence, and an existence oracle for it. Fail closed.
+    return (
+        False,
+        f"file_exists({path_str}): not evaluated — no sandbox available to check it in "
+        f"(host filesystem access is not permitted)",
+    )
 
 
 async def _check_command(
@@ -627,48 +632,17 @@ async def _check_command(
             f"command({predicate.cmd!r}): exited {result.exit_code}, "
             f"expected {predicate.expect_exit} (sandbox)",
         )
-    return await _check_command_on_host(predicate, sbx, timeout)
-
-
-async def _check_command_on_host(
-    predicate: CommandExitPredicate, sbx: Any, timeout: float,
-) -> tuple[bool, str]:
-    """Fallback: run on the host (sandbox-less / fake-executor path)."""
-    import asyncio
-    import subprocess
-    from pathlib import Path
-
-    workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-    cwd = str(Path(workspace).resolve()) if workspace else None
-
-    def _run() -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            predicate.cmd, shell=True, executable="/bin/bash",
-            cwd=cwd, capture_output=True, text=True, timeout=timeout,
-            check=False, env={"PATH": os.environ.get("PATH", "")},
-        )
-
-    started = asyncio.get_event_loop().time()
-    try:
-        completed = await asyncio.to_thread(_run)
-    except subprocess.TimeoutExpired:
-        return (False, f"command({predicate.cmd!r}): timeout after {timeout}s")
-    except Exception as exc:  # noqa: BLE001 — defensive
-        return (
-            False,
-            f"command({predicate.cmd!r}): executor error ({type(exc).__name__}: {exc})",
-        )
-    duration = asyncio.get_event_loop().time() - started
-    if completed.returncode == predicate.expect_exit:
-        return (
-            True,
-            f"command({predicate.cmd!r}): exited {completed.returncode} "
-            f"as expected (in {duration:.2f}s)",
-        )
+    # No sandbox exec surface → the check is UN-EVALUATABLE, never a host
+    # subprocess. `predicate.cmd` is a model-authored string harvested verbatim
+    # from `submit_plan` / `propose_plan_update` (shape-validated only), and the
+    # destruction deny-list above is not an arbitrary-code-execution control.
+    # Running it here would run it in the agent-server's own process, cwd and
+    # PATH. This mirrors `_maybe_emit_context_step_done_marks`, which already
+    # bails out when `sbx is None`. Fail closed: non-pass, and say why.
     return (
         False,
-        f"command({predicate.cmd!r}): exited {completed.returncode}, "
-        f"expected {predicate.expect_exit}",
+        f"command({predicate.cmd!r}): not evaluated — no sandbox available to run it in "
+        f"(host execution is not permitted)",
     )
 
 

@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import os
 import posixpath
+import re
 import shutil
+import socket
 import tempfile
 import uuid
 import zipfile
@@ -14,8 +17,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
 from disco.core import EventSource, LLMMessage, MessageEvent
+from disco.core.host_egress import EgressDenied, validate_untrusted_url
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectStore, is_runtime_secret_path
 from starlette.datastructures import UploadFile
@@ -27,6 +32,30 @@ from ..title_service import fallback_title
 
 _GIT_CLONE_TIMEOUT_S = 120
 CloneGit = Callable[[str, Path], Awaitable[None]]
+
+# `git_url` is caller-supplied and NOT admin-gated (see `_json_source`), so the
+# only transports it may name are the ones that cannot reach the host itself.
+# `https` is the whole allowlist:
+#   * `ext::` runs a SHELL COMMAND (`ext::sh -c '…'`) — remote code execution,
+#     unaffected by `--depth 1`.
+#   * `file://` / a bare path clones the host filesystem into the workspace.
+#   * `ssh://` + scp-style `git@host:path` would authenticate as the SERVER's
+#     unix user against arbitrary internal hosts. Nothing in the product
+#     configures git credentials or known_hosts (the import dialog's field is
+#     `<input type="url">` with an https placeholder), so ssh import could only
+#     ever succeed by borrowing host key material — a privilege escalation, not
+#     a feature. Add it only together with a per-owner credential surface.
+#   * plain `http://` is omitted deliberately: it is the transport every cloud
+#     metadata endpoint speaks, and dropping it costs nothing a self-host needs.
+_ALLOWED_GIT_SCHEMES = ("https",)
+# Defence in depth for (b): even if the parse above were bypassed, git itself
+# refuses every transport outside this list.
+_GIT_ALLOW_PROTOCOL = ":".join(_ALLOWED_GIT_SCHEMES)
+# Mirrors `tools/mcp/stdio.py::_SAFE_PASSTHROUGH`: the subprocess boundary is not
+# a trust boundary, so DISCO_SECRET_KEY and every *_API_KEY stay behind.
+_GIT_ENV_PASSTHROUGH = ("PATH", "LANG", "LC_ALL", "TZ", "TMPDIR", "SystemRoot")
+_GIT_FALLBACK_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+_HOST_PATH_RE = re.compile(r"/(?:home|root|Users|tmp|var|etc|opt|srv|private)(?:/[^\s'\"]*)?")
 
 
 @dataclass(frozen=True)
@@ -221,7 +250,81 @@ def _materialize_zip(
     return ImportStats(len(entries), total, largest_path, largest_bytes)
 
 
+def _validated_git_url(raw: str) -> str:
+    """The caller-supplied clone URL, or ``ImportRejected`` before any use of it.
+
+    Allowlist, never denylist: exactly the schemes in `_ALLOWED_GIT_SCHEMES` are
+    accepted and everything else — `ext::` (shell execution), `file://`, a bare
+    path, scp-style `git@host:path` (no scheme at all) — is rejected by naming
+    what IS permitted.
+    """
+    url = raw.strip()
+    if not url:
+        _reject(400, "git_url_invalid", "git_url must not be empty")
+    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in url):
+        _reject(400, "git_url_invalid", "git_url must not contain whitespace or control characters")
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        _reject(400, "git_url_invalid", f"git_url is not a valid URL: {exc}")
+    allowed = ", ".join(f"{scheme}://" for scheme in _ALLOWED_GIT_SCHEMES)
+    if parsed.scheme.lower() not in _ALLOWED_GIT_SCHEMES:
+        _reject(
+            400,
+            "git_url_scheme",
+            f"git_url must start with one of: {allowed} (got {parsed.scheme.lower() or 'no'} "
+            "scheme)",
+        )
+    if not parsed.hostname:
+        _reject(400, "git_url_invalid", "git_url must name a host")
+    if parsed.username or parsed.password:
+        # The URL is echoed back to the caller and into the seed message.
+        _reject(400, "git_url_credentials", "git_url must not embed credentials")
+    return url
+
+
+async def _require_public_git_host(git_url: str) -> None:
+    """Route the clone target through the SAME host-egress policy every other
+    untrusted URL uses, so a `git_url` cannot be used as an SSRF probe against
+    loopback/private/link-local addresses (169.254.169.254 and friends).
+
+    A host that does not resolve is NOT a policy denial — git will fail on its
+    own — so the DNS-failure case is allowed through unchanged. That also keeps
+    the check inert on an offline test host.
+    """
+    try:
+        await asyncio.to_thread(validate_untrusted_url, git_url)
+    except EgressDenied as exc:
+        if isinstance(exc.__cause__, socket.gaierror):
+            return
+        _reject(400, "git_url_blocked", "git_url does not resolve to a public address")
+
+
+def _git_clone_env() -> dict[str, str]:
+    env = {key: os.environ[key] for key in _GIT_ENV_PASSTHROUGH if key in os.environ}
+    env.setdefault("PATH", _GIT_FALLBACK_PATH)
+    env["GIT_ALLOW_PROTOCOL"] = _GIT_ALLOW_PROTOCOL
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    # HOME is withheld and both config layers are pinned to /dev/null: a
+    # `url.<base>.insteadOf` line in the host's gitconfig could otherwise rewrite
+    # a validated https URL into `ext::` after our parse has run.
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    return env
+
+
+def _sanitized_git_error(raw: str, dest: Path) -> str:
+    text = raw
+    for host_path in (str(dest), str(dest.parent)):
+        if host_path:
+            text = text.replace(host_path, "<import-dir>")
+    return _HOST_PATH_RE.sub("<path>", text)[:1000]
+
+
 async def clone_git_url(git_url: str, dest: Path) -> None:
+    url = _validated_git_url(git_url)
+    await _require_public_git_host(url)
     git = shutil.which("git")
     if git is None:
         _reject(400, "git_missing", "git is not installed on the agent-server host")
@@ -231,11 +334,13 @@ async def clone_git_url(git_url: str, dest: Path) -> None:
             "clone",
             "--depth",
             "1",
-            git_url,
+            "--",
+            url,
             str(dest),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
+            env=_git_clone_env(),
         )
     except OSError as exc:
         _reject(400, "git_clone_failed", f"failed to launch git: {exc}")
@@ -247,7 +352,7 @@ async def clone_git_url(git_url: str, dest: Path) -> None:
         raise ImportRejected(400, "git_clone_failed", "git clone timed out") from exc
     if proc.returncode != 0:
         detail = (stderr or stdout).decode(errors="replace").strip() or "git clone failed"
-        _reject(400, "git_clone_failed", detail[:1000])
+        _reject(400, "git_clone_failed", _sanitized_git_error(detail, dest))
 
 
 async def _multipart_source(request: Request) -> ImportSource:
@@ -297,7 +402,10 @@ async def _json_source(request: Request) -> ImportSource:
     if isinstance(path_value, str) and path_value.strip():
         return _path_source(request, path_value)
     assert isinstance(git_url_value, str)
-    git_url = git_url_value.strip()
+    # Validate at PARSE time, before a workspace is created and before any
+    # subprocess can be spawned; `clone_git_url` re-validates for callers that
+    # reach it directly.
+    git_url = _validated_git_url(git_url_value)
     return ImportSource(
         kind="git",
         label=git_url,

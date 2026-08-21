@@ -23,6 +23,7 @@ from disco.core.auth import (
     origin_permitted,
     pairing_token,
     request_traversed_proxy,
+    session_cookie_secure,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -42,6 +43,10 @@ _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
 _ADMIN_PREFIXES = (
     "/api/models",
     "/api/openrouter",
+    # Writes provider API keys AND mints a signed origin approval for an
+    # operator-supplied base_url (provider_config_service -> approve_provider_origin),
+    # which is admin-gated everywhere else. Omission, not a decision.
+    "/api/providers",
     "/api/secrets",
     "/api/security",
     "/api/stripe",
@@ -70,16 +75,31 @@ def _auto_pair_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _under_pytest() -> bool:
+    """The ONLY signal that in-process test shims may be honoured.
+
+    `request.client.host` is `scope["client"]`, which uvicorn's
+    ProxyHeadersMiddleware rewrites from `X-Forwarded-For` (on by default, and
+    it does not check the value is an IP). A caller could therefore send
+    `X-Forwarded-For: testclient` and be treated as the in-process TestClient —
+    which mints an admin session. Every `testclient` shortcut below is gated on
+    this, so the shim cannot exist outside a test run.
+    """
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
 def _is_loopback_client(request: Request) -> bool:
     host = request.client.host if request.client is not None else ""
-    return host == "testclient" or host == "::1" or host.startswith("127.")
+    if host == "testclient":
+        return _under_pytest()
+    return host == "::1" or host.startswith("127.")
 
 
 def _is_testclient(request: Request) -> bool:
+    if not _under_pytest():
+        return False
     if request.client and request.client.host == "testclient":
         return True
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
     host = (request.headers.get("host") or "").split(":", 1)[0]
     return host in {"test", "testserver", "t"}
 
@@ -127,13 +147,26 @@ def current_owner_id(request: Request) -> str:
     return current_session(request).owner_id
 
 
-def set_session_cookie(response: Response, token: str, session: AuthSession) -> None:
+def set_session_cookie(
+    response: Response,
+    token: str,
+    session: AuthSession,
+    *,
+    request: Request | None = None,
+) -> None:
     response.set_cookie(
         SESSION_COOKIE,
         token,
         max_age=max(1, session.expires_at - int(time.time())),
         httponly=True,
-        secure=False,
+        # Not hardcoded: an https front door (a TLS reverse proxy / Tailscale
+        # HTTPS in front of loopback http) must get a Secure cookie, while a
+        # plain-localhost run must not — see `session_cookie_secure`.
+        secure=session_cookie_secure(
+            request.url.scheme if request is not None else None,
+            request.headers.get("x-forwarded-proto") if request is not None else None,
+            request.headers.get("host") if request is not None else None,
+        ),
         samesite="strict",
         path="/",
     )
@@ -312,7 +345,7 @@ def make_auth_router() -> APIRouter:
             else:
                 raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
-        set_session_cookie(response, cookie, session)
+        set_session_cookie(response, cookie, session, request=request)
         return {
             "ok": True,
             "owner_id": session.owner_id,
@@ -333,12 +366,20 @@ def make_auth_router() -> APIRouter:
         session = signer.verify_cookie_header(cookie_header_from_headers(request.headers))
         if session is None:
             return {"authenticated": False}
-        return {
+        body: dict[str, Any] = {
             "authenticated": True,
             "owner_id": session.owner_id,
-            "csrf_token": session.csrf_token,
             "admin": session.is_admin,
         }
+        # Second layer under CORS: this route is public and the CSRF token is a
+        # bearer credential, so hand it out only to a request that is same-origin
+        # (a browser omits Origin there) or comes from a permitted origin. A page
+        # on some other local port therefore learns nothing even if the CORS
+        # allowlist is ever widened by configuration.
+        origin = request.headers.get("origin")
+        if origin is None or origin_permitted(origin, request.headers.get("host")):
+            body["csrf_token"] = session.csrf_token
+        return body
 
     @router.get("/api/auth/origins")
     async def auth_origins() -> dict:

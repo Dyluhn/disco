@@ -147,6 +147,10 @@ def _build_http_probe(sbx: Any) -> HttpProbe | None:
 
 
 def _build_command_runner(sbx: Any) -> CommandRunner | None:
+    # `None` is LOAD-BEARING: `DoDEvaluator` has no default command runner, so a
+    # sandbox-less executor makes every `command` predicate un-evaluatable
+    # (non-pass, `unverifiable`) instead of running the model's command string on
+    # the agent-server host. Never substitute a host runner here.
     if sbx is None or not hasattr(sbx, "exec_shell"):
         return None
 

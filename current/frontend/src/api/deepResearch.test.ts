@@ -3,9 +3,17 @@
  * the bare page origin. Mirrors the agent.upload.test.ts pattern: mock fetch
  * via vi.stubGlobal and spy on agentHttpBase so we can assert the full URL.
  *
- * WALK-03 (C1): serializeReportToMarkdown must strip [[passage_id]] markers
- * from disputed_notes so they don't leak into plain-text exports.
+ * One numbering, everywhere (2026-08-21): serializeReportToMarkdown renders
+ * every [[passage_id]] marker as the UI's [n] numeral (first-seen source
+ * order over report.passages — lib/sources.ts:citationNumbers) and the footer
+ * lists one source per number. The byte-parity and shared-fixture tests here
+ * pin the SAME bytes/assignment as the Python serializer's suite
+ * (agent-server test_report_export.py).
  */
+
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeReportToMarkdown } from "@/api/deepResearch";
@@ -244,7 +252,7 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
   });
 });
 
-// ---- WALK-03 (C1): serializeReportToMarkdown strips [[id]] from disputed_notes ----
+// ---- Citation numbering: [[id]] markers render as the UI's [n] numerals ----
 
 function makeMinimalReport(overrides: Partial<ReportEvent> = {}): ReportEvent {
   return {
@@ -263,9 +271,16 @@ function makeMinimalReport(overrides: Partial<ReportEvent> = {}): ReportEvent {
   };
 }
 
-describe("serializeReportToMarkdown — WALK-03 disputed_notes [[id]] stripping", () => {
-  it("WALK-03: strips [[passage_id]] markers from disputed_notes in the export", () => {
+describe("serializeReportToMarkdown — disputed_notes citation numbering", () => {
+  it("renders known [[passage_id]] markers as [n] and unknown ones as [?]", () => {
     const report = makeMinimalReport({
+      passages: [
+        {
+          id: "bce679_p0",
+          source_title: "Known Source",
+          source_url: "https://known.example.com/x",
+        },
+      ],
       sections: [
         {
           id: "s1",
@@ -287,15 +302,22 @@ describe("serializeReportToMarkdown — WALK-03 disputed_notes [[id]] stripping"
     // The raw [[id]] markers must not appear in the export
     expect(md).not.toMatch(/\[\[bce679_p0\]\]/);
     expect(md).not.toMatch(/\[\[abc123\]\]/);
-    // But the surrounding prose should still be present
-    expect(md).toContain("One source argues X");
-    expect(md).toContain("Another claims Y");
+    // Known passage → the UI's numeral; unknown id → [?] (never a raw hash)
+    expect(md).toContain("One source argues X [1].");
+    expect(md).toContain("Another claims Y [?].");
     // The conflicts line itself should appear
     expect(md).toContain("_Conflicts noted:");
   });
 
-  it("WALK-03: a note that is ONLY a [[id]] marker (no surrounding text) is dropped", () => {
+  it("a note that is ONLY a [[id]] marker becomes its numeral (line kept)", () => {
     const report = makeMinimalReport({
+      passages: [
+        {
+          id: "id_only",
+          source_title: "Solo",
+          source_url: "https://solo.example.com/",
+        },
+      ],
       sections: [
         {
           id: "s1",
@@ -310,12 +332,12 @@ describe("serializeReportToMarkdown — WALK-03 disputed_notes [[id]] stripping"
     });
 
     const md = serializeReportToMarkdown(report);
-    // After stripping, the note is empty → the whole conflicts line is dropped
-    expect(md).not.toContain("_Conflicts noted:");
+    // The numeral resolves against the sources footer, so the line stays.
+    expect(md).toContain("_Conflicts noted: [1]_");
     expect(md).not.toMatch(/\[\[id_only\]\]/);
   });
 
-  it("WALK-03: sections with no disputed_notes still export cleanly", () => {
+  it("sections with no disputed_notes still export cleanly", () => {
     const report = makeMinimalReport({
       sections: [
         {
@@ -408,5 +430,140 @@ describe("serializeReportToMarkdown — passage-text normalization", () => {
     const md = serializeReportToMarkdown(report);
     expect(md).toContain("A [real](https://example.com/a) link and `a | b` inline.");
     expect(md).toContain("```\nx | y | z | w | v\n```");
+  });
+});
+
+// ---- py↔ts byte parity + shared numbering fixture (2026-08-21) --------------
+//
+// The Python serializer's suite (agent-server test_report_export.py) pins the
+// SAME bytes for the same sample report, and the same [n] assignment for the
+// same shared fixture — together these hold the cross-language contract that
+// exports always show the numbering the user saw in the UI.
+
+function makeSampleReport(): ReportEvent {
+  return makeMinimalReport({
+    query: "What is the airspeed velocity of an unladen swallow?",
+    summary: "African and European swallows differ. Airspeed ~11 m/s and ~8 m/s.",
+    sections: [
+      {
+        id: "s0",
+        title: "African Swallow",
+        markdown:
+          "The African swallow cruises at **11 m/s** with 5-7 flaps per second." +
+          "\n\nSee [[p0]] for primary data.",
+        cited_passage_ids: ["p0"],
+        confidence: "high",
+        disputed_notes: [],
+        unsupported_count: 0,
+      },
+      {
+        id: "s1",
+        title: "European Swallow",
+        markdown:
+          "The European swallow is smaller and slower: **8 m/s**." +
+          "\n\nMeasurements vary by season [[p1]].",
+        cited_passage_ids: ["p1"],
+        confidence: "mixed",
+        disputed_notes: ["seasonal variation unaccounted in some studies"],
+        unsupported_count: 0,
+      },
+    ],
+    passages: [
+      {
+        id: "p0",
+        source_title: "Avian Speed Database",
+        source_url: "https://birds.example.com/p0",
+      },
+      {
+        id: "p1",
+        source_title: "European Ornithology Journal",
+        source_url: "https://birds.example.com/p1",
+      },
+    ],
+    unsupported_count: 1,
+    bounded_by: "sources",
+  });
+}
+
+const CAPTURED_MARKDOWN =
+  `# Deep Research: What is the airspeed velocity of an unladen swallow?
+
+## Executive Summary
+
+African and European swallows differ. Airspeed ~11 m/s and ~8 m/s.
+
+## African Swallow
+
+The African swallow cruises at **11 m/s** with 5-7 flaps per second.
+
+See [1] for primary data.
+
+## European Swallow
+
+_Conflicts noted: seasonal variation unaccounted in some studies_
+
+The European swallow is smaller and slower: **8 m/s**.
+
+Measurements vary by season [2].
+
+---
+
+` +
+  "_This run was bounded by **sources**. Some planned sub-questions were not covered. " +
+  "Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._" +
+  `
+
+---
+
+Sources cited (2):
+
+- [1] Avian Speed Database — https://birds.example.com/p0
+- [2] European Ornithology Journal — https://birds.example.com/p1`;
+
+describe("serializeReportToMarkdown — py↔ts byte parity", () => {
+  it("produces the exact bytes the Python serializer's suite pins", () => {
+    expect(serializeReportToMarkdown(makeSampleReport())).toBe(CAPTURED_MARKDOWN);
+  });
+});
+
+interface ParityFixture {
+  passages: Array<Record<string, unknown>>;
+  section_markdown: string;
+  expected_inline: string;
+  expected_footer: string[];
+}
+
+describe("serializeReportToMarkdown — shared citation-numbering fixture", () => {
+  const fixturePath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../packages/agent-server/tests/fixtures/citation_numbering_parity.json",
+  );
+  const fx = JSON.parse(readFileSync(fixturePath, "utf-8")) as ParityFixture;
+
+  it("assigns the same [n] numbering the Python serializer does", () => {
+    const report = makeMinimalReport({
+      query: "Parity",
+      summary: "Summary.",
+      passages: fx.passages,
+      sections: [
+        {
+          id: "s0",
+          title: "Numbering",
+          markdown: fx.section_markdown,
+          cited_passage_ids: fx.passages.map((p) => String(p.id)),
+          confidence: "high",
+          disputed_notes: [],
+          unsupported_count: 0,
+        },
+      ],
+    });
+
+    const md = serializeReportToMarkdown(report);
+    expect(md).toContain(fx.expected_inline);
+    expect(md).toContain(`Sources cited (${fx.expected_footer.length}):`);
+    const footer = md.split("Sources cited", 1 + 1)[1];
+    expect(footer.split("\n\n", 2)[1]).toBe(fx.expected_footer.join("\n"));
+    // No raw passage id anywhere in the export.
+    expect(md).not.toContain("[[");
   });
 });

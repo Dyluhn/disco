@@ -29,6 +29,7 @@ from disco.core.auth import (
     SESSION_COOKIE,
     validated_canonical_preview_url,
 )
+from disco.core.host_egress import EgressDenied, guarded_get
 from disco.core.loop.preview_target import is_managed_host_preview_port
 from disco.tools.sandbox._container import NOVNC_PORT, USER_PORTS
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
@@ -438,10 +439,33 @@ class HttpVerifyClient(AbstractVerifyClient):
             return None
 
     async def fetch_app(self, url: str) -> tuple[int, bytes] | None:
+        """Fetch a MODEL-AUTHORED deployment URL under the host egress policy.
+
+        This runs in the agent-server process — on the host network, with the
+        container socket mounted — so an unguarded fetch here is a server-side
+        request forgery primitive whose response bytes flow back into the verify
+        report. ``_canonical_deployment_url`` range-checks bare IP literals only
+        and returns any DNS hostname unchanged, so a name resolving to link-local
+        metadata, loopback (disco's own API) or an ``*.internal`` address reaches
+        this call, as does a public host that redirects there.
+
+        :func:`guarded_get` resolves before connecting, rejects every non-global
+        address, re-validates each redirect hop, checks the peer it actually
+        connected to (so a DNS rebind loses the race), strips credentials across
+        hops and ignores proxy environment variables.
+
+        A denied URL is reported, not raised: returning ``None`` is the existing
+        "unreachable" signal that ``app_body_problem`` turns into a report entry,
+        so a blocked target fails the deliverable instead of crashing the run.
+        """
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as hc:
-                resp = await hc.get(url)
-                return resp.status_code, resp.content
+            resp = await guarded_get(url, timeout_s=30.0)
+            return resp.status_code, resp.content
+        except EgressDenied as exc:
+            # Distinct from "unreachable": the operator needs to see that WE
+            # refused the target, not that the deployment is down.
+            log.warning("fetch_app(%s) blocked by host egress policy: %s", url, exc)
+            return None
         except Exception as exc:  # noqa: BLE001 — unreachable URL → report, don't crash
             log.warning("fetch_app(%s) failed: %s", url, exc)
             return None

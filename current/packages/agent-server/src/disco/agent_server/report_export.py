@@ -52,6 +52,11 @@ from disco.core.brand.tokens import Theme
 from disco.core.events import report_truncation
 from disco.core.think import strip_think_spans
 
+from ._report_citations import (
+    _citation_numbers,
+    _cited_source_rows,
+    _source_url_key,  # noqa: F401  (re-export: test seam + shared alg)
+)
 from ._report_normalize import (
     _is_table_separator,
     _normalize_passage_text,  # noqa: F401  (re-export: test seam + shared alg)
@@ -88,21 +93,26 @@ def serialize_markdown(
     byte-parity test passes ``title=None``).
     """
     report = _normalized_report(report)
+    # One numbering, everywhere: the UI's [n] assignment (first-seen source
+    # order over report.passages) is the canonical presentation — inline
+    # markers and the sources footer never show a raw passage id.
+    numbers = _citation_numbers(report.passages)
     display_title = (title or "").strip() or report.query
     lines: list[str] = []
     lines.append(f"# Deep Research: {display_title}")
     lines.append("")
     lines.append("## Executive Summary")
     lines.append("")
-    lines.append(report.summary or "*(no summary)*")
+    lines.append(_sub_citation_markers(report.summary, numbers) or "*(no summary)*")
     lines.append("")
     for s in report.sections:
         lines.append(f"## {s.title}")
         lines.append("")
         if s.disputed_notes and len(s.disputed_notes) > 0:
-            lines.append(f"_Conflicts noted: {'; '.join(s.disputed_notes)}_")
+            notes = _sub_citation_markers("; ".join(s.disputed_notes), numbers)
+            lines.append(f"_Conflicts noted: {notes}_")
             lines.append("")
-        lines.append(s.markdown)
+        lines.append(_sub_citation_markers(s.markdown, numbers))
         lines.append("")
     _trunc = report_truncation(report.bounded_by)
     if _trunc:
@@ -116,13 +126,13 @@ def serialize_markdown(
         lines.append("")
     lines.append("---")
     lines.append("")
-    lines.append(f"Passages cited ({len(report.passages)}):")
+    # One row per citation NUMBER (not per passage) — the same list the UI's
+    # Sources panel shows, resolvable against the inline [n] markers above.
+    rows = _cited_source_rows(report.passages, numbers)
+    lines.append(f"Sources cited ({len(rows)}):")
     lines.append("")
-    for p in report.passages:
-        pid = str(p.get("id", "?"))
-        title = str(p.get("source_title", ""))
-        url = str(p.get("source_url", ""))
-        lines.append(f"- [{pid}] {title} — {url}")
+    for n, src_title, url in rows:
+        lines.append(f"- [{n}] {src_title} — {url}")
     # WALK-20: optional follow-up Q&A section — byte-identical output when
     # follow_ups is None or empty (the byte-parity contract is preserved).
     if follow_ups:
@@ -134,7 +144,7 @@ def serialize_markdown(
             lines.append("")
             lines.append(f"**Q:** {question}")
             lines.append("")
-            lines.append(strip_think_spans(answer))
+            lines.append(_sub_citation_markers(strip_think_spans(answer), numbers))
     return "\n".join(lines)
 
 
@@ -195,11 +205,18 @@ _CITE_RE = re.compile(r"\[\[([^\]]+)\]\]")
 _CHART_FENCE_RE = re.compile(r"```chart[^\n]*\n(.*?)```", re.DOTALL)
 
 
-def _citation_map(report: ReportEvent) -> dict[str, int]:
-    """passage-id → 1-based citation number, by passage order — the SAME mapping
-    the frontend uses (sources.ts:citationNumbers). The PDF previously leaked the
-    raw internal id (e.g. ``7a6ee0_p1``) inside the chip; this turns it into ``[1]``."""
-    return {str(p.get("id")): i + 1 for i, p in enumerate(report.passages) if p.get("id")}
+def _sub_citation_markers(text: str, numbers: dict[str, int]) -> str:
+    """Replace ``[[passage_id]]`` markers with the UI's ``[n]`` numeral.
+
+    Unknown ids degrade to ``[?]`` (never leak the raw hash). Shared by the
+    markdown serializer for the summary, section bodies, disputed notes and
+    follow-up answers; the mirror lives in deepResearch.ts."""
+
+    def _one(m: re.Match[str]) -> str:
+        n = numbers.get(m.group(1).strip())
+        return f"[{n}]" if n is not None else "[?]"
+
+    return _CITE_RE.sub(_one, text)
 
 
 def _cite_chip(raw_id: str, cite_map: dict[str, int] | None) -> str:
@@ -358,11 +375,11 @@ def _cover_subtitle_text(summary: str | None, limit: int = 240) -> str:
     return (cut[:sp] if sp > 0 else cut).rstrip() + "…"
 
 
-def _cover_meta_html(report: ReportEvent, n_passages: int) -> str:
+def _cover_meta_html(report: ReportEvent, n_sources: int) -> str:
     items = [
         '<span><span class="meta-label">Depth</span>&nbsp;'
         f"{_html.escape(report.depth_tier or 'standard_deep')}</span>",
-        f'<span><span class="meta-label">Sources</span>&nbsp;{n_passages}</span>',
+        f'<span><span class="meta-label">Sources</span>&nbsp;{n_sources}</span>',
     ]
     _trunc = report_truncation(report.bounded_by)
     if _trunc:
@@ -379,7 +396,7 @@ def _pdf_display_title(report: ReportEvent, title: str | None) -> str:
 
 
 def _pdf_cover_html(
-    report: ReportEvent, title_escaped: str, theme: Theme, n_passages: int
+    report: ReportEvent, title_escaped: str, theme: Theme, n_sources: int
 ) -> str:
     """Cover page: dropcap title, subtitle, meta row, and the disco definition
     mark (only when ``theme.branded``)."""
@@ -391,7 +408,7 @@ def _pdf_cover_html(
         title_html = title_escaped
 
     cover_mark = definition_mark_html("colophon") if theme.branded else ""
-    cover_meta = _cover_meta_html(report, n_passages)
+    cover_meta = _cover_meta_html(report, n_sources)
 
     return (
         '<div class="cover-page">'
@@ -507,18 +524,18 @@ def _pdf_followup_html(
     )
 
 
-def _pdf_sources_appendix_html(passages: list[dict[str, Any]]) -> str:
-    """Sources appendix (2-col class when passages > 30), omitted entirely
-    when there are no cited passages."""
-    n_passages = len(passages)
-    if not n_passages:
+def _pdf_sources_appendix_html(rows: list[tuple[int, str, str]]) -> str:
+    """Sources appendix (2-col class when sources > 30), omitted entirely when
+    there are no cited passages. One entry per citation NUMBER — the same [n]
+    the inline chips render, so a chip's #src-{n} link always lands here."""
+    n_sources = len(rows)
+    if not n_sources:
         return ""
-    two_col_class = " sources-2col" if n_passages > 30 else ""
+    two_col_class = " sources-2col" if n_sources > 30 else ""
     src_items = ""
-    for i, p in enumerate(passages):
-        n = i + 1  # same 1-based number as the inline citation chips
-        ptitle = _html.escape(str(p.get("source_title", "")))
-        url = _html.escape(str(p.get("source_url", "")))
+    for n, src_title, src_url in rows:
+        ptitle = _html.escape(src_title)
+        url = _html.escape(src_url)
         src_items += (
             f'<li id="src-{n}">'
             f'<span class="src-id">[{n}]</span>'
@@ -529,7 +546,7 @@ def _pdf_sources_appendix_html(passages: list[dict[str, Any]]) -> str:
     return (
         f'<div class="sources-appendix{two_col_class}">'
         '<div class="sources-heading">'
-        f"Sources ({n_passages})</div>"
+        f"Sources ({n_sources})</div>"
         f'<ul class="sources-list">{src_items}</ul>'
         "</div>"
     )
@@ -557,10 +574,13 @@ def _build_pdf_html(
     report = _normalized_report(report)
     sections = report.sections
     passages = report.passages
-    n_passages = len(passages)
 
-    # Numbered-citation map (id → [N]) + theme palette for inline SVG charts.
-    cite_map = _citation_map(report)
+    # Numbered-citation map (id → [N]) — the SAME assignment the UI renders
+    # (first-seen source order; lib/sources.ts:citationNumbers) — plus the
+    # one-row-per-number source list and the theme palette for inline charts.
+    cite_map = _citation_numbers(passages)
+    source_rows = _cited_source_rows(passages, cite_map)
+    n_sources = len(source_rows)
     pal = palette_from_theme(theme)
 
     # ---- running header ----
@@ -571,7 +591,7 @@ def _build_pdf_html(
     # ---- cover ----
     display_title = _pdf_display_title(report, title)
     title_escaped = _html.escape(display_title)
-    cover_html = _pdf_cover_html(report, title_escaped, theme, n_passages)
+    cover_html = _pdf_cover_html(report, title_escaped, theme, n_sources)
 
     # ---- TOC (when > 10 sections) ----
     toc_html = _pdf_toc_html(sections)
@@ -589,7 +609,7 @@ def _build_pdf_html(
     followup_html = _pdf_followup_html(follow_ups, cite_map, pal)
 
     # ---- sources appendix ----
-    appendix_html = _pdf_sources_appendix_html(passages)
+    appendix_html = _pdf_sources_appendix_html(source_rows)
 
     # ---- assemble ----
     brand_css = font_face_css() + theme_css_vars(theme) + print_skeleton_css()

@@ -20,7 +20,10 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 _UNSAFE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-FRONTEND_ORIGIN = "http://localhost:5173"
+# The compose front door. (The Vite dev port is no longer trusted by default —
+# see origin_policy._DEFAULT_ALLOWED_ORIGINS — so the split-origin proof uses the
+# shipped UI origin, which is still a different port from the agent-server Host.)
+FRONTEND_ORIGIN = "http://localhost:8088"
 EVIL_ORIGIN = "https://evil.example"
 pytestmark = pytest.mark.integration
 

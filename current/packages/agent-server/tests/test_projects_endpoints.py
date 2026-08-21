@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.agent_server.routes import projects as projects_routes
+from disco.agent_server.routes import projects_import
 from disco.core import (
     ConversationStatus,
     EventSource,
@@ -648,3 +650,151 @@ def test_surface_sidecar_drops_unknown_values(store, tmp_path, monkeypatch):
     assert runtime._surface_of("conv_ok") == "deep_research"
     # the invalid entry fell back to the ladder → research default
     assert runtime._surface_of("conv_bad") == "research"
+
+
+# ---- git import transport hardening (SEC-1) ---------------------------------
+#
+# `git_url` is caller-supplied and reaches `git clone`. git's `ext::` transport
+# runs a SHELL COMMAND, `file://` clones the host filesystem, and any URL at all
+# is an SSRF probe with git's stderr reflected back. The parse must reject every
+# non-https transport BEFORE a process can exist.
+
+
+class _SpawnSpy:
+    """Records every subprocess launch attempt and never launches one."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    async def __call__(self, *args: object, **kwargs: object) -> object:
+        self.calls.append(args)
+        raise AssertionError(f"git must not be spawned for {args!r}")
+
+
+@pytest.mark.parametrize(
+    "hostile_url",
+    [
+        "ext::sh -c 'touch /tmp/pwned'",
+        "ext::sh",
+        "file:///etc/passwd",
+        "file:///home/dylan/.ssh",
+        "/etc/passwd",
+        "git@github.com:acme/widgets.git",
+        "http://169.254.169.254/latest/meta-data/",
+        "ftp://example.com/repo.git",
+        "https://user:token@example.com/acme/widgets.git",
+    ],
+)
+def test_import_git_rejects_non_https_transport_before_spawning_git(
+    store, tmp_path, monkeypatch, hostile_url
+):
+    spy = _SpawnSpy()
+    monkeypatch.setattr(projects_import.asyncio, "create_subprocess_exec", spy)
+    runtime = _runtime(store, root=str(tmp_path / "projects"))
+    client = TestClient(create_app(store, runtime=runtime))
+
+    res = client.post("/api/projects/import", json={"git_url": hostile_url})
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["reason"] in {
+        "git_url_scheme",
+        "git_url_invalid",
+        "git_url_credentials",
+    }
+    assert spy.calls == []  # no process was ever launched
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_import_git_rejection_names_the_allowed_scheme(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path / "projects"))
+    client = TestClient(create_app(store, runtime=runtime))
+
+    res = client.post("/api/projects/import", json={"git_url": "ext::sh"})
+
+    assert res.status_code == 400
+    body = res.json()["detail"]
+    assert body["reason"] == "git_url_scheme"
+    assert "https://" in body["message"]
+
+
+def test_clone_git_url_pins_transport_and_withholds_host_secrets(monkeypatch, tmp_path):
+    """Defence in depth for a parse that is ever bypassed: git itself is told
+    which protocols may be used, and the child gets a sanitized env."""
+    monkeypatch.setenv("DISCO_SECRET_KEY", "super-secret-master-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-should-never-be-inherited")
+    recorded: dict[str, object] = {}
+
+    class _Proc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (b"", b"")
+
+    async def fake_exec(*args: object, **kwargs: object):
+        recorded["argv"] = args
+        recorded["env"] = kwargs["env"]
+        return _Proc()
+
+    monkeypatch.setattr(projects_import.asyncio, "create_subprocess_exec", fake_exec)
+    asyncio.run(
+        projects_import.clone_git_url("https://example.com/acme/widgets.git", tmp_path / "repo")
+    )
+
+    argv = recorded["argv"]
+    assert isinstance(argv, tuple)
+    # `--` terminates options, so a URL can never be read as a git flag.
+    assert "--" in argv
+    assert argv.index("--") < argv.index("https://example.com/acme/widgets.git")
+    env = recorded["env"]
+    assert isinstance(env, dict)
+    assert env["GIT_ALLOW_PROTOCOL"] == "https"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    # A `url.<base>.insteadOf` rewrite in the host's gitconfig could otherwise
+    # turn the validated https URL back into `ext::` after the parse ran.
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_CONFIG_SYSTEM"] == os.devnull
+    assert "DISCO_SECRET_KEY" not in env
+    assert "OPENROUTER_API_KEY" not in env
+    assert "HOME" not in env
+
+
+def test_clone_git_url_blocks_link_local_metadata_address(monkeypatch, tmp_path):
+    spy = _SpawnSpy()
+    monkeypatch.setattr(projects_import.asyncio, "create_subprocess_exec", spy)
+
+    with pytest.raises(projects_import.ImportRejected) as excinfo:
+        asyncio.run(
+            projects_import.clone_git_url(
+                "https://169.254.169.254/latest/meta-data/", tmp_path / "repo"
+            )
+        )
+
+    assert excinfo.value.reason == "git_url_blocked"
+    assert spy.calls == []
+
+
+def test_clone_git_url_redacts_host_paths_from_reflected_stderr(monkeypatch, tmp_path):
+    dest = tmp_path / "repo"
+
+    class _Proc:
+        returncode = 128
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return (
+                b"",
+                f"fatal: could not create work tree dir {dest}: /home/operator/.gitconfig".encode(),
+            )
+
+    async def fake_exec(*_args: object, **_kwargs: object):
+        return _Proc()
+
+    monkeypatch.setattr(projects_import.asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(projects_import.ImportRejected) as excinfo:
+        asyncio.run(projects_import.clone_git_url("https://example.com/acme/widgets.git", dest))
+
+    message = excinfo.value.message
+    assert excinfo.value.reason == "git_clone_failed"
+    assert str(dest) not in message
+    assert "/home/operator" not in message
+    assert "could not create work tree dir" in message

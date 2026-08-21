@@ -16,6 +16,7 @@ from disco.core.auth import (
     origin_matches_request_host,
     origin_permitted,
     request_traversed_proxy,
+    session_cookie_secure,
 )
 
 
@@ -52,13 +53,29 @@ def test_degenerate_origins_refused() -> None:
 
 
 def test_origin_permitted_is_allowlist_or_same_host() -> None:
-    # Allowlisted split-origin dev layout still passes with NO host match…
-    assert origin_allowed("http://localhost:5173")
-    assert origin_permitted("http://localhost:5173", "testserver")
+    # Allowlisted split-origin layout still passes with NO host match…
+    assert origin_allowed("http://localhost:8088")
+    assert origin_permitted("http://localhost:8088", "testserver")
     # …and an unlisted front-door origin passes ONLY via the same-host rule.
     assert not origin_allowed("http://mybox.tail1234.ts.net:8088")
     assert origin_permitted("http://mybox.tail1234.ts.net:8088", "mybox.tail1234.ts.net:8088")
     assert not origin_permitted("http://mybox.tail1234.ts.net:8088", "other.host:8088")
+
+
+def test_vite_dev_port_is_not_trusted_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """5173 is the Vite DEFAULT port, i.e. one any unrelated local project can
+    occupy. Pre-trusting it made every such page same-site with the app AND a
+    permitted CORS origin, so it could read the CSRF token from the public
+    /api/auth/session and issue authenticated writes. Opt in explicitly instead."""
+    monkeypatch.delenv("DISCO_FRONTEND_ORIGINS", raising=False)
+    monkeypatch.delenv("PMX_FRONTEND_ORIGINS", raising=False)
+    assert not origin_allowed("http://localhost:5173")
+    assert not origin_allowed("http://127.0.0.1:5173")
+    # …and it is NOT reachable through the same-host rule either.
+    assert not origin_permitted("http://localhost:5173", "localhost:8800")
+    # The documented split-origin dev workflow opts in with the existing env var.
+    monkeypatch.setenv("DISCO_FRONTEND_ORIGINS", "http://localhost:5173")
+    assert origin_allowed("http://localhost:5173")
 
 
 # ---- localhost auto-pair (trust follows the bind) -----------------------------
@@ -157,3 +174,47 @@ def test_request_traversed_proxy_detects_forwarding_headers() -> None:
     # legit local case would always be refused.
     assert not request_traversed_proxy({"x-forwarded-proto": "https"})
     assert not request_traversed_proxy({})
+
+
+# ---- session cookie Secure flag (SEC-6a) ------------------------------------
+
+
+def test_session_cookie_not_secure_on_plain_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser DISCARDS a Secure cookie on an http origin, so first-run
+    pairing on plain localhost must stay unflagged — including when the
+    operator has also declared an https public URL for the remote front door."""
+    monkeypatch.delenv("DISCO_PUBLIC_UI_URL", raising=False)
+    monkeypatch.delenv("PMX_PUBLIC_UI_URL", raising=False)
+    assert not session_cookie_secure("http", None, "localhost:8088")
+    assert not session_cookie_secure("http", "http", "127.0.0.1:8000")
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", "https://box.tail1234.ts.net")
+    assert not session_cookie_secure("http", None, "localhost:8088")
+    assert not session_cookie_secure("http", None, "127.0.0.1:8088")
+
+
+def test_session_cookie_secure_behind_a_tls_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real remote shape: TLS terminated by a proxy (Tailscale HTTPS,
+    nginx, cloudflared) that forwards to loopback http. Hardcoding
+    secure=False shipped the session cookie over the public leg unflagged."""
+    monkeypatch.delenv("DISCO_PUBLIC_UI_URL", raising=False)
+    monkeypatch.delenv("PMX_PUBLIC_UI_URL", raising=False)
+    # 1. the forwarded scheme header the front-door nginx sets
+    assert session_cookie_secure("http", "https", "box.tail1234.ts.net")
+    assert session_cookie_secure("http", "https, http", "box.tail1234.ts.net")
+    # 2. TLS terminated by the app itself
+    assert session_cookie_secure("https", None, "box.example.com")
+    # 3. a proxy that forwards no scheme header — the declared public URL
+    assert not session_cookie_secure("http", None, "box.tail1234.ts.net")
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", "https://box.tail1234.ts.net")
+    assert session_cookie_secure("http", None, "box.tail1234.ts.net")
+    # An http public URL keeps it off.
+    monkeypatch.setenv("DISCO_PUBLIC_UI_URL", "http://box.lan:8088")
+    assert not session_cookie_secure("http", None, "box.lan:8088")
+
+
+def test_session_cookie_secure_defaults_off_with_no_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DISCO_PUBLIC_UI_URL", raising=False)
+    monkeypatch.delenv("PMX_PUBLIC_UI_URL", raising=False)
+    assert not session_cookie_secure()

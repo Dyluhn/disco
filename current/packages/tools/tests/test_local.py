@@ -14,6 +14,7 @@ import hashlib
 import io
 import tarfile
 from collections import namedtuple
+from typing import Any
 
 import pytest
 from disco.core import SecurityRisk
@@ -32,9 +33,24 @@ from docker.errors import ImageNotFound
 _Exec = namedtuple("_Exec", ["exit_code", "output"])
 
 
+def honest_host_config(run_kwargs: dict) -> dict[str, Any]:
+    """The ``HostConfig`` a daemon that honours the create request would report."""
+    mem = str(run_kwargs.get("mem_limit") or "0m").removesuffix("m")
+    return {
+        "Runtime": run_kwargs.get("runtime") or "",
+        "Memory": int(float(mem or 0)) * 1024 * 1024,
+        "NanoCpus": int(run_kwargs.get("nano_cpus") or 0),
+        "PidsLimit": int(run_kwargs.get("pids_limit") or 0),
+    }
+
+
 class FakeContainer:
     def __init__(self, run_kwargs: dict) -> None:
         self.run_kwargs = run_kwargs
+        # A LYING engine: HostConfig fields to override on reload(). The local tier
+        # can be pointed at a Podman Docker-compat socket, which drops the requested
+        # runtime without erroring — so the honest echo is never a guarantee.
+        self.host_config_lies: dict[str, Any] = {}
         self.stopped = self.removed = self.started = False
         self.status = "created"
         self.exec_calls: list[list[str]] = []
@@ -120,8 +136,14 @@ class FakeContainer:
         self.started = True
         self.status = "running"
 
-    def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
-        pass
+    def reload(self):
+        """docker-py refreshes ``.attrs``; a TRUTHFUL engine echoes the create
+        request back under ``HostConfig``, which is where the post-create runtime
+        and resource-limit guards read it. ``host_config_lies`` models an engine
+        that does not."""
+        host_config = honest_host_config(self.run_kwargs)
+        host_config.update(self.host_config_lies)
+        self.attrs["HostConfig"] = host_config
 
     def stop(self, timeout=None):
         self.stopped = True
@@ -214,8 +236,17 @@ class _FakeLocalNetworks:
 class FakeLocalClient:
     """A LOCAL docker-py-style client (no SSH) — Docker or a Podman Docker-compat socket."""
 
-    def __init__(self, *, runtimes=("runc", "crun"), has_image: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        runtimes=("runc", "crun"),
+        has_image: bool = True,
+        host_config_lies: dict[str, Any] | None = None,
+    ) -> None:
         self._runtimes = {r: {} for r in runtimes}
+        # What the daemon reports instead of the honest echo (an engine that
+        # accepts the create call and silently assigns something else).
+        self._host_config_lies = dict(host_config_lies or {})
         self.images = _Images(has_image)
         self.volumes = _Volumes()
         self.networks = _FakeLocalNetworks()
@@ -231,6 +262,7 @@ class FakeLocalClient:
 
     def run(self, **kwargs):
         c = FakeContainer(kwargs)
+        c.host_config_lies = dict(self._host_config_lies)
         net = kwargs.get("network")
         if net:
             c.attrs = {"NetworkSettings": {"Networks": {net: {"IPAddress": "172.29.0.5"}}}}
@@ -431,3 +463,75 @@ def test_unknown_backend_falls_back_to_weakest():
     assert prof.adversarial_safe is False
     # weakest fallback gates even LOW risk
     assert prof.recommended_confirmation().should_confirm(SecurityRisk.LOW) is True
+
+
+# --- runtime + bounds honesty on the LOCAL docker-py create path ---------------
+# `DISCO_LOCAL_ENGINE=docker` + `DISCO_LOCAL_RUNTIME=runsc` is a DOCUMENTED posture
+# (self-host.md), and the socket it points at may in fact be Podman's Docker-compat
+# socket, which advertises `runsc` in /info from a static candidate path whether or
+# not the binary exists and then drops HostConfig.Runtime on create. The pre-flight
+# therefore false-greens on exactly the transport that lies; only inspecting what
+# was actually assigned tells the truth. These pin it for the local tier.
+
+
+def _runsc_svc(client: FakeLocalClient) -> LocalSandboxService:
+    return LocalSandboxService(SandboxConfig(backend="local", runtime="runsc"), client=client)
+
+
+async def test_local_tier_refuses_a_runtime_that_silently_became_the_default():
+    """Ask for gVisor on the local socket, get crun, and be told — not sandboxed."""
+    client = FakeLocalClient(
+        runtimes=("runsc", "runc", "crun"), host_config_lies={"Runtime": "crun"}
+    )
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await _runsc_svc(client).create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "refusing to run unsandboxed" in str(excinfo.value)
+    assert "runsc" in str(excinfo.value)
+
+
+async def test_local_tier_refuses_a_runtime_dropped_entirely():
+    """Podman's compat API drops the field rather than rejecting the request."""
+    client = FakeLocalClient(runtimes=("runsc", "runc", "crun"), host_config_lies={"Runtime": ""})
+    with pytest.raises(SandboxUnavailableError):
+        await _runsc_svc(client).create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+
+async def test_local_tier_allows_a_runtime_that_took_effect():
+    client = FakeLocalClient(runtimes=("runsc", "runc", "crun"))
+    assert (
+        await _runsc_svc(client).create(SandboxSpec(), owner_id="o", conversation_id="c")
+        is not None
+    )
+
+
+async def test_local_tier_default_runc_is_not_treated_as_an_isolation_claim():
+    """The local tier's own default IS runc — the guard must stay silent there,
+    even when the daemon reports nothing back, or every local install breaks."""
+    client = FakeLocalClient(host_config_lies={"Runtime": ""})
+    svc = LocalSandboxService(default_local_config(), client=client)
+    assert await svc.create(SandboxSpec(), owner_id="o", conversation_id="c") is not None
+
+
+@pytest.mark.parametrize(
+    ("dropped", "label"),
+    [("Memory", "memory"), ("NanoCpus", "CPU"), ("PidsLimit", "pids")],
+)
+async def test_local_tier_refuses_a_resource_bound_that_did_not_take_effect(dropped, label):
+    """A cap the engine dropped leaves the box unbounded while the caller believes
+    it is capped — fork-bomb / memory-exhaustion host DoS from agent code."""
+    client = FakeLocalClient(host_config_lies={dropped: 0})
+    svc = LocalSandboxService(default_local_config(), client=client)
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "refusing to run without the requested resource bounds" in str(excinfo.value)
+    assert f"requested a {label} limit" in str(excinfo.value)
+
+
+async def test_local_tier_allows_the_bounds_it_actually_asked_for():
+    """The honest engine: every requested cap recorded — no refusal, and the caps
+    really were requested in the create call (not merely asserted after the fact)."""
+    client = FakeLocalClient()
+    svc = LocalSandboxService(default_local_config(), client=client)
+    assert await svc.create(SandboxSpec(), owner_id="o", conversation_id="c") is not None
+    kw = client.last.run_kwargs
+    assert kw["pids_limit"] > 0 and kw["nano_cpus"] > 0 and kw["mem_limit"].endswith("m")

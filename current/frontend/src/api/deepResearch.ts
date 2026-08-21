@@ -15,6 +15,8 @@
  */
 
 import { agentFetch, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
+import { normalizePassageMarkdown } from "./deepResearchParts/passageNormalize";
+import { sourceUrlKey } from "@/lib/sources";
 import type { ReportEvent, ReportSection } from "@/types/agent";
 
 export interface DeepResearchSubmit {
@@ -176,174 +178,109 @@ export async function requestReportAudio(
   return res.json();
 }
 
-// ---- Passage-text normalization (mirrors report_export.py's shared seam) ----
-//
-// Scraped passages arrive with backslash-escaped markdown links and table
-// debris; the server export cleans both in _normalize_passage_text. This is
-// the SAME algorithm so the client-side serializer stays byte-identical to
-// the server's fmt=md output for the same report.
+// ---- Citation numbering (mirrors lib/sources.ts + _report_citations.py) ----
 
-const ESCAPED_LINK_RE = /\\\[((?:[^\\\]]|\\.)*?)\\\]\(([^()\s]+)\)/g;
-const MD_ESCAPE_CHAR_RE = /\\([\\`*_{}[\]()<>#+\-.!|~])/g;
-const EXTERNAL_URL_RE = /^https?:\/\//i;
-const TABLE_ALIGN_RE = /^:?-{3,}:?$/;
-const FENCE_RE = /^\s*(```|~~~)/;
-
-function unescapeMd(text: string): string {
-  return text.replace(MD_ESCAPE_CHAR_RE, "$1");
-}
-
-function rewriteEscapedLink(_m: string, rawText: string, rawUrl: string): string {
-  const text = unescapeMd(rawText).trim();
-  const url = unescapeMd(rawUrl).trim();
-  if (!text) return EXTERNAL_URL_RE.test(url) ? url : "";
-  if (EXTERNAL_URL_RE.test(url) && url !== text) return `${text} (${url})`;
-  return text;
-}
-
-function splitTableRow(line: string): string[] {
-  let row = line.trim();
-  if (row.startsWith("|")) row = row.slice(1);
-  if (row.endsWith("|")) row = row.slice(0, -1);
-  const cells: string[] = [];
-  let buf = "";
-  let escaped = false;
-  for (const ch of row) {
-    if (escaped) {
-      buf += ch;
-      escaped = false;
-    } else if (ch === "\\") {
-      escaped = true;
-    } else if (ch === "|") {
-      cells.push(buf.trim());
-      buf = "";
-    } else {
-      buf += ch;
+/** One numbering, everywhere: passage-id → the 1-based [n] numeral the UI
+ * renders (lib/sources.ts:citationNumbers) — the position of the passage's
+ * SOURCE in first-seen `source_url` order over `report.passages`. Passages
+ * from one source share the number; a passage with no URL numbers alone,
+ * keyed by its id. Same rule over the report's raw passage dicts; the server
+ * mirror is `_citation_numbers` in agent-server's _report_citations.py, and
+ * the parity tests pin both to the same assignment. */
+function reportCitationNumbers(
+  passages: Array<Record<string, unknown>>,
+): Map<string, number> {
+  const bySource = new Map<string, number>();
+  const numbers = new Map<string, number>();
+  for (const p of passages) {
+    const id = String(p.id ?? "?");
+    const url = typeof p.source_url === "string" ? p.source_url : "";
+    const key = url ? sourceUrlKey(url) : `#${id}`;
+    let n = bySource.get(key);
+    if (n === undefined) {
+      n = bySource.size + 1;
+      bySource.set(key, n);
     }
+    numbers.set(id, n);
   }
-  if (escaped) buf += "\\";
-  cells.push(buf.trim());
-  return cells;
+  return numbers;
 }
 
-function isTableSeparator(line: string): boolean {
-  const cells = splitTableRow(line);
-  return cells.length > 0 && cells.every((c) => TABLE_ALIGN_RE.test(c.trim()));
+const CITE_MARKER_RE = /\[\[([^\]]+)\]\]/g;
+
+/** Replace `[[passage_id]]` markers with the UI's `[n]` numeral. Unknown ids
+ * degrade to `[?]` — a raw id is never shown. Mirrors `_sub_citation_markers`
+ * in report_export.py. */
+function subCitationMarkers(text: string, numbers: Map<string, number>): string {
+  return text.replace(CITE_MARKER_RE, (_m, rawId: string) => {
+    const n = numbers.get(rawId.trim());
+    return n !== undefined ? `[${n}]` : "[?]";
+  });
 }
 
-function isPseudoTableLine(line: string): boolean {
-  return (line.match(/\|/g) ?? []).length >= 3 && (line.match(/ \| /g) ?? []).length >= 2;
-}
-
-function formatPipeRow(cells: string[]): string {
-  return `| ${cells.join(" | ")} |`;
-}
-
-function fitRow(cells: string[], width: number, pad: string): string[] {
-  return cells.length < width
-    ? cells.concat(Array(width - cells.length).fill(pad))
-    : cells.slice(0, width);
-}
-
-/** Consume one genuine pipe table starting at `lines[i]` (whose header line,
- * already link-rewritten, is `header`): pad/truncate the separator row and
- * every body row to the header's column count. Appends the repaired rows to
- * `out` and returns the index of the first line past the table.
- * Mirrors _normalize_table_block in report_export's _report_normalize.py. */
-function consumeTableBlock(lines: string[], i: number, header: string, out: string[]): number {
-  const width = splitTableRow(header).length;
-  out.push(header);
-  const sep = splitTableRow(lines[i + 1]);
-  out.push(sep.length === width ? lines[i + 1] : formatPipeRow(fitRow(sep, width, "---")));
-  const isRow = (l: string) => Boolean(l.trim()) && l.includes("|") && !isTableSeparator(l);
-  for (i += 2; i < lines.length && isRow(lines[i]); i += 1) {
-    const rowLine = lines[i].replace(ESCAPED_LINK_RE, rewriteEscapedLink);
-    const row = splitTableRow(rowLine);
-    out.push(row.length === width ? rowLine : formatPipeRow(fitRow(row, width, "")));
+/** One `[n, title, url]` row per citation number, in numeric order — the
+ * sources footer body. Carries the FIRST passage seen for each source (the
+ * same row the UI's Sources panel shows). Mirrors `_cited_source_rows`. */
+function citedSourceRows(
+  passages: Array<Record<string, unknown>>,
+  numbers: Map<string, number>,
+): Array<[number, string, string]> {
+  const rows = new Map<number, [number, string, string]>();
+  for (const p of passages) {
+    const n = numbers.get(String(p.id ?? "?"));
+    if (n === undefined || rows.has(n)) continue;
+    rows.set(n, [n, String(p.source_title ?? ""), String(p.source_url ?? "")]);
   }
-  return i;
-}
-
-/** Shared cleanup for passage-bearing markdown (summary + section bodies):
- * escaped links → clean prose, ragged pipe tables → header-width rows,
- * high-pipe-density non-table lines → readable `;`-separated text.
- * Fenced code blocks pass through untouched. Clean input is returned as-is. */
-function normalizePassageMarkdown(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let i = 0;
-  let inFence = false;
-  while (i < lines.length) {
-    let line = lines[i];
-    if (FENCE_RE.test(line)) {
-      inFence = !inFence;
-      out.push(line);
-      i += 1;
-      continue;
-    }
-    if (inFence) {
-      out.push(line);
-      i += 1;
-      continue;
-    }
-    line = line.replace(ESCAPED_LINK_RE, rewriteEscapedLink);
-    if (i + 1 < lines.length && line.includes("|") && isTableSeparator(lines[i + 1])) {
-      i = consumeTableBlock(lines, i, line, out);
-      continue;
-    }
-    if (isPseudoTableLine(line)) {
-      out.push(splitTableRow(line).filter(Boolean).join("; "));
-      i += 1;
-      continue;
-    }
-    out.push(line);
-    i += 1;
-  }
-  let result = out.join("\n");
-  if (text.endsWith("\n") && !result.endsWith("\n")) result += "\n";
-  return result;
+  return Array.from(rows.keys())
+    .sort((a, b) => a - b)
+    .map((n) => rows.get(n) as [number, string, string]);
 }
 
 /** The markdown serializer. Same shape the prior pmx-deep-verify.py script
  * produced — single source of truth for how a report looks as a portable
- * document. Includes citations as a footer table so the user can resolve
- * [[passage_id]] markers without the live UI.
+ * document. Citations render as the UI's [n] numerals (reportCitationNumbers)
+ * and the footer lists one source per number, so the document resolves on its
+ * own without the live UI — and never shows a raw passage id.
  *
  * Exported so the NeedMoreCard's File System Access API path can get the raw
  * string (to write via showSaveFilePicker) without duplicating the logic.
  *
  * ``followUps`` — optional list of [question, answer] pairs from selected
  * post-report Q&A turns (WALK-20). When provided and non-empty a
- * ``## Follow-up Q&A`` section is appended after the passages footer.
+ * ``## Follow-up Q&A`` section is appended after the sources footer.
  * When absent or empty the output is byte-identical to the baseline
  * (the byte-parity contract with Python's serialize_markdown is preserved). */
 export function serializeReportToMarkdown(
   report: ReportEvent,
   followUps?: Array<[string, string]>,
 ): string {
+  // One numbering, everywhere: the UI's [n] assignment (first-seen source
+  // order over report.passages) is the canonical presentation — inline
+  // markers and the sources footer never show a raw passage id.
+  const numbers = reportCitationNumbers(report.passages);
   const lines: string[] = [];
   lines.push(`# Deep Research: ${report.query}`);
   lines.push("");
   lines.push("## Executive Summary");
   lines.push("");
-  lines.push(report.summary ? normalizePassageMarkdown(report.summary) : "*(no summary)*");
+  lines.push(
+    report.summary
+      ? subCitationMarkers(normalizePassageMarkdown(report.summary), numbers)
+      : "*(no summary)*",
+  );
   lines.push("");
   for (const s of report.sections) {
     lines.push(`## ${s.title}`);
     lines.push("");
     if (s.disputed_notes && s.disputed_notes.length > 0) {
-      // Strip [[passage_id]] citation markers — they are UI artefacts that
-      // can't resolve in a plain-text document.
-      const stripped = s.disputed_notes
-        .map((n) => n.replace(/\[\[[\w-]+\]\]/g, "").trim())
-        .filter(Boolean)
-        .join("; ");
-      if (stripped) {
-        lines.push(`_Conflicts noted: ${stripped}_`);
-        lines.push("");
-      }
+      // [[passage_id]] markers become the UI's [n] numerals — resolvable
+      // against the sources footer, unlike the raw ids (WALK-03's stripping
+      // is superseded by the shared numbering).
+      const noted = subCitationMarkers(s.disputed_notes.join("; "), numbers);
+      lines.push(`_Conflicts noted: ${noted}_`);
+      lines.push("");
     }
-    lines.push(normalizePassageMarkdown(s.markdown));
+    lines.push(subCitationMarkers(normalizePassageMarkdown(s.markdown), numbers));
     lines.push("");
   }
   if (report.bounded_by) {
@@ -358,13 +295,13 @@ export function serializeReportToMarkdown(
   }
   lines.push("---");
   lines.push("");
-  lines.push(`Passages cited (${report.passages.length}):`);
+  // One row per citation NUMBER (not per passage) — the same list the UI's
+  // Sources panel shows, resolvable against the inline [n] markers above.
+  const rows = citedSourceRows(report.passages, numbers);
+  lines.push(`Sources cited (${rows.length}):`);
   lines.push("");
-  for (const p of report.passages) {
-    const id = String((p as Record<string, unknown>).id ?? "?");
-    const title = String((p as Record<string, unknown>).source_title ?? "");
-    const url = String((p as Record<string, unknown>).source_url ?? "");
-    lines.push(`- [${id}] ${title} — ${url}`);
+  for (const [n, title, url] of rows) {
+    lines.push(`- [${n}] ${title} — ${url}`);
   }
   // WALK-20: optional follow-up Q&A section — byte-identical output when
   // followUps is absent or empty (preserves the py↔ts byte-parity contract).
@@ -377,7 +314,7 @@ export function serializeReportToMarkdown(
       lines.push("");
       lines.push(`**Q:** ${q}`);
       lines.push("");
-      lines.push(a);
+      lines.push(subCitationMarkers(a, numbers));
     });
   }
   return lines.join("\n");

@@ -226,7 +226,16 @@ def _reject_if_imported(store: SqliteEventStore, conversation_id: str) -> None:
     third-party events, so reviving them would feed an attacker's content to the
     agent with this instance's tools/credentials. Every loop-kicking / mutating
     endpoint rejects them at the server EDGE (409); the UI hiding the affordance
-    is defense-in-depth, never the boundary."""
+    is defense-in-depth, never the boundary.
+
+    Fails CLOSED on a conversation this store has never seen: `conversation_origin`
+    answers None for BOTH "ordinary local conversation" and "no such row", so an
+    unknown id used to sail past the guard. Every HTTP caller reaches here after
+    `require_owned_conversation` (which 404s first), so this is the belt on an
+    existing pair of braces — but a guard that cannot tell "not imported" from
+    "don't know" is the one thing it must never be."""
+    if store.conversation_owner_id_sync(conversation_id) is None:
+        raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
     if store.conversation_origin(conversation_id) == "imported":
         raise HTTPException(status_code=409, detail={"reason": "imported_read_only"})
 
