@@ -20,6 +20,7 @@ from .._container import (
     nofile_ulimits,
     resolve_bounds,
 )
+from .._effective_config import assert_effective_limits, assert_effective_runtime
 from ..base import SandboxUnavailableError
 from ..capability_relay import RelayConfigurationError, parse_upstream
 
@@ -113,6 +114,21 @@ def _run_gvisor_container(
         name=container_name,
         labels=labels,
         **net_kwargs,
+    )
+    # `client.containers.run` reaches the SAME daemon the Podman backend does, and
+    # `DISCO_LOCAL_ENGINE=docker` against a Podman compat socket is a documented,
+    # reachable posture — so the pre-flight `_require_runtime` here is talking to
+    # the transport that lies. Verify what was actually assigned, exactly as the
+    # Podman create path does; the caller's cleanup removes the container on raise.
+    # The keepalive command is all that has run at this point: no agent code.
+    assert_effective_runtime(container, svc._cfg.runtime)
+    assert_effective_limits(
+        container,
+        {
+            "Memory": int(mem_mb) * 1024 * 1024,
+            "NanoCpus": int(cpu * 1_000_000_000),
+            "PidsLimit": int(pids),
+        },
     )
     return volume, container
 

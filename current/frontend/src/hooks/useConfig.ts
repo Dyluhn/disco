@@ -5,6 +5,7 @@ import {
   createSkill,
   deleteMcpServer as apiDeleteMcp,
   deleteSkill,
+  importMcpConfig,
   listMcpConnections,
   listSkills,
   revokeMcpServer as apiRevokeMcp,
@@ -66,6 +67,19 @@ export function useCreateMcpServer() {
   return useMutation({
     mutationFn: (config: McpServerConfig) => apiCreateMcp(config),
     onSuccess: () => qc.invalidateQueries({ queryKey: MCP_KEY }),
+  });
+}
+
+/** Paste-a-config import. Applies (dryRun=false) invalidate the connection
+ * list; previews are read-only and leave the cache alone. */
+export function useImportMcpConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ text, dryRun }: { text: string; dryRun: boolean }) =>
+      importMcpConfig(text, dryRun),
+    onSuccess: (_result, variables) => {
+      if (!variables.dryRun) void qc.invalidateQueries({ queryKey: MCP_KEY });
+    },
   });
 }
 

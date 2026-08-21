@@ -15,6 +15,7 @@ from disco.app_server.config.dtos import ProviderCatalogueModelDTO, ProviderCrea
 from disco.app_server.config_state import ConfigState
 from disco.app_server.routes import providers as providers_mod
 from disco.core import SkillStore, SqliteEventStore
+from disco.core.auth import SESSION_COOKIE, SessionSigner
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from disco.core.llm.config import ProviderSettings
 from fastapi.testclient import TestClient
@@ -500,3 +501,62 @@ def test_enable_requires_context_when_catalogue_silent(client) -> None:
     # so the model is actually usable as a Build/agent driver (tool-calling
     # gate) — plus long_context, since 131072 clears its >~64k semantics.
     assert set(entry["capabilities"]) >= {"tool_calling", "json_mode", "long_context"}
+
+
+# ---- admin gate (SEC-C4) -----------------------------------------------------
+
+
+def _non_admin(client: TestClient) -> None:
+    token, _session = SessionSigner().mint(owner_id="member", is_admin=False)
+    client.headers.update({"Cookie": f"{SESSION_COOKIE}={token}"})
+
+
+def test_provider_writes_require_an_admin_session(client):
+    """POST/PUT /api/providers write provider API KEYS and mint a signed origin
+    approval for an operator-supplied base_url (approve_provider_origin) — the
+    same authority every other approval-write path admin-gates. /api/providers
+    was simply missing from the admin prefix list."""
+    _non_admin(client)
+
+    created = client.post(
+        "/api/providers",
+        json={
+            "label": "Evil",
+            "base_url": "http://attacker.example/v1",
+            "kind": "openai-compat",
+            "api_key": "sk-exfiltrate",
+        },
+    )
+    assert created.status_code == 403
+    assert "admin" in created.text
+
+    # The `{provider_id}` sub-paths are covered by the same prefix rule.
+    updated = client.put("/api/providers/openai", json={"label": "hijacked"})
+    assert updated.status_code == 403
+    deleted = client.delete("/api/providers/openai")
+    assert deleted.status_code == 403
+    enabled = client.post("/api/providers/openai/enable", json={"catalogue_id": "gpt-4o"})
+    assert enabled.status_code == 403
+    # Reads are gated with them, exactly like /api/models and /api/secrets.
+    assert client.get("/api/providers").status_code == 403
+
+
+def test_admin_session_still_writes_providers(client, monkeypatch):
+    async def fake_fetch(provider, api_key):
+        return []
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", fake_fetch)
+    token, _session = SessionSigner().mint(owner_id="operator", is_admin=True)
+    client.headers.update({"Cookie": f"{SESSION_COOKIE}={token}"})
+
+    created = client.post(
+        "/api/providers",
+        json={
+            "label": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "kind": "openai-compat",
+            "api_key": "sk-openai-secret",
+        },
+    )
+
+    assert created.status_code == 201

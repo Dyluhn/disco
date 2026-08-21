@@ -327,3 +327,58 @@ async def test_ws_accept_finished_refused_for_imported_conversation() -> None:
         f.get("type") == "error" and f.get("error", {}).get("detail") == "imported_read_only"
         for f in ws.sent
     ), "the imported_read_only refusal must be sent back on the socket"
+
+
+@pytest.mark.parametrize(
+    ("frame_type", "control_method"),
+    [
+        ("approve_plan", "approve_plan"),
+        ("request_plan", "request_plan"),
+        ("pick_alternative", "pick_alternative"),
+        ("resume", None),
+    ],
+)
+async def test_ws_loop_kicking_control_frames_refused_for_imported_conversation(
+    frame_type: str, control_method: str | None
+) -> None:
+    """SEC-C3: every loop-KICKING control frame the WS seam dispatches must
+    refuse an imported conversation, exactly like its HTTP twin (e.g. POST
+    /conversations/{cid}/resume, which has always been guarded). An imported
+    bundle is a third party's event log — reviving it feeds attacker-authored
+    content to the agent with this instance's tools and credentials."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local", origin="imported")
+    runtime = MagicMock()
+    runtime.conversation_control.approve_plan = AsyncMock()
+    runtime.conversation_control.request_plan = AsyncMock()
+    runtime.conversation_control.pick_alternative = AsyncMock()
+    runtime.contract._fold_contract_from_history = AsyncMock()
+    runtime._resume.resume_conversation = AsyncMock()
+    ws = _FakeWS()
+
+    frame = WSClientFrame(type=frame_type, option_id="opt-1", content="replan please")
+    await _handle_frame(store, ws, CID, frame, runtime)
+
+    if control_method is not None:
+        getattr(runtime.conversation_control, control_method).assert_not_awaited()
+    runtime._resume.resume_conversation.assert_not_awaited()
+    assert any(
+        f.get("type") == "error" and f.get("error", {}).get("detail") == "imported_read_only"
+        for f in ws.sent
+    ), f"{frame_type} must be refused on an imported conversation"
+
+
+@pytest.mark.parametrize("frame_type", ["pause", "cancel"])
+async def test_ws_stop_frames_stay_allowed_on_an_imported_conversation(frame_type: str) -> None:
+    """Only KICKING frames are refused — `pause`/`cancel` merely stop work."""
+    store = SqliteEventStore(":memory:")
+    store.create_conversation(CID, owner_id="local", origin="imported")
+    runtime = MagicMock()
+    runtime.pause = AsyncMock()
+    runtime.cancel = AsyncMock()
+    ws = _FakeWS()
+
+    await _handle_frame(store, ws, CID, WSClientFrame(type=frame_type), runtime)
+
+    assert getattr(runtime, frame_type).await_count == 1
+    assert ws.sent == []

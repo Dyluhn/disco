@@ -718,7 +718,7 @@ async def _exercise_path_preview_capability_contract(
     same_host_session = owner.get(
         "/api/auth/session",
         headers={
-            "Origin": "http://127.0.0.1:5173",
+            "Origin": "http://127.0.0.1:8088",
             "Host": "127.0.0.1:18240",
         },
     )
@@ -727,7 +727,7 @@ async def _exercise_path_preview_capability_contract(
     assert owner.get(
         f"/conversations/{cid}/events",
         headers={
-            "Origin": "http://127.0.0.1:5173",
+            "Origin": "http://127.0.0.1:8088",
             "Host": "127.0.0.1:18240",
         },
     ).json()["events"] == ["OWNER-BYTES"]

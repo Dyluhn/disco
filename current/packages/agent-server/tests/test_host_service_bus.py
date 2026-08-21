@@ -635,7 +635,7 @@ def test_kill_switch_revokes_all_conversation_credentials(store, token_store):
         "/conversations/conv_1/kill",
         headers={
             "Host": "localhost:8000",
-            "Origin": "http://localhost:5173",
+            "Origin": "http://localhost:8088",
             CSRF_HEADER: session.csrf_token,
         },
     )

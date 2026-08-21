@@ -257,7 +257,7 @@ African and European swallows differ. Airspeed ~11 m/s and ~8 m/s.
 
 The African swallow cruises at **11 m/s** with 5-7 flaps per second.
 
-See [[p0]] for primary data.
+See [1] for primary data.
 
 ## European Swallow
 
@@ -265,7 +265,7 @@ _Conflicts noted: seasonal variation unaccounted in some studies_
 
 The European swallow is smaller and slower: **8 m/s**.
 
-Measurements vary by season [[p1]].
+Measurements vary by season [2].
 
 ---
 
@@ -276,10 +276,10 @@ Measurements vary by season [[p1]].
 
 ---
 
-Passages cited (2):
+Sources cited (2):
 
-- [p0] Avian Speed Database — https://birds.example.com/p0
-- [p1] European Ornithology Journal — https://birds.example.com/p1"""
+- [1] Avian Speed Database — https://birds.example.com/p0
+- [2] European Ornithology Journal — https://birds.example.com/p1"""
 )
 
 

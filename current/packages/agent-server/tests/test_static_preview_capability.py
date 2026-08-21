@@ -1070,13 +1070,28 @@ async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
     monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_START", str(gateway_start))
     monkeypatch.setenv("DISCO_LOCAL_PREVIEW_PORT_COUNT", "2")
 
+    # The frontend tree, wherever the three-bucket layout puts it: the bucketed
+    # path is the disk location since the restructure; the bare path is the
+    # logical (pre-restructure) fallback.
+    bucketed = Path.cwd() / "current" / "frontend"
+    frontend_root = bucketed if bucketed.is_dir() else Path.cwd() / "frontend"
+    vite_bin = frontend_root / "node_modules" / ".bin" / "vite"
+    # Deliberately NOT a pytest.skip: the inventory authority forbids
+    # skip/xfail marker growth, and this test's whole point is that a real Vite
+    # dev server is exercised. A missing node_modules is an unprepared
+    # environment, so fail loudly and name the fix.
+    assert vite_bin.is_file(), (
+        f"frontend node_modules not installed (no {vite_bin}); "
+        "run `npm ci` in current/frontend"
+    )
+
     probe = bind_socket()
     vite_port = int(probe.getsockname()[1])
     probe.close()
     vite_root = tmp_path / "vite-react"
     (vite_root / "src").mkdir(parents=True)
     (vite_root / "node_modules").symlink_to(
-        (Path.cwd() / "frontend" / "node_modules").resolve(),
+        (frontend_root / "node_modules").resolve(),
         target_is_directory=True,
     )
     (vite_root / "index.html").write_text(
@@ -1102,7 +1117,7 @@ async def test_canonical_loopback_preserves_route_during_real_vite_react_hmr(
     source_path = vite_root / "src" / "main.jsx"
     source_path.write_text(react_source("VITE REACT ONE"))
     vite_process = await asyncio.create_subprocess_exec(
-        str((Path.cwd() / "frontend" / "node_modules" / ".bin" / "vite").resolve()),
+        str(vite_bin.resolve()),
         "--host",
         "127.0.0.1",
         "--port",

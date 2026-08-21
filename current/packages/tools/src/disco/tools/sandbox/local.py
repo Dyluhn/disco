@@ -33,6 +33,7 @@ from ._container import (
     nofile_ulimits,
     resolve_bounds,
 )
+from ._effective_config import assert_effective_limits, assert_effective_runtime
 from .base import SandboxSpec, SandboxUnavailableError
 from .capability_relay import RelayConfigurationError, parse_upstream
 from .config import SandboxConfig, default_local_config
@@ -186,7 +187,7 @@ class LocalSandboxService(GvisorSandboxService):
         # Bind `ports` at function-frame (the conditional expression above might
         # leave it unbound on an unrecognised mode — defense in depth).
         ports: dict[str, str | None] | None = None
-        return client.containers.run(
+        container = client.containers.run(
             image=self._cfg.image,
             # keepalive
             command=_keepalive_command(),
@@ -211,6 +212,22 @@ class LocalSandboxService(GvisorSandboxService):
             labels=labels,
             **net_kwargs,
         )
+        # `DISCO_LOCAL_ENGINE=docker` + `DISCO_LOCAL_RUNTIME=runsc` against what is
+        # actually Podman's compat socket is a documented, reachable posture, and
+        # that transport advertises `runsc` in /info from a static candidate path
+        # whether or not the binary exists — so the pre-flight `_require_runtime`
+        # false-greens on exactly the engine that drops the field. Verify what was
+        # really assigned, and that the cgroup bounds were really recorded.
+        assert_effective_runtime(container, self._cfg.runtime)
+        assert_effective_limits(
+            container,
+            {
+                "Memory": int(mem_mb) * 1024 * 1024,
+                "NanoCpus": int(cpu * 1_000_000_000),
+                "PidsLimit": int(pids),
+            },
+        )
+        return container
 
     def _cleanup_failed_local_start(
         self,

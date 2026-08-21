@@ -31,6 +31,14 @@ def main() -> None:
         host=cast(str, disco_env("HOST", "127.0.0.1")),
         port=int(cast(str, disco_env("PORT", "8800"))),
         ws="websockets-sansio",
+        # Do NOT let a forwarding header rewrite the ASGI client address.
+        # uvicorn's default (proxy_headers=True, forwarded_allow_ips="127.0.0.1")
+        # rewrites scope["client"] from X-Forwarded-For without checking it is an
+        # IP, so on a loopback-bound host-process run any local caller could
+        # present an arbitrary client host. The loopback checks in auth.py are
+        # about the real TCP peer; nothing here needs the forwarded value (the
+        # https signal is read from the header directly).
+        proxy_headers=False,
     )
 
 

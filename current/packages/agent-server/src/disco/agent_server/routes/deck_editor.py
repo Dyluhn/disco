@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 from ..auth import current_owner_id
 from ..runtime import ConversationRuntime
-from ._common import _declared_artifacts, require_owned_conversation
+from ._common import _declared_artifacts, _reject_if_imported, require_owned_conversation
 from .files import _read_artifact_bytes
 
 
@@ -686,6 +686,9 @@ def make_deck_editor_router(
         workspace untouched) → lower_deck → render. Write-back requires a live
         sandbox session (409 otherwise — no writes)."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
+        # Writes files into the workspace and wakes a sandbox — a mutation an
+        # imported (read-only) conversation must refuse, like every other one.
+        _reject_if_imported(store, conversation_id)
         return await _patch_deck_response(store, runtime, conversation_id, body, path)
 
     return router

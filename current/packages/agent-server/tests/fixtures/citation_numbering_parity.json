@@ -1,0 +1,43 @@
+{
+  "comment": "Shared py<->ts fixture: citation numbering must assign the SAME [n] on both sides. Consumed by test_report_export.py (serialize_markdown / _report_citations) and api/deepResearch.test.ts (serializeReportToMarkdown). The passages exercise the sourceUrlKey identity: tracking params, trailing slash, default port, host case + trailing dot, query-pair ordering, a non-default port, and a url-less passage.",
+  "passages": [
+    {
+      "id": "a1",
+      "source_title": "Alpha Story",
+      "source_url": "https://alpha.example.com/story?utm_source=feed&fbclid=zz"
+    },
+    {
+      "id": "a2",
+      "source_title": "Alpha Story (dup passage)",
+      "source_url": "https://alpha.example.com/story/"
+    },
+    {
+      "id": "b1",
+      "source_title": "Beta Paper",
+      "source_url": "https://beta.example.com:443/paper?b=2&a=1"
+    },
+    {
+      "id": "b2",
+      "source_title": "Beta Paper (dup passage)",
+      "source_url": "https://BETA.example.com./paper?a=1&b=2"
+    },
+    {
+      "id": "c1",
+      "source_title": "Gamma Portal",
+      "source_url": "https://gamma.example.com:8443/x"
+    },
+    {
+      "id": "d1",
+      "source_title": "No URL Passage",
+      "source_url": ""
+    }
+  ],
+  "section_markdown": "Cites [[a1]] [[a2]] [[b1]] [[b2]] [[c1]] [[d1]] [[missing_id]].",
+  "expected_inline": "Cites [1] [1] [2] [2] [3] [4] [?].",
+  "expected_footer": [
+    "- [1] Alpha Story — https://alpha.example.com/story?utm_source=feed&fbclid=zz",
+    "- [2] Beta Paper — https://beta.example.com:443/paper?b=2&a=1",
+    "- [3] Gamma Portal — https://gamma.example.com:8443/x",
+    "- [4] No URL Passage — "
+  ]
+}

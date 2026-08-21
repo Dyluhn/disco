@@ -81,6 +81,24 @@ const ALLOWLIST: Record<string, string> = {
   "disco:build.preview-restart": "restarts a live preview server — proof-tier",
   "disco:confirm-dialog.confirm": "destructive delete — needs a seeded row + live backend",
   "disco:confirm-dialog.cancel": "paired with the destructive confirm flow — proof-tier",
+  // PKG-26: renders only on a FINISHED build (never on the fresh cid-less
+  // /build surface) and sends the authoritative accept_finished frame to a
+  // live conversation — same tier as build.edit-apply above.
+  "disco:build.mark-done": "accepts a FINISHED live build as-is (accept_finished frame) — proof-tier",
+  // PKG-28/29/30 composer controls. These are declared disco handles (so the
+  // gate classifies them backend-command) that are visible on the fresh
+  // surfaces, but they only mutate local composer state — the backend call
+  // they set up is the proof-tier submit (send-message) already listed above.
+  "disco:search.type-standard": "scope slider segment — local composer state; the run it configures is proof-tier",
+  "disco:search.type-deep-research": "scope slider segment — local composer state; the run it configures is proof-tier",
+  "disco:search.options": "local options-panel toggle; the run it configures is proof-tier",
+  "disco:build.options": "local options-panel toggle; the run it configures is proof-tier",
+  "disco:search.driver-model": "driver-model notice — local reveal/focus of the model picker",
+  "disco:dr.driver-model": "driver-model notice — local reveal/focus (renders only in the Deep Research composer)",
+  "disco:build.driver-model": "driver-model notice — local reveal/focus of the model picker",
+  // Mobile-only (lg:hidden) — never visible at this config's 1280x800 desktop
+  // viewport, so never gated; listed for documentation completeness.
+  "disco:build.mobile-inspector-open": "mobile-only inspector opener — hidden at the desktop viewport",
 };
 
 test("per-surface — enumerate every route + enforce the coverage gate", async ({

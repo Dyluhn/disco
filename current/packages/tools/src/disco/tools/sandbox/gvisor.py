@@ -62,6 +62,7 @@ from ._container import proxy_readiness_argv as proxy_readiness_argv
 from ._container import proxy_run_argv as proxy_run_argv
 from ._container import resolve_bounds as resolve_bounds
 from ._container import sealed as sealed
+from ._effective_config import cgroup_enforcement_warning
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .capability_relay import (
     HOST_SERVICE_RELAY_PORT,
@@ -314,6 +315,20 @@ class GvisorSandboxService:
         if self._cfg.runtime not in runtimes:
             raise SandboxUnavailableError(
                 f"the {self._cfg.runtime!r} runtime is not configured on the Docker host"
+            )
+        # A runtime registered with `--runtime-flag ignore-cgroups` records every
+        # requested cap and enforces none, so neither the create call nor the
+        # post-create HostConfig inspection can see it — the registered arguments
+        # are the only place that posture is visible. WARN rather than refuse: this
+        # project's own self-host guide documents the flag as the rootless-runsc
+        # workaround, so failing closed would break installs it told people to make.
+        warning = cgroup_enforcement_warning(runtimes, self._cfg.runtime)
+        if warning:
+            _LOG.error(
+                "sandbox.cgroup_enforcement_disabled runtime=%s engine=%s: %s",
+                self._cfg.runtime,
+                self._cfg.docker_socket,
+                warning,
             )
 
     def _require_image(self, client: Any) -> None:

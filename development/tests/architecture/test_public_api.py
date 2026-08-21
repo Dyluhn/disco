@@ -872,8 +872,9 @@ class TestFrontendPublicApi:
         # and `StoredCredentialField` as independently owned public components.
         # 404 after the mobile-first-class pass added three shared primitives
         # (tapTarget, useScrollFade, ScrollFade). 407 after the composer redesign
-        # (SearchTypeSlider, DriverModelNotice, focusModelControl). Additive both.
-        assert len(live["frontend_modules"]) == 407
+        # (SearchTypeSlider, DriverModelNotice, focusModelControl). 409 after the
+        # production-readiness wave (McpImportBox, passageNormalize). All additive.
+        assert len(live["frontend_modules"]) == 409
         assert len(authority["contract_files"]) == 2
         assert all(set(row) == {"path", "sha256", "bytes"} for row in authority["contract_files"])
         assert module == {

@@ -16,6 +16,7 @@ import sys
 import tarfile
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from disco.tools.anatomy import Capability
@@ -34,9 +35,25 @@ from disco.tools.sandbox._container import (
 from disco.tools.sandbox.file_batch import SandboxFileMutation
 
 
+def honest_host_config(create_kwargs: dict) -> dict[str, Any]:
+    """The ``HostConfig`` a daemon that honours the create request would report."""
+    mem = str(create_kwargs.get("mem_limit") or "0m").removesuffix("m")
+    return {
+        "Runtime": create_kwargs.get("runtime") or "",
+        "Memory": int(float(mem or 0)) * 1024 * 1024,
+        "CpuQuota": int(create_kwargs.get("cpu_quota") or 0),
+        "CpuPeriod": int(create_kwargs.get("cpu_period") or 0),
+        "PidsLimit": int(create_kwargs.get("pids_limit") or 0),
+    }
+
+
 class FakeContainer:
     def __init__(self, create_kwargs: dict, fs: dict[str, bytes]) -> None:
         self.create_kwargs = create_kwargs
+        # A LYING engine: HostConfig fields to override on reload(). Podman's
+        # Docker-compat API drops the requested runtime without erroring, so the
+        # honest echo below is a property of the daemon, never a guarantee.
+        self.host_config_lies: dict[str, Any] = {}
         self.fs = fs  # shared with the CLI runner (write here, read there)
         self.started = self.stopped = self.removed = False
         self.status = "created"
@@ -55,8 +72,14 @@ class FakeContainer:
         self.started = True
         self.status = "running"
 
-    def reload(self):  # no-op: the fake leaves attrs alone (callers set NetworkSettings)
-        pass
+    def reload(self):
+        """podman-py refreshes ``.attrs`` (callers set NetworkSettings); a TRUTHFUL
+        engine also echoes the create request back under ``HostConfig``, which is
+        where the post-create runtime and resource-limit guards read it.
+        ``host_config_lies`` models an engine that does not."""
+        host_config = honest_host_config(self.create_kwargs)
+        host_config.update(self.host_config_lies)
+        self.attrs["HostConfig"] = host_config
 
     def exec_run(self, cmd, demux=False, workdir=None, detach=False):
         # The sidecar's one-shot setup (resolv.conf + proxy launch) goes through
@@ -1000,3 +1023,131 @@ def test_engine_default_runtimes_carry_no_isolation_promise_to_enforce():
     _runtime_guard("crun", None)
     _runtime_guard("runc", None)
     _runtime_guard("", None)
+
+
+# --- bounds honesty: a requested resource cap must actually take effect --------
+# Same "requested is not effective" reasoning as the runtime guard, extended to the
+# cgroup bounds. An engine (or compat transport) that DROPS a create field it does
+# not support leaves the sandbox unbounded while the caller believes it is capped —
+# which makes the bounds validators decorative and allows fork-bomb / memory-
+# exhaustion host DoS from agent code.
+
+
+def _limits_guard(requested: dict[str, int], effective: dict[str, Any] | None):
+    """Drive the shared post-create bounds guard against a reported HostConfig."""
+    from disco.tools.sandbox._effective_config import assert_effective_limits
+
+    class _Container:
+        def __init__(self) -> None:
+            self.attrs: dict = {} if effective is None else {"HostConfig": dict(effective)}
+
+        def reload(self) -> None:
+            pass
+
+    return assert_effective_limits(_Container(), requested)
+
+
+def test_requested_bounds_that_took_effect_are_allowed():
+    _limits_guard(
+        {"Memory": 2048, "CpuQuota": 100_000, "PidsLimit": 512},
+        {"Memory": 2048, "CpuQuota": 100_000, "PidsLimit": 512},
+    )  # must not raise
+
+
+def test_a_requested_bound_the_engine_dropped_is_refused():
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        _limits_guard({"PidsLimit": 512}, {"PidsLimit": 0})
+    assert "requested a pids limit of 512 but the container has none" in str(excinfo.value)
+
+
+def test_a_requested_bound_missing_from_the_report_entirely_is_refused():
+    with pytest.raises(SandboxUnavailableError):
+        _limits_guard({"Memory": 2048}, {})
+
+
+def test_dockers_unlimited_sentinel_is_refused_like_an_absent_bound():
+    """Docker spells "no limit" as -1 for PidsLimit; that is not a bound."""
+    with pytest.raises(SandboxUnavailableError):
+        _limits_guard({"PidsLimit": 512}, {"PidsLimit": -1})
+
+
+def test_a_bound_the_engine_loosened_is_refused():
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        _limits_guard({"Memory": 2048}, {"Memory": 1 << 40})
+    assert "was created with" in str(excinfo.value)
+
+
+def test_a_bound_the_engine_tightened_is_allowed():
+    """Stricter than requested means the engine tightened — the host stays protected."""
+    _limits_guard({"Memory": 2048, "PidsLimit": 512}, {"Memory": 1024, "PidsLimit": 64})
+
+
+def test_bounds_guard_fails_closed_when_the_container_cannot_be_inspected():
+    from disco.tools.sandbox._effective_config import assert_effective_limits
+
+    class _Container:
+        attrs: dict = {}
+
+        def reload(self) -> None:
+            raise RuntimeError("daemon closed the connection")
+
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        assert_effective_limits(_Container(), {"PidsLimit": 512})
+    assert "could not verify the sandbox resource limits took effect" in str(excinfo.value)
+
+
+def test_no_requested_bounds_means_nothing_to_verify():
+    _limits_guard({}, None)
+    _limits_guard({"PidsLimit": 0}, None)  # 0 is the "unset" sentinel, not a claim
+
+
+async def test_podman_create_refuses_a_bound_the_socket_silently_dropped():
+    """End to end through the real Podman create path, not just the helper."""
+    svc, client, _cli = _svc()
+    real_create = client.create
+
+    def _create(**kwargs):
+        container = real_create(**kwargs)
+        if str(kwargs.get("name", "")).startswith("disco-sbx-"):
+            container.host_config_lies = {"PidsLimit": 0}
+        return container
+
+    client.create = _create
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "refusing to run without the requested resource bounds" in str(excinfo.value)
+
+
+# --- the cgroup posture HostConfig cannot see ---------------------------------
+
+
+def test_cgroup_disabling_runtime_args_are_described_for_the_operator():
+    """`runsc --runtime-flag ignore-cgroups` records every cap and enforces none, so
+    the create call and the post-create inspect both look perfect. The registered
+    runtime arguments are the only place the posture is visible."""
+    from disco.tools.sandbox._effective_config import cgroup_enforcement_warning
+
+    warning = cgroup_enforcement_warning(
+        {"runsc": {"path": "/usr/bin/runsc", "runtimeArgs": ["--ignore-cgroups"]}}, "runsc"
+    )
+    assert warning is not None
+    assert "NOT enforced" in warning
+
+
+def test_runtime_args_without_a_cgroup_flag_produce_no_warning():
+    from disco.tools.sandbox._effective_config import cgroup_enforcement_warning
+
+    assert (
+        cgroup_enforcement_warning({"runsc": {"runtimeArgs": ["--platform=systrap"]}}, "runsc")
+        is None
+    )
+
+
+def test_absent_runtime_args_are_not_read_as_proof_of_enforcement():
+    """Podman's compat /info reports only a path per runtime and no arguments at
+    all, so on that transport the signal is simply unavailable — None here means
+    "cannot tell", never "verified enforced"."""
+    from disco.tools.sandbox._effective_config import cgroup_enforcement_warning
+
+    assert cgroup_enforcement_warning({"runsc": {"path": "/usr/bin/runsc"}}, "runsc") is None
+    assert cgroup_enforcement_warning({}, "runsc") is None

@@ -1,5 +1,5 @@
 import { MCP_CONNECTIONS } from "@/fixtures/config";
-import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
+import type { McpConnection, McpImportResult, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
 import type { ProbeResult } from "@/types/probe";
 import { agentGet, agentLive, agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
@@ -113,6 +113,22 @@ export async function listMcpConnections(): Promise<McpConnection[]> {
   }
   await fixtureDelay();
   return fixtureMcp.map((c) => ({ ...c }));
+}
+
+/** Paste-a-config import: send the raw pasted `mcpServers` blob to the server,
+ * which owns the ONLY parser (the client never pre-parses). `dryRun` previews;
+ * `dryRun=false` stores pasted secret values as SecretStore refs and creates
+ * the servers through the same path as the manual form. */
+export async function importMcpConfig(text: string, dryRun: boolean): Promise<McpImportResult> {
+  if (!isLive()) {
+    throw new Error("Connect the app server to import a pasted MCP config.");
+  }
+  const result = await apiSend<McpImportResult>("POST", "/api/mcp/servers/import", {
+    text,
+    dry_run: dryRun,
+  });
+  if (!dryRun && agentLive()) await agentSend("POST", "/api/mcp/reload");
+  return result;
 }
 
 export async function createMcpServer(config: McpServerConfig): Promise<McpConnection> {

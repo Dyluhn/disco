@@ -75,3 +75,34 @@ export interface McpServerApprove {
   config_hash?: string;
   description_hash?: string;
 }
+
+/** One secret the paste-import will store (or expects to exist). Only the ref
+ * NAME and provenance travel the wire — never the pasted value. */
+export interface McpImportSecret {
+  ref: string;
+  source_key: string;
+  value_provided: boolean;
+  already_configured: boolean;
+}
+
+/** One parsed server from a pasted `mcpServers` blob: a proposal (error null)
+ * or a refusal whose `error` names exactly what is wrong. */
+export interface McpImportServer {
+  name: string;
+  transport?: string | null;
+  url?: string | null;
+  args?: string[] | null;
+  env?: Record<string, string> | null;
+  headers?: Record<string, string> | null;
+  warnings: string[];
+  error?: string | null;
+  created: boolean;
+  secrets: McpImportSecret[];
+}
+
+/** POST /api/mcp/servers/import response — preview (dry_run) or apply. */
+export interface McpImportResult {
+  dry_run: boolean;
+  ok: boolean;
+  servers: McpImportServer[];
+}

@@ -50,11 +50,13 @@ from disco.core import (
     ToolResult,
     View,
 )
+from disco.core.dod import CommandExitPredicate, FileExistsPredicate
 from disco.core.llm import OperatingMode
 from disco.core.loop.plan_command_validation import (
     _PROBE_LOOPBACK_PREVIEW_ISSUE,
     _PROBE_RUNTIME_PREVIEW_ISSUE,
 )
+from disco.core.loop.plan_conditions import PlanStepConditions
 from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
 
 CID = "conv-c18"
@@ -927,108 +929,142 @@ async def test_c18_container_command_timed_out_fails(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_h342_c18_and_finish_fallback_share_bash_process_substitution(tmp_path):
-    """The advisory and authoritative finish gate use identical Bash semantics.
+async def test_h342_c18_command_predicate_reaches_exec_shell_verbatim(tmp_path):
+    """H342: the sandbox gets the RAW command string — no re-quoting, no wrapper.
 
-    H342 froze this exact process-substitution predicate into the DoD, while the
-    public proof worked only when the agent added ``bash -c``. The C18 fallback
-    and fresh DoD runner both selected ambient ``/bin/sh`` and rejected a
-    correct workspace. Keep the exact predicate here so either fallback drifting
-    away from the shared Bash contract blocks FINISHED.
+    The predicate below is the one H342 froze into the DoD; it needs Bash
+    process substitution, which the sandbox's `exec_shell` provides. C18 must
+    hand it over byte-for-byte, so a shell-dialect regression shows up as a
+    failing predicate rather than a mangled command.
+
+    (Rewritten from `test_h342_c18_and_finish_fallback_share_bash_process_substitution`,
+    which asserted the two HOST `subprocess(shell=True)` fallbacks pinned the same
+    bash dialect. Both fallbacks are deleted, so the shared contract is now
+    "the sandbox runs it, verbatim".)
     """
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    (workspace / "primes.py").write_text(
-        "def primes(n):\n"
-        "    out = []\n"
-        "    candidate = 2\n"
-        "    while len(out) < n:\n"
-        "        if all(candidate % p for p in out if p * p <= candidate):\n"
-        "            out.append(candidate)\n"
-        "        candidate += 1\n"
-        "    return out\n"
-        "print(*primes(20), sep='\\n')\n"
-    )
-    sbx = _FakeSandbox(str(workspace))
-
-    agent = ScriptedAgent(
-        [
-            action_step(
-                "submit_plan",
-                {
-                    "summary": "p",
-                    "steps": [
-                        {
-                            "title": "verify the first twenty primes",
-                            "done_condition": {
-                                "kind": "command",
-                                "cmd": _H342_PROCESS_SUBSTITUTION_PREDICATE,
-                                "expect_exit": 0,
-                            },
-                        }
-                    ],
-                },
-            ),
-            # Cross the approved-plan execution boundary before marking it done.
-            action_step("shell", {"command": "python3 primes.py"}),
-            action_step("plan_step", {"index": 1, "state": "done"}),
-            finish_step(),
-        ]
-    )
-    loop, store = build_loop(agent, executor=_SandboxExecutor(sbx), conversation_id=CID)
-    loop.mode = OperatingMode.PLANNING
-    loop._planning_tools = frozenset(["file_read"])
-    await loop.send_message("go")
-    await loop.run()
-    await loop.approve_plan()
-    await loop.run()
-
-    events = await store.get_events(CID)
-    notes = _advisory_notes(events)
-    assert len(notes) == 1, f"expected exactly 1 C18 note, got {len(notes)}"
-    note = notes[0]
-    assert "met" in note.message.content
-    assert note.meta.get("passed") is True
-    # Subprocess path stamps "in X.XXs"; sandbox path stamps "(sandbox)".
-    assert "(sandbox)" not in note.message.content
-    assert "in " in note.message.content
-    final_status = next(event for event in reversed(events) if isinstance(event, StatusEvent))
-    assert final_status.status == ConversationStatus.FINISHED
-
-
-async def test_h342_c18_host_fallback_pins_bash_and_raw_command(tmp_path, monkeypatch):
-    import os
-    import subprocess
-
-    from disco.core.dod import CommandExitPredicate
-    from disco.core.loop.plan_conditions import PlanStepConditions
-
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    sbx = _FakeSandbox(str(workspace))
+    sbx = _FakeContainerSandboxWithExecShell(_FakeExecResult(exit_code=0, stdout="ok"))
     loop, _ = build_loop(
-        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id="conv-h342-c18"
+        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id="conv-h342-verbatim"
     )
-    captured: dict[str, object] = {}
-
-    def _run(command: str, **kwargs):  # noqa: ANN003, ANN202
-        captured["command"] = command
-        captured.update(kwargs)
-        return subprocess.CompletedProcess(command, 0, stdout="verified", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", _run)
-    command = "read -r value < <(printf 71); [[ $value == 71 ]]"
-    passed, _note = await PlanStepConditions(loop).check_command_for_plan_step(
-        CommandExitPredicate(cmd=command)
+    passed, note = await PlanStepConditions(loop).check_command_for_plan_step(
+        CommandExitPredicate(cmd=_H342_PROCESS_SUBSTITUTION_PREDICATE)
     )
 
     assert passed is True
-    assert captured["command"] == command
-    assert captured["shell"] is True
-    assert captured["executable"] == "/bin/bash"
-    assert captured["cwd"] == str(workspace)
-    assert captured["timeout"] == 5.0
-    assert captured["env"] == {"PATH": os.environ.get("PATH", "")}
+    assert "(sandbox)" in note
+    assert sbx.exec_shell_calls == [(_H342_PROCESS_SUBSTITUTION_PREDICATE, 5)]
+
+
+@pytest.mark.asyncio
+async def test_c18_command_predicate_without_sandbox_is_unevaluatable_and_spawns_no_process(
+    tmp_path, monkeypatch
+):
+    """W3/H-EXEC: no sandbox exec surface → the C18 command check is
+    UN-EVALUATABLE (non-pass, and the note says why), and NOTHING is spawned on
+    the agent-server host.
+
+    Replaces `test_h342_c18_host_fallback_pins_bash_and_raw_command`, which
+    pinned the bash dialect / cwd / env of the host `subprocess(shell=True)`
+    fallback. `predicate.cmd` is harvested verbatim from the model's
+    `submit_plan` arguments and is shape-validated only, so that fallback was
+    host command execution of model-authored text; it is deleted rather than
+    hardened.
+    """
+    import subprocess
+
+    spawned: list[object] = []
+    for name in ("Popen", "run", "call", "check_call", "check_output"):
+        monkeypatch.setattr(
+            subprocess,
+            name,
+            lambda *a, **kw: spawned.append((a, kw)),  # noqa: ARG005
+        )
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    # A sandbox WITHOUT exec_shell — the shape the deleted fallback keyed on.
+    sbx = _FakeSandbox(str(workspace))
+    assert not hasattr(sbx, "exec_shell")
+    loop, _ = build_loop(
+        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id="conv-h-exec-c18"
+    )
+    passed, note = await PlanStepConditions(loop).check_command_for_plan_step(
+        CommandExitPredicate(cmd="echo owned; id")
+    )
+
+    assert spawned == [], "sandbox-less C18 command check spawned a process"
+    assert passed is False
+    assert "not evaluated" in note
+    assert "no sandbox available" in note
+    # NOT reported as a command that ran and failed.
+    assert "exited" not in note
+
+
+@pytest.mark.asyncio
+async def test_c18_file_exists_without_sandbox_is_unevaluatable_and_reads_no_host_path(
+    tmp_path, monkeypatch
+):
+    """W3/H-EXEC: no sandbox file surface → the C18 `file_exists` check is
+    UN-EVALUATABLE, and the agent-server's own filesystem is never consulted.
+
+    The deleted fallback ran `Path(predicate.path).exists()` on this branch with
+    NO workspace clamp (the clamp above it only applies when the sandbox reports
+    a `workspace_path`), so a model-authored absolute path was an existence
+    oracle for the agent-server host.
+    """
+    from pathlib import Path as _Path
+
+    touched: list[str] = []
+
+    monkeypatch.setattr(_Path, "exists", lambda self: touched.append(str(self)) or True)
+    monkeypatch.setattr(_Path, "is_file", lambda self: touched.append(str(self)) or True)
+
+    class _NoSandboxExecutor:
+        sandbox = None
+
+        def available_tools(self):
+            return []
+
+        async def execute(self, call):  # noqa: ANN001
+            raise AssertionError("not used")
+
+    loop, _ = build_loop(
+        ScriptedAgent([]), executor=_NoSandboxExecutor(), conversation_id="conv-h-exec-file"
+    )
+    passed, note = await PlanStepConditions(loop).check_file_exists_for_plan_step(
+        FileExistsPredicate(path="/etc/shadow")
+    )
+
+    assert touched == [], f"host filesystem was consulted: {touched}"
+    assert passed is False
+    assert "not evaluated" in note
+    assert "no sandbox available" in note
+    # NOT reported as a file that was looked for and found/missing.
+    assert "found" not in note and "missing" not in note
+
+
+@pytest.mark.asyncio
+async def test_c18_sandbox_exec_error_still_reports_sandbox_exec_error(tmp_path):
+    """Unchanged path: a sandbox EXISTS but its exec raises → the existing
+    'sandbox exec error' outcome, not the un-evaluatable one."""
+
+    class _Boom:
+        workspace_path = None
+
+        async def exec_shell(self, cmd: str, *, timeout_s: int) -> object:  # noqa: ARG002
+            raise RuntimeError("backend down")
+
+    loop, _ = build_loop(
+        ScriptedAgent([]), executor=_SandboxExecutor(_Boom()), conversation_id="conv-h-exec-boom"
+    )
+    passed, note = await PlanStepConditions(loop).check_command_for_plan_step(
+        CommandExitPredicate(cmd="test -f index.html")
+    )
+
+    assert passed is False
+    assert "sandbox exec error" in note
+    assert "RuntimeError: backend down" in note
+    assert "not evaluated" not in note
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,9 @@ Covers:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.agent_server.report_export import (
@@ -81,9 +84,11 @@ def _make_sample_report() -> ReportEvent:
     )
 
 
-# The exact markdown output the original TypeScript serializer produces for
-# the sample report above. This IS the captured sample — cut from a browser
-# console after running `exportReportAsMarkdown(report)` with the same data.
+# The exact markdown output the TypeScript serializer produces for the sample
+# report above. Citations render as the UI's [n] numerals (first-seen source
+# order) and the footer lists one source per number — never a raw passage id.
+# The vitest twin (api/deepResearch.test.ts) pins the SAME bytes from
+# serializeReportToMarkdown; together they hold the py↔ts byte-parity contract.
 CAPTURED_MARKDOWN = (
     """\
 # Deep Research: What is the airspeed velocity of an unladen swallow?
@@ -96,7 +101,7 @@ African and European swallows differ. Airspeed ~11 m/s and ~8 m/s.
 
 The African swallow cruises at **11 m/s** with 5-7 flaps per second.
 
-See [[p0]] for primary data.
+See [1] for primary data.
 
 ## European Swallow
 
@@ -104,7 +109,7 @@ _Conflicts noted: seasonal variation unaccounted in some studies_
 
 The European swallow is smaller and slower: **8 m/s**.
 
-Measurements vary by season [[p1]].
+Measurements vary by season [2].
 
 ---
 
@@ -115,10 +120,10 @@ Measurements vary by season [[p1]].
 
 ---
 
-Passages cited (2):
+Sources cited (2):
 
-- [p0] Avian Speed Database — https://birds.example.com/p0
-- [p1] European Ornithology Journal — https://birds.example.com/p1"""
+- [1] Avian Speed Database — https://birds.example.com/p0
+- [2] European Ornithology Journal — https://birds.example.com/p1"""
 )
 
 
@@ -149,7 +154,7 @@ def test_markdown_empty_sections() -> None:
     result = serialize_markdown(report)
     assert "## Executive Summary" in result
     assert "Nothing to see." in result
-    assert "Passages cited (0):" in result
+    assert "Sources cited (0):" in result
     # No section headings
     assert list(result.split("\n")).count("") >= 2
 
@@ -194,7 +199,8 @@ def test_markdown_empty_summary_is_placeholder() -> None:
 
 
 def test_markdown_passage_missing_fields() -> None:
-    """Passages with missing fields render safely with '?' / empty strings."""
+    """Passages with missing fields still get a citation number and render
+    safely with empty title/url strings."""
     report = ReportEvent(
         source=EventSource.AGENT,
         query="Test",
@@ -205,7 +211,8 @@ def test_markdown_passage_missing_fields() -> None:
     )
     result = serialize_markdown(report)
     assert " — " in result
-    assert "[?]" in result
+    # A url-less, id-less passage still numbers alone (keyed by its "?" id).
+    assert "- [1]  — " in result
 
 
 # ---- Format dispatch --------------------------------------------------------
@@ -426,7 +433,7 @@ def test_markdown_with_follow_ups_appends_qa_section() -> None:
     assert "**Q:** Is this well studied?" in result
     assert "Yes, extensively by ornithologists worldwide." in result
     # Q&A section must appear AFTER the passages footer
-    passages_pos = result.index("Passages cited")
+    passages_pos = result.index("Sources cited")
     qa_pos = result.index("## Follow-up Q&A")
     assert qa_pos > passages_pos
 
@@ -817,3 +824,120 @@ async def test_export_waits_for_canonical_generated_title(store: SqliteEventStor
     assert payload.decode("utf-8").splitlines()[0] == (
         "# Deep Research: Weekly Open Source Releases"
     )
+
+
+# ---- One numbering, everywhere: UI [n] parity (2026-08-21) ------------------
+#
+# The exports must present citations exactly as the UI renders them — the [n]
+# assignment from lib/sources.ts:citationNumbers (first-seen source order over
+# report.passages) — never a raw passage id. The shared fixture is also
+# consumed by api/deepResearch.test.ts, pinning the SAME assignment in the
+# TypeScript serializer.
+
+_PARITY_FIXTURE = Path(__file__).parent / "fixtures" / "citation_numbering_parity.json"
+
+
+def _parity_report() -> tuple[ReportEvent, dict]:
+    fx = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    report = ReportEvent(
+        source=EventSource.AGENT,
+        query="Parity",
+        summary="Summary.",
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Numbering",
+                markdown=fx["section_markdown"],
+                cited_passage_ids=[str(p["id"]) for p in fx["passages"]],
+                confidence="high",
+                disputed_notes=[],
+            )
+        ],
+        passages=fx["passages"],
+        all_hits=[],
+    )
+    return report, fx
+
+
+def test_citation_numbering_parity_fixture_markdown() -> None:
+    """Shared fixture: inline [[id]] markers render as the UI's [n] numerals
+    (same source → same number; unknown id → [?]) and the footer lists one
+    source per number in numeric order."""
+    report, fx = _parity_report()
+    result = serialize_markdown(report)
+    assert fx["expected_inline"] in result
+    assert f"Sources cited ({len(fx['expected_footer'])}):" in result
+    footer = result.split("Sources cited", 1)[1]
+    assert footer.split("\n\n", 1)[1] == "\n".join(fx["expected_footer"])
+    # No raw passage id anywhere in the export.
+    assert "[[" not in result
+
+
+def test_citation_numbers_first_seen_source_order() -> None:
+    """_citation_numbers mirrors citationNumbers (lib/sources.ts): one number
+    per source in first-seen order; passages from one source share it."""
+    from disco.agent_server.report_export import _citation_numbers
+
+    passages = [
+        {"id": "x1", "source_url": "https://a.example.com/one"},
+        {"id": "x2", "source_url": "https://b.example.com/two"},
+        {"id": "x3", "source_url": "https://a.example.com/one"},
+        {"id": "x4", "source_url": ""},
+    ]
+    assert _citation_numbers(passages) == {"x1": 1, "x2": 2, "x3": 1, "x4": 3}
+
+
+def test_source_url_key_mirrors_sources_ts() -> None:
+    """_source_url_key collapses tracking params, default ports, host case /
+    trailing dots and trailing slashes — the sourceUrlKey identity."""
+    from disco.agent_server.report_export import _source_url_key
+
+    assert _source_url_key("https://a.example.com/x?utm_source=f&fbclid=z") == (
+        _source_url_key("https://a.example.com/x")
+    )
+    assert _source_url_key("https://a.example.com:443/x/") == (
+        _source_url_key("https://A.example.com./x")
+    )
+    assert _source_url_key("https://a.example.com/x?b=2&a=1") == (
+        _source_url_key("https://a.example.com/x?a=1&b=2")
+    )
+    assert _source_url_key("https://a.example.com:8443/x") != (
+        _source_url_key("https://a.example.com/x")
+    )
+    # Unparseable / relative urls fall back to the trimmed raw string.
+    assert _source_url_key("  not a url  ") == "not a url"
+
+
+def test_pdf_appendix_one_row_per_source_shared_number() -> None:
+    """PDF: two passages from one source share a chip number, and the
+    appendix lists ONE row for them (no separate renumbering)."""
+    from disco.agent_server.report_export import _build_pdf_html
+    from disco.core.brand import resolve_theme
+
+    report = ReportEvent(
+        source=EventSource.AGENT,
+        query="Q",
+        summary="S",
+        sections=[
+            ReportSection(
+                id="s0",
+                title="Sec",
+                markdown="First [[m1]] then [[m2]] then [[n1]].",
+                cited_passage_ids=["m1", "m2", "n1"],
+                confidence="high",
+                disputed_notes=[],
+            )
+        ],
+        passages=[
+            {"id": "m1", "source_title": "Same Source", "source_url": "https://s.example.com/a"},
+            {"id": "m2", "source_title": "Same Source", "source_url": "https://s.example.com/a"},
+            {"id": "n1", "source_title": "Other", "source_url": "https://o.example.com/b"},
+        ],
+        all_hits=[],
+    )
+    html = _build_pdf_html(report, None, resolve_theme("disco", "light"))
+    assert html.count('<a class="chip" href="#src-1">1</a>') == 2
+    assert '<a class="chip" href="#src-2">2</a>' in html
+    assert html.count('id="src-1"') == 1
+    assert 'id="src-3"' not in html
+    assert "Sources (2)" in html

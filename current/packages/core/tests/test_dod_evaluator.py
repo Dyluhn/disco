@@ -114,6 +114,56 @@ async def _failing_http_probe(_url: str, _expected: int) -> HttpProbeResult:
     )
 
 
+class _WorkspaceSandbox:
+    """A process-tier-shaped sandbox over a real `tmp_path` workspace.
+
+    Exposes exactly the evidence triad the production file checker needs
+    (`file_exists` / `resolve_relpath` / `exec_shell`), so tests that used to
+    lean on the evaluator's deleted host-filesystem fallback now exercise the
+    checker production actually injects (`_build_file_checker`). `exec_shell`
+    understands only the checker's own non-empty probe — anything else is a
+    test bug, not a shell.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = Path(root)
+        self.workspace_path = str(root)
+
+    def _resolve(self, path: str) -> Path | None:
+        try:
+            return resolve_under_workspace(self.root, path)
+        except PathEscapeError:
+            return None
+
+    async def file_exists(self, path: str) -> bool:
+        resolved = self._resolve(path)
+        return resolved is not None and resolved.exists()
+
+    async def resolve_relpath(self, path: str) -> str:
+        return path
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int = 5):  # noqa: ANN202, ARG002
+        import shlex
+        from types import SimpleNamespace
+
+        parts = shlex.split(cmd)
+        assert parts[:4] == ["sh", "-c", 'test -s "$1"', "disco"], cmd
+        resolved = self._resolve(parts[4])
+        ok = resolved is not None and resolved.is_file() and resolved.stat().st_size > 0
+        return SimpleNamespace(exit_code=0 if ok else 1, stdout="", stderr="", timed_out=False)
+
+
+def _workspace_file_checker(root: Path):  # noqa: ANN202
+    """The PRODUCTION sandbox file checker, bound to a real tmp_path workspace."""
+    from disco.core.loop.finish.content_gate_parts.dod_evaluator_build import (
+        _build_file_checker,
+    )
+
+    checker = _build_file_checker(_WorkspaceSandbox(root))
+    assert checker is not None
+    return checker
+
+
 class ScriptedJudge(SubjectiveJudge):
     """A fake `SubjectiveJudge` that returns a scripted `SubjectiveVerdict`
     for the i-th call. Records every request so the test can assert
@@ -157,6 +207,7 @@ async def test_met_dod_verdict_passes(tmp_path: Path) -> None:
         tmp_path,
         command_runner=_passing_command_runner,
         http_probe=_passing_http_probe,
+        file_checker=_workspace_file_checker(tmp_path),
     )
     verdict = await ev.evaluate(spec, conversation_id="conv_met")
 
@@ -214,6 +265,7 @@ async def test_unmet_file_predicate_is_named_in_verdict(tmp_path: Path) -> None:
         tmp_path,
         command_runner=_passing_command_runner,
         http_probe=_passing_http_probe,
+        file_checker=_workspace_file_checker(tmp_path),
     )
     verdict = await ev.evaluate(spec)
 
@@ -228,7 +280,7 @@ async def test_unmet_file_predicate_is_named_in_verdict(tmp_path: Path) -> None:
     assert len(verdict.results) == 2
     by_kind = {type(r.predicate).__name__: r for r in verdict.results}
     assert by_kind["FileExistsPredicate"].passed is False
-    assert "file does not exist" in by_kind["FileExistsPredicate"].reason
+    assert "does not exist" in by_kind["FileExistsPredicate"].reason
     assert by_kind["CommandExitPredicate"].passed is True
 
 
@@ -266,94 +318,63 @@ async def test_unmet_command_predicate_is_named_in_verdict(tmp_path: Path) -> No
     assert captured == ["pytest -q"]
 
 
-async def test_h342_default_command_runner_pins_bash_and_clean_context(
+async def test_sandbox_less_command_predicate_is_unevaluatable_and_spawns_no_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The sandbox-less DoD fallback cannot inherit an ambient /bin/sh dialect."""
-    import os
+    """W3/H-EXEC: with NO injected `command_runner` there is no sandbox to run
+    the model's command string in, so the predicate is UN-EVALUATABLE — a
+    non-pass flagged `unverifiable` — and the evaluator spawns NO process.
+
+    Replaces the former `test_h342_default_command_runner_*` tests, which pinned
+    the bash dialect / process-group kill / output bounds of the host
+    `subprocess(shell=True)` fallback. That fallback is deleted: a DoD `command`
+    predicate is copied verbatim from a model-authored plan `done_condition`,
+    and the destructive-command deny-list is explicitly not an
+    arbitrary-code-execution control, so there is nothing left to pin.
+    """
     import subprocess
 
-    import disco.core.dod_evaluator as evaluator_module
-
-    captured: dict[str, object] = {}
-
-    real_popen = evaluator_module.subprocess.Popen
-
-    def _popen(command: str, **kwargs):  # noqa: ANN003, ANN202
-        captured["command"] = command
-        captured.update(kwargs)
-        return real_popen(command, **kwargs)
-
-    monkeypatch.setattr(evaluator_module.subprocess, "Popen", _popen)
-    command = "read -r value < <(printf 71); [[ $value == 71 ]]"
-    verdict = await DoDEvaluator(tmp_path).evaluate(
-        DoDSpec(predicates=[CommandExitPredicate(cmd=command)])
-    )
-
-    assert verdict.passed is True
-    assert captured["command"] == command
-    assert captured["shell"] is True
-    assert captured["executable"] == "/bin/bash"
-    assert captured["cwd"] == str(tmp_path)
-    assert captured["stdin"] is subprocess.DEVNULL
-    assert captured["stdout"] is subprocess.PIPE
-    assert captured["stderr"] is subprocess.PIPE
-    assert captured["start_new_session"] is True
-    assert captured["env"] == {"PATH": os.environ.get("PATH", "")}
-
-
-async def test_h368_default_command_runner_timeout_terminates_process_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import signal
-
-    import disco.core.dod_evaluator as evaluator_module
-
-    calls: list[tuple[int, signal.Signals]] = []
-    real_killpg = evaluator_module.os.killpg
-
-    monkeypatch.setattr(
-        evaluator_module.os,
-        "killpg",
-        lambda pid, sig: (calls.append((pid, sig)), real_killpg(pid, sig))[1],
-    )
-    verdict = await DoDEvaluator(tmp_path, command_timeout_seconds=0.01).evaluate(
-        DoDSpec(predicates=[CommandExitPredicate(cmd="python -c 'import time; time.sleep(5)'")])
-    )
-
-    assert verdict.passed is False
-    assert verdict.results[0].details["timed_out"] is True
-    assert verdict.results[0].unverifiable is True
-    assert calls and calls[0][1] == signal.SIGTERM
-
-
-async def test_h368_default_command_runner_bounds_fast_producer_output(tmp_path: Path) -> None:
-    payload_bytes = 2_000_000
-    verdict = await DoDEvaluator(tmp_path, command_timeout_seconds=2).evaluate(
-        DoDSpec(
-            predicates=[
-                CommandExitPredicate(
-                    cmd=f"python -c 'import sys; sys.stdout.write(\"x\" * {payload_bytes})'"
-                )
-            ]
+    spawned: list[object] = []
+    for name in ("Popen", "run", "call", "check_call", "check_output"):
+        monkeypatch.setattr(
+            subprocess,
+            name,
+            lambda *a, **kw: spawned.append((a, kw)),  # noqa: ARG005
         )
+
+    verdict = await DoDEvaluator(tmp_path, http_probe=_passing_http_probe).evaluate(
+        DoDSpec(predicates=[CommandExitPredicate(cmd="echo owned; id", expect_exit=0)])
     )
 
-    assert verdict.passed is True
-    output = str(verdict.results[0].details.get("stdout_tail", ""))
-    # The verdict itself intentionally stores only a short tail; exercise the
-    # runner directly below to prove the process boundary was bounded first.
-    from disco.core.dod_evaluator import _default_command_runner
+    assert spawned == [], "sandbox-less DoD command predicate spawned a process"
+    assert verdict.passed is False
+    assert len(verdict.unmet) == 1
+    assert isinstance(verdict.unmet[0], CommandExitPredicate)
+    result = verdict.results[0]
+    # Un-evaluatable, NOT "the command failed": `unverifiable` is the infra
+    # channel, and the reason says why it could not be evaluated.
+    assert result.unverifiable is True
+    assert "not evaluated" in result.reason
+    assert "no sandbox available" in result.reason
+    assert result.details.get("no_command_runner") is True
+    assert result.details.get("exit_code") is None
 
-    result = await _default_command_runner(
-        f"python -c 'import sys; sys.stdout.write(\"x\" * {payload_bytes})'",
-        cwd=tmp_path,
-        timeout_seconds=2,
-    )
-    assert result.exit_code == 0 and result.timed_out is False
-    assert len(result.stdout) < 140_000
-    assert "[disco: stdout truncated; 2000000 bytes total" in result.stdout
-    assert len(output) <= 2_000
+
+async def test_evaluator_module_has_no_host_shell_execution_surface() -> None:
+    """Nothing in the evaluator module may reach a host shell again."""
+    import inspect as _inspect
+
+    import disco.core.dod_evaluator as evaluator_module
+
+    assert not hasattr(evaluator_module, "subprocess")
+    assert not hasattr(evaluator_module, "_default_command_runner")
+    assert not hasattr(evaluator_module, "_run_command")
+    assert not hasattr(evaluator_module, "_build_default_command_runner")
+    src = _inspect.getsource(evaluator_module)
+    # (`shell=True` still appears in the module docstring, which explains why
+    # there is no host runner — assert on the executable surface instead.)
+    assert "import subprocess" not in src
+    assert "Popen(" not in src
 
 
 async def test_unmet_http_predicate_is_named_in_verdict(tmp_path: Path) -> None:
@@ -583,23 +604,43 @@ async def test_judge_exception_is_recorded_not_raised(tmp_path: Path) -> None:
 # ---- Safety: destructive commands are refused by the default runner --------
 
 
-async def test_default_command_runner_refuses_destructive_commands(
+async def test_sandbox_command_runner_refuses_destructive_commands(
     tmp_path: Path,
 ) -> None:
-    """The DEFAULT `command_runner` (no fake injection) routes the spec's
-    command through the engine's destructive-command deny-list. A
-    `rm -rf /` predicate is recorded as `denied=True` (NOT silently run)
-    and the predicate is unmet with the deny reason. This is the parity
-    with the agent's own verify-on-finish probe: a denied verify is a
-    hard fail, not a silent pass."""
+    """The production `command_runner` (the sandbox `exec_shell` adapter built by
+    the finish gate) routes the spec's command through the engine's
+    destructive-command deny-list. A `rm -rf /` predicate is recorded as
+    `denied=True` (NOT silently run) and the predicate is unmet with the deny
+    reason. This is the parity with the agent's own verify-on-finish probe: a
+    denied verify is a hard fail, not a silent pass.
+
+    Retargeted from `test_default_command_runner_refuses_destructive_commands`:
+    the evaluator no longer has a default host runner to carry the deny floor,
+    so the assertion now covers the runner production actually injects. Same
+    assertions, same strength.
+    """
+    from disco.core.loop.finish.content_gate_parts.dod_evaluator_build import (
+        _build_command_runner,
+    )
+
+    class _Sbx:
+        workspace_path = str(tmp_path)
+        exec_shell_calls: list[str] = []
+
+        async def exec_shell(self, cmd: str, *, timeout_s: int) -> object:  # noqa: ARG002
+            type(self).exec_shell_calls.append(cmd)
+            raise AssertionError("a hard-denied command must never reach exec_shell")
+
+    runner = _build_command_runner(_Sbx())
+    assert runner is not None
     spec = DoDSpec(
         predicates=[
             CommandExitPredicate(cmd="rm -rf /", expect_exit=0),
         ]
     )
-    # Use the default command runner — no `_passing_command_runner` injection.
-    ev = DoDEvaluator(tmp_path, http_probe=_passing_http_probe)
+    ev = DoDEvaluator(tmp_path, command_runner=runner, http_probe=_passing_http_probe)
     verdict = await ev.evaluate(spec)
+    assert _Sbx.exec_shell_calls == []
     assert verdict.passed is False
     assert len(verdict.unmet) == 1
     assert isinstance(verdict.unmet[0], CommandExitPredicate)
@@ -615,16 +656,30 @@ async def test_default_command_runner_refuses_destructive_commands(
 # ---- Path-escape safety ---------------------------------------------------
 
 
-async def test_file_exists_outside_workspace_is_a_hard_fail(
-    tmp_path: Path,
+async def test_file_exists_without_a_checker_is_unevaluatable_and_reads_no_host_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A `file_exists` predicate whose path resolves OUTSIDE the workspace
-    is a hard fail. The evaluator does not pretend to grade it; the
-    verdict names the predicate unmet with the escape reason. This is
-    the same discipline the sandbox uses for the agent's file tools, and
-    it's important: a spec that says `file_exists path: /etc/passwd`
-    would otherwise let the agent pass by *seeing* (or claiming to see)
-    an arbitrary file's existence."""
+    """A `file_exists` predicate whose path points OUTSIDE the workspace (or
+    anywhere else) must never be answered off the agent-server's filesystem.
+
+    Rewritten from `test_file_exists_outside_workspace_is_a_hard_fail`, which
+    asserted the deleted host-filesystem branch turned `../../etc/passwd` into a
+    "path escapes workspace" hard fail. The evaluator no longer resolves or
+    stats anything: with no `file_checker` injected the predicate is
+    un-evaluatable, which is a strictly stronger refusal — it also covers paths
+    that do NOT escape. The escape rule itself is still covered directly by
+    `test_resolve_under_workspace_rejects_escape`, and in production by the
+    sandbox that owns path resolution.
+    """
+    stats: list[str] = []
+
+    def _spy_exists(self: Path) -> bool:
+        stats.append(str(self))
+        return True
+
+    monkeypatch.setattr(Path, "exists", _spy_exists)
+    monkeypatch.setattr(Path, "is_file", lambda self: stats.append(str(self)) or True)
+
     spec = DoDSpec(
         predicates=[
             FileExistsPredicate(path="../../etc/passwd"),
@@ -636,11 +691,16 @@ async def test_file_exists_outside_workspace_is_a_hard_fail(
         http_probe=_passing_http_probe,
     )
     verdict = await ev.evaluate(spec)
+
+    assert stats == [], f"host filesystem was consulted: {stats}"
     assert verdict.passed is False
     assert len(verdict.unmet) == 1
     assert isinstance(verdict.unmet[0], FileExistsPredicate)
-    assert "path escapes workspace" in verdict.results[0].reason
-    assert verdict.results[0].details.get("escape") is True
+    result = verdict.results[0]
+    assert result.unverifiable is True
+    assert "not evaluated" in result.reason
+    assert "no sandbox available" in result.reason
+    assert result.details.get("no_file_checker") is True
 
 
 @pytest.mark.asyncio
@@ -648,7 +708,12 @@ async def test_file_exists_rejects_empty_and_directory(tmp_path: Path) -> None:
     """ANTI-GAMING (codex P2): file_exists requires a REGULAR, NON-EMPTY file.
     An empty `touch`ed placeholder and a directory both satisfy Path.exists()
     but are not the deliverable the step promised — they must FAIL, else a model
-    passes the gate without producing real content."""
+    passes the gate without producing real content.
+
+    Retargeted from the evaluator's deleted host-filesystem branch onto
+    `_build_file_checker` — the checker production injects — so the rule is
+    asserted where it now lives. Same three cases, same verdicts.
+    """
     (tmp_path / "empty.html").write_text("")  # 0 bytes
     (tmp_path / "asdir").mkdir()  # a directory named like a file
     (tmp_path / "real.html").write_text("<h1>content</h1>")  # the honest case
@@ -656,19 +721,65 @@ async def test_file_exists_rejects_empty_and_directory(tmp_path: Path) -> None:
         tmp_path,
         command_runner=_passing_command_runner,
         http_probe=_passing_http_probe,
+        file_checker=_workspace_file_checker(tmp_path),
     )
     # empty file → FAIL with an "empty" reason
     v_empty = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="empty.html")]))
     assert v_empty.passed is False
     assert "empty" in v_empty.results[0].reason.lower()
-    assert v_empty.results[0].details.get("empty_or_dir") is True
-    # directory → FAIL with a "directory" reason
+    # directory → FAIL (a directory is not a regular non-empty file)
     v_dir = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="asdir")]))
     assert v_dir.passed is False
-    assert "directory" in v_dir.results[0].reason.lower()
     # a real non-empty file still PASSES (no false-block on the honest deliverable)
     v_ok = await ev.evaluate(DoDSpec(predicates=[FileExistsPredicate(path="real.html")]))
     assert v_ok.passed is True
+
+
+async def test_http_ok_without_a_probe_is_unevaluatable_and_opens_no_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """W3/H-EXEC: with no injected `http_probe` an `http_ok` predicate is
+    un-evaluatable and NOTHING leaves the agent-server process.
+
+    The deleted default probe GET the model-authored URL from the host behind
+    its own loopback/RFC1918 allow-list; the deliverable's server binds the
+    SANDBOX's localhost, so that probe graded the wrong machine as well as
+    reaching out of the process. Production injects the in-sandbox curl probe.
+    """
+    import socket
+
+    import disco.core.host_egress as host_egress
+
+    async def _no_wire(*args: object, **kwargs: object) -> object:
+        raise AssertionError("the evaluator opened an HTTP connection")
+
+    monkeypatch.setattr(host_egress, "guarded_get", _no_wire)
+    monkeypatch.setattr(
+        socket, "create_connection", lambda *a, **k: pytest.fail("socket opened")
+    )
+
+    verdict = await DoDEvaluator(
+        tmp_path, command_runner=_passing_command_runner
+    ).evaluate(
+        DoDSpec(predicates=[HTTPOkPredicate(url="http://127.0.0.1:8000/", expect_status=200)])
+    )
+
+    assert verdict.passed is False
+    result = verdict.results[0]
+    assert result.unverifiable is True
+    assert "not evaluated" in result.reason
+    assert "no sandbox available" in result.reason
+    assert result.details.get("no_http_probe") is True
+
+
+async def test_evaluator_module_has_no_host_probe_surface() -> None:
+    """The deleted host probe must not come back through a side door."""
+    import disco.core.dod_evaluator as evaluator_module
+
+    assert not hasattr(evaluator_module, "_default_http_probe")
+    assert not hasattr(evaluator_module, "_build_default_http_probe")
+    assert not hasattr(evaluator_module, "guarded_get")
+    assert not hasattr(evaluator_module, "_egress_allowed")
 
 
 @pytest.mark.asyncio

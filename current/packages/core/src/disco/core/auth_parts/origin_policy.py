@@ -10,11 +10,23 @@ from typing import Any
 
 from ..env import disco_env
 
+# NOTE: the Vite dev-server ports (5173) are deliberately NOT here. This list is
+# a CORS allowlist used with `allow_credentials=True`, and `SameSite=Strict` does
+# not help: SameSite is site-scoped, not PORT-scoped, so a page on any allowlisted
+# localhost port is same-site with the app and its credentialed fetch carries the
+# session cookie. `GET /api/auth/session` then hands that page the CSRF token and
+# it can issue authenticated writes — including provider API keys. 5173 is the
+# Vite DEFAULT, i.e. a port any unrelated `npm run dev` in any repo can occupy,
+# so shipping it pre-trusted made every operator's other projects a takeover
+# path. The remaining ports are Disco's OWN front doors (8000/8800 the servers,
+# 8088 the compose UI, 80 privileged), which an attacker cannot squat while
+# Disco is the thing running there.
+#
+# The split-origin dev layout still works — opt in explicitly with the existing
+# `DISCO_FRONTEND_ORIGINS=http://localhost:5173` (see `allowed_frontend_origins`).
 _DEFAULT_ALLOWED_ORIGINS = (
     "http://localhost",
     "http://127.0.0.1",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "http://localhost:8800",
@@ -138,6 +150,43 @@ _PROXY_HEADERS = (
     "cf-connecting-ip",
     "x-real-ip",
 )
+
+
+def session_cookie_secure(
+    request_scheme: str | None = None,
+    forwarded_proto: str | None = None,
+    request_host: str | None = None,
+) -> bool:
+    """Whether the session cookie must carry ``Secure``.
+
+    Hardcoding ``secure=False`` is right for a plain-localhost run and wrong for
+    the deployment shape people actually use remotely: a TLS front door (a
+    Tailscale HTTPS proxy, nginx, cloudflared) terminating https and proxying to
+    loopback http. There the session cookie travels over the public leg with no
+    Secure flag, so any plain-http origin the browser can be steered to leaks it.
+
+    Three signals, in order, all of them configuration the app already has —
+    no new env var:
+
+      1. ``X-Forwarded-Proto: https`` — what the front-door nginx forwards, and
+         the same signal `routes/preview_capability.py` already uses for the
+         preview cookie.
+      2. The request's own scheme (direct TLS termination).
+      3. ``DISCO_PUBLIC_UI_URL`` starting ``https://`` — the operator's declared
+         front door, for a proxy that forwards no scheme header.
+
+    Signal 3 is skipped for a localhost-family Host: an operator with an https
+    public URL can still reach the app over plain http on the loopback port, and
+    a browser DISCARDS a Secure cookie on an http origin — that would break
+    first-run pairing there. Localhost is exactly where the flag buys nothing.
+    """
+    if (forwarded_proto or "").split(",")[0].strip().lower() == "https":
+        return True
+    if (request_scheme or "").strip().lower() == "https":
+        return True
+    if _request_hostname(request_host).rstrip(".") in _LOCALHOST_HOSTNAMES:
+        return False
+    return (disco_env("PUBLIC_UI_URL", "") or "").strip().lower().startswith("https://")
 
 
 def request_traversed_proxy(headers: Any) -> bool:

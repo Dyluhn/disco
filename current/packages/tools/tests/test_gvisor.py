@@ -74,6 +74,17 @@ def test_sandbox_image_includes_asset_inspection_clis() -> None:
     assert {"file", "xxd"} <= install_tokens
 
 
+def honest_host_config(run_kwargs: dict) -> dict[str, Any]:
+    """The ``HostConfig`` a daemon that honours the create request would report."""
+    mem = str(run_kwargs.get("mem_limit") or "0m").removesuffix("m")
+    return {
+        "Runtime": run_kwargs.get("runtime") or "",
+        "Memory": int(float(mem or 0)) * 1024 * 1024,
+        "NanoCpus": int(run_kwargs.get("nano_cpus") or 0),
+        "PidsLimit": int(run_kwargs.get("pids_limit") or 0),
+    }
+
+
 class FakeContainer:
     def __init__(self, run_kwargs: dict) -> None:
         self.run_kwargs = run_kwargs
@@ -82,6 +93,10 @@ class FakeContainer:
         self.started = False
         self.status = "created"
         self.attrs: dict = {}  # NetworkSettings populated on reload() if needed
+        # A LYING engine: HostConfig fields to override on reload(). Podman's
+        # Docker-compat API drops the requested runtime without erroring, so the
+        # honest echo below is a property of the daemon, never a guarantee.
+        self.host_config_lies: dict[str, Any] = {}
         self.exec_calls: list[list[str]] = []
         # queued (exit_code, stdout_bytes, stderr_bytes) for shell execs; else echoes ok
         self.exec_results: list[tuple[int, bytes, bytes]] = []
@@ -94,8 +109,14 @@ class FakeContainer:
         self.started = True
         self.status = "running"
 
-    def reload(self):  # docker-py refreshes .attrs; the fake leaves them empty
-        pass
+    def reload(self):
+        """docker-py refreshes ``.attrs``; a TRUTHFUL engine echoes the create
+        request back under ``HostConfig``, which is where the post-create runtime
+        and resource-limit guards read it. ``host_config_lies`` models an engine
+        that does not."""
+        host_config = honest_host_config(self.run_kwargs)
+        host_config.update(self.host_config_lies)
+        self.attrs["HostConfig"] = host_config
 
     def exec_run(self, cmd, demux=False, workdir=None, detach=False):
         self.exec_calls.append(cmd)
@@ -279,9 +300,14 @@ class FakeDockerClient:
         runtimes=("runsc", "runc"),
         run_error: Exception | None = None,
         has_image: bool = True,
+        host_config_lies: dict[str, Any] | None = None,
+        runtime_args: dict[str, list[str]] | None = None,
     ) -> None:
-        self._runtimes = {r: {} for r in runtimes}
+        self._runtimes = {r: dict(runtimeArgs=(runtime_args or {}).get(r, [])) for r in runtimes}
         self._run_error = run_error
+        # What the daemon will report instead of the honest echo (an engine that
+        # accepts the create call and silently assigns something else).
+        self._host_config_lies = dict(host_config_lies or {})
         self.containers = self
         self.images = _FakeImages(has_image)
         self.volumes = _FakeVolumes()
@@ -299,6 +325,7 @@ class FakeDockerClient:
         if self._run_error is not None:
             raise self._run_error
         c = FakeContainer(kwargs)
+        c.host_config_lies = dict(self._host_config_lies)
         # [FIX6] mirror reality: a sandbox joined to the internal egress net is
         # assigned an IP on it. `_launch_inbound_forwarder` reads this after
         # reload() to target the inbound TCP forwarder in every container mode.
@@ -777,3 +804,140 @@ def test_config_drives_host_details(tmp_path):
     assert kw["image"] == "custom:tag"
     assert kw["working_dir"] == "/ws"
     assert kw["volumes"][next(iter(kw["volumes"]))]["bind"] == "/ws"
+
+
+# --- runtime + bounds honesty on the DOCKER-PY create path ---------------------
+# The Podman backend has verified its effective runtime since the compat-API
+# lesson, but `containers.run` reaches the SAME daemon: `DISCO_LOCAL_ENGINE=docker`
+# against a Podman compat socket, or the `gvisor` backend pointed at one, both land
+# here. The pre-flight `_require_runtime` trusts `client.info()["Runtimes"]`, which
+# that transport populates from a STATIC CANDIDATE PATH whether or not the binary
+# exists — so it false-greens on exactly the engine that drops the field. Only
+# inspecting what was actually assigned can tell the truth. These pin that.
+
+
+async def test_docker_path_refuses_a_runtime_that_silently_became_the_default(tmp_path):
+    """The headline case: ask for gVisor over docker-py, get crun, and be told."""
+    # `runsc` is advertised by /info (the pre-flight passes) but the daemon
+    # assigns its own default — precisely the Podman compat-socket behaviour.
+    client = FakeDockerClient(host_config_lies={"Runtime": "crun"})
+    svc = _svc(tmp_path, client)
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "refusing to run unsandboxed" in str(excinfo.value)
+    assert "runsc" in str(excinfo.value)
+
+
+async def test_docker_path_refuses_a_runtime_dropped_entirely(tmp_path):
+    """Podman's compat API drops HostConfig.Runtime rather than rejecting it."""
+    client = FakeDockerClient(host_config_lies={"Runtime": ""})
+    svc = _svc(tmp_path, client)
+    with pytest.raises(SandboxUnavailableError):
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+
+async def test_docker_path_allows_a_runtime_that_took_effect(tmp_path):
+    """The honest engine: requested runsc, got runsc — no refusal."""
+    client = FakeDockerClient()  # honest echo
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert inst is not None
+    assert client.last.run_kwargs["runtime"] == "runsc"
+
+
+@pytest.mark.parametrize("engine_default", ["runc", "crun"])
+async def test_docker_path_does_not_refuse_the_engine_default_runtimes(tmp_path, engine_default):
+    """runc/crun ARE the engine defaults and promise no extra isolation, so asking
+    for one is not a claim to enforce — a mismatch there must NOT fail the start.
+
+    (An empty runtime cannot reach this guard on the Docker tiers: the pre-flight
+    ``_require_runtime`` rejects it as unregistered first. The shared helper's
+    ``""`` exemption is covered on the Podman path, which has no such pre-flight.)
+    """
+    client = FakeDockerClient(runtimes=("runsc", "runc", "crun"), host_config_lies={"Runtime": ""})
+    cfg = SandboxConfig(workspace_root=str(tmp_path), runtime=engine_default)
+    svc = GvisorSandboxService(cfg, client=client)
+    assert await svc.create(SandboxSpec(), owner_id="o", conversation_id="c") is not None
+
+
+@pytest.mark.parametrize(
+    ("dropped", "label"),
+    [("Memory", "memory"), ("NanoCpus", "CPU"), ("PidsLimit", "pids")],
+)
+async def test_docker_path_refuses_a_resource_bound_that_did_not_take_effect(
+    tmp_path, dropped, label
+):
+    """Requested != effective applies to the cgroup caps too. An engine that drops
+    a cap it does not support leaves the box unbounded while the caller believes it
+    is capped — the fork-bomb / memory-exhaustion host DoS the bounds exist to stop."""
+    client = FakeDockerClient(host_config_lies={dropped: 0})
+    svc = _svc(tmp_path, client)
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "refusing to run without the requested resource bounds" in str(excinfo.value)
+    assert f"requested a {label} limit" in str(excinfo.value)
+
+
+async def test_docker_path_refuses_a_resource_bound_the_engine_loosened(tmp_path):
+    """A recorded cap LARGER than the one asked for is a loosening, never allowed."""
+    client = FakeDockerClient(host_config_lies={"PidsLimit": 1_000_000})
+    svc = _svc(tmp_path, client)
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "1000000" in str(excinfo.value)
+
+
+async def test_docker_path_allows_a_resource_bound_the_engine_tightened(tmp_path):
+    """Stricter than requested is the engine tightening — the host stays protected."""
+    client = FakeDockerClient(host_config_lies={"PidsLimit": 16})
+    svc = _svc(tmp_path, client)
+    assert await svc.create(SandboxSpec(), owner_id="o", conversation_id="c") is not None
+
+
+async def test_docker_path_fails_closed_when_the_effective_config_cannot_be_read(tmp_path):
+    """An unverifiable boundary is not a boundary: an inspect failure must refuse."""
+
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    real_run = client.run
+
+    def _run(**kwargs):
+        container = real_run(**kwargs)
+
+        def _boom():
+            raise RuntimeError("daemon closed the connection")
+
+        container.reload = _boom
+        return container
+
+    client.run = _run
+    with pytest.raises(SandboxUnavailableError) as excinfo:
+        await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    assert "could not verify" in str(excinfo.value)
+
+
+def test_cgroup_disabling_runtime_flag_is_reported_to_the_operator(tmp_path, caplog):
+    """`--runtime-flag ignore-cgroups` is the documented rootless-runsc workaround
+    and it disables the memory/CPU/pids limits. HostConfig CANNOT see this — the
+    caps are recorded and simply not enforced — so the registered runtime arguments
+    are the only signal. WARN, not refuse: this project's own self-host guide
+    documents the flag, so failing closed would break installs it told people to make.
+    """
+    import logging
+
+    client = FakeDockerClient(runtime_args={"runsc": ["--ignore-cgroups"]})
+    svc = _svc(tmp_path, client)
+    with caplog.at_level(logging.ERROR):
+        svc._require_runtime(client)  # must NOT raise
+    assert "sandbox.cgroup_enforcement_disabled" in caplog.text
+    assert "NOT enforced" in caplog.text
+
+
+def test_runtime_without_cgroup_disabling_flags_is_not_reported(tmp_path, caplog):
+    import logging
+
+    client = FakeDockerClient(runtime_args={"runsc": ["--platform=systrap"]})
+    svc = _svc(tmp_path, client)
+    with caplog.at_level(logging.ERROR):
+        svc._require_runtime(client)
+    assert "cgroup_enforcement_disabled" not in caplog.text

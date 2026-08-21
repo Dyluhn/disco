@@ -47,12 +47,10 @@ def test_logging_inspect_and_provider_variables_reach_their_consumers() -> None:
         "DISCO_GEMMA_API_KEY",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
-        "AZURE_OPENAI_API_KEY",
         "TAVILY_API_KEY",
         "BRAVE_API_KEY",
         "BRAVE_SEARCH_API_KEY",
         "FIRECRAWL_API_KEY",
-        "COMFYUI_API_KEY",
         "OPENAI_IMAGE_API_KEY",
         "OPENAI_TTS_API_KEY",
     ):

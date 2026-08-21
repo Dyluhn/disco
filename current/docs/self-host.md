@@ -256,6 +256,13 @@ creating a container, so asking for `runsc` there produced an ordinary `crun`
 container with no isolation upgrade and no error. The sandbox now inspects the
 runtime it actually received and refuses to run when it does not match the one
 requested — you get a typed failure instead of a boundary you only believed in.
+That check runs on **every** container backend, not just Podman: pointing
+`DISCO_LOCAL_ENGINE=docker` at what is in fact Podman's Docker-compatible socket
+reaches the same daemon, and that socket's `/info` advertises `runsc` from a
+static candidate path whether or not the binary is installed — so a pre-flight
+"is the runtime registered?" check cannot tell the truth there. The same
+after-the-fact inspection also confirms the memory/CPU/pids caps were recorded,
+and refuses to start a container that came back without them.
 
 For a real gVisor boundary, install `runsc` per
 [gVisor's instructions](https://gvisor.dev/docs/user_guide/install/) and use
@@ -271,7 +278,12 @@ for another; the remote `gvisor` backend avoids that trade. Also be aware that
 `runsc` under a rootless engine currently fails on cgroup delegation
 (`/sys/fs/cgroup/cgroup.subtree_control: permission denied`), and the
 `--runtime-flag ignore-cgroups` workaround disables the memory/CPU/pids limits
-this project treats as load-bearing.
+this project treats as load-bearing. That posture is invisible to the container
+inspection above — the caps are recorded and simply never enforced — so the
+sandbox instead reads the runtime's registered arguments and logs a loud
+`sandbox.cgroup_enforcement_disabled` error when it finds the flag. It is a
+warning rather than a refusal because this guide documents the workaround; if you
+are running it, agent code can exhaust host memory, CPU and PIDs.
 
 The unisolated `process` backend is development-only and fails closed unless both
 `DISCO_SANDBOX=process` and `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1` are explicit.

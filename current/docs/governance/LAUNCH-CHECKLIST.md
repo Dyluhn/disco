@@ -65,6 +65,17 @@ For what each launch package changed, see
   `webhook_primitive.py`; state of record
   `current/sec-work-remaining/README.md`.
 
+- **Dead `.env.example` knobs removed (owner decision: remove, don't build).**
+  `AZURE_OPENAI_API_KEY` and `COMFYUI_API_KEY` had no reader anywhere in the
+  tree — neither appears in the `_LEGACY_IMPORTS` env-import table
+  (`secret_refs.py`) and provider secrets resolve from SecretStore only, never
+  `os.environ`. ComfyUI image-gen itself stays: it is a live, deliberately
+  keyless backend (`_ComfyUIBackend` takes only a base URL). Removed from
+  `.env.example`, both `compose.yaml` service blocks, and the compose
+  environment test.
+  → `.env.example`, `compose.yaml`,
+  `current/packages/agent-server/tests/test_self_host_compose_environment.py`.
+
 ## PARTIAL
 
 - **Mobile tap-target sweep.** First-run paths are done on shared primitives
@@ -103,10 +114,6 @@ For what each launch package changed, see
   run.** The campaign waves are done; the independent-model half remains
   outstanding.
   → `current/sec-work-remaining/README.md` (state of record).
-
-- **`.env.example` advertises knobs that go nowhere.** `AZURE_OPENAI_API_KEY`
-  and `COMFYUI_API_KEY` sit in the root `.env.example` — remove them or build
-  what they promise.
 
 - **Only one install path is proven.** Debian, macOS and WSL2 installs are
   untested, as is the anonymous HTTPS clone path; the verified path is

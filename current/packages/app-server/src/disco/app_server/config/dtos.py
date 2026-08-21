@@ -569,6 +569,12 @@ class McpServerConfigDTO(BaseModel):
     url: str
     transport: Literal["stdio", "streamable_http"] = "stdio"
     args: list[str] | None = None
+    # Secret-ref maps — VALUES ARE SecretStore KEY NAMES, never raw secrets
+    # (mirrors McpServerConfig.env/headers). `env` is stdio-only (subprocess
+    # environment); `headers` is streamable_http-only (auth headers, resolved
+    # orchestrator-side and covered by the origin/secret-ref approval gate).
+    env: dict[str, str] | None = None
+    headers: dict[str, str] | None = None
     enabled: bool = True
     allowed_tools: list[str] | None = None
     risk_tier: Literal["unknown", "low", "medium", "high"] = "medium"
@@ -581,6 +587,8 @@ class McpServerPatchDTO(BaseModel):
     url: str | None = None
     transport: Literal["stdio", "streamable_http"] | None = None
     args: list[str] | None = None  # stdio only; see McpServerConfigDTO
+    env: dict[str, str] | None = None  # stdio only; secret-ref NAMES, never values
+    headers: dict[str, str] | None = None  # streamable_http only; secret-ref names
     enabled: bool | None = None
     allowed_tools: list[str] | None = None
     risk_tier: Literal["unknown", "low", "medium", "high"] | None = None

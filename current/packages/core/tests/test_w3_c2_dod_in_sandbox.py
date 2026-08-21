@@ -12,8 +12,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from disco.core import DoDSpec
-from disco.core.dod import CommandExitPredicate, FileExistsPredicate
+from disco.core.dod import CommandExitPredicate, FileExistsPredicate, HTTPOkPredicate
 from disco.core.loop.finish import FinishGate
 from loop_fakes import ScriptedAgent, build_loop
 
@@ -149,3 +150,60 @@ async def test_plan_step_command_predicate_applies_hard_deny_floor(tmp_path):
     )
     assert ok is False
     assert "hard-denied" in note
+
+
+async def test_partial_sandbox_grades_nothing_on_the_host(tmp_path, monkeypatch):
+    """The production shape of the deleted fallbacks: an executor whose sandbox
+    exposes a `workspace_path` but none of the evidence API (no `exec_shell`,
+    no `file_exists`). `build_dod_evaluator` still constructs — and every
+    predicate comes back UN-EVALUATABLE instead of being graded against the
+    agent-server's own process, filesystem and network.
+    """
+    import socket
+    import subprocess
+    from pathlib import Path
+
+    import disco.core.host_egress as host_egress
+
+    touched: list[str] = []
+    spawned: list[object] = []
+    for name in ("Popen", "run", "call", "check_call", "check_output"):
+        monkeypatch.setattr(subprocess, name, lambda *a, **kw: spawned.append((a, kw)))
+    monkeypatch.setattr(Path, "exists", lambda self: touched.append(str(self)) or True)
+    monkeypatch.setattr(Path, "is_file", lambda self: touched.append(str(self)) or True)
+    monkeypatch.setattr(socket, "create_connection", lambda *a, **k: pytest.fail("socket"))
+
+    async def _no_wire(*args: object, **kwargs: object) -> object:
+        raise AssertionError("an HTTP connection was opened")
+
+    monkeypatch.setattr(host_egress, "guarded_get", _no_wire)
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "index.html").write_text("<h1>on the host</h1>")
+
+    class _WorkspaceOnlySandbox:
+        workspace_path = str(ws)
+
+    loop, _ = build_loop(
+        ScriptedAgent([]), executor=_Executor(_WorkspaceOnlySandbox()), conversation_id=CID
+    )
+    ev = await FinishGate(loop).verification.build_dod_evaluator()
+    verdict = await ev.evaluate(
+        DoDSpec(
+            predicates=[
+                FileExistsPredicate(path="index.html"),
+                CommandExitPredicate(cmd="test -f index.html", expect_exit=0),
+                HTTPOkPredicate(url="http://127.0.0.1:8000/", expect_status=200),
+            ]
+        )
+    )
+
+    assert spawned == [] and touched == []
+    assert verdict.passed is False
+    assert len(verdict.unmet) == 3
+    for result in verdict.results:
+        assert result.passed is False
+        assert result.unverifiable is True
+        assert "not evaluated" in result.reason
+        assert "no sandbox available" in result.reason

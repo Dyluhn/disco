@@ -2,10 +2,13 @@
 decomposition (pure move, zero behavior change).
 
 These three helpers have no `DoDEvaluator` state, no I/O, no async — they
-are pure string/network-policy helpers. The functions that USE them
-(`_default_command_runner`, `_default_http_probe`, the per-predicate
-dispatch in `DoDEvaluator._check_command_exit`) stay in `dod_evaluator.py`
-and import the names from here. The public test re-export
+are pure string/network-policy helpers. The consumers stay outside this
+module and import the names from here: `_hard_deny_reason` is the deny floor
+for the in-sandbox command runner (`loop/finish/content_gate_parts/
+dod_evaluator_build.py`) and the plan-step command predicate, and `tail`
+bounds the evidence recorded in `DoDEvaluator._check_command_exit`.
+(`_egress_allowed` has no caller since the host HTTP probe was deleted — the
+DoD gate now probes only from inside the sandbox.) The public test re-export
 (`from disco.core.dod_evaluator import tail`) is preserved by a re-import
 inside `dod_evaluator.py`.
 """

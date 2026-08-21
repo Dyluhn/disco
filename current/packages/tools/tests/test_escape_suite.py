@@ -49,7 +49,16 @@ class _FakeContainer:
         self.started = False
         self.removed = False
 
-    def reload(self) -> None: ...
+    def reload(self) -> None:
+        """A TRUTHFUL engine echoes the create request back under ``HostConfig``,
+        which is where the post-create runtime and resource-limit guards read it."""
+        mem = str(self.run_kwargs.get("mem_limit") or "0m").removesuffix("m")
+        self.attrs["HostConfig"] = {
+            "Runtime": self.run_kwargs.get("runtime") or "",
+            "Memory": int(float(mem or 0)) * 1024 * 1024,
+            "NanoCpus": int(self.run_kwargs.get("nano_cpus") or 0),
+            "PidsLimit": int(self.run_kwargs.get("pids_limit") or 0),
+        }
 
     def start(self) -> None:
         self.started = True
