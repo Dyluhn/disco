@@ -660,8 +660,11 @@ class TestMappingStatic:
             # filesystem/HTTP fallbacks the close-host-exec pass removed; one
             # new vitest suite (McpImportBox) plus the citation-renumbering
             # rewrite of deepResearch, so +9 TS static ids against -3 renamed.
-            "python_test_file_count": 854,
-            "python_static_test_id_count": 10564,
+            # PKG-33-MCP-CONNECTIVITY: one new agent-server file for the
+            # approved-origin egress bypass (6 ids) plus one id extending the
+            # compose-environment file for the server image's JS runtime.
+            "python_test_file_count": 855,
+            "python_static_test_id_count": 10571,
             "typescript_test_file_count": 253,
             "typescript_static_test_id_count": 1263,
         }
@@ -1072,7 +1075,9 @@ class TestCollectedCounts:
             # across MCP paste import, auth/session hardening, secret strength,
             # import/egress/sandbox exploit batteries — against 7 deleted with
             # the host fallbacks the close-host-exec pass removed.
-            "packages": 11013,
+            # The MCP-connectivity fix adds 7 non-parametrized package ids:
+            # six in one new agent-server file, one in the compose file.
+            "packages": 11020,
             # 1288 from PKG-03-EDIT-EVIDENCE: +24 in the `harness` root, the
             # edit-evidence producer acceptance. The new ids land here and not
             # under `packages` because the producer is harness code; the
@@ -1202,7 +1207,7 @@ class TestCollectedCounts:
         }
         assert set(collected["roots"]) == set(test_inventory.PYTHON_ROOTS)
         assert collected["counts"] == expected
-        assert collected["total"] == 12851 == sum(expected.values())
+        assert collected["total"] == 12858 == sum(expected.values())
         for root in test_inventory.PYTHON_ROOTS:
             ids = collected["roots"][root]
             assert len(ids) == expected[root]
@@ -1218,7 +1223,7 @@ class TestCollectedCounts:
         problems: list[str] = []
         result = test_inventory._check_collected_ids(baseline, REPO_ROOT, problems)
         assert problems == []
-        assert result == {"collected_total": 12851}
+        assert result == {"collected_total": 12858}
 
         drifted = copy.deepcopy(baseline)
         drifted["collected"]["roots"]["tests"] = list(
@@ -1237,9 +1242,9 @@ class TestBaselineValidation:
         assert result == {
             "ok": True,
             "problems": [],
-            "python_static_ids": 10564,
+            "python_static_ids": 10571,
             "typescript_static_ids": 1263,
-            "collected_total": 12851,
+            "collected_total": 12858,
         }
 
         latest_identity = test_inventory.subprocess.check_output(

@@ -109,8 +109,20 @@ def compute_mcp_egress_hosts(http_clients: dict[str, McpHttpClient]) -> frozense
     )
 
 
+def _mcp_egress_proxy_required() -> bool:
+    """True when the operator runs their OWN orchestrator-side egress sidecar and
+    wants approved MCP origins routed through it anyway (opt-in, default off)."""
+
+    raw = disco_env("MCP_EGRESS_PROXY_REQUIRED", "0")
+    assert raw is not None  # default above is non-None
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def compute_mcp_proxy_env(
-    url: str | None, http_clients: dict[str, McpHttpClient]
+    url: str | None,
+    http_clients: dict[str, McpHttpClient],
+    *,
+    origin_approved: bool = False,
 ) -> dict[str, str] | None:
     """The HTTP(S)_PROXY env the orchestrator-side MCP HTTP client routes
     through, governed by the SAME PMX_BUILD_EGRESS posture as the sandbox spec
@@ -123,6 +135,24 @@ def compute_mcp_proxy_env(
     PMX_BUILD_EGRESS=open) → None (direct). host comes from
     PMX_MCP_EGRESS_PROXY_HOST (default loopback). See
     current/docs/workorders/RP-05b-orchestrator-proxy-decision.md.
+
+    `origin_approved` is the operator-approval bypass. The shipped Compose
+    stack runs NO egress sidecar (the proxy is created per-sandbox, with a
+    per-run allowlist, by the sandbox backends — there is no long-lived
+    orchestrator-side instance and a static one could not track an allowlist
+    that changes whenever Settings changes). Under the default `filtered`
+    posture that made every remote MCP server unreachable: nothing listens on
+    127.0.0.1:8888 inside the agent-server container, so the httpx client got
+    ConnectionRefused. The proxy's only job here is to enforce an allowlist
+    that is itself DERIVED from the configured MCP servers
+    (`compute_mcp_egress_hosts`), and a server only reaches this point after
+    passing the config-hash approval plus `origin_approved` — the same
+    operator decision, made earlier and persisted. So an approved origin
+    connects directly; anything not approved never gets a client at all
+    (`McpHttpConnector.connect` raises before this is called). Redirect
+    laundering is not a hole: `McpHttpClient` sets follow_redirects=False.
+    Operators who DO run their own outbound sidecar can force every MCP
+    connection back through it with DISCO_MCP_EGRESS_PROXY_REQUIRED=1.
     """
     # `http_clients` is accepted (not read) to keep a uniform (url, http_clients)
     # call convention with compute_mcp_egress_hosts; this posture is env-only.
@@ -144,6 +174,8 @@ def compute_mcp_proxy_env(
             return None
     except ValueError:
         pass
+    if origin_approved and not _mcp_egress_proxy_required():
+        return None
     from disco.tools.sandbox._container import EGRESS_PROXY_PORT, proxy_env
 
     host = disco_env("MCP_EGRESS_PROXY_HOST", "127.0.0.1")
@@ -311,8 +343,7 @@ class McpHttpConnector:
         from disco.tools.mcp.naming import qualified_name
         from disco.tools.mcp.pool import _UNTRUSTED_DESC_WRAPPER, _schema_to_args_model
 
-        if srv.url and not self.origin_approved(name, srv):
-            raise RuntimeError("MCP HTTP origin is not operator-approved")
+        proxy = self._gate_and_proxy_env(name, srv)
         client = McpHttpClient(
             server=srv,
             secrets=self._secret_store,
@@ -320,13 +351,8 @@ class McpHttpConnector:
             call_timeout_s=10.0,
         )
 
-        # RP-05b §2: route the orchestrator-side MCP client's outbound httpx
-        # through the egress allowlisting proxy when the build posture is
-        # filtered, so a host outside the unioned allowlist is denied 403 — the
-        # client must NOT bypass the sidecar. open posture → None (direct). See
-        # current/docs/workorders/RP-05b-orchestrator-proxy-decision.md.
         try:
-            await client.connect(proxy_env=compute_mcp_proxy_env(srv.url, self.clients))
+            await client.connect(proxy_env=proxy)
         except Exception:
             self.clients[name] = client  # register for close
             raise
@@ -385,6 +411,25 @@ class McpHttpConnector:
             name,
             len(raw_tools),
         )
+
+    def _gate_and_proxy_env(self, name: str, srv: McpServerConfig) -> dict[str, str] | None:
+        """Apply the operator gate, then decide this connection's egress route.
+
+        ONE evaluation of `origin_approved` serves both: it refuses an
+        unapproved origin (no client is ever constructed for one) and it is the
+        `origin_approved` flag `compute_mcp_proxy_env` bypasses the — absent —
+        egress sidecar on. Keeping them in one place is the point: the bypass
+        cannot drift away from the check that admits the connection.
+
+        RP-05b §2: under the `filtered` posture a NON-approved caller still gets
+        the proxy env, so an off-allowlist host is denied 403 rather than dialed
+        directly. `open` posture → None (direct). See
+        current/docs/workorders/RP-05b-orchestrator-proxy-decision.md.
+        """
+        approved = bool(srv.url) and self.origin_approved(name, srv)
+        if srv.url and not approved:
+            raise RuntimeError("MCP HTTP origin is not operator-approved")
+        return compute_mcp_proxy_env(srv.url, self.clients, origin_approved=approved)
 
     def origin_approved(self, name: str, srv: McpServerConfig) -> bool:
         from disco.core.llm.secret_refs import secret_ref_allowed_for_origin

@@ -61,6 +61,23 @@ COPY current/packages/ ./current/packages/
 RUN uv sync --frozen --no-dev --all-packages
 
 # ---------------------------------------------------------------------------
+# Stage 1b — the JavaScript runtime that stdio MCP servers need.
+#
+# `disco.tools.mcp.stdio` spawns the MCP server subprocess IN THIS IMAGE (the
+# agent-server process owns the stdio transport — it is NOT delegated to a
+# sandbox container), and essentially every published stdio MCP server is
+# launched as `npx -y @modelcontextprotocol/server-...`. Without node/npx on
+# PATH every stdio server fails to launch, which is what shipped before.
+#
+# Copied from the official slim image rather than apt-installed: Debian
+# bookworm's `nodejs` is 18.x (EOL, below the >=20 many MCP servers require)
+# and `apt install npm` drags in a large node-* dependency fan-out. Copying
+# just the interpreter + npm's own package keeps this to roughly ~130 MB and
+# pulls in NO build toolchain (no node-gyp, no gcc, no python-dev).
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS nodejs
+
+# ---------------------------------------------------------------------------
 # Stage 2 — runtime: slim python with only the native libs the servers need.
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
@@ -95,6 +112,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         podman \
         tmux \
     && rm -rf /var/lib/apt/lists/*
+
+# node + npm/npx for stdio MCP servers (see the stage-1b comment). Both stages
+# are bookworm, so the copied binary matches this image's glibc. The two
+# symlinks are what the official image ships in /usr/local/bin.
+COPY --from=nodejs /usr/local/bin/node /usr/local/bin/node
+COPY --from=nodejs /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npx --version
 
 WORKDIR /app
 
