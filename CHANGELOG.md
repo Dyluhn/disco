@@ -31,6 +31,20 @@
 
 ### Fixed
 
+- MCP was unusable in the shipped Compose deployment, in both transports.
+  Remote (`streamable_http`) servers were routed at an egress proxy on
+  127.0.0.1:8888 that the stack never runs, so every connection died with
+  ConnectionRefused; an operator-approved origin now connects directly, while
+  an unapproved one is still refused before a client exists
+  (`DISCO_MCP_EGRESS_PROXY_REQUIRED=1` restores proxying for operators who run
+  their own). Local (`stdio`) servers could not launch at all because the
+  server image had no JavaScript runtime; it now ships Node 22 + npm/npx, so
+  `npx -y @modelcontextprotocol/server-...` works — see the security tradeoff
+  noted in `docs/self-host.md`.
+- Host-address guidance for services running on the host machine: under
+  rootless Docker `host.docker.internal` is a dead address and the host's LAN
+  IP is required, the exact reverse of rootless Podman. Documented, with the
+  Ollama preset hint corrected.
 - OpenRouter model selection and image generation, broken by an approval-ref
   canonicalization gap.
 - Research surface: Notify highlight, "New research" wired up, and source

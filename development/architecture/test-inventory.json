@@ -1,14 +1,14 @@
 {
   "schema": "disclaude-architecture-test-inventory-v1",
-  "source_identity": "556f611040111ef9e5cfffc88abc5b1e3986de1c",
+  "source_identity": "c7a36af206e918346b37a26d86cfc33ec417f09c",
   "collected": {
     "counts": {
-      "packages": 11013,
+      "packages": 11020,
       "harness": 1433,
       "integrations": 9,
       "tests": 396
     },
-    "total": 12851,
+    "total": 12858,
     "roots": {
       "packages": [
         "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
@@ -1606,6 +1606,12 @@
         "packages/agent-server/tests/test_mcp_egress.py::test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow",
         "packages/agent-server/tests/test_mcp_egress.py::test_runtime_mcp_egress_hosts_method",
         "packages/agent-server/tests/test_mcp_egress.py::test_url_host_extracts_netloc",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_approved_remote_host_connects_directly",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_connect_hands_the_approval_result_to_the_proxy_decision",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_loopback_and_open_posture_are_unchanged",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_operator_can_force_approved_hosts_back_through_their_own_sidecar",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_origin_never_reaches_the_network_at_all",
+        "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_remote_host_still_gets_the_proxy_posture",
         "packages/agent-server/tests/test_mcp_fence.py::test_fence_behavioral_hostile_payload_does_not_steer",
         "packages/agent-server/tests/test_mcp_fence.py::test_fence_behavioral_injection_attempts_are_contained",
         "packages/agent-server/tests/test_mcp_fence.py::test_fence_output_appended_as_text_not_parsed",
@@ -2474,6 +2480,7 @@
         "packages/agent-server/tests/test_self_host_compose_environment.py::test_agent_server_receives_every_advertised_runtime_override",
         "packages/agent-server/tests/test_self_host_compose_environment.py::test_example_and_self_host_doc_name_the_effective_overrides",
         "packages/agent-server/tests/test_self_host_compose_environment.py::test_logging_inspect_and_provider_variables_reach_their_consumers",
+        "packages/agent-server/tests/test_self_host_compose_environment.py::test_server_image_ships_the_js_runtime_stdio_mcp_servers_need",
         "packages/agent-server/tests/test_server_entrypoints.py::test_agent_entrypoint_uses_maintained_websocket_adapter",
         "packages/agent-server/tests/test_server_entrypoints.py::test_app_entrypoint_uses_maintained_websocket_adapter",
         "packages/agent-server/tests/test_sessions_degrade.py::test_dead_pipe_cold_no_history_returns_empty_stale",
@@ -12872,9 +12879,9 @@
     }
   },
   "mapping_static": {
-    "identity": "556f611040111ef9e5cfffc88abc5b1e3986de1c",
-    "python_test_file_count": 854,
-    "python_static_test_id_count": 10564,
+    "identity": "c7a36af206e918346b37a26d86cfc33ec417f09c",
+    "python_test_file_count": 855,
+    "python_static_test_id_count": 10571,
     "python_test_files": [
       "harness/build_soak/tests/_eventlog.py",
       "harness/build_soak/tests/conftest.py",
@@ -13056,6 +13063,7 @@
       "packages/agent-server/tests/test_live_probe_nonblocking.py",
       "packages/agent-server/tests/test_mcp_e6_new_hash.py",
       "packages/agent-server/tests/test_mcp_egress.py",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py",
       "packages/agent-server/tests/test_mcp_fence.py",
       "packages/agent-server/tests/test_mcp_http.py",
       "packages/agent-server/tests/test_mcp_manager_degraded.py",
@@ -16052,6 +16060,12 @@
       "packages/agent-server/tests/test_mcp_egress.py::test_build_sandbox_spec_unions_mcp_hosts_into_egress_allow",
       "packages/agent-server/tests/test_mcp_egress.py::test_runtime_mcp_egress_hosts_method",
       "packages/agent-server/tests/test_mcp_egress.py::test_url_host_extracts_netloc",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_approved_remote_host_connects_directly",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_connect_hands_the_approval_result_to_the_proxy_decision",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_loopback_and_open_posture_are_unchanged",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_operator_can_force_approved_hosts_back_through_their_own_sidecar",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_origin_never_reaches_the_network_at_all",
+      "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_remote_host_still_gets_the_proxy_posture",
       "packages/agent-server/tests/test_mcp_fence.py::test_fence_behavioral_hostile_payload_does_not_steer",
       "packages/agent-server/tests/test_mcp_fence.py::test_fence_behavioral_injection_attempts_are_contained",
       "packages/agent-server/tests/test_mcp_fence.py::test_fence_output_appended_as_text_not_parsed",
@@ -16833,6 +16847,7 @@
       "packages/agent-server/tests/test_self_host_compose_environment.py::test_agent_server_receives_every_advertised_runtime_override",
       "packages/agent-server/tests/test_self_host_compose_environment.py::test_example_and_self_host_doc_name_the_effective_overrides",
       "packages/agent-server/tests/test_self_host_compose_environment.py::test_logging_inspect_and_provider_variables_reach_their_consumers",
+      "packages/agent-server/tests/test_self_host_compose_environment.py::test_server_image_ships_the_js_runtime_stdio_mcp_servers_need",
       "packages/agent-server/tests/test_server_entrypoints.py::test_agent_entrypoint_uses_maintained_websocket_adapter",
       "packages/agent-server/tests/test_server_entrypoints.py::test_app_entrypoint_uses_maintained_websocket_adapter",
       "packages/agent-server/tests/test_sessions_degrade.py::test_dead_pipe_cold_no_history_returns_empty_stale",
@@ -33843,6 +33858,44 @@
         "python_static_test_ids": [
           "packages/agent-server/tests/test_lifecycle.py::test_hard_kill_waits_for_detached_suspend_reclaim",
           "packages/agent-server/tests/test_teardown_leaves_zero_resources.py::test_resource_registry_close_joins_detached_reclaim"
+        ],
+        "typescript_test_files": [],
+        "typescript_static_test_ids": [],
+        "fixtures": []
+      }
+    },
+    {
+      "package": "PKG-33-MCP-CONNECTIVITY",
+      "root": "packages",
+      "source_identity_before": "556f611040111ef9e5cfffc88abc5b1e3986de1c",
+      "source_identity_after": "c7a36af206e918346b37a26d86cfc33ec417f09c",
+      "collected_roots": {
+        "packages": {
+          "before_count": 11013,
+          "after_count": 11020,
+          "added_ids": [
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_approved_remote_host_connects_directly",
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_connect_hands_the_approval_result_to_the_proxy_decision",
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_loopback_and_open_posture_are_unchanged",
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_operator_can_force_approved_hosts_back_through_their_own_sidecar",
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_origin_never_reaches_the_network_at_all",
+            "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_remote_host_still_gets_the_proxy_posture",
+            "packages/agent-server/tests/test_self_host_compose_environment.py::test_server_image_ships_the_js_runtime_stdio_mcp_servers_need"
+          ]
+        }
+      },
+      "mapping_static_additions": {
+        "python_test_files": [
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py"
+        ],
+        "python_static_test_ids": [
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_approved_remote_host_connects_directly",
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_connect_hands_the_approval_result_to_the_proxy_decision",
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_loopback_and_open_posture_are_unchanged",
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_operator_can_force_approved_hosts_back_through_their_own_sidecar",
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_origin_never_reaches_the_network_at_all",
+          "packages/agent-server/tests/test_mcp_egress_approved_bypass.py::test_unapproved_remote_host_still_gets_the_proxy_posture",
+          "packages/agent-server/tests/test_self_host_compose_environment.py::test_server_image_ships_the_js_runtime_stdio_mcp_servers_need"
         ],
         "typescript_test_files": [],
         "typescript_static_test_ids": [],

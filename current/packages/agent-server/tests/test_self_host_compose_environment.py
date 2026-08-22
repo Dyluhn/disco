@@ -77,3 +77,46 @@ def test_example_and_self_host_doc_name_the_effective_overrides() -> None:
         assert name in example
         assert name in docs
     assert "rotate_secret_store.py" in docs
+
+
+def test_server_image_ships_the_js_runtime_stdio_mcp_servers_need() -> None:
+    """`disco.tools.mcp.stdio` spawns the MCP server subprocess inside THIS
+    image (the agent-server process owns the stdio transport — it is not handed
+    to a sandbox container), and published stdio servers are launched with
+    `npx -y ...`. Without node/npx the launch fails with FileNotFoundError, which
+    is what shipped. Pin the runtime's presence and its lean copy-from shape —
+    no apt node-* fan-out, no build toolchain."""
+
+    dockerfile = (_REPO / "current" / "deploy" / "compose" / "Dockerfile.server").read_text(
+        encoding="utf-8"
+    )
+
+    assert "FROM node:22-bookworm-slim AS nodejs" in dockerfile
+    assert "COPY --from=nodejs /usr/local/bin/node /usr/local/bin/node" in dockerfile
+    assert (
+        "COPY --from=nodejs /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm"
+        in dockerfile
+    )
+    assert "/usr/local/bin/npx" in dockerfile
+    # The lean guarantee: the apt package list gains nothing — no distro node
+    # fan-out, no build toolchain. Read the actual `apt-get install` package
+    # list so the rationale comments above stay free text.
+    apt_block = dockerfile.split("RUN apt-get update", 1)[1].split("rm -rf /var/lib/apt/lists", 1)[
+        0
+    ]
+    apt_packages = set(apt_block.replace("\\", "").split())
+    assert (
+        apt_packages
+        & {
+            "nodejs",
+            "npm",
+            "node-gyp",
+            "build-essential",
+            "gcc",
+            "python3-dev",
+        }
+        == set()
+    )
+
+    docs = (_REPO / "current" / "docs" / "self-host.md").read_text(encoding="utf-8")
+    assert "stdio MCP" in docs

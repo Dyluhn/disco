@@ -147,6 +147,12 @@ services:
       # vision capability and constructs every Build sandbox egress posture.
       DISCO_DRIVER_VISION: "${DISCO_DRIVER_VISION:-${PMX_DRIVER_VISION:-0}}"
       DISCO_BUILD_EGRESS: "${DISCO_BUILD_EGRESS:-${PMX_BUILD_EGRESS:-filtered}}"
+      # MCP egress: this stack runs NO orchestrator-side egress sidecar (the
+      # allowlisting proxy is per-sandbox, per-run), so an operator-approved MCP
+      # origin connects directly under the filtered posture. Set REQUIRED=1 only
+      # if you run your own proxy reachable at HOST:8888 inside this container.
+      DISCO_MCP_EGRESS_PROXY_REQUIRED: "${DISCO_MCP_EGRESS_PROXY_REQUIRED:-0}"
+      DISCO_MCP_EGRESS_PROXY_HOST: "${DISCO_MCP_EGRESS_PROXY_HOST:-127.0.0.1}"
       # --- memory hygiene (OOM floor fix) ---------------------------------
       # Deep Research's bursty concurrent gather + in-process ONNX encoders
       # fragment the heap; the glibc allocator then strands freed pages mid-heap

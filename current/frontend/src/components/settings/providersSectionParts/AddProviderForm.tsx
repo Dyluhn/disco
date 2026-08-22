@@ -35,10 +35,12 @@ function OllamaHint({ selected }: { selected: ProviderPreset | undefined }) {
   if (selected?.id !== "ollama") return null;
   return (
     <p className="font-ui text-[0.76rem] leading-snug text-text-faint">
-      No API key is needed. Docker Compose uses
+      No API key is needed. Rootless Podman (the default stack) uses
       <span className="font-mono"> host.docker.internal:11434/v1</span>;
       native installs can use
-      <span className="font-mono"> localhost:11434/v1</span>.
+      <span className="font-mono"> localhost:11434/v1</span>. On rootless Docker
+      that alias is a dead address — use the host&rsquo;s LAN IP, e.g.
+      <span className="font-mono"> 192.168.1.10:11434/v1</span>.
     </p>
   );
 }

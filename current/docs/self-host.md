@@ -305,6 +305,31 @@ The non-generative defaults are keyless:
 | Rerank/NLI | fastembed ONNX, `BAAI/bge-reranker-base` |
 | TTS | bundled Kokoro ONNX, voices `af_heart` and `af_bella` |
 
+### Reaching a service running on the host machine
+
+An endpoint on the host — Ollama, llama.cpp, LM Studio, a local MCP server —
+is **not** at `localhost` from inside the containers, and the address that does
+work depends on which engine you run. Measured on this project's own hosts,
+2026-08-21:
+
+| Engine | `host.docker.internal` | Host's LAN IP |
+|---|---|---|
+| rootless Podman (the documented default) | **works** — resolves to `169.254.1.2`, host ports reachable | **fails** — pasta gives the container the host's own address, so this loops back to the container |
+| rootless Docker | **fails** — resolves to `172.17.0.1`, every port refused | **works** — use `192.168.x.y` etc. |
+| rootful Docker / Docker Desktop | works (`host-gateway`) | works |
+
+Evidence for the rootless-Docker row: with `sshd` listening on `0.0.0.0:22` on
+the host, a socket from inside `agent-server` to `172.17.0.1:22` (and to the
+compose network gateway `172.21.0.1:22`) is refused, while `<host-LAN-IP>:22`
+connects. Rootless Docker's network namespace has no route back to host
+listeners, so the `host-gateway` alias Compose sets is a dead address there.
+
+The `Ollama (local)` provider preset ships `http://host.docker.internal:11434/v1`
+because rootless Podman is the documented default. **On rootless Docker, replace
+that host with your machine's LAN IP** (`hostname -I | awk '{print $1}'`) and
+make sure the service binds `0.0.0.0`, not `127.0.0.1`. The same substitution
+applies to any MCP server URL pointing at the host.
+
 The default image bakes the full encoder tier. A smaller build can be made with:
 
 ```bash
@@ -313,6 +338,43 @@ docker build \
   -t disco-server:lite \
   -f current/deploy/compose/Dockerfile.server .
 ```
+
+## MCP servers
+
+Both MCP transports are served by the `agent-server` container. Add servers in
+**Settings -> MCP**; each one passes two approvals (the config/origin approval,
+then a tool-schema approval) before any tool becomes callable.
+
+**Remote (`streamable_http`).** The URL must be reachable *from the agent-server
+container* — see [Reaching a service running on the host
+machine](#reaching-a-service-running-on-the-host-machine) if the server runs on
+your own machine. Under the default `DISCO_BUILD_EGRESS=filtered` posture the
+orchestrator's MCP HTTP client connects directly once the origin is approved.
+It does **not** route through an egress proxy, because the shipped stack runs
+none: the allowlisting proxy is created per-sandbox with a per-run allowlist by
+the sandbox backends, and a static orchestrator-side one could not track an
+allowlist that changes whenever Settings changes. An unapproved origin is
+refused before a client is ever constructed, so the approval gate — not the
+proxy — is what bounds where the orchestrator can connect. Operators who do run
+their own outbound proxy can force approved MCP origins back through it with
+`DISCO_MCP_EGRESS_PROXY_REQUIRED=1` (default `0`); it must then be listening on
+`DISCO_MCP_EGRESS_PROXY_HOST:8888` from inside the container.
+
+**Local (`stdio`).** The server image ships Node 22 plus `npm`/`npx`, so the
+usual `npx -y @modelcontextprotocol/server-...` command lines work out of the
+box. The subprocess runs **inside the agent-server container**, not in a
+sandbox: it gets only `PATH`, `HOME`, locale, `TMPDIR` and the secret refs you
+explicitly attach — never `DISCO_SECRET_KEY` or provider keys — but it does run
+with the agent-server's filesystem access (including `/data`) and network.
+
+> **Security tradeoff, stated plainly.** Approving a stdio MCP server lets `npx`
+> download and execute an arbitrary npm package, with its transitive
+> dependencies, inside the agent-server container. That is the cost of stdio MCP
+> support at all; the approval gate is the control. Pin versions
+> (`@scope/pkg@1.2.3`) rather than floating tags, and prefer a remote
+> `streamable_http` server when one exists. If you do not want this, do not
+> approve stdio servers — the runtime being present does not launch anything on
+> its own.
 
 ## Compose environment overrides
 
@@ -323,6 +385,8 @@ encoder URLs keep the bundled local encoder tier; setting them has an effect whe
 | Override | Effective service | Omitted/default behavior |
 |---|---|---|
 | `DISCO_BUILD_EGRESS` | `agent-server` | `filtered`; registry allowlist proxy |
+| `DISCO_MCP_EGRESS_PROXY_REQUIRED` | `agent-server` | `0`; approved MCP origins connect directly |
+| `DISCO_MCP_EGRESS_PROXY_HOST` | `agent-server` | `127.0.0.1`; only read when the above is `1` |
 | `DISCO_DRIVER_VISION` | `agent-server` | `0`; no driver-local vision claim |
 | `DISCO_EMBEDDER_URL` | `agent-server` | blank; bundled embedder |
 | `DISCO_RERANKER_URL` | `agent-server` | blank; bundled reranker |
@@ -377,3 +441,8 @@ the server image alone.
 The default `disco-server` is expected to be large because it includes
 LibreOffice plus the full fastembed and Kokoro asset set. Anything materially
 above the recorded values should be investigated.
+
+Since 2026-08-21 the server image also carries Node 22 + npm for stdio MCP
+servers, copied from `node:22-bookworm-slim` rather than apt-installed. Measured
+in isolation on `python:3.12-slim-bookworm` that layer adds about **140 MB**
+(a 127 MB base became 267 MB) — roughly 3% of the server image.
