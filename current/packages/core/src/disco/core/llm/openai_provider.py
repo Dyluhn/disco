@@ -20,8 +20,9 @@ the loop's reactive surfacing depend on.
 
 The request-assembly, response-decoding, and streaming logic live in the
 allowlisted private modules (``_request_assembly``, ``_openai_response``,
-``_openai_stream``). This module keeps ``OpenAIProvider`` as an explicit, thin
-defining facade with its exact public method signatures and monkeypatch seams.
+``_openai_stream``, ``_responses_api``). This module keeps ``OpenAIProvider`` as
+an explicit, thin defining facade with its exact public method signatures and
+monkeypatch seams.
 """
 
 from __future__ import annotations
@@ -100,6 +101,13 @@ from ._request_assembly import (
 from ._request_assembly import (
     truncate_think_block as _truncate_think_block,
 )
+from ._responses_api import (
+    build_responses_payload as _build_responses_payload,
+)
+from ._responses_api import (
+    decode_responses_response as _decode_responses_response,
+)
+from ._responses_api import is_responses_endpoint as _is_responses_endpoint
 from .errors import (
     LLMAuthError,
     LLMContentFiltered,
@@ -182,6 +190,13 @@ class OpenAIProvider:
         return _message_to_wire_impl(m, sanitize_fn=_sanitize_tool_name)
 
     def _payload(self, req: CompletionRequest, model: str, *, stream: bool) -> dict:
+        if _is_responses_endpoint(self._base):
+            return _build_responses_payload(
+                base_url=self._base,
+                provider_name=self.name,
+                req=req,
+                model=model,
+            )
         return _build_payload_impl(
             base_url=self._base,
             name=self.name,
@@ -339,10 +354,13 @@ class OpenAIProvider:
     async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
         payload = self._payload(req, model, stream=False)
         self._ledger_emit(req, model, payload)
+        endpoint = (
+            self._base if _is_responses_endpoint(self._base) else (f"{self._base}/chat/completions")
+        )
         try:
             async with self._client() as client:
                 resp = await client.post(
-                    f"{self._base}/chat/completions",
+                    endpoint,
                     json=payload,
                     headers=self._headers(req),
                 )
@@ -356,11 +374,19 @@ class OpenAIProvider:
             ) from exc
         if resp.status_code >= 400:
             self._raise_typed(resp.status_code, resp.text)
+        if _is_responses_endpoint(self._base):
+            return _decode_responses_response(req=req, model=model, data=resp.json())
         return self._to_response(req, model, resp.json())
 
     async def stream_complete(
         self, req: CompletionRequest, *, model: str
     ) -> AsyncIterator[StreamChunk]:
+        if _is_responses_endpoint(self._base):
+            response = await self.complete(req.model_copy(update={"stream": False}), model=model)
+            if response.text:
+                yield StreamChunk(delta_text=response.text)
+            yield StreamChunk(done=True, final=response)
+            return
         payload = self._payload(req, model, stream=True)
         self._ledger_emit(req, model, payload)
         async for chunk in _stream_complete_impl(

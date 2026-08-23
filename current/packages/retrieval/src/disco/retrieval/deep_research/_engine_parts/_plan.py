@@ -24,6 +24,7 @@ from disco.core.llm import CallContext
 
 from ...models import Passage as RetrievalPassage
 from .. import engine
+from ..controller import ResearchController
 from ..decompose import SubQuestion
 from ..gather import GatherLegContext, SubQuestionResult
 
@@ -40,6 +41,8 @@ async def prepare_plan(
     resume_sections: list[ReportSection] | None,
     resume_passages: list[RetrievalPassage] | None,
     resume_all_hits: list[Any] | None,
+    resume_completed_probes: list[str] | None,
+    resume_pending_probes: list[str] | None,
     emit: EmitFn,
 ) -> tuple[
     str | None,
@@ -58,15 +61,24 @@ async def prepare_plan(
         plan_steps = plan_steps[: run._bound.max_subquestions]
         bounded_by = "subquestions"
 
-    # Carry forward already-completed sections (resume). Match by title — the
-    # plan step titles ARE the section titles, so a section present means that
-    # sub-question is done and must not be re-gathered.
+    # Carry forward already-compiled sections and the explicit completed-probe
+    # checkpoint. Historical events did not have completed_probes, so exact
+    # title matches remain a narrow backward-compatible recovery path.
     sections: list[ReportSection] = list(resume_sections or [])
     done_titles = {s.title for s in sections}
+    completed_probes = set(resume_completed_probes or []) | done_titles
     carried_passages: list[RetrievalPassage] = list(resume_passages or [])
     carried_hits: list[Any] = list(resume_all_hits or [])
-    pending = [SubQuestion(title=t) for t in plan_steps if t not in done_titles]
-    run._scheduled_subquestions = len(sections) + len(pending)
+    controller = ResearchController(run._bound)
+    controller.seed([*(resume_pending_probes or []), *plan_steps])
+    controller.restore_completed(completed_probes)
+    controller.restore_evidence(carried_passages, completed_probes)
+    run._controller = controller
+    # Release only the first small batch. Subsequent batches are selected after
+    # global evidence assessment, so the approved plan is a probe queue rather
+    # than an irreversible list of report sections.
+    pending = [probe.to_subquestion() for probe in controller.next_batch()]
+    run._scheduled_subquestions = len(sections) + controller.scheduled
     # Graceful low-RAM transparency (#26): the gather concurrency was derived
     # from available RAM. Surface it — and whether it's actually *constraining*
     # parallelism (cap < legs) — so a memory-reduced run is VISIBLE, never a
@@ -77,6 +89,8 @@ async def prepare_plan(
         {
             "phase": "gather",
             "subquestions": len(pending),
+            "queued_subquestions": controller.active,
+            "batch_size": controller.batch_size,
             "resumed_sections": len(sections),
             "concurrency": run._gather_concurrency,
             "memory_bounded": memory_bounded,
@@ -136,13 +150,10 @@ def start_gather_tasks(
     # their cited subset, not enough information to reconstruct prior discovery.
     remaining = run._bound.max_sources
 
-    # RP-04: Pipeline restructure.
-    # 1. Partition budget upfront (Race Fix).
-    n_pending = len(pending)
-    budget_per = remaining // n_pending if n_pending > 0 else 0
-    extra_budget = remaining % n_pending if n_pending > 0 else 0
-
-    # 2. Start all GATHER tasks concurrently (Producer).
+    # Start only this bounded batch concurrently (Producer). The shared
+    # SourceBudget is the sole admission pool; every leg receives the full
+    # execution allowance as a local ceiling and unused capacity remains
+    # available to later probes.
     # Retrieval work (search, fetch, extract, embed, rerank) runs concurrently.
     #
     # BUNDLED-tier peak-memory guard: when `run._gather_concurrency` is set
@@ -163,8 +174,8 @@ def start_gather_tasks(
         return await engine.gather_for_subquestion(_subq, **kw)
 
     gather_tasks: list[GatherTask] = []
-    for i, subq in enumerate(pending):
-        subq_budget = budget_per + (1 if i < extra_budget else 0)
+    for subq in pending:
+        subq_budget = remaining
         subq_id, subq_namespace, leg_context = _build_leg_context(run, subq)
 
         task = asyncio.create_task(

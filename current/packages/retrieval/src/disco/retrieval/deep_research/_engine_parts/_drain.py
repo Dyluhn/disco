@@ -1,23 +1,13 @@
-"""RP-04 drain-and-synthesize consumer, extracted from
-`DeepResearchRun._drain_and_synthesize`.
+"""RP-04 drain consumer, extracted from `DeepResearchRun._drain_gathered`.
 
-The original method mixed FOUR concerns in one 26-branch, 120-logical-line
-body: the should-cancel/wall-clock stop check, the D3 steer/inject-source
-mid-run checkpoints, awaiting + error-handling one gather leg's task, and
-synthesizing that leg's section. Each is now a single-purpose helper with its
-own (small) branch count; `drain_and_synthesize` itself is back to owning
-only the per-leg loop's control flow.
+Owns the research-phase control flow: the should-cancel/wall-clock stop
+check, the D3 steer/inject-source mid-run checkpoints, and awaiting +
+error-handling one gather leg's task. Report writing happens ONLY after the
+whole research phase completes (`_engine_parts._compiler`); nothing here
+produces report prose.
 
 Every helper that needs the live `DeepResearchRun` takes it as an explicit
 `run` parameter (never a method) — see `_engine_parts/__init__.py`.
-
-Calls `synthesize_section` through `engine.synthesize_section(...)`
-(module-attribute lookup at call time) rather than importing it directly:
-`current/packages/retrieval/tests/test_pipeline_invariants.py` and
-`current/packages/agent-server/tests/test_upload_corpus.py` monkeypatch
-`disco.retrieval.deep_research.engine.synthesize_section`, and a direct
-`from ..synthesis import synthesize_section` binding here would capture the
-pre-patch function object and silently defeat that patch.
 """
 
 from __future__ import annotations
@@ -27,10 +17,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from disco.core import ReportSection
-
 from ...models import Passage as RetrievalPassage
-from .. import engine
 from ..decompose import SubQuestion
 from ..gather import GatherLegContext, SubQuestionResult
 
@@ -50,11 +37,34 @@ _BOUND_PRIORITY = {
 
 
 class _WallClockExpired(Exception):
-    """An in-flight gather or synthesis operation crossed the run deadline."""
+    """An in-flight gather operation crossed the research-phase deadline."""
+
+
+def seconds_left(run: DeepResearchRun, started: float) -> float:
+    """Research-phase seconds remaining under the tier wall clock.
+
+    The tier wall clock bounds RESEARCH. A tier-proportional reserve is held
+    back for report writing (outline, sections, verification, summary) so
+    gathering cannot starve the writing phase; the writing phase itself runs
+    under its calls' own bounded retries, never a shrinking global slice.
+    """
+    minimum_words = run._bound.report_min_words
+    if minimum_words >= 8_000:
+        estimated_sections = 12
+    elif minimum_words >= 4_000:
+        estimated_sections = 9
+    elif minimum_words >= 1_500:
+        estimated_sections = 5
+    else:
+        estimated_sections = 1
+    estimated_sections = min(run._bound.max_subquestions, estimated_sections)
+    reserve = max(60.0, 35.0 * estimated_sections + 45.0)
+    reserve = min(reserve, run._bound.max_wall_clock_s * 0.4)
+    return max(0.0, run._bound.max_wall_clock_s - reserve - (time.monotonic() - started))
 
 
 def _seconds_left(run: DeepResearchRun, started: float) -> float:
-    return max(0.0, run._bound.max_wall_clock_s - (time.monotonic() - started))
+    return seconds_left(run, started)
 
 
 def _dominant_bound(current: str | None, candidate: str | None) -> str | None:
@@ -88,7 +98,7 @@ def _check_stop_condition(
     stopped — matches the original inline check exactly."""
     if should_cancel is not None and should_cancel():
         return True, "stopped"
-    if (time.monotonic() - started) <= run._bound.max_wall_clock_s:
+    if _seconds_left(run, started) > 0:
         return False, bounded_by
     bounded_by = _dominant_bound(bounded_by, "wall_clock")
     still_running = [t for _, t, _, _, _ in gather_tasks if not t.done()]
@@ -111,7 +121,9 @@ async def _drain_steer_hooks(
         return None
     bounded_by: str | None = None
     for steer_text in pop_steers():
-        if run._scheduled_subquestions >= run._bound.max_subquestions:
+        controller = run._controller
+        scheduled = controller.scheduled if controller is not None else run._scheduled_subquestions
+        if scheduled >= run._bound.max_subquestions:
             bounded_by = _dominant_bound(bounded_by, "subquestions")
             await emit(
                 "observation",
@@ -130,6 +142,27 @@ async def _drain_steer_hooks(
                     "subquestion": steer_text,
                     "ok": False,
                     "detail": "mid-run steer not started: source cap reached",
+                },
+            )
+            continue
+        if controller is not None:
+            action = controller.queue_probe(steer_text, origin="follow_up", priority=True)
+            if action is None:
+                await emit(
+                    "observation",
+                    {
+                        "subquestion": steer_text,
+                        "ok": False,
+                        "detail": "mid-run steer already represented by an active probe",
+                    },
+                )
+                continue
+            await emit(
+                "observation",
+                {
+                    "subquestion": steer_text,
+                    "ok": True,
+                    "detail": f"mid-run steer: adding research probe '{steer_text}'",
                 },
             )
             continue
@@ -216,60 +249,10 @@ def _merge_leg_result(
     return bounded_by
 
 
-async def _synthesize_leg_section(
-    run: DeepResearchRun,
-    sub_result: SubQuestionResult,
-    *,
-    subq_id: str,
-    subq_namespace: str,
-    leg_context: GatherLegContext,
-    gather_tasks: list[GatherTask],
-    sections: list[ReportSection],
-    emit: EmitFn,
-    timeout_s: float,
-) -> None:
-    """Synthesize this leg's section (a durable checkpoint) and append it to
-    `sections` in place. A synthesis failure cancels every sibling leg before
-    re-raising — same contract as the original inline try/except."""
-    await emit("phase", {"phase": "synthesize", "section": len(sections) + 1})
-    try:
-        section = await asyncio.wait_for(
-            engine.synthesize_section(
-                sub_result,
-                router=run._router,
-                embedder=run._embedder,
-                vector_store=run._vector_store,
-                namespace=subq_namespace,
-                nli=run._nli,
-                section_id=subq_id,
-                top_k_for_section=run._bound.rerank_top_k,
-                emit=emit,
-                leg_context=leg_context,
-                recency_window=run._recency_window,
-            ),
-            timeout=timeout_s,
-        )
-    except TimeoutError as exc:
-        await _cancel_and_drain(gather_tasks)
-        raise _WallClockExpired from exc
-    except Exception:
-        # A synthesis failure must not leak the still-running retrieval
-        # tasks into the long-lived server loop.
-        await _cancel_and_drain(gather_tasks)
-        raise
-    sections.append(section)
-    # A checkpoint signal the agent-server persists as incremental progress.
-    await emit(
-        "section_done",
-        {"section_id": section.id, "title": section.title, "done": len(sections)},
-    )
-
-
 async def drain_and_synthesize(
     run: DeepResearchRun,
     gather_tasks: list[GatherTask],
     *,
-    sections: list[ReportSection],
     started: float,
     bounded_by: str | None,
     should_cancel: Callable[[], bool] | None,
@@ -277,12 +260,11 @@ async def drain_and_synthesize(
     pop_steers: PopSteersFn = None,
     pop_injected_sources: PopInjectedSourcesFn = None,
 ) -> tuple[list[SubQuestionResult], str | None, list[RetrievalPassage]]:
-    """RP-04 consumer: drain the gather tasks in order, synthesizing each
-    section immediately (a durable checkpoint) before consuming the next.
-    Honors Stop (`should_cancel`) and the wall-clock bound at every
-    sub-question boundary, cancelling the still-running legs when either
-    trips. Appends completed sections to `sections` in place; returns
-    `(results, bounded_by, injected_passages)`.
+    """RP-04 consumer: drain the gather tasks in order. Honors Stop
+    (`should_cancel`) and the research wall-clock bound at every sub-question
+    boundary, cancelling the still-running legs when either trips. Returns
+    `(results, bounded_by, injected_passages)`. Report writing happens only
+    after the whole research phase completes — never here.
 
     D3 — mid-run steer / inject hooks (both default None → OFF-path is
     byte-identical to a run without hooks):
@@ -294,19 +276,12 @@ async def drain_and_synthesize(
       subsequent section's candidate set. Returned alongside `results` so
       `run()` can add them to `carried_passages` for the final report
       assembly."""
-    # 3. Consume results serially (Consumer).
-    # LLM work (synthesis) MUST stay a single-depth queue (one at a time).
-    # The MERGE point: the leg's `SubQuestionResult` (its independent
-    # output) is appended to `results` here, and the synthesized
-    # `ReportSection` is appended to `sections`. No other leg's state
-    # touches the leg's accumulated passages / hits / queries — those
-    # arrive here as immutable frozen-shape objects only.
     results: list[SubQuestionResult] = []
     injected_passages: list[RetrievalPassage] = []  # accumulated inject-source passages
 
     i = 0
     while i < len(gather_tasks):
-        _subq, task, subq_id, subq_namespace, leg_context = gather_tasks[i]
+        _subq, task, _subq_id, subq_namespace, _leg_context = gather_tasks[i]
         i += 1
 
         stop, bounded_by = _check_stop_condition(
@@ -339,20 +314,4 @@ async def drain_and_synthesize(
             break
 
         bounded_by = _merge_leg_result(sub_result, results, injected_passages, bounded_by)
-
-        try:
-            await _synthesize_leg_section(
-                run,
-                sub_result,
-                subq_id=subq_id,
-                subq_namespace=subq_namespace,
-                leg_context=leg_context,
-                gather_tasks=gather_tasks,
-                sections=sections,
-                emit=emit,
-                timeout_s=_seconds_left(run, started),
-            )
-        except _WallClockExpired:
-            bounded_by = _dominant_bound(bounded_by, "wall_clock")
-            break
     return results, bounded_by, injected_passages

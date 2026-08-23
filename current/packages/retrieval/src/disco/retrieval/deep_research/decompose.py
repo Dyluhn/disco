@@ -1,10 +1,12 @@
-"""Decompose the user's query into sub-questions = the research plan's steps.
+"""Decompose the user's query into broad starting research directions.
 
 Mirrors `RouterQueryRewriter.rewrite()`'s call shape (QUERY_REWRITER role, one
-model call), but asks for SUB-QUESTIONS / SECTIONS rather than paraphrases. The
-output becomes the `steps` field of the PlanEvent the agent loop's plan-mode
-intercept already turns into AWAITING_PLAN_APPROVAL — so the human can edit
-sub-questions before the gather phase spends any inference budget.
+model call), but asks for focused evidence-seeking probes rather than
+paraphrases. The output becomes the `steps` field of the PlanEvent the agent
+loop's plan-mode intercept already turns into AWAITING_PLAN_APPROVAL — so the
+human can edit the starting directions before gathering spends inference
+budget. Probes are disposable: later adaptive gathering may deepen, broaden,
+or challenge them, and none is a promise about the final report outline.
 
 Defensive about model shape drift: the rewriter prompt asks for "one per line"
 and we parse line by line (the same shape `rewrite()` uses). A model that
@@ -31,9 +33,9 @@ from disco.core.think import strip_think_spans
 
 @dataclass(frozen=True)
 class SubQuestion:
-    """One sub-question / section of the plan. `title` is what the user sees
-    in the plan-approval gate AND what the synthesis renders as a section
-    heading on the final report — same string serves both.
+    """One disposable starting research probe. `title` is what the user sees
+    in the plan-approval gate and what retrieval uses as its query; the final
+    report editor derives headings from the pooled evidence instead.
 
     ``label`` is an optional short user-visible label for activity-feed events.
     When set (e.g. during iterative refinement), the emit layer uses it instead
@@ -50,9 +52,9 @@ class SubQuestion:
 
 
 _PROMPT_TEMPLATE = (
-    "You are decomposing a research question into focused sub-questions that "
-    "together ANSWER the SPECIFIC question asked. Each sub-question becomes one "
-    "section of a multi-section research report.\n\n"
+    "You are mapping a research question into focused starting directions that "
+    "together gather evidence to answer the SPECIFIC question asked. These are "
+    "disposable search probes, not report sections or a table of contents.\n\n"
     "Question: {query}\n\n"
     "RULES — read carefully, they affect what the reader actually learns:\n\n"
     "1. ANSWER THE SPECIFIC QUESTION. Identify what the question is really "
@@ -61,14 +63,14 @@ _PROMPT_TEMPLATE = (
     "key players). Make those the CORE sub-questions. Background / "
     "fundamentals are CONTEXT, not the bulk — at most 1 of the {n} should be "
     "purely background, and only if it materially supports the core.\n\n"
-    "2. ORDER BY IMPORTANCE TO THE QUESTION. List the most directly relevant "
-    "sub-question FIRST, then in descending order of importance. Runs that hit "
-    "their depth budget cover the early sub-questions first — so the most "
-    "important content must be earliest. Background goes LAST, never first.\n\n"
+    "2. ORDER BY IMPORTANCE TO THE QUESTION. Start with the most directly "
+    "relevant directions, then add context, mechanisms, comparisons, limitations, "
+    "and counterevidence. The adaptive researcher may later deepen or broaden "
+    "any direction, so do not assume one probe equals one final section.\n\n"
     "3. Each sub-question must be SPECIFIC and ANSWERABLE — not 'What is X?' "
     "but 'Which X products are shipping today vs. promised vs. discontinued?' "
     "Tight, investigatable, the kind a domain analyst would ask.\n\n"
-    "Output EXACTLY {n} sub-questions, ONE PER LINE, in priority order. No "
+    "Output EXACTLY {n} starting directions, ONE PER LINE, in priority order. No "
     "numbering, no bullets, no explanation, no header. Just the questions."
 )
 

@@ -9,12 +9,16 @@ is run separately.)
 from __future__ import annotations
 
 import httpx
+import pytest
 from disco.retrieval.live import (
     Crawl4aiExtractionProvider,
     OpenAIEmbedder,
+    ProviderConfigError,
     SearxngSearchProvider,
     SidecarNLIVerifier,
     TeiReranker,
+    _resolve_extraction_wiring,
+    _resolve_search_wiring,
     build_multi_search,
 )
 from disco.retrieval.models import Passage
@@ -79,6 +83,22 @@ def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():
 
     fallback = build_multi_search([])
     assert type(fallback).__name__ == "DdgsSearchProvider"
+
+
+def test_build_multi_search_raises_when_requested_sources_are_unconstructible():
+    """Explicitly requested sources are never silently swapped for DDGS."""
+    with pytest.raises(ProviderConfigError, match="could be constructed"):
+        build_multi_search(["searxng"])  # no searxng_url → unconstructible
+
+
+def test_unapproved_search_origin_raises_instead_of_silent_ddgs():
+    with pytest.raises(ProviderConfigError, match="approved trust origin"):
+        _resolve_search_wiring("tavily", "", "key", "", {}, lambda *_a: False)
+
+
+def test_unapproved_extraction_origin_raises_instead_of_silent_local():
+    with pytest.raises(ProviderConfigError, match="approved trust origin"):
+        _resolve_extraction_wiring("firecrawl", "", "key", "", {}, lambda *_a: False)
 
 
 # ---- Crawl4AI ---------------------------------------------------------------

@@ -26,7 +26,7 @@
   {
     "id": "DM-008",
     "kind": "distributed_concern",
-    "location": "current/packages/retrieval/src/disco/retrieval/streaming.py + current/packages/retrieval/src/disco/retrieval/deep_research/claims.py + current/packages/retrieval/src/disco/retrieval/deep_research/synthesis.py",
+    "location": "current/packages/retrieval/src/disco/retrieval/streaming.py + current/packages/retrieval/src/disco/retrieval/deep_research/synthesis.py",
     "concern": "duplicated citation grammar/private sibling coupling",
     "owner_package": "PKG-11-RETRIEVAL",
     "source_disposition_id": "DM-008"

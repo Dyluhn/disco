@@ -48,10 +48,10 @@ unit:
 # the marathon phases `live` (development/harness/marathon/conftest.py) — they need a real
 # agent-server, and now say so contractually instead of ERRORing at setup.
 harness:
-	PYTHONPATH=. uv run pytest harness
+	PYTHONPATH=. uv run pytest development/harness
 
 integrations:
-	PYTHONPATH=. uv run pytest integrations
+	PYTHONPATH=. uv run pytest current/integrations
 
 contract:
 	PYTHONPATH=. uv run pytest development/harness/tests/test_contract.py

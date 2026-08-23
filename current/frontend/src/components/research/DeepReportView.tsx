@@ -194,6 +194,10 @@ function SectionView({
   const real = section.section!;
   const conf = CONFIDENCE_VARIANT[real.confidence] ?? CONFIDENCE_VARIANT.high;
   const sectionUnsupported = real.unsupported_count ?? 0;
+  const sectionClaims = (answer?.claims ?? []).filter((claim) => {
+    if (claim.section_id) return claim.section_id === real.id;
+    return claim.claim.cited_passage_ids.some((id) => real.cited_passage_ids.includes(id));
+  });
   const shape = classifySection(real.markdown, index);
   const chrome = SHAPE_CHROME[shape];
   // Plain sections get a faint left rule on odd positions so a long run of them
@@ -260,7 +264,7 @@ function SectionView({
       </div>
 
       <ClaimVerdicts
-        claims={answer?.claims ?? []}
+        claims={sectionClaims}
         passages={answer?.passages ?? []}
       />
     </section>

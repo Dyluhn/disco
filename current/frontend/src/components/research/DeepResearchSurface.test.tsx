@@ -115,7 +115,7 @@ describe("Deep Research surface — full lifecycle", () => {
     renderSurface();
     // Iterative grounding takes 30+ minutes and burns tokens — the control was
     // removed from the UI. The API field remains a default-false stub, so the
-    // create frame still carries iterative:false (see deepResearch.test.ts).
+    // There is one execution method; no hidden mode selector is sent either.
     expect(
       screen.queryByRole("button", { name: /Iterative grounding/i }),
     ).not.toBeInTheDocument();
@@ -263,11 +263,11 @@ describe("Deep Research derivers", () => {
   it("deriveAssemblingSections shows pending for uncovered + done for covered", () => {
     const plan = derivePlan(fixtureFullTrace)!;
     const sections = deriveAssemblingSections(fixtureFullTrace, plan);
-    expect(sections).toHaveLength(6);
-    expect(sections[0].state).toBe("done");
-    expect(sections[2].state).toBe("done");
-    expect(sections[3].state).toBe("pending"); // not covered
-    expect(sections[5].state).toBe("pending");
+    expect(sections).toHaveLength(3);
+    expect(sections.every((section) => section.state === "done")).toBe(true);
+    expect(sections.map((section) => section.title)).toEqual(
+      fixtureReport.sections.map((section) => section.title),
+    );
   });
 
   it("deriveSourceTiers splits cited / reviewed / discovered", () => {

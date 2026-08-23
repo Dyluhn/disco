@@ -84,7 +84,6 @@ describe("useDeepResearch lazy conversation lifecycle", () => {
     act(() => {
       result.current.setLeaderId("driver-final");
       result.current.setDepthTier("exhaustive");
-      result.current.setIterative(true);
       result.current.setRecencyWindow("week");
       result.current.setSelectedSources(["arxiv", "ddgs"]);
     });
@@ -94,7 +93,6 @@ describe("useDeepResearch lazy conversation lifecycle", () => {
       expect(patchConversationSettings).toHaveBeenCalledWith("conv_deep_lazy", {
         modelOverride: "driver-final",
         depthTier: "exhaustive",
-        iterative: true,
         recencyWindow: "week",
         sources: ["arxiv", "ddgs"],
       }),

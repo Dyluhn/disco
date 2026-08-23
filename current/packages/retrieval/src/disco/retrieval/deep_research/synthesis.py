@@ -1,15 +1,19 @@
-"""Map-reduce synthesis: section per sub-question, then assemble + coherence.
+"""Map-reduce synthesis: one section per planned outline spec, then summary.
 
 Hundreds of sources will NOT fit one synthesis prompt. The pattern:
 
-    MAP:    for each section:
+    MAP:    for each planned section (evidence-led outline, never probe
+            titles):
                 retrieve the relevant corpus subset for this section
                 synthesize the section grounded in those passages
                 verify per-claim via NLI (reuse `_verify_claims`)
                 roll up confidence + disputed_notes from the verdicts
+                one bounded rewrite if the grounded candidate is thin;
+                still failing → raise (the run errors, no fallback prose)
 
     REDUCE: assemble the sections + one coherence-pass call returns the
-            executive summary that opens the report.
+            executive summary that opens the report (same contract: one
+            repair, then raise).
 
 The per-section synthesis call is the same shape as the existing standard-
 answer synthesis: constrained-citation prompt + RAG_ANSWERER. The output
@@ -52,19 +56,13 @@ from ._summary import (
     _COHERENCE_PROMPT as _SUMMARY_COHERENCE_PROMPT,
 )
 from ._summary import (
-    _coherence_outline as _summary_coherence_outline,
-)
-from ._summary import (
-    _is_junk_evidence,
-)
-from ._summary import (
     coherence_pass as _summary_coherence_pass,
 )
 from .evidence import EVIDENCE_SYSTEM_PROMPT as _EVIDENCE_SYSTEM_PROMPT
 from .gather import GatherLegContext, SubQuestionResult
+from .report_compiler import RetrievalGap
 
 _COHERENCE_PROMPT = _SUMMARY_COHERENCE_PROMPT
-_coherence_outline = _summary_coherence_outline
 coherence_pass = _summary_coherence_pass
 
 
@@ -262,10 +260,19 @@ def _repair_tables(markdown: str) -> str:
     return _synthesis_parts.repair_tables(markdown)
 
 
+def _repair_grounded_tables(markdown: str) -> str:
+    """Re-normalize tables after claim filtering removes unsupported cells."""
+
+    return _synthesis_parts.repair_grounded_tables(markdown)
+
+
 _SECTION_PROMPT = (
     "You are writing one section of an analytical research report. Your job is "
     "to SYNTHESIZE across the cited sources — not summarize them serially.\n\n"
-    "Section topic: {topic}\n\n"
+    "Report thesis: {report_thesis}\n"
+    "Report outline: {report_outline}\n"
+    "Section heading: {topic}\n"
+    "Section purpose: {section_purpose}\n\n"
     "SOURCES (use ONLY these — every factual sentence must end in [[id]] "
     "citations):\n{passages}\n\n"
     "WRITE THE SECTION. Follow these rules carefully — they are what "
@@ -332,7 +339,8 @@ _SECTION_PROMPT = (
     '  // OR for scatter: "data": [{{"x": 1, "y": 2, "group": "A"}}]\n'
     "}}\n"
     "```\n\n"
-    "FORMAT: roughly 3–7 short paragraphs of markdown, but VARY the structure "
+    "FORMAT: roughly 3–7 short paragraphs of markdown (or the assigned word "
+    "allocation below), but VARY the structure "
     "to fit the content rather than forcing every section into the same shape. "
     "Where the section enumerates parallel items (options, criteria, steps, "
     "examples), a short bulleted or numbered list reads clearer than prose; "
@@ -343,6 +351,56 @@ _SECTION_PROMPT = (
     "report renders one). Every factual sentence — INCLUDING list items, table "
     "cells, and callouts — still ends in [[id]] citations."
 )
+
+
+def _depth_target_instruction(target_words: tuple[int, int] | None) -> str:
+    if target_words is None:
+        return ""
+    minimum, maximum = target_words
+    return (
+        f"\n\nDEPTH TARGET: Write approximately {minimum}-{maximum} words for "
+        "this section when the assigned evidence supports it. Do not pad, "
+        "repeat, or invent material to reach the target."
+    )
+
+
+def _clean_section_debris(markdown: str) -> str:
+    """Remove punctuation-only remnants left by claim filtering.
+
+    Grounding is allowed to delete unsupported sentences.  A deleted sentence
+    must not leave a line containing only ``.``/``-``/``>`` or a dangling
+    table pipe in the rendered report.  Keep citations and normal markdown
+    constructs intact; this is presentation cleanup, not a second verifier.
+    """
+    lines: list[str] = []
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        plain = re.sub(r"\[\[[\w-]+\]\]", "", stripped)
+        plain = re.sub(r"[`*_~>#|:\-.,;!?()\[\]{}]", "", plain).strip()
+        if not plain and "[[" not in stripped:
+            continue
+        # A quote or list marker without any surviving words is debris.
+        if not plain and "[[" in stripped:
+            continue
+        lines.append(line.rstrip())
+    return "\n".join(lines).strip()
+
+
+def _section_word_count(markdown: str) -> int:
+    return len(re.findall(r"[A-Za-z][\w'-]*", re.sub(r"\[\[[\w-]+\]\]", "", markdown)))
+
+
+def _section_needs_rewrite(markdown: str, target_words: tuple[int, int] | None) -> bool:
+    """Return true for a grounded candidate that is too thin for its slot."""
+    if target_words is None:
+        return False
+    minimum, _maximum = target_words
+    required = max(24, min(120, int(minimum * 0.45)))
+    return _section_word_count(markdown) < required or len(re.findall(r"\[\[", markdown)) == 0
 
 
 def _format_passages(passages: list[Passage]) -> str:
@@ -357,63 +415,7 @@ def _format_passages(passages: list[Passage]) -> str:
     return "\n\n".join(parts)
 
 
-def _first_clean_sentence(text: str) -> str | None:
-    """First complete sentence of a passage that passes the junk filter.
-
-    A single sentence — not a 500-char slice — because the downstream claim
-    gate keeps only the sentence a [[id]] cluster cites; a multi-sentence
-    quote would be stripped back to its tail and re-create the mid-sentence
-    stubs this fix removes. Bounded to the first 8 sentences per passage.
-    """
-    for sentence in re.split(r"(?<=[.!?])\s+", " ".join(text.split()))[:8]:
-        sentence = sentence.strip()
-        if sentence and len(sentence) <= 500 and not _is_junk_evidence(sentence):
-            return sentence
-    return None
-
-
-def _grounded_extractive_fallback(passages: list[Passage]) -> str:
-    """Preserve citable evidence when the synthesis model returns no prose.
-
-    This is deliberately extractive: it does not invent a summary or keep
-    spending model calls after the bounded retry. Each preserved quote is one
-    clean, junk-filtered sentence (never a truncation stub, nav boilerplate,
-    or table debris), capped at three quotes. Source text is escaped so it
-    cannot inject markdown/citation syntax; the only live citation marker is
-    the passage id appended by us. The honest framing sentence is added by
-    `_ground_section_markdown` AFTER the claim gate — an uncited meta-sentence
-    placed here would (correctly) be stripped by it.
-    """
-
-    blocks: list[str] = []
-    for passage in passages:
-        sentence = _first_clean_sentence(passage.text)
-        if sentence is None:
-            continue
-        # Escape source-controlled markdown, especially bracket pairs that
-        # could masquerade as citations in the report contract.
-        escaped = re.sub(r"([\\`*_[\]<>])", r"\\\1", sentence)
-        blocks.append(f"> {escaped} [[{passage.id}]]")
-        if len(blocks) == 3:
-            break
-    return "\n\n".join(blocks)
-
-
 _Confidence = Literal["high", "mixed", "low"]
-
-_NO_SUPPORTED_SYNTHESIS = "*(No source-supported synthesis could be produced for this section.)*"
-
-
-def _source_noun(source_count: int) -> str:
-    return "retrieved source" if source_count == 1 else "retrieved sources"
-
-
-def _no_evidence_markdown(source_count: int, *, prefix: str = "") -> str:
-    """The honest empty-section sentence — one clear statement, no stub list."""
-    return (
-        f"*({prefix}No evidence answering this sub-question was found in the "
-        f"{source_count} {_source_noun(source_count)}.)*"
-    )
 
 
 def _confidence_from_claims(claims: list[dict]) -> tuple[_Confidence, int]:
@@ -621,12 +623,54 @@ async def _generate_section_markdown(
     )
 
 
+async def _rewrite_section_markdown(
+    router: LLMRouter,
+    instruction: str,
+    markdown: str,
+    *,
+    leg_context: GatherLegContext,
+    passages: list[Passage],
+) -> str:
+    """Give a thin or verification-damaged section one bounded rewrite.
+
+    The rewrite receives the identical instruction and evidence set.  Keeping
+    it inside this function makes it impossible for a repair to silently
+    switch to a different retrieval corpus or bypass the normal markup gate.
+    """
+    repair_instruction = (
+        "Rewrite the previous section as a complete, substantive section. Keep "
+        "its heading out of the body, use the assigned evidence only, preserve "
+        "all supported findings and citations, and remove punctuation-only or "
+        "truncated fragments. Meet the requested word allocation without padding."
+    )
+    response = await cast(_RouterWithCtx, router).complete(
+        CompletionRequest(
+            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+            messages=[
+                LLMMessage(role="system", content=_EVIDENCE_SYSTEM_PROMPT),
+                LLMMessage(role="user", content=instruction),
+                LLMMessage(role="assistant", content=markdown),
+                LLMMessage(role="user", content=repair_instruction),
+            ],
+            temperature=_SYNTHESIS_TEMPERATURE,
+            max_tokens=2800,
+        ),
+        context=leg_context.call_context,
+    )
+    rewritten = strip_think_spans(response.text)
+    return await _normalize_section_markup(
+        rewritten,
+        router=router,
+        instruction=instruction,
+        leg_context=leg_context,
+        passage_ids={passage.id for passage in passages},
+    )
+
+
 async def _ground_section_markdown(
     markdown: str,
     passages: list[Passage],
     nli: Any,
-    *,
-    extractive_fallback: bool,
 ) -> tuple[str, _Confidence, int, list[str], list[str]]:
     """Verify, filter, and summarize the grounding state of one section."""
     by_id = {p.id: p for p in passages}
@@ -634,20 +678,13 @@ async def _ground_section_markdown(
     confidence, unsupported = _confidence_from_claims(claims)
     # Unsupported includes invented ids and uncited factual prose. Keep weak,
     # honestly-cited claims visible under the section confidence label.
-    markdown = (
-        _retain_claim_verdicts(markdown, claims, frozenset({"supported", "weak"}))
-        or _NO_SUPPORTED_SYNTHESIS
-    )
+    markdown = _retain_claim_verdicts(markdown, claims, frozenset({"supported", "weak"}))
+    markdown = _repair_grounded_tables(markdown)
+    markdown = _clean_section_debris(markdown)
+    if not markdown:
+        raise RetrievalGap("verification removed every claim from the candidate section")
     disputed_notes = _extract_disputed_notes(markdown)
     cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})
-    if extractive_fallback:
-        # Quotes are not an answer: frame them honestly AFTER the claim gate
-        # (which would strip an uncited framing sentence — exactly how the old
-        # fallback degraded into a bare quote-stub list), and force `low`.
-        confidence = "low"
-        markdown, cited_ids = _synthesis_parts.frame_extractive_fallback(
-            markdown, cited_ids, source_count=len(passages)
-        )
     return markdown, confidence, unsupported, disputed_notes, cited_ids
 
 
@@ -664,11 +701,16 @@ async def synthesize_section(
     emit: EmitFn,
     leg_context: GatherLegContext,
     recency_window: str | None = None,
+    target_words: tuple[int, int] | None = None,
+    report_thesis: str = "",
+    report_outline: str = "",
+    section_purpose: str = "",
 ) -> ReportSection:
     """Synthesize one section from the corpus + verify per-claim. Returns a
-    ReportSection ready for the ReportEvent. Any failure mode degrades
-    gracefully: an empty corpus → "(no sources gathered)" body marked
-    `confidence: low`."""
+    ReportSection ready for the ReportEvent, or raises (RetrievalGap for a
+    candidate that cannot be grounded to a substantive section; provider
+    errors propagate) so the run surfaces the failure instead of shipping
+    degraded prose."""
     passages = await _retrieve_for_section(
         sub_result.subq.title,
         namespace=namespace,
@@ -685,11 +727,8 @@ async def synthesize_section(
         _synth_payload["label"] = sub_result.subq.label
     await emit("synthesize_section", _synth_payload)
     if not passages:
-        return ReportSection(
-            id=section_id,
-            title=sub_result.subq.title,
-            markdown="*(No sources were gathered for this section.)*",
-            confidence="low",
+        raise RetrievalGap(
+            f"candidate section {sub_result.subq.title!r} has no report-worthy evidence"
         )
 
     # DR-3 E4: date + recency directive (section synthesis).
@@ -704,8 +743,14 @@ async def synthesize_section(
             f"Prefer recent data over historical baselines where sources differ.\n\n"
         )
     instruction = _synth_preamble + _SECTION_PROMPT.format(
-        topic=sub_result.subq.title, passages=_format_passages(passages)
+        report_thesis=report_thesis or "Not supplied; infer only from the evidence.",
+        report_outline=report_outline or sub_result.subq.title,
+        topic=sub_result.subq.title,
+        section_purpose=section_purpose
+        or "Advance the report's answer using the strongest findings.",
+        passages=_format_passages(passages),
     )
+    instruction += _depth_target_instruction(target_words)
     # Per-leg isolation: the synthesis LLM call is also scoped to this leg's
     # CallContext. The synthesis phase is serialized (one leg at a time per
     # the engine's single-depth LLM queue), so concurrent contamination is
@@ -716,48 +761,35 @@ async def synthesize_section(
         LLMMessage(role="system", content=_EVIDENCE_SYSTEM_PROMPT),
         LLMMessage(role="user", content=instruction),
     ]
-    used_extractive_fallback = False
-    try:
-        markdown = await _generate_section_markdown(
-            router, instruction, leg_messages, leg_context=leg_context, passages=passages
-        )
-    except Exception as exc:  # noqa: BLE001 — preserve gathered evidence below
-        markdown, early_return = await _synthesis_parts.fallback_section_or_markdown(
-            passages,
-            section_id=section_id,
-            title=sub_result.subq.title,
-            emit=emit,
-            reason=f"exception:{type(exc).__name__}",
-        )
-        used_extractive_fallback = bool(markdown)
-        if early_return is not None:
-            return early_return
-
-    # EMPTY-SECTION GUARD (final). If the body is STILL empty after the
-    # empty-response retry + the truncation/chart/table post-processing (e.g. the
-    # only content was an invalid chart that _validate_charts dropped, or the
-    # model just never produced prose), degrade HONESTLY. Never store a blank
-    # body — the UI renders the section's title+confidence header unconditionally,
-    # so an empty markdown shows as a titled card with no content (a false
-    # affordance). This says plainly that the section had no usable output.
-    if not markdown.strip():
-        markdown, early_return = await _synthesis_parts.fallback_section_or_markdown(
-            passages,
-            section_id=section_id,
-            title=sub_result.subq.title,
-            emit=emit,
-            reason="empty_after_retry",
-        )
-        used_extractive_fallback = bool(markdown)
-        if early_return is not None:
-            return early_return
-
-    markdown, confidence, unsupported, disputed_notes, cited_ids = await _ground_section_markdown(
-        markdown,
-        passages,
-        nli,
-        extractive_fallback=used_extractive_fallback,
+    # The funnel: one generation (with its internal empty-response retry and
+    # truncation continuations), the grounding gate, then AT MOST one bounded
+    # rewrite when the grounded candidate is empty or too thin for its slot.
+    # A candidate that still fails raises to the run — never quote-stub prose.
+    markdown = await _generate_section_markdown(
+        router, instruction, leg_messages, leg_context=leg_context, passages=passages
     )
+    if not markdown.strip():
+        raise RetrievalGap(
+            f"section {sub_result.subq.title!r} produced no prose after the bounded retry"
+        )
+    try:
+        grounded = await _ground_section_markdown(markdown, passages, nli)
+        if _section_needs_rewrite(grounded[0], target_words):
+            raise RetrievalGap("candidate section is too thin for its report allocation")
+    except RetrievalGap:
+        rewritten = await _rewrite_section_markdown(
+            router,
+            instruction,
+            markdown,
+            leg_context=leg_context,
+            passages=passages,
+        )
+        grounded = await _ground_section_markdown(rewritten, passages, nli)
+        if _section_needs_rewrite(grounded[0], target_words):
+            raise RetrievalGap(
+                f"section {sub_result.subq.title!r} remained too thin after its one rewrite"
+            )
+    markdown, confidence, unsupported, disputed_notes, cited_ids = grounded
 
     return ReportSection(
         id=section_id,

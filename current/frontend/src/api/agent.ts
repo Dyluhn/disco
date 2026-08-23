@@ -170,7 +170,6 @@ export async function patchConversationSettings(
     quiet?: boolean;
     assist?: boolean | null;
     depthTier?: "quick" | "standard_deep" | "exhaustive";
-    iterative?: boolean;
     recencyWindow?: "month" | "week" | null;
     sources?: string[];
   },
@@ -182,7 +181,6 @@ export async function patchConversationSettings(
     ...(settings.quiet !== undefined ? { quiet: settings.quiet } : {}),
     ...(settings.assist !== undefined ? { assist: settings.assist } : {}),
     ...(settings.depthTier !== undefined ? { depth_tier: settings.depthTier } : {}),
-    ...(settings.iterative !== undefined ? { iterative: settings.iterative } : {}),
     ...(settings.recencyWindow !== undefined
       ? { recency_window: settings.recencyWindow }
       : {}),

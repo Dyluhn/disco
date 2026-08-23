@@ -19,7 +19,6 @@ export interface DeepResearchLifecycleParams {
   leaderId: string | null;
   depthTier: Tier;
   setDepthTier: (tier: Tier) => void;
-  iterative: boolean;
   recencyWindow: "month" | "week" | null;
   sources: string[];
   preCid: string | null;
@@ -40,7 +39,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
     leaderId,
     depthTier,
     setDepthTier,
-    iterative,
     recencyWindow,
     sources,
     preCid,
@@ -59,7 +57,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
       query,
       modelOverride,
       runDepthTier,
-      runIterative,
       runRecencyWindow,
       runSources,
     }: {
@@ -67,7 +64,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
       query: string;
       modelOverride: string | null;
       runDepthTier: Tier;
-      runIterative: boolean;
       runRecencyWindow: "month" | "week" | null;
       runSources: string[];
     }) => {
@@ -75,7 +71,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
       await patchConversationSettings(cid, {
         modelOverride,
         depthTier: runDepthTier,
-        iterative: runIterative,
         recencyWindow: runRecencyWindow,
         sources: runSources,
       });
@@ -104,14 +99,13 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
           query: trimmed,
           modelOverride: leaderId,
           runDepthTier: depthTier,
-          runIterative: iterative,
           runRecencyWindow: recencyWindow,
           runSources: sources,
         });
         return;
       }
       create.mutate(
-        { query: trimmed, leaderId, depthTier, iterative, recencyWindow, sources },
+        { query: trimmed, leaderId, depthTier, recencyWindow, sources },
         {
           // kick:true — this is the ONLY path that starts the run.
           onSuccess: (cid) =>
@@ -124,7 +118,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
       startPrecreated,
       leaderId,
       depthTier,
-      iterative,
       recencyWindow,
       sources,
       preCid,
@@ -149,7 +142,6 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
           query: q,
           leaderId,
           depthTier: "exhaustive",
-          iterative,
           recencyWindow,
           sources,
         },
@@ -159,7 +151,7 @@ export function useDeepResearchLifecycle(params: DeepResearchLifecycleParams) {
         },
       );
     },
-    [create, leaderId, iterative, recencyWindow, sources, setDepthTier, setSession],
+    [create, leaderId, recencyWindow, sources, setDepthTier, setSession],
   );
 
   // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps

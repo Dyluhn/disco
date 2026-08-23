@@ -9,16 +9,20 @@ ranking.py, the NLI shape) — the interfaces don't change, the stubs are replac
   OpenAIEmbedder          -> Embedder             (bge-m3, OpenAI /v1/embeddings)
   SidecarNLIVerifier      -> _NLIVerifierLike      (NLI sidecar /verify)
 
-Providers degrade gracefully: a failed search/rerank/embed returns a sane
-fallback (empty / input order) rather than crashing the pipeline; a failed
-extract becomes an ExtractedDoc with status != "ok" so the honest-failure
-rendering (§2.2) shows it. Base URLs are injected (env-configured at wiring time).
+Per-CALL failures degrade with a logged warning (a failed search returns no
+hits for that round; a failed extract becomes an ExtractedDoc with status !=
+"ok"), and the run-level zero-evidence gate turns total failure into a run
+error. CONFIG failures never degrade: an unapproved or unconstructible
+requested provider raises ProviderConfigError at wiring time instead of
+silently substituting a bundled provider. Base URLs are injected
+(env-configured at wiring time).
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
@@ -31,6 +35,16 @@ from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
 from .providers import SearchProvider
 from .url_policy import parse_source_date, url_allowed
+
+_LOG = logging.getLogger(__name__)
+
+# Wiring policy (unapproved/unconstructible requested providers raise) lives
+# in `_provider_wiring`; re-exported here as the stable import surface.
+from ._provider_wiring import (  # noqa: E402
+    ProviderConfigError,
+    _resolve_extraction_wiring,
+    _resolve_search_wiring,
+)
 
 # W-33: cap how long a remote-encoder connectivity probe waits. The probe only
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
@@ -104,8 +118,12 @@ class SearxngSearchProvider:
                 resp = await client.get(f"{self._base}/search", params=params)
                 resp.raise_for_status()
                 return resp.json().get("results", [])
-        except (httpx.HTTPError, ValueError):
-            return []  # discovery failure degrades to no hits (pipeline still runs)
+        except (httpx.HTTPError, ValueError) as exc:
+            # Discovery failure degrades to no hits for THIS round (the run's
+            # zero-evidence gate raises later if nothing was ever admitted),
+            # but is never silent.
+            _LOG.warning("SearXNG search failed: %s: %s", type(exc).__name__, exc)
+            return []
 
     def _to_hits(
         self,
@@ -647,6 +665,14 @@ def build_multi_search(
     }
     providers = _collect_multi_search_providers(sources, cfg)
     if not providers:
+        requested = [str(source).strip().lower() for source in sources if str(source).strip()]
+        if requested:
+            # The user explicitly chose sources; substituting a different
+            # provider behind their back is a config error, not a fallback.
+            raise ProviderConfigError(
+                f"none of the requested search sources could be constructed: {requested}; "
+                "check their configuration or choose different sources"
+            )
         return DdgsSearchProvider()
     if len(providers) == 1:
         return providers[0]
@@ -680,57 +706,6 @@ def _resolve_remote_flag(remote: bool | None, e: Mapping[str, str]) -> bool:
     if encoders is None:
         encoders = e.get("PMX_ENCODERS", "local")
     return encoders.lower() == "remote"
-
-
-def _resolve_search_wiring(
-    search_provider: str,
-    search_base_url: str,
-    search_api_key: str,
-    search_secret_ref: str,
-    e: Mapping[str, str],
-    approved: Callable[[str, str, str | None], bool],
-) -> tuple[str, str, str]:
-    # B2 — pluggable discovery. Bundled (ddgs) by default so a fresh install works
-    # keyless; searxng self-hosts (base_url, empty -> env default); tavily/brave/
-    # semantic_scholar are resolved against an approved trust origin.
-    search_url = search_base_url or (
-        _env_url(e, "DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
-    )
-    search_trust_url = {
-        "tavily": "https://api.tavily.com",
-        "brave": search_url or "https://api.search.brave.com",
-        "semantic_scholar": search_url or "https://api.semanticscholar.org",
-    }.get(search_provider, search_url)
-    if search_trust_url and not approved(
-        search_trust_url, f"search:{search_provider}", search_secret_ref
-    ):
-        return "ddgs", "", ""
-    return search_provider, search_url, search_api_key
-
-
-def _resolve_extraction_wiring(
-    extraction_provider: str,
-    extraction_base_url: str,
-    extraction_api_key: str,
-    extraction_secret_ref: str,
-    e: Mapping[str, str],
-    approved: Callable[[str, str, str | None], bool],
-) -> tuple[str, str, str]:
-    # B1 — pluggable extraction. Bundled (local) by default; crawl4ai self-hosts
-    # (base_url, empty -> env default); firecrawl is paid (resolved api_key).
-    if extraction_provider == "crawl4ai":
-        extraction_url = extraction_base_url or _env_url(e, "DISCO_CRAWL4AI_URL")
-    elif extraction_provider == "firecrawl":
-        extraction_url = extraction_base_url or "https://api.firecrawl.dev"
-    else:
-        extraction_url = extraction_base_url
-    if extraction_provider != "local" and not approved(
-        extraction_url,
-        f"extraction:{extraction_provider}",
-        extraction_secret_ref,
-    ):
-        return "local", "", ""
-    return extraction_provider, extraction_url, extraction_api_key
 
 
 def _resolve_encoder_urls(

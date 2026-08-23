@@ -265,14 +265,6 @@ class DeepResearchService:
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
         self._state.set_depth(conversation_id, tier)
 
-    # ── A4.4 iterative research toggle ────────────────────────────────────────
-
-    def _iterative_for(self, conversation_id: str) -> bool:
-        return self._state.iterative_for(conversation_id)
-
-    def set_iterative(self, conversation_id: str, enabled: bool) -> None:
-        self._state.set_iterative(conversation_id, enabled)
-
     # ── DR-3 recency window (E2) ──────────────────────────────────────────────
 
     def set_recency(self, conversation_id: str, window: str | None) -> None:
@@ -427,7 +419,7 @@ class DeepResearchService:
             subqs = await decompose_query(
                 ctx.router,
                 query,
-                max_subq=ctx.bound.max_subquestions,
+                max_subq=ctx.bound.initial_probe_count,
                 recency_window=ctx.recency_window,
             )
         except Exception as exc:  # noqa: BLE001 — surface as a system reminder

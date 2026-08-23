@@ -15,13 +15,11 @@ class DeepResearchState:
 
     def __init__(self) -> None:
         self._depth: dict[str, str] = {}
-        self._iterative: dict[str, bool] = {}
         self._recency: dict[str, Literal["month", "week"]] = {}
         self._upload_passages: dict[str, list[Passage]] = {}
 
     def forget(self, conversation_id: str) -> None:
         self._depth.pop(conversation_id, None)
-        self._iterative.pop(conversation_id, None)
         self._recency.pop(conversation_id, None)
         self._upload_passages.pop(conversation_id, None)
 
@@ -44,12 +42,6 @@ class DeepResearchState:
     def set_depth(self, conversation_id: str, tier: str | None) -> None:
         if tier and tier in {candidate.value for candidate in DepthTier}:
             self._depth[conversation_id] = tier
-
-    def iterative_for(self, conversation_id: str) -> bool:
-        return self._iterative.get(conversation_id, False)
-
-    def set_iterative(self, conversation_id: str, enabled: bool) -> None:
-        self._iterative[conversation_id] = bool(enabled)
 
     def set_recency(self, conversation_id: str, window: str | None) -> None:
         if window in {"month", "week"}:

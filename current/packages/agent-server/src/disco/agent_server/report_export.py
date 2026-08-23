@@ -114,16 +114,6 @@ def serialize_markdown(
             lines.append("")
         lines.append(_sub_citation_markers(s.markdown, numbers))
         lines.append("")
-    _trunc = report_truncation(report.bounded_by)
-    if _trunc:
-        lines.append("---")
-        lines.append("")
-        lines.append(
-            f"_This run was bounded by **{_trunc}**. Some planned "
-            f"sub-questions were not covered. Consider running the EXHAUSTIVE "
-            f"tier or assigning a faster driver model for deeper coverage._"
-        )
-        lines.append("")
     lines.append("---")
     lines.append("")
     # One row per citation NUMBER (not per passage) — the same list the UI's
@@ -482,20 +472,6 @@ def _pdf_sections_html(
     return "\n".join(sections_html_parts)
 
 
-def _pdf_bounded_html(report: ReportEvent) -> str:
-    """Bounded-by honesty note, emitted only when the run was truncated."""
-    _trunc = report_truncation(report.bounded_by)
-    if not _trunc:
-        return ""
-    return (
-        '<div class="bounded-note">This run was bounded by '
-        f"<strong>{_html.escape(_trunc)}</strong>. "
-        "Some planned sub-questions were not covered. Consider running "
-        "the EXHAUSTIVE tier or assigning a faster driver model for "
-        "deeper coverage.</div>"
-    )
-
-
 def _pdf_followup_html(
     follow_ups: list[tuple[str, str]] | None,
     cite_map: dict[str, int],
@@ -603,7 +579,9 @@ def _build_pdf_html(
     sections_html = _pdf_sections_html(sections, cite_map, pal)
 
     # ---- bounded-by note ----
-    bounded_html = _pdf_bounded_html(report)
+    # Research-budget telemetry remains available in the cover metadata and
+    # interactive trace. It is deliberately not injected into report prose.
+    bounded_html = ""
 
     # ---- follow-up Q&A ----
     followup_html = _pdf_followup_html(follow_ups, cite_map, pal)

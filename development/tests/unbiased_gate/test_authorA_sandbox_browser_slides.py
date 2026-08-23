@@ -24,6 +24,7 @@ class _FakeContainer:
         self.status = "running"
         self.labels = {}
         self.attrs = {
+            "HostConfig": {},
             "NetworkSettings": {
                 "Networks": {},
                 "Ports": ports or {},
@@ -123,6 +124,13 @@ class _FakeContainers:
             self.sidecar = _FakeContainer(name, ports=ports, ip="10.89.0.2")
             return self.sidecar
         self.sandbox = _FakeContainer(name, ip="10.89.0.3")
+        memory = str(kwargs.get("mem_limit", "0")).lower()
+        memory_bytes = int(memory.removesuffix("m")) * 1024 * 1024 if memory.endswith("m") else int(memory)
+        self.sandbox.attrs["HostConfig"] = {
+            "Memory": memory_bytes,
+            "CpuQuota": kwargs.get("cpu_quota"),
+            "PidsLimit": kwargs.get("pids_limit"),
+        }
         for net_name in kwargs.get("networks") or {}:
             self.sandbox.attrs["NetworkSettings"]["Networks"][net_name] = {"IPAddress": "10.89.0.3"}
         return self.sandbox

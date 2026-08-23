@@ -3,7 +3,7 @@
  * run. Three components inside the strip:
  *
  *   ┌─────────────────────────────────────────────────────────────┐
- *   │ Sub-questions  3 of 6  ·  30 sources  ·  Round 2/4   [ ▾ ]  │  ← collapsible header
+ *   │ Directions  3 of 6  ·  30 sources  ·  Round 2/4       [ ▾ ]  │  ← collapsible header
  *   ├─────────────────────────────────────────────────────────────┤
  *   │ ☑ 1. What products are shipping today?            done      │
  *   │ ⟳ 2. What are the manufacturing bottlenecks?      active    │  ← PlanPanel
@@ -58,7 +58,7 @@ function StatsRow({
         <span className="text-text">{stats.subquestionsDone}</span>
         <span className="text-text-faint"> of </span>
         <span className="text-text">{stats.subquestionsTotal}</span>
-        <span className="text-text-faint"> sub-questions</span>
+        <span className="text-text-faint"> starting directions</span>
       </span>
       <span className="text-text-faint">·</span>
       <span>
@@ -102,7 +102,7 @@ function Heartbeat({
   let now: string | null = null;
   if (stats.activeSection) {
     const n = stats.activeSection.index || stats.subquestionsDone + 1;
-    now = `Writing section ${n} of ${stats.subquestionsTotal}: “${stats.activeSection.title}”`;
+    now = `Compiling report section ${n}: “${stats.activeSection.title}”`;
   } else if (stats.phase === "coherence") {
     now = "Cross-checking the report for coherence…";
   } else if (stats.activeSubquestion) {

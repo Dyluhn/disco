@@ -291,13 +291,37 @@ def _available_source_budget(local_remaining: int, shared: SourceBudget | None) 
     return min(local_remaining, shared.remaining) if shared is not None else local_remaining
 
 
+def _report_usable_passage(passage: Passage) -> bool:
+    """Reject obvious extraction furniture before it consumes source capacity.
+
+    Retrieval remains auditable through ``all_hits``; only report-worthy
+    passages should spend the scarce cross-leg evidence budget.  Keep this
+    structural and conservative so substantive claims are never filtered by
+    an inferred topic judgment.
+    """
+    text = " ".join(passage.text.split())
+    if len(re.findall(r"[A-Za-z][\w'-]*", text)) < 5:
+        return False
+    lowered = text.casefold()
+    return not (
+        lowered.startswith(("last verified:", "last updated:", "published:"))
+        or "privacy policy" in lowered
+        or "terms of service" in lowered
+        or text.count("|") >= 2
+    )
+
+
 def _admit_fresh_passages(
     retrieval: RetrievalResult,
     seen_passage_ids: set[str],
     local_remaining: int,
     shared: SourceBudget | None,
 ) -> tuple[list[Passage], int]:
-    candidates = _fresh_passages(retrieval, seen_passage_ids)
+    candidates = [
+        passage
+        for passage in _fresh_passages(retrieval, seen_passage_ids)
+        if _report_usable_passage(passage)
+    ]
     if shared is None:
         admitted = candidates[:local_remaining]
         charged = len(admitted)

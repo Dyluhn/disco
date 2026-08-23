@@ -98,7 +98,11 @@ async def run_follow_up_completion(
     which previously each carried their own copy of this try/except."""
     from ..deep_research_service import _clean_model_text
 
-    router = service._drivers.router()
+    # Honor the conversation's leader-model override — a follow-up must be
+    # answered by the same model the report was produced with, not the default.
+    router = service._drivers.router(
+        pick=service._settings._get_model_override(conversation_id)
+    )
     try:
         answer = await router.complete(
             CompletionRequest(
@@ -200,9 +204,9 @@ async def run_follow_up(
 
     Reuses the prior report's corpus (passages) as grounding context so the
     follow-up answer is source-backed. The user's follow-up question is the
-    most recent USER message after the report. The answer is emitted as
-    message events (agent response) on the conversation log, and a new
-    lightweight ReportEvent captures the follow-up.
+    most recent USER message after the report. The answer is stored as one
+    assistant MessageEvent on the conversation log (no new ReportEvent), and
+    the conversation returns to FINISHED.
 
     This is the RP-13 report-follow-up path — same event-stream-append
     pattern as RP-08's scheduled-task re-injection. Every step below is on

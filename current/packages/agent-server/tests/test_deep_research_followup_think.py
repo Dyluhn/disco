@@ -38,7 +38,9 @@ class _Drivers:
     def __init__(self, router: _Router) -> None:
         self._router = router
 
-    def router(self) -> _Router:
+    def router(self, pick: Any = None) -> _Router:
+        # The follow-up path pins the conversation's leader-model override.
+        del pick
         return self._router
 
 

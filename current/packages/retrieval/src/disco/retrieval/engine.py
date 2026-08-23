@@ -114,10 +114,16 @@ class DefaultRetrievalEngine:
         """
         if req.depth == "shallow" or self._rewriter is None:
             return [compress_search_query(req.query)]
-        if req.depth == "standard":
-            rewritten = await self._rewriter.rewrite(req.query, n=1)
-        else:
-            rewritten = await self._rewriter.rewrite(req.query, n=4)  # deep → multi-query
+        try:
+            if req.depth == "standard":
+                rewritten = await self._rewriter.rewrite(req.query, n=1)
+            else:
+                rewritten = await self._rewriter.rewrite(req.query, n=4)  # deep → multi-query
+        except Exception:  # noqa: BLE001 — rewriting is an optional search enhancement
+            # A rejected or unavailable rewrite must not erase the search leg.
+            # Search the user's query directly through the same retrieval path;
+            # later adaptive probes can still broaden or deepen it normally.
+            rewritten = [req.query]
         return [compress_search_query(q) for q in rewritten]
 
     async def _discover(self, req: RetrievalRequest, queries: list[str]) -> list[SearchHit]:

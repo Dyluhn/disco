@@ -9,24 +9,19 @@ This module imports its parent **lazily**: `from . import synthesis as
 _synthesis` below binds the module object only (always safe — the submodule
 is registered in `sys.modules` the instant its import begins, before any of
 its top-level code runs). The few synthesis-private names this file needs
-(`_grounded_extractive_fallback`, `_RouterWithCtx`, `_SYNTHESIS_TEMPERATURE`)
-are resolved as `_synthesis.<name>` attribute lookups **inside function
-bodies**, i.e. at call time, not at import time. `synthesis.py` imports THIS
-module at its own top level (the normal parent-imports-child direction), so
-by the time anything here is actually called, `synthesis.py` has long since
-finished executing and every one of those attributes exists. A top-level
-`from .synthesis import _grounded_extractive_fallback` here would instead
-fail at import time, since synthesis.py hasn't reached that definition yet
-when it imports this module.
+(`_RouterWithCtx`, `_EVIDENCE_SYSTEM_PROMPT`, `_SYNTHESIS_TEMPERATURE`) are
+resolved as `_synthesis.<name>` attribute lookups **inside function bodies**,
+i.e. at call time, not at import time. `synthesis.py` imports THIS module at
+its own top level (the normal parent-imports-child direction), so by the time
+anything here is actually called, `synthesis.py` has long since finished
+executing and every one of those attributes exists.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import cast
 
-from disco.core import ReportSection
 from disco.core.events import LLMMessage
 from disco.core.llm import (
     CapabilityProfile,
@@ -37,11 +32,8 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
-from ..models import Passage
 from . import synthesis as _synthesis
 from .gather import GatherLegContext
-
-EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # ---------------------------------------------------------------------------
 # BW-07 table repair (PY-0710: `_repair_tables` mccabe was 17, cap 15) — split
@@ -152,6 +144,40 @@ def repair_tables(markdown: str) -> str:
     return "\n".join(out)
 
 
+def repair_grounded_tables(markdown: str) -> str:
+    """Repair tables after unsupported claims have been removed.
+
+    Claim filtering can erase individual table cells while preserving their
+    pipe delimiters.  Normalize the table again, then drop sparse fragment rows
+    that no longer carry enough cells to remain meaningful.  A table with no
+    substantive rows disappears instead of rendering as a broken skeleton.
+    """
+
+    lines = repair_tables(markdown).split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        if index + 1 >= len(lines) or not _is_delimiter_row(lines[index + 1]):
+            if lines[index].strip() != "|":
+                out.append(lines[index])
+            index += 1
+            continue
+        header = lines[index]
+        divider = lines[index + 1]
+        ncols = max(2, _header_cell_count(header))
+        index += 2
+        rows: list[str] = []
+        while index < len(lines) and "|" in lines[index] and lines[index].strip():
+            row = _normalize_table_row(lines[index], ncols)
+            cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+            if sum(bool(cell) for cell in cells) >= max(2, ncols - 1):
+                rows.append(row)
+            index += 1
+        if rows:
+            out.extend([header, divider, *rows])
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # `synthesize_section` decomposition (PY-0711/0712: logical 185 / cap 100,
 # mccabe 26 / cap 15) — the truncation-continuation loop and the shared
@@ -220,60 +246,7 @@ async def continue_truncated_section(
     return markdown
 
 
-def frame_extractive_fallback(
-    markdown: str, cited_ids: list[str], *, source_count: int
-) -> tuple[str, list[str]]:
-    """Honest framing for a section whose only content is preserved quotes.
-
-    Called AFTER the claim gate on an extractive-fallback section: quotes that
-    survived grounding get one clear framing sentence ahead of them; a section
-    with no surviving quotes collapses to a single honest no-evidence line —
-    never a bare quote-stub list.
-    """
-    if markdown == _synthesis._NO_SUPPORTED_SYNTHESIS or not cited_ids:
-        return _synthesis._no_evidence_markdown(source_count), []
-    note = (
-        "*(No synthesized answer to this sub-question could be grounded in "
-        f"the {source_count} {_synthesis._source_noun(source_count)}; the "
-        "closest passages are preserved below without interpretation.)*"
-    )
-    return f"{note}\n\n{markdown}", cited_ids
-
-
-async def fallback_section_or_markdown(
-    passages: list[Passage],
-    *,
-    section_id: str,
-    title: str,
-    emit: EmitFn,
-    reason: str,
-) -> tuple[str, ReportSection | None]:
-    """Grounded extractive fallback + telemetry. If the fallback is ALSO
-    empty (no passage survived the junk filter), returns the honest
-    no-evidence `ReportSection` so the caller can short-circuit; never
-    erases evidence to report the telemetry."""
-    markdown = _synthesis._grounded_extractive_fallback(passages)
-    try:
-        await emit(
-            "synthesize_section_fallback",
-            {
-                "section": title,
-                "reason": reason,
-                # One "[[id]]" per preserved quote — the junk filter may keep
-                # fewer than the old min(len(passages), 3), or none at all.
-                "passages_preserved": markdown.count("[["),
-            },
-        )
-    except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
-        pass
-    if not markdown:
-        prefix = ""
-        if reason.startswith("exception:"):
-            prefix = f"Section synthesis failed ({reason.removeprefix('exception:')}). "
-        return "", ReportSection(
-            id=section_id,
-            title=title,
-            markdown=_synthesis._no_evidence_markdown(len(passages), prefix=prefix),
-            confidence="low",
-        )
-    return markdown, None
+# The extractive-fallback constructors that used to live here
+# (`frame_extractive_fallback`, `fallback_section_or_markdown`) were removed:
+# a section that cannot be synthesized and grounded raises to the run instead
+# of shipping quote-stub prose.

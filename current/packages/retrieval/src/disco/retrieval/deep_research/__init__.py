@@ -1,10 +1,12 @@
 """Deep Research — the long-horizon research subsystem.
 
 Composes the existing pieces (retrieval engine, grounding pipeline, NLI,
-vector store, query rewriter) into the **plan → iterate-retrieve-reason-refine
-→ corpus at scale → map-reduce synthesis → multi-section grounded report**
+vector store, query rewriter) into the **plan → adaptive gathering →
+evidence-led outline → per-section grounded synthesis → executive summary**
 arc. The agent loop owns the plan-approval gate and event streaming; this
-package owns the research process itself.
+package owns the research process itself. A run either produces that report,
+raises (surfaced as a run error), or checkpoints on user Stop — there is no
+alternate report constructor.
 
 Public API:
 - `DepthTier`, `DepthBound`, `bounds_for(tier)` — the cost/time bound config.

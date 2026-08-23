@@ -1,11 +1,15 @@
-"""Grounded executive-summary reduction for Deep Research reports."""
+"""Grounded executive-summary reduction for Deep Research reports.
+
+One writer, one bounded repair, one validation gate. A summary that cannot
+pass validation raises ReportCompilationError — the run surfaces an error
+instead of shipping a manufactured or diagnostic summary.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import datetime
 import re
-from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,40 +20,27 @@ from disco.core.think import strip_think_spans
 from ..grounding import _retain_supported_claims, _verify_claims
 from ..models import Passage
 from .evidence import EVIDENCE_SYSTEM_PROMPT
+from .report_compiler import ReportCompilationError
 
 _COHERENCE_PROMPT = (
-    "You are writing the executive summary of a research report. State the "
-    "FINDINGS — the actual answer to the question — so a reader who reads ONLY "
-    "the summary learns what the report concludes.\n\n"
+    "You are the executive editor of a research report. Write a direct, "
+    "finding-led answer so a reader who reads ONLY the summary understands the "
+    "report's conclusion.\n\n"
     "Question: {query}\n\n"
-    "Sections of the report (with their lead findings):\n{outline}\n\n"
-    "Grounding-supported cited findings from every section (complete claim ledger; dates are "
-    "source publication dates, not guesses):\n{evidence}\n\n"
-    "RULES — these are the difference between a summary that informs and one "
-    "that just describes structure:\n\n"
-    "1. LEAD WITH THE ANSWER. The first sentence states the report's bottom-"
-    "line answer to the question. Not 'this report examines X.' Not 'X is a "
-    "transformative technology.' The actual finding: where things stand, what "
-    "the state of play is, what the report concluded.\n\n"
-    "2. NAME THE KEY TENSIONS AND UNCERTAINTIES. If the field is divided, say "
-    "what's contested. If announcements outpace shipping reality, say so. If "
-    "evidence is thin in a particular area, name it. A good executive summary "
-    "tells the reader where to be skeptical.\n\n"
-    "3. NO STRUCTURE DESCRIPTION. The following sentences are BANNED: 'This "
-    "report begins by…', 'It then examines…', 'Finally, it evaluates…', "
-    "'The report is organized as…', 'The first section covers…'. Never tell "
-    "the reader what's coming; tell them what was found.\n\n"
-    "4. MEASURED REGISTER. Cut: 'transformative,' 'revolutionary,' 'poised "
-    "to revolutionize,' 'pivotal,' 'game-changing.' Describe and qualify.\n\n"
-    "5. SYNTHESIZE ACROSS SECTIONS. The summary is not three section "
-    "summaries glued together; it's the overarching story those sections "
-    "tell when read together.\n\n"
-    "6. DO NOT TURN A QUALIFICATION INTO A CONTRADICTION. If a section reports "
-    "a concrete release, launch, or announcement, name it before qualifying its "
-    "importance or availability. Never claim none occurred when a section says "
-    "one did.\n\n"
-    "FORMAT: 2–4 short paragraphs of markdown. No headers. No new claims "
-    "beyond what the sections established — the summary distills."
+    "Complete final report:\n{report}\n\n"
+    "The first sentence MUST explicitly answer the question and name its "
+    "subject. Do not open by defining an evaluation framework unless the user "
+    "asked for that definition. Lead with the bottom-line answer, then give the "
+    "strongest supporting "
+    "findings and decision-relevant tensions or uncertainty. Discuss the subject "
+    "itself, never the report's organization or how the material was gathered. "
+    "When the report has multiple sections, synthesize across them; never copy "
+    "the opening paragraph of one section as the whole summary. "
+    "Use a measured register. Preserve the inline citations already present in "
+    "the report and introduce no new claims. Grounding-supported cited findings "
+    "are already embedded in the complete report. If the report names a "
+    "concrete release, launch, or announcement, Never claim none occurred.\n\n"
+    "FORMAT: 2–4 short paragraphs of markdown. No headers."
 )
 
 _WORD = re.compile(r"[a-z0-9]+")
@@ -88,71 +79,7 @@ _STOPWORDS = frozenset(
     }
 )
 
-# The complete supported-claim ledger is retained for grounding.  Only the
-# fallback's pairwise NLI work is bounded: a recent posting window finds likely
-# lexical conflicts, and unexamined findings remain present rather than being
-# silently discarded.  This keeps exhaustive reports linear in claim count.
-_CONFLICT_TERM_HISTORY = 32
-_CONFLICT_CANDIDATES_PER_FINDING = 4
-_MAX_FALLBACK_CONFLICT_CHECKS = 256
 _SUMMARY_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9*_`])")
-
-# --- Evidence junk filter -----------------------------------------------
-# NLI grounding proves a fragment is FAITHFUL to a source; it cannot prove the
-# fragment is a FINDING. Scraped page furniture ("Last verified: …", FAQ/nav
-# links, raw table rows) entails itself verbatim, so it sails through the
-# claim gate and — before this filter — shipped as executive-summary prose or
-# bare section quotes. These rules judge presentation-worthiness only; the
-# verification machinery upstream is untouched.
-_QUOTE_MARKER = re.compile(r"(?m)^\s*>\s?")
-_EVIDENCE_MARKUP = re.compile(r"[*`#_~>\\]+")
-_EVIDENCE_WORD = re.compile(r"[A-Za-z][\w'-]*")
-_ELLIPSIS_EDGE = re.compile(r"^[\s\"'(\[]*(?:\.\.\.|…)|(?:\.\.\.|…)[\s.\"')\]]*$")
-_METADATA_STUB = re.compile(
-    r"^\s*(?:last\s+(?:verified|updated|modified|reviewed)"
-    r"|published|updated|posted|page\s+\d+)\s*[:\-–—]",
-    re.IGNORECASE,
-)
-_NAV_BOILERPLATE = re.compile(
-    r"\b(?:faqs?|cookies?|subscribe|newsletter|sign\s+(?:up|in)|log\s+in"
-    r"|click\s+here|read\s+more|learn\s+more|see\s+our|our\s+methodology"
-    r"|privacy\s+policy|terms\s+of\s+(?:service|use)|all\s+rights\s+reserved"
-    r"|skip\s+to\s+content|related\s+articles?|share\s+this)\b",
-    re.IGNORECASE,
-)
-_SITE_RELATIVE_LINK = re.compile(r"\]\s*\(\s*/")
-_MIN_EVIDENCE_CHARS = 20
-_MIN_EVIDENCE_WORDS = 3
-
-_UNGROUNDED_SUMMARY_FALLBACK = (
-    "The research could not ground an executive summary in the retrieved "
-    "sources: no verified finding was substantive enough to summarize. The "
-    "per-section detail below records what each sub-question's sources did "
-    "and did not establish."
-)
-
-
-def _is_junk_evidence(text: str) -> bool:
-    """True when a supported fragment is scrape debris, not a finding.
-
-    Rules, in order: too short to inform (< 20 chars or < 3 words of plain
-    text); a mid-sentence truncation stub (leading lowercase, or an ellipsis
-    at either edge); scrape metadata ("Last verified: …"); site-navigation
-    boilerplate (FAQ / methodology / cookie / subscribe patterns, or a
-    markdown link to a site-relative path); table debris ('|' cells).
-    """
-    plain = _EVIDENCE_MARKUP.sub("", _QUOTE_MARKER.sub("", text)).strip()
-    words = _EVIDENCE_WORD.findall(plain)
-    if len(plain) < _MIN_EVIDENCE_CHARS or len(words) < _MIN_EVIDENCE_WORDS:
-        return True
-    if plain[0].islower() or _ELLIPSIS_EDGE.search(plain):
-        return True
-    if _METADATA_STUB.match(plain):
-        return True
-    if _NAV_BOILERPLATE.search(plain) or _SITE_RELATIVE_LINK.search(text):
-        return True
-    pipes = plain.count("|")
-    return pipes >= 2 or (pipes == 1 and len(words) < 10)
 
 
 @dataclass(frozen=True)
@@ -178,28 +105,6 @@ def _paragraphize(sentences: list[str]) -> list[str]:
     return paragraphs
 
 
-def _fallback_sentence(finding: _SupportedFinding) -> str:
-    """Render one grounded finding without leaking quote-block markers."""
-    cleaned = re.sub(r"(?m)^\s*>\s?", "", finding.text).rstrip(" .")
-    citations = " ".join(f"[[{passage_id}]]" for passage_id in finding.cited_ids)
-    return f"{cleaned}. {citations}"
-
-
-def _coherence_outline(sections: list[ReportSection]) -> str:
-    """Render bounded, cited section evidence for the summary reduce call."""
-    outline_lines = []
-    for section in sections:
-        lead = (section.markdown.strip()[:1_200] or section.title).replace("  ", " ").strip()
-        marks = []
-        if section.confidence in ("mixed", "low"):
-            marks.append(f"confidence={section.confidence}")
-        if section.disputed_notes:
-            marks.append(f"flagged disagreement: {section.disputed_notes[0][:100]}")
-        suffix = f"  [{'; '.join(marks)}]" if marks else ""
-        outline_lines.append(f"- **{section.title}** — {lead}{suffix}")
-    return "\n".join(outline_lines)
-
-
 def _recency_preamble(recency_window: str | None) -> str:
     if recency_window is None:
         return ""
@@ -216,27 +121,59 @@ async def _generate_summary(
     findings: list[_SupportedFinding],
     router: LLMRouter,
     recency_window: str | None,
+    repair_of: str | None = None,
 ) -> str:
+    """One summary-writer call. Provider failure propagates to the caller —
+    a dead provider is a run failure, never a silently degraded summary."""
+    report = _complete_report_text(sections)
+    dated_context = ""
+    dates = sorted(
+        {finding.published_at.isoformat() for finding in findings if finding.published_at}
+    )
+    if dates:
+        dated_context = "\n\nDated context already represented by the report: " + ", ".join(
+            f"published={date}" for date in dates
+        )
+    repair = ""
+    if repair_of:
+        repair = (
+            "\n\nRewrite the previous draft below. Keep only claims established in "
+            "the complete report and preserve their inline citations.\n"
+            f"Previous draft:\n{repair_of}\n"
+        )
     instruction = _recency_preamble(recency_window) + _COHERENCE_PROMPT.format(
         query=query,
-        outline=_coherence_outline(sections),
-        evidence=_render_findings_ledger(findings),
-    )
-    try:
-        response = await router.complete(
-            CompletionRequest(
-                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                messages=[
-                    LLMMessage(role="system", content=EVIDENCE_SYSTEM_PROMPT),
-                    LLMMessage(role="user", content=instruction),
-                ],
-                temperature=0.0,
-                max_tokens=400,
-            )
+        report=report,
+    ) + dated_context + repair
+    response = await router.complete(
+        CompletionRequest(
+            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+            messages=[
+                LLMMessage(role="system", content=EVIDENCE_SYSTEM_PROMPT),
+                LLMMessage(role="user", content=instruction),
+            ],
+            temperature=0.0,
+            max_tokens=400,
         )
-    except Exception:  # noqa: BLE001 — verified section fallback is authoritative
-        return ""
+    )
     return strip_think_spans(response.text)
+
+
+def _complete_report_text(sections: list[ReportSection]) -> str:
+    """Render the final verified body with the concluding analysis first.
+
+    Evidence-led reports conventionally place implications or the direct
+    answer last.  Putting that section first in the editor-only view prevents
+    long reports from turning the executive summary into a copy of section
+    one; the complete report remains present and its published order is not
+    changed.
+    """
+    ordered = [sections[-1], *sections[:-1]] if len(sections) > 1 else sections
+    return "\n\n".join(
+        f"## {section.title}\n{section.markdown.strip()}"
+        for section in ordered
+        if section.markdown.strip()
+    )
 
 
 def _latest_source_date(
@@ -277,24 +214,6 @@ def _collect_supported_findings(
     return findings
 
 
-def _render_findings_ledger(findings: list[_SupportedFinding]) -> str:
-    """Render the complete tier-bounded claim ledger.
-
-    Deep Research admits at most twelve sections and section synthesis is itself
-    output-bounded, so retaining every supported claim here is finite and avoids
-    recreating the tail-loss that hid contradictory findings.
-    """
-    if not findings:
-        return "- No section claim passed host grounding verification."
-    return "\n".join(
-        f"- section={finding.section_index + 1}; published="
-        f"{finding.published_at.isoformat() if finding.published_at else 'unknown'}; "
-        f"finding={finding.text.rstrip(' .')}. "
-        + " ".join(f"[[{passage_id}]]" for passage_id in finding.cited_ids)
-        for finding in findings
-    )
-
-
 def _stem(token: str) -> str:
     if token.endswith("ies") and len(token) > 4:
         return token[:-3] + "y"
@@ -327,52 +246,6 @@ def _nli_contradicts(left: str, right: str, nli: Any) -> bool:
         return nli.entail(left, right) == "contradict" or nli.entail(right, left) == "contradict"
     except Exception:  # noqa: BLE001 — unavailable conflict check falls back to grounding only
         return False
-
-
-def _fallback_conflict_candidates(
-    findings: list[_SupportedFinding],
-) -> list[tuple[int, int]]:
-    """Return a bounded set of likely contradiction pairs.
-
-    Findings are visited oldest-to-newest when dates are known.  Each claim
-    considers only recent postings for its substantive terms and at most four
-    strongest lexical candidates.  Missing a pair is conservative: fallback
-    keeps both claims; it never drops an unchecked finding.
-    """
-
-    postings: dict[str, deque[int]] = {}
-    pairs: list[tuple[int, int]] = []
-    ordered = sorted(
-        range(len(findings)),
-        key=lambda index: (
-            findings[index].published_at or datetime.date.min,
-            index,
-        ),
-    )
-    for right_index in ordered:
-        right = findings[right_index]
-        right_terms = _claim_terms(right.text)
-        candidate_overlap: dict[int, int] = {}
-        for term in right_terms:
-            for left_index in postings.get(term, ()):
-                candidate_overlap[left_index] = candidate_overlap.get(left_index, 0) + 1
-        opposite_negation = _has_negation(right.text)
-        ranked = sorted(
-            (
-                (overlap, left_index)
-                for left_index, overlap in candidate_overlap.items()
-                if overlap >= 2 or _has_negation(findings[left_index].text) != opposite_negation
-            ),
-            key=lambda item: (-item[0], item[1]),
-        )
-        for _overlap, left_index in ranked[:_CONFLICT_CANDIDATES_PER_FINDING]:
-            pairs.append((left_index, right_index))
-            if len(pairs) >= _MAX_FALLBACK_CONFLICT_CHECKS:
-                return pairs
-        for term in right_terms:
-            posting = postings.setdefault(term, deque(maxlen=_CONFLICT_TERM_HISTORY))
-            posting.append(right_index)
-    return pairs
 
 
 def _summary_claim_conflicts(
@@ -412,43 +285,6 @@ def _reject_conflicting_summary_claims(
     return out, had_conflict
 
 
-def _fallback_findings(
-    findings: list[_SupportedFinding], nli: Any, recency_window: str | None
-) -> str:
-    # Presentation hygiene, not verification: a junk fragment is faithfully
-    # grounded (it's verbatim source text) but is page furniture, not a
-    # finding — never paragraphize it into the executive summary.
-    findings = [finding for finding in findings if not _is_junk_evidence(finding.text)]
-    dropped: set[int] = set()
-    unresolved = False
-    for left_index, right_index in _fallback_conflict_candidates(findings):
-        left = findings[left_index]
-        right = findings[right_index]
-        if not _nli_contradicts(left.text, right.text, nli):
-            continue
-        if (
-            recency_window is not None
-            and left.published_at
-            and right.published_at
-            and left.published_at != right.published_at
-        ):
-            dropped.add(left_index if left.published_at < right.published_at else right_index)
-        else:
-            unresolved = True
-    kept = [finding for index, finding in enumerate(findings) if index not in dropped]
-    paragraphs = _paragraphize([_fallback_sentence(finding) for finding in kept])
-    if not paragraphs:
-        # Nothing survived the junk filter (or conflict pruning). Say so
-        # honestly instead of shipping an empty summary or snippet soup.
-        return _UNGROUNDED_SUMMARY_FALLBACK
-    # Keep the mechanically grounded fallback readable without asking another
-    # model to rewrite it. Four contiguous paragraphs preserve finding order and
-    # prevent Markdown markers or a long claim ledger from becoming one wall.
-    if unresolved:
-        paragraphs[0] = "Sources disagree on some current-state findings. " + paragraphs[0]
-    return "\n\n".join(paragraphs)
-
-
 def _readable_summary(summary: str) -> str:
     """Honor the 2–4 paragraph contract when a provider returns one prose wall."""
     cleaned = re.sub(r"(?m)^\s*>\s?", "", summary).strip()
@@ -461,6 +297,43 @@ def _readable_summary(summary: str) -> str:
     return "\n\n".join(_paragraphize(sentences))
 
 
+_SUMMARY_DIAGNOSTIC = re.compile(
+    r"\b(?:verification|retrieval gap|provider failure|search process)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_substantive_summary(summary: str) -> bool:
+    """Reject structural/status digests before they can become the summary."""
+    plain = re.sub(r"\[\[[\w-]+\]\]", "", summary)
+    words = _WORD.findall(plain)
+    return (
+        len(words) >= 3
+        and bool(re.search(r"[.!?]", plain))
+        and bool(re.search(r"\[\[[\w-]+\]\]", summary))
+        and _SUMMARY_DIAGNOSTIC.search(summary) is None
+    )
+
+
+def _summary_copies_one_section(summary: str, sections: list[ReportSection]) -> bool:
+    """Reject a section excerpt masquerading as an executive synthesis."""
+    if len(sections) < 2:
+        return False
+    sentences = [
+        re.sub(r"\[\[[\w-]+\]\]", "", sentence).strip(" \n*-#>.").casefold()
+        for sentence in _SUMMARY_SENTENCE_BREAK.split(summary)
+    ]
+    substantive = [sentence for sentence in sentences if len(sentence.split()) >= 5]
+    if len(substantive) < 2:
+        return False
+    for section in sections:
+        body = re.sub(r"\[\[[\w-]+\]\]", "", section.markdown).casefold()
+        copied = sum(sentence in body for sentence in substantive)
+        if copied / len(substantive) >= 0.75:
+            return True
+    return False
+
+
 async def coherence_pass(
     query: str,
     sections: list[ReportSection],
@@ -470,20 +343,48 @@ async def coherence_pass(
     nli: Any,
     recency_window: str | None = None,
 ) -> str:
-    """Generate a cited summary and retain only independently supported claims."""
+    """Generate a cited executive summary and retain only supported claims.
+
+    One draft, then one bounded repair against the same complete report. A
+    summary that still fails the validation gate — uncited, insubstantial,
+    conflicting with section findings, or a copy of one section — raises
+    ReportCompilationError so the run errors instead of shipping it.
+    """
     if not sections:
-        return "*(No sections were generated.)*"
+        raise ReportCompilationError("cannot write an executive summary for an empty report")
     by_id = {passage.id: passage for passage in passages}
     findings = await asyncio.to_thread(_collect_supported_findings, sections, by_id, nli)
-    summary = await _generate_summary(query, sections, findings, router, recency_window)
-    if summary:
-        claims = await asyncio.to_thread(_verify_claims, summary, by_id, nli)
+    if not findings:
+        raise ReportCompilationError(
+            "claim verification retained no supported findings to summarize"
+        )
+
+    async def _ground_summary(candidate: str) -> str:
+        if not candidate:
+            return ""
+        claims = await asyncio.to_thread(_verify_claims, candidate, by_id, nli)
         claims, had_conflict = await asyncio.to_thread(
             _reject_conflicting_summary_claims, claims, findings, by_id, nli
         )
-        grounded = _retain_supported_claims(summary, claims)
-        if grounded and not had_conflict:
+        grounded = _retain_supported_claims(candidate, claims)
+        if (
+            grounded
+            and not had_conflict
+            and _is_substantive_summary(grounded)
+            and not _summary_copies_one_section(grounded, sections)
+        ):
             return _readable_summary(grounded)
-    if findings:
-        return await asyncio.to_thread(_fallback_findings, findings, nli, recency_window)
-    return "The report did not contain a factual claim that passed grounding verification."
+        return ""
+
+    draft = await _generate_summary(query, sections, findings, router, recency_window)
+    grounded = await _ground_summary(draft)
+    if grounded:
+        return grounded
+
+    repaired = await _generate_summary(
+        query, sections, findings, router, recency_window, repair_of=draft
+    )
+    grounded = await _ground_summary(repaired)
+    if grounded:
+        return grounded
+    raise ReportCompilationError("executive summary failed validation after one repair")

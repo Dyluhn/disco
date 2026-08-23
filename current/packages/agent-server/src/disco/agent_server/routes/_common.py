@@ -150,7 +150,7 @@ class CreateConversationBody(BaseModel):
     space_id: str | None = None
     title: str | None = None
     # "research" (read-only, ungated) | "build" / "agent" (agent + tools + gate;
-    # identical machinery, different framing) | "deep_research" (plan→iterate→report).
+    # identical machinery, different framing) | "deep_research" (plan→research→report).
     # A Literal so a junk surface 422s at the edge rather than persisting a DB label
     # the runtime then coerces to a toolless research loop (the DC-05 half-state).
     surface: Literal["research", "build", "agent", "deep_research"] = "research"
@@ -164,9 +164,8 @@ class CreateConversationBody(BaseModel):
     # depth picker sends it here; the runtime reads it via _depth_for. Without
     # wiring it through, every run silently used the standard_deep default.
     depth_tier: str | None = None
-    # A4: Deep Research iterative grounding. When True the engine re-searches
-    # weakly-grounded claims and re-checks (up to 3 rounds). The UI's toggle sends
-    # it here; the runtime reads it via _iterative_for. False ⇒ standard run.
+    # Deprecated wire field retained for older clients. Deep Research now has one
+    # adaptive path, so either value is accepted and ignored.
     iterative: bool = False
     # --- Shared schema points pre-seeded for the runthru-v2 fan-out (each is wired
     # by its owning wave; default = OFF / byte-identical to today until wired). ---
@@ -216,6 +215,7 @@ class UpdateSettingsBody(BaseModel):
     # is still pristine so a lazily-created upload cid can retain its files even
     # if the user changes controls before submitting the query.
     depth_tier: Literal["quick", "standard_deep", "exhaustive"] | None = None
+    # Deprecated compatibility field; accepted and ignored.
     iterative: bool | None = None
     recency_window: Literal["month", "week"] | None = None
     sources: list[str] | None = None

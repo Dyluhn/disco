@@ -148,8 +148,6 @@ def build_run(
         # G1/DR-4 F2: seed every gather leg with upload passages.
         upload_passages=upload_passages or None,
         corpus_ids=space_ids,
-        # A4.4: per-cid iterative-research toggle (default False → OFF path).
-        iterative=service._iterative_for(conversation_id),
     )
 
 
@@ -224,19 +222,31 @@ def build_emit_callback(service: DeepResearchService, conversation_id: str):
 
 def rebuild_resume_state(
     resume_from: ReportEvent | None,
-) -> tuple[list[Any] | None, list[Passage] | None, list[SearchHit] | None]:
+) -> tuple[
+    list[Any] | None,
+    list[Passage] | None,
+    list[SearchHit] | None,
+    list[str] | None,
+    list[str] | None,
+]:
     """Checkpointed resume: rebuild the retrieval-typed passages/hits from
     the prior partial ReportEvent's plain dicts so the engine can carry its
     completed sections forward (and skip those sub-questions)."""
     if resume_from is None:
-        return None, None, None
+        return None, None, None, None, None
     resume_sections = list(resume_from.sections)
     resume_passages = [
         Passage.model_validate(p)
         for p in [*resume_from.passages, *resume_from.reviewed_passages]
     ]
     resume_all_hits = [SearchHit.model_validate(h) for h in resume_from.all_hits]
-    return resume_sections, resume_passages, resume_all_hits
+    return (
+        resume_sections,
+        resume_passages,
+        resume_all_hits,
+        list(resume_from.completed_probes),
+        list(resume_from.pending_probes),
+    )
 
 
 def build_steer_hooks(service: DeepResearchService, conversation_id: str):
@@ -263,11 +273,15 @@ async def run_engine(
     resume_sections: list[Any] | None,
     resume_passages: list[Passage] | None,
     resume_all_hits: list[SearchHit] | None,
+    resume_completed_probes: list[str] | None,
+    resume_pending_probes: list[str] | None,
     emit: Any,
-) -> ReportFromRun | None:
-    """Run the engine and always clean up its per-run state, regardless of
-    outcome. Returns the run result, or None on failure (an ErrorEvent has
-    already been appended in that case)."""
+) -> ReportFromRun:
+    """Run the engine and always clean up its per-run LIVE state, regardless
+    of outcome. Exceptions propagate to ``run_execute``'s single failure
+    handler (ErrorEvent + StatusEvent(ERROR)). The conversation's depth/
+    recency/upload selections are NOT cleared here — a paused run needs them
+    to resume with the same settings."""
     from ..runtime import _release_process_memory
 
     # Fresh cancel flag for this execution; the engine polls it at each
@@ -286,28 +300,40 @@ async def run_engine(
             resume_sections=resume_sections,
             resume_passages=resume_passages,
             resume_all_hits=resume_all_hits,
+            resume_completed_probes=resume_completed_probes,
+            resume_pending_probes=resume_pending_probes,
             pop_steers=pop_steers,
             pop_injected_sources=pop_injected_sources,
         )
-    except Exception as exc:  # noqa: BLE001 — surface as ErrorEvent
-        await service._store.append(
-            conversation_id,
-            ErrorEvent(
-                code="deep_research_failed",
-                detail=f"{type(exc).__name__}: {exc}",
-            ),
-        )
-        return None
     finally:
         service._cancellations.clear(conversation_id)
         # D3: remove per-cid queues so the WS handler knows no DR run is
         # active for this cid (it tests `cid in _dr_steer` for routing).
-        service.forget(conversation_id)
+        service._live_state.forget(conversation_id)
         # Return the run's transient working set (fetch buffers + ONNX batch
         # temporaries, already freed by the time run.run() returned) back to
         # the OS, so a long-lived server doesn't accumulate a permanent RSS
         # floor from bursty DR runs. The retention half of the OOM fix.
         _release_process_memory()
+
+
+def _tier_for_run(
+    service: DeepResearchService,
+    conversation_id: str,
+    resume_from: ReportEvent | None,
+) -> DepthTier:
+    """Resolve the run's depth tier — from the checkpoint on resume.
+
+    Depth/recency/uploads live in server memory only, and a resume can happen
+    after that memory was cleared (or after a restart). The checkpoint event
+    durably carries the tier the user chose, so a stopped Quick or Exhaustive
+    run never silently resumes as Standard."""
+    if resume_from is not None:
+        try:
+            return DepthTier(resume_from.depth_tier)
+        except ValueError:
+            pass
+    return service._depth_for(conversation_id)
 
 
 async def run_execute(
@@ -317,19 +343,49 @@ async def run_execute(
     *,
     resume_from: ReportEvent | None = None,
 ) -> None:
-    """The post-approval driver: run DeepResearchRun on the approved plan,
-    emitting Action/Observation events for every retrieval round + section
-    synthesis, ending with a ReportEvent + StatusEvent(FINISHED).
+    """The post-approval driver with exactly three outcomes: a ReportEvent +
+    FINISHED, a Stop checkpoint ReportEvent + PAUSED, or an ErrorEvent +
+    ERROR. Every failure — provider config, preflight, the engine, or
+    persisting the final event — lands in the single failure handler here, so
+    a run can never end without a terminal status."""
+    try:
+        await _run_to_report(service, conversation_id, plan, resume_from=resume_from)
+    except Exception as exc:  # noqa: BLE001 — every failure becomes a named run error
+        _LOG.exception("deep research run failed for %s", conversation_id)
+        service.forget(conversation_id)
+        try:
+            await service._store.append(
+                conversation_id,
+                ErrorEvent(
+                    code="deep_research_failed",
+                    detail=f"{type(exc).__name__}: {exc}",
+                ),
+            )
+            await service._lifecycle_commands.append_status(
+                conversation_id, ConversationStatus.ERROR, detail=str(exc)[:200]
+            )
+        except Exception:  # noqa: BLE001 — the failure record itself failed; only log
+            _LOG.exception("failed to record deep research failure for %s", conversation_id)
 
-    ``resume_from`` is a prior stopped run's partial ReportEvent: its
-    completed sections (+ their cited passages / discovered hits) are
-    carried into the engine so resume continues from the checkpoint instead
-    of redoing the sub-questions that already finished."""
+
+async def _run_to_report(
+    service: DeepResearchService,
+    conversation_id: str,
+    plan: PlanEvent,
+    *,
+    resume_from: ReportEvent | None = None,
+) -> None:
+    """Build deps, preflight, run the engine, persist the terminal events.
+
+    ``resume_from`` is a prior stopped run's checkpoint ReportEvent: its
+    gathered evidence + probe state (and depth tier) are carried into the
+    engine so resume continues from the checkpoint instead of redoing the
+    probes that already finished."""
     # Find the query from the user's last (pre-plan) message.
     events = await service._store.get_events(conversation_id)
     query = resolve_query(events, plan)
     plan_steps = [s.title for s in plan.steps]
-    tier = service._depth_for(conversation_id)
+    tier = _tier_for_run(service, conversation_id, resume_from)
     recency_window = service._recency_for(conversation_id)
 
     # Providers come from the existing research-stream plumbing (search,
@@ -350,6 +406,7 @@ async def run_execute(
     # On failure: emit a NAMED StatusEvent(ERROR) + ErrorEvent and DO NOT run.
     preflight_reason = await run_preflight(service, conversation_id, deps, space_ids)
     if preflight_reason is not None:
+        service.forget(conversation_id)
         await service._store.append(
             conversation_id,
             ErrorEvent(code="deep_research_preflight", detail=preflight_reason),
@@ -375,7 +432,13 @@ async def run_execute(
     )
 
     emit = build_emit_callback(service, conversation_id)
-    resume_sections, resume_passages, resume_all_hits = rebuild_resume_state(resume_from)
+    (
+        resume_sections,
+        resume_passages,
+        resume_all_hits,
+        resume_completed_probes,
+        resume_pending_probes,
+    ) = rebuild_resume_state(resume_from)
 
     result = await run_engine(
         service,
@@ -385,14 +448,15 @@ async def run_execute(
         resume_sections=resume_sections,
         resume_passages=resume_passages,
         resume_all_hits=resume_all_hits,
+        resume_completed_probes=resume_completed_probes,
+        resume_pending_probes=resume_pending_probes,
         emit=emit,
     )
-    if result is None:
-        return
 
-    # Emit the partial-or-final ReportEvent. If the user pressed Stop, the run
-    # halted at a checkpoint (bounded_by="stopped") with the partial report
-    # preserved → emit PAUSED (resumable), NOT FINISHED.
+    # Emit the report-or-checkpoint ReportEvent. If the user pressed Stop, the
+    # run halted at a checkpoint (bounded_by="stopped", no report prose) →
+    # emit PAUSED (resumable) and KEEP the depth/recency/upload selections so
+    # resume runs with the same settings. A finished run clears them.
     await service._store.append(conversation_id, result.to_event())
     stopped = getattr(result, "bounded_by", None) == "stopped"
     await service._lifecycle_commands.append_status(
@@ -400,3 +464,5 @@ async def run_execute(
         ConversationStatus.PAUSED if stopped else ConversationStatus.FINISHED,
         detail="stopped" if stopped else None,
     )
+    if not stopped:
+        service._state.forget(conversation_id)

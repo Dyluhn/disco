@@ -25,11 +25,11 @@ from disco.core import ReportSection
 from disco.core.llm import CompletionResponse, TokenUsage
 from disco.retrieval import InMemoryVectorStore, Passage
 from disco.retrieval.deep_research import synthesis
+from disco.retrieval.deep_research.report_compiler import ReportCompilationError
 from disco.retrieval.deep_research.synthesis import (
     _COHERENCE_PROMPT,
     _SECTION_PROMPT,
     _SYNTHESIS_TEMPERATURE,
-    _coherence_outline,
     _extract_disputed_notes,
     _format_passages,
     _retrieve_for_section,
@@ -135,20 +135,7 @@ def test_verification_helper_still_imported_unchanged():
     assert hasattr(synthesis, "_verify_claims")
 
 
-def test_coherence_outline_retains_concrete_names_beyond_old_short_lead():
-    padding = "Background qualification. " * 20
-    outline = _coherence_outline(
-        [
-            ReportSection(
-                id="release",
-                title="Recent releases",
-                markdown=f"{padding}Muse Glimmer shipped this week [[cnbc]].",
-            )
-        ]
-    )
-
-    assert "Muse Glimmer shipped this week" in outline
-    assert "[[cnbc]]" in outline
+def test_coherence_prompt_protects_concrete_release_claims():
     assert "Never claim none occurred" in _COHERENCE_PROMPT
 
 
@@ -205,6 +192,22 @@ class _SummaryRouter:
         )
 
 
+class _SequencedSummaryRouter:
+    def __init__(self, texts: list[str]) -> None:
+        self.texts = iter(texts)
+        self.requests = []
+
+    async def complete(self, request):  # noqa: ANN001
+        self.requests.append(request)
+        return CompletionResponse(
+            text=next(self.texts),
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+            finish_reason="stop",
+            model_used="summary-test",
+            request_id=request.request_id,
+        )
+
+
 class _ReleaseNLI:
     @staticmethod
     def _negative(text: str) -> bool:
@@ -253,8 +256,11 @@ async def test_coherence_rejects_grounded_claim_that_contradicts_another_section
             markdown="No significant open-source models were released this week [[negative]].",
         ),
     ]
-    router = _SummaryRouter(
-        "No significant open-source models were released this week [[negative]]."
+    router = _SequencedSummaryRouter(
+        [
+            "No significant open-source models were released this week [[negative]].",
+            "Muse Glimmer was released as open source this week [[released]].",
+        ]
     )
 
     summary = await coherence_pass(
@@ -269,6 +275,8 @@ async def test_coherence_rejects_grounded_claim_that_contradicts_another_section
     assert "Muse Glimmer was released" in summary
     assert "[[released]]" in summary
     assert "No significant" not in summary
+    # The contradicted draft was rejected and repaired via a second call.
+    assert len(router.requests) == 2
     prompt = router.requests[0].messages[-1].content
     assert "Grounding-supported cited findings" in prompt
     assert "published=2026-08-11" in prompt
@@ -313,15 +321,9 @@ async def test_coherence_allows_newer_supported_state_to_supersede_old_state():
 
 
 @pytest.mark.asyncio
-async def test_coherence_fallback_retains_dated_history_without_recency_scope():
+async def test_coherence_raises_when_summary_fails_validation_after_repair():
+    """An unusable summary is a run failure, never a manufactured digest."""
     passages = [
-        Passage(
-            id="old",
-            source_url="https://example.com/old",
-            source_title="Old status",
-            text="Muse Glimmer was not released.",
-            published_at=datetime.date(2026, 8, 1),
-        ),
         Passage(
             id="new",
             source_url="https://example.com/new",
@@ -332,59 +334,75 @@ async def test_coherence_fallback_retains_dated_history_without_recency_scope():
     ]
     sections = [
         ReportSection(
-            id="old-section",
-            title="Earlier status",
-            markdown="Muse Glimmer was not released [[old]].",
-        ),
-        ReportSection(
             id="new-section",
             title="Current status",
             markdown="Muse Glimmer was released [[new]].",
         ),
     ]
 
+    with pytest.raises(ReportCompilationError):
+        await coherence_pass(
+            "How did the release status change?",
+            sections,
+            router=_SummaryRouter(""),  # type: ignore[arg-type]
+            passages=passages,
+            nli=_ReleaseNLI(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_coherence_repairs_opening_section_copy_into_cross_section_summary():
+    passages = [
+        Passage(
+            id="announcement",
+            source_url="https://example.com/announcement",
+            source_title="Announcement",
+            text=(
+                "The Muse Glimmer release was announced this week. "
+                "The announcement described a public repository."
+            ),
+        ),
+        Passage(
+            id="released",
+            source_url="https://example.com/released",
+            source_title="Release",
+            text="Muse Glimmer was released as open source this week.",
+        ),
+    ]
+    opening = (
+        "The Muse Glimmer release was announced this week [[announcement]]. "
+        "The announcement described a public repository [[announcement]]."
+    )
+    sections = [
+        ReportSection(id="opening", title="Background", markdown=opening),
+        ReportSection(
+            id="answer",
+            title="Bottom line",
+            markdown="Muse Glimmer was released as open source this week [[released]].",
+        ),
+    ]
+    repaired = (
+        "Muse Glimmer was released as open source this week [[released]]. "
+        "The announcement described a public repository [[announcement]]."
+    )
+    router = _SequencedSummaryRouter([opening, repaired])
+
     summary = await coherence_pass(
-        "How did the release status change?",
+        "Was Muse Glimmer released as open source?",
         sections,
-        router=_SummaryRouter(""),  # type: ignore[arg-type]
+        router=router,  # type: ignore[arg-type]
         passages=passages,
         nli=_ReleaseNLI(),
     )
 
-    assert summary.startswith("Sources disagree on some current-state findings.")
-    assert "Muse Glimmer was not released" in summary
-    assert "[[old]]" in summary
-    assert "Muse Glimmer was released" in summary
-    assert "[[new]]" in summary
-    assert "\n\n" in summary
-
-
-def test_fallback_summary_keeps_markdown_markers_out_of_the_paragraph_body():
-    from disco.retrieval.deep_research._summary import (
-        _fallback_findings,
-        _SupportedFinding,
+    assert summary == (
+        "Muse Glimmer was released as open source this week [[released]].\n\n"
+        "The announcement described a public repository [[announcement]]."
     )
-
-    findings = [
-        _SupportedFinding(
-            text="> **As of August 16, 2026**, the release is public",
-            cited_ids=("release",),
-            section_index=0,
-            published_at=datetime.date(2026, 8, 16),
-        ),
-        _SupportedFinding(
-            text="The repository includes model weights",
-            cited_ids=("weights",),
-            section_index=1,
-            published_at=datetime.date(2026, 8, 16),
-        ),
-    ]
-
-    summary = _fallback_findings(findings, _ReleaseNLI(), None)
-
-    assert summary.startswith("**As of August 16, 2026**")
-    assert not summary.startswith(">")
-    assert "\n\n" in summary
+    assert len(router.requests) == 2
+    assert router.requests[0].messages[-1].content.index("## Bottom line") < (
+        router.requests[0].messages[-1].content.index("## Background")
+    )
 
 
 def test_successful_summary_is_split_when_provider_ignores_paragraph_contract():
@@ -412,150 +430,3 @@ def test_successful_summary_preserves_existing_markdown_paragraphs():
         "**Bottom line.** The first finding is supported [[one]].\n\n"
         "The qualification is also supported [[two]]."
     )
-
-
-# ---------------------------------------------------------------------------
-# Empty-evidence honesty: the junk filter and the honest fallback paragraph.
-# Junk rows are REAL fragments from an exported report that shipped as
-# executive-summary prose before the filter existed.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("fragment", "is_junk"),
-    [
-        # scrape metadata stub (also ends in an ellipsis)
-        ("    Last verified: August 19, 2026 ….", True),
-        # site-navigation boilerplate with an escaped relative-path link
-        (
-            "For more details including relating to our methodology, "
-            "see our \\[FAQs.\\](/faq)",
-            True,
-        ),
-        # raw scraped-table fragments ('|' debris)
-        ("| Vendor | Q2 revenue | Growth |", True),
-        ("Owner | Fleet size | 12", True),
-        # mid-sentence truncation stubs
-        ("…and the remainder of the fleet was retrofitted by June", True),
-        ("which is why the market cannot yet be sized before 2030", True),
-        ("The market grew rapidly in the first half and …", True),
-        # too short to inform
-        ("Read more", True),
-        # subscribe/cookie boilerplate
-        ("Subscribe to our newsletter for weekly updates on the sector.", True),
-        ("Accept all cookies to continue reading this article.", True),
-        # genuine findings must all survive
-        ("Muse Glimmer was released", False),
-        ("The repository includes model weights", False),
-        ("> **As of August 16, 2026**, the release is public", False),
-        (
-            "Samsung announced a solid-state battery with a claimed 600-mile range",
-            False,
-        ),
-    ],
-)
-def test_junk_evidence_filter(fragment: str, is_junk: bool):
-    from disco.retrieval.deep_research._summary import _is_junk_evidence
-
-    assert _is_junk_evidence(fragment) is is_junk
-
-
-def test_fallback_summary_drops_junk_findings_but_keeps_genuine_ones():
-    from disco.retrieval.deep_research._summary import (
-        _fallback_findings,
-        _SupportedFinding,
-    )
-
-    findings = [
-        _SupportedFinding(
-            text="Last verified: August 19, 2026 ….",
-            cited_ids=("nav1",),
-            section_index=0,
-            published_at=None,
-        ),
-        _SupportedFinding(
-            text="| Vendor | Q2 revenue | Growth |",
-            cited_ids=("tbl1",),
-            section_index=0,
-            published_at=None,
-        ),
-        _SupportedFinding(
-            text="The repository includes model weights",
-            cited_ids=("weights",),
-            section_index=1,
-            published_at=datetime.date(2026, 8, 16),
-        ),
-    ]
-
-    summary = _fallback_findings(findings, _ReleaseNLI(), None)
-
-    assert "The repository includes model weights" in summary
-    assert "[[weights]]" in summary
-    assert "Last verified" not in summary
-    assert "|" not in summary
-
-
-def test_fallback_summary_with_only_junk_findings_is_one_honest_paragraph():
-    from disco.retrieval.deep_research._summary import (
-        _UNGROUNDED_SUMMARY_FALLBACK,
-        _fallback_findings,
-        _SupportedFinding,
-    )
-
-    findings = [
-        _SupportedFinding(
-            text=(
-                "For more details including relating to our methodology, "
-                "see our \\[FAQs.\\](/faq)"
-            ),
-            cited_ids=("faq",),
-            section_index=0,
-            published_at=None,
-        ),
-        _SupportedFinding(
-            text="…and the remainder of the fleet was retrofitted by June",
-            cited_ids=("stub",),
-            section_index=1,
-            published_at=None,
-        ),
-    ]
-
-    summary = _fallback_findings(findings, _ReleaseNLI(), None)
-
-    assert summary == _UNGROUNDED_SUMMARY_FALLBACK
-    assert summary.startswith("The research could not ground an executive summary")
-    assert "per-section detail" in summary
-    assert "FAQs" not in summary
-    assert not summary.startswith("Sources disagree")
-
-
-def test_fallback_conflict_checks_are_bounded_without_dropping_unchecked_findings():
-    from disco.retrieval.deep_research._summary import (
-        _MAX_FALLBACK_CONFLICT_CHECKS,
-        _fallback_findings,
-        _SupportedFinding,
-    )
-
-    class _CountingNLI(_ReleaseNLI):
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def entail(self, premise: str, hypothesis: str) -> str:
-            self.calls += 1
-            return super().entail(premise, hypothesis)
-
-    findings = [
-        _SupportedFinding(
-            text=("Muse Glimmer was not released" if index % 2 else "Muse Glimmer was released"),
-            cited_ids=(f"p{index}",),
-            section_index=index % 12,
-            published_at=datetime.date(2026, 1, 1) + datetime.timedelta(days=index),
-        )
-        for index in range(500)
-    ]
-    nli = _CountingNLI()
-
-    summary = _fallback_findings(findings, nli, "week")
-
-    assert nli.calls <= _MAX_FALLBACK_CONFLICT_CHECKS * 2
-    assert "[[p499]]" in summary
