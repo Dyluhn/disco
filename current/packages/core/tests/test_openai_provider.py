@@ -70,6 +70,51 @@ async def test_non_streaming_parses_content_and_usage():
     assert r.finish_reason == "stop"
     assert r.usage.input_tokens == 5 and r.usage.output_tokens == 1
 
+    def responses_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert request.url.path == "/v1/responses"
+        assert body == {
+            "model": "muse-spark-1.2-contributor",
+            "input": [{"role": "user", "content": "hi"}],
+            "temperature": 0.0,
+            # Muse reasoning and visible output share this allowance, so the
+            # adapter preserves Disco's 50-token answer budget with headroom.
+            "max_output_tokens": 1074,
+            "reasoning": {"effort": "low"},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "model": "muse-spark-1.2-contributor",
+                "status": "completed",
+                "output": [
+                    {"type": "reasoning", "summary": []},
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "Muse answer"}],
+                    },
+                ],
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 218,
+                    "input_tokens_details": {"cached_tokens": 3},
+                    "output_tokens_details": {"reasoning_tokens": 207},
+                },
+            },
+        )
+
+    muse = OpenAIProvider(
+        "https://api.meta.ai/v1/responses",
+        name="meta-muse",
+        transport=httpx.MockTransport(responses_handler),
+    )
+    muse_response = await muse.complete(_req(), model="muse-spark-1.2-contributor")
+    assert muse_response.text == "Muse answer"
+    assert muse_response.finish_reason == "stop"
+    assert muse_response.usage.input_tokens == 12
+    assert muse_response.usage.cached_tokens == 3
+    assert muse_response.response_metadata == {"reasoning_tokens": 207}
+
 
 async def test_reasoning_only_truncation_yields_empty_content():
     # A reasoning model truncated mid-thought (small max_tokens) → empty content.
@@ -201,6 +246,41 @@ async def test_streaming_reassembles_and_final_matches():
     assert final.text == "Hello, world"
     assert final.finish_reason == "stop"
     assert final.usage.output_tokens == 2
+
+    def responses_handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert request.url.path == "/v1/responses"
+        assert "stream" not in body
+        return httpx.Response(
+            200,
+            json={
+                "model": "muse-spark-1.2-contributor",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "One response"}],
+                    }
+                ],
+                "usage": {"input_tokens": 4, "output_tokens": 2},
+            },
+        )
+
+    responses_provider = OpenAIProvider(
+        "https://api.meta.ai/v1/responses",
+        name="meta-muse",
+        transport=httpx.MockTransport(responses_handler),
+    )
+    response_chunks = [
+        chunk
+        async for chunk in responses_provider.stream_complete(
+            _req(), model="muse-spark-1.2-contributor"
+        )
+    ]
+    assert [chunk.delta_text for chunk in response_chunks] == ["One response", ""]
+    assert response_chunks[-1].done is True
+    assert response_chunks[-1].final is not None
+    assert response_chunks[-1].final.text == "One response"
 
 
 async def _collect(provider, model="m"):

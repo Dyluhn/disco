@@ -15,14 +15,15 @@ each extracted piece, so `DeepResearchRun`'s own call sites (and its `run()`
 orchestration) are unchanged.
 
 Modules:
-- :mod:`_plan`   -- plan-bounding + gather-task dispatch (`prepare_plan`,
+- :mod:`_plan`     -- plan-bounding + gather-task dispatch (`prepare_plan`,
   `start_gather_tasks`, `start_one_steer_task`).
-- :mod:`_drain`  -- the drain-and-synthesize consumer loop plus its
-  single-purpose helpers (stop-condition check, D3 steer/inject checkpoints,
-  leg-result await, per-leg synthesis).
-- :mod:`_refine` -- the A4.4 iterative-refinement loop plus `refine_section`'s
-  single-purpose helpers.
-- :mod:`_report` -- final report assembly (`assemble_report`).
+- :mod:`_drain`    -- the research-phase drain loop plus its single-purpose
+  helpers (stop-condition check, D3 steer/inject checkpoints, leg-result
+  await) and the research wall-clock reserve (`seconds_left`).
+- :mod:`_adaptive` -- adaptive probe-batch execution between drains.
+- :mod:`_compiler` -- the one post-research report path (outline → sections).
+- :mod:`_finish`   -- report finalization (compile → summary → assemble).
+- :mod:`_report`   -- final report data collection (`collect_report_data`).
 """
 
 from __future__ import annotations

@@ -25,7 +25,7 @@ Four surfaces, one shared event log + agent core:
 | Surface | What it does |
 |---|---|
 | **Search** | A single grounded answer — claims tethered to extracted passages, with a citation-verification (NLI) pass that marks unsupported claims rather than hiding them. |
-| **Deep Research** | A multi-source report: decompose → parallel retrieval → adversarial claim verification → cited synthesis, with depth tiers, replay, and export (Markdown / PDF / DOCX). |
+| **Deep Research** | A multi-source report: broad investigation plan → adaptive search/read/gap loop → evidence-led report outline → cited synthesis and claim verification, with depth tiers, replay, and export (Markdown / PDF / DOCX). |
 | **Build** | A single-threaded coding agent in a sandbox: shell sessions, dev-server preview, browser automation, a persistent IPython kernel, file/code artifacts, plan + risk-gated execution, workspace versions, preview, and rollback. |
 | **Agent** | The *same* agent machinery as Build, framed as a general task agent — point it at any multi-step task, extend its reach with MCP servers. |
 
@@ -235,6 +235,9 @@ npm run typecheck:build
 npm run build
 npm run test
 ```
+
+Deep Research development runs can be injected, replayed, and inspected with
+the [outside-observer harness](development/harness/DEEP_RESEARCH.md).
 
 Audio overviews (RP-09) use the **bundled** in-process Kokoro TTS — `kokoro-onnx` +
 `lameenc`. This is a default product tier, so it ships in the agent-server's core

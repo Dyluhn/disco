@@ -52,16 +52,16 @@ SANCTIONED_COMMANDS: tuple[dict[str, Any], ...] = (
     {
         "label": "make harness",
         "source": "Makefile:harness",
-        "argv": ["-m", "pytest", "--collect-only", "harness"],
+        "argv": ["-m", "pytest", "--collect-only", "development/harness"],
         "needs_repo_root_on_path": True,
-        "quote": "PYTHONPATH=. uv run pytest harness",
+        "quote": "PYTHONPATH=. uv run pytest development/harness",
     },
     {
         "label": "make integrations",
         "source": "Makefile:integrations",
-        "argv": ["-m", "pytest", "--collect-only", "integrations"],
+        "argv": ["-m", "pytest", "--collect-only", "current/integrations"],
         "needs_repo_root_on_path": True,
-        "quote": "PYTHONPATH=. uv run pytest integrations",
+        "quote": "PYTHONPATH=. uv run pytest current/integrations",
     },
     {
         "label": "ci required unit",

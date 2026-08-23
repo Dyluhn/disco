@@ -163,29 +163,25 @@ def test_create_conversation_applies_depth_tier():
 
 
 def test_create_conversation_applies_iterative():
-    """A4: the POST /conversations `iterative` flag must reach the runtime — it
-    flows UI→request→set_iterative exactly like depth_tier→set_depth. Default OFF."""
+    """Older clients may still send the field, but it cannot select a second
+    Deep Research execution path."""
     store = SqliteEventStore(":memory:")
     runtime = _runtime(store, "x")
     client = TestClient(create_app(store, runtime=runtime))
 
-    cid_on = client.post(
+    response_on = client.post(
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "iterative": True},
-    ).json()["conversation_id"]
-    assert runtime.deep_research._iterative_for(cid_on) is True
+    )
+    assert response_on.status_code == 200
 
-    cid_off = client.post(
+    response_off = client.post(
         "/conversations",
         json={"owner_id": "local", "surface": "deep_research", "iterative": False},
-    ).json()["conversation_id"]
-    assert runtime.deep_research._iterative_for(cid_off) is False
-
-    # omitted → the OFF default still applies
-    cid_def = client.post(
-        "/conversations", json={"owner_id": "local", "surface": "deep_research"}
-    ).json()["conversation_id"]
-    assert runtime.deep_research._iterative_for(cid_def) is False
+    )
+    assert response_off.status_code == 200
+    assert not hasattr(runtime.deep_research, "set_iterative")
+    assert not hasattr(runtime.deep_research, "_iterative_for")
 
 
 def test_create_conversation_applies_research_sources():

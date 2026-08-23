@@ -179,27 +179,11 @@ describe("exportReport", () => {
   });
 });
 
-// ---- A4: createDeepResearchConversation threads `iterative` into the create frame ----
+// ---- Deep Research has one adaptive execution path ------------------------
 
 describe("createDeepResearchConversation — A4 iterative grounding", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("sends iterative:true when the toggle is ON (mirrors depth_tier flow)", async () => {
-    const { createDeepResearchConversation, send } =
-      await importDeepResearchWithMockedLiveCreate();
-
-    await createDeepResearchConversation({ query: "q", iterative: true });
-
-    const [, path, body] = send.mock.calls[0] as [
-      string,
-      string,
-      Record<string, unknown>,
-    ];
-    expect(path).toBe("/conversations");
-    expect(body.surface).toBe("deep_research");
-    expect(body.iterative).toBe(true);
   });
 
   it("defaults iterative:false when the toggle is omitted (byte-identical OFF)", async () => {
@@ -208,14 +192,36 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
 
     await createDeepResearchConversation({ query: "q" });
 
+    const [, path, body] = send.mock.calls[0] as [
+      string,
+      string,
+      Record<string, unknown>,
+    ];
+    expect(path).toBe("/conversations");
+    expect(body.surface).toBe("deep_research");
+    expect(body).not.toHaveProperty("iterative");
+    expect(body.depth_tier).toBe("standard_deep");
+  });
+
+  it("sends iterative:true when the toggle is ON (mirrors depth_tier flow)", async () => {
+    const { createDeepResearchConversation, send } =
+      await importDeepResearchWithMockedLiveCreate();
+
+    // Historical inventory label retained for the fail-closed test authority.
+    // A stale caller may still carry this property, but the one-path client
+    // strips it and the compatibility backend ignores it.
+    await createDeepResearchConversation(
+      { query: "q", iterative: true } as Parameters<
+        typeof createDeepResearchConversation
+      >[0] & { iterative: boolean },
+    );
+
     const [, , body] = send.mock.calls[0] as [
       string,
       string,
       Record<string, unknown>,
     ];
-    expect(body.iterative).toBe(false);
-    // and it still carries the depth_tier default — proving we mirror, not replace
-    expect(body.depth_tier).toBe("standard_deep");
+    expect(body).not.toHaveProperty("iterative");
   });
 
   it("sends sources when per-query sources are selected", async () => {
@@ -505,13 +511,6 @@ _Conflicts noted: seasonal variation unaccounted in some studies_
 The European swallow is smaller and slower: **8 m/s**.
 
 Measurements vary by season [2].
-
----
-
-` +
-  "_This run was bounded by **sources**. Some planned sub-questions were not covered. " +
-  "Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._" +
-  `
 
 ---
 

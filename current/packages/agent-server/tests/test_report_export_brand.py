@@ -269,13 +269,6 @@ Measurements vary by season [2].
 
 ---
 
-"""
-    "_This run was bounded by **sources**. Some planned sub-questions were not covered. "
-    "Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._"
-    """
-
----
-
 Sources cited (2):
 
 - [1] Avian Speed Database — https://birds.example.com/p0
@@ -491,7 +484,7 @@ def test_endpoint_valid_theme_returns_payload(
     assert CAPTURED_MARKDOWN.encode("utf-8") == r.content
 
 
-# ---- 14. bounded_by note present when set ------------------------------------
+# ---- 14. bounded_by remains metadata, never report prose ---------------------
 
 
 def test_build_pdf_html_bounded_note() -> None:
@@ -506,7 +499,8 @@ def test_build_pdf_html_bounded_note() -> None:
     )
     theme = resolve_theme("disco", "light")
     html = _build_pdf_html(report, None, theme)
-    assert "bounded-note" in html
+    assert 'class="bounded-note"' not in html
+    assert "Bounded by" in html
     assert "sources" in html
 
 

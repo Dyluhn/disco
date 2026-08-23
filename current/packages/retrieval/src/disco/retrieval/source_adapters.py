@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import logging
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
@@ -15,6 +16,8 @@ import httpx
 from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
 from .models import SearchHit
+
+_LOG = logging.getLogger(__name__)
 from .providers import SearchProvider
 from .url_policy import parse_source_date, source_url_key, url_allowed
 
@@ -437,8 +440,16 @@ class MultiSearchProvider:
             return_exceptions=True,
         )
         rows_by_provider: list[list[SearchHit]] = []
-        for result in gathered:
-            if isinstance(result, BaseException) or not result:
+        for provider, result in zip(self._providers, gathered, strict=True):
+            if isinstance(result, BaseException):
+                _LOG.warning(
+                    "search provider %s failed: %s: %s",
+                    getattr(provider, "name", type(provider).__name__),
+                    type(result).__name__,
+                    result,
+                )
+                continue
+            if not result:
                 continue
             rows_by_provider.append(list(result))
         return rows_by_provider

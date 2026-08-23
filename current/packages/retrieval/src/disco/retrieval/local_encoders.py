@@ -279,6 +279,10 @@ class FastEmbedNLIVerifier:
         self._entail_at = entail_at
         self._contradict_below = contradict_below
         self._cache: dict[tuple[str, str], float] = {}
+        # Pairs whose encoder call FAILED. A failed measurement is "neutral"
+        # (no signal), never "contradict" — a score of 0.0 would otherwise
+        # fall below `contradict_below` and label the claim contradicted.
+        self._errored: set[tuple[str, str]] = set()
 
     def score(self, premise: str, hypothesis: str) -> float:
         key = (premise, hypothesis)
@@ -290,11 +294,14 @@ class FastEmbedNLIVerifier:
                 # RAM guard: propagate so the caller gets an honest error, not a wrong neutral
                 raise
             except Exception:  # noqa: BLE001 — failure → neutral, never crash
+                self._errored.add(key)
                 self._cache[key] = 0.0
         return self._cache[key]
 
     def entail(self, premise: str, hypothesis: str) -> Entailment:
         s = self.score(premise, hypothesis)
+        if (premise, hypothesis) in self._errored:
+            return "neutral"
         if s >= self._entail_at:
             return "entail"
         if s <= self._contradict_below:

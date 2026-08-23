@@ -125,11 +125,10 @@ export function deriveReport(events: AgentEvent[]): ReportEvent | null {
   return null;
 }
 
-/** Placeholder section-cards rendered DURING the run, so the user sees the
- *  report's structure assembling. Each plan sub-question becomes a placeholder;
- *  when `synthesize_section` fires it transitions to "writing"; when the
- *  final ReportEvent arrives the placeholder is superseded by the real
- *  ReportSection (the surface handles the swap). */
+/** Final report sections. The approved plan contains starting research
+ * directions, not a promised document outline, so plan steps must never become
+ * fake section placeholders. The report compiler owns section structure after
+ * the evidence loop finishes. */
 export interface AssemblingSection {
   id: string;
   title: string;
@@ -142,31 +141,15 @@ export function deriveAssemblingSections(
   events: AgentEvent[],
   plan: DeepPlanView | null,
 ): AssemblingSection[] {
-  if (!plan) return [];
+  void plan;
   const report = deriveReport(events);
-  const sectionByTitle = new Map<string, ReportSection>();
-  if (report) {
-    for (const s of report.sections) sectionByTitle.set(s.title, s);
-  }
-  const writingTitles = new Set<string>();
-  for (const e of events) {
-    if (e.kind !== "action" || !e.tool_call) continue;
-    if (e.tool_call.tool_name === "synthesize_section") {
-      writingTitles.add(String(e.tool_call.arguments.section ?? ""));
-    }
-  }
-  return plan.steps.map((step, i) => {
-    const real = sectionByTitle.get(step.title);
-    let state: "pending" | "writing" | "done" = "pending";
-    if (real) state = "done";
-    else if (writingTitles.has(step.title)) state = "writing";
-    return {
-      id: real?.id ?? `s${i}`,
-      title: step.title,
-      state,
-      section: real ?? null,
-    };
-  });
+  if (!report) return [];
+  return report.sections.map((section) => ({
+    id: section.id,
+    title: section.title,
+    state: "done",
+    section,
+  }));
 }
 
 // ---- live activity (trace) -------------------------------------------------

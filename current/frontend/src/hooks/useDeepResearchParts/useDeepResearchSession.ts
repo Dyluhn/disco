@@ -1,7 +1,7 @@
 /**
  * Deep Research session state, split out of `useDeepResearch`
  * (PKG-12-C/TS-0043/TS-0044): the surface's controls (leader/sources/depth/
- * iterative/recency), the active session, the resume-path effect, and the
+ * recency), the active session, the resume-path effect, and the
  * G1/DR-4 pre-created-cid machinery so file attachments work before the
  * first submit.
  */
@@ -23,8 +23,6 @@ export interface DeepResearchSessionApi {
   setSources: (sources: string[]) => void;
   depthTier: Tier;
   setDepthTier: (tier: Tier) => void;
-  iterative: boolean;
-  setIterative: (iterative: boolean) => void;
   recencyWindow: "month" | "week" | null;
   setRecencyWindow: (window: "month" | "week" | null) => void;
   /** G1/DR-4: the pre-created cid for the empty state (before first submit). */
@@ -34,7 +32,7 @@ export interface DeepResearchSessionApi {
   preCreateFlightRef: MutableRefObject<Promise<string> | null>;
   /** W-07: lazily obtain the pre-created cid for the Attach affordance so
    *  uploads work BEFORE the user submits. Returns the existing preCid, or
-   *  creates one NOW carrying the CURRENT depth/recency/iterative/leader
+   *  creates one NOW carrying the CURRENT depth/recency/leader
    *  settings (so the upload lands in the conversation that will actually
    *  run) and stores it so submit() reuses the SAME cid. null offline. */
   ensurePreCid: () => Promise<string | null>;
@@ -56,10 +54,6 @@ export function useDeepResearchSession(
   const [leaderId, setLeaderId] = useState<string | null>(initialLeaderId ?? null);
   const [sources, setSources] = useState<string[]>(initialSources);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
-  // A4: iterative grounding toggle — false = standard run, true = re-search
-  // weakly-grounded claims + re-check (up to 3 rounds). Flows into submit's
-  // create frame as `iterative`, read by the runtime's set_iterative path.
-  const [iterative, setIterative] = useState(false);
   // DR-3: recency filter — null = off (any time), "month"/"week" = date-bounded.
   const [recencyWindow, setRecencyWindow] = useState<"month" | "week" | null>(null);
 
@@ -90,7 +84,6 @@ export function useDeepResearchSession(
       query: "",
       leaderId,
       depthTier,
-      iterative,
       recencyWindow,
       sources,
     }).then((cid) => {
@@ -108,7 +101,6 @@ export function useDeepResearchSession(
     preCid,
     preCreate,
     depthTier,
-    iterative,
     recencyWindow,
     leaderId,
     sources,
@@ -123,8 +115,6 @@ export function useDeepResearchSession(
     setSources,
     depthTier,
     setDepthTier,
-    iterative,
-    setIterative,
     recencyWindow,
     setRecencyWindow,
     preCid,

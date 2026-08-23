@@ -91,7 +91,7 @@ def provider_request_shape(
 ) -> ProviderRequestShape:
     """Reduce an already-final payload to a fixed, content-free scalar shape."""
 
-    messages = payload.get("messages")
+    messages = payload.get("messages", payload.get("input"))
     message_list = messages if isinstance(messages, list) else []
     tools = payload.get("tools")
     tool_list = tools if isinstance(tools, list) else []
@@ -104,7 +104,7 @@ def provider_request_shape(
     context_window = (
         raw_context_window if type(raw_context_window) is int and raw_context_window > 0 else None
     )
-    max_output_tokens = payload.get("max_tokens")
+    max_output_tokens = payload.get("max_tokens", payload.get("max_output_tokens"))
     if type(max_output_tokens) is not int or max_output_tokens <= 0:
         max_output_tokens = None
     return ProviderRequestShape(

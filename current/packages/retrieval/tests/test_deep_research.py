@@ -18,7 +18,10 @@ event-emission shape can be validated.
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -171,14 +174,26 @@ class _FakeNLI:
 
 
 class _ScriptedRouter(LLMRouter):
-    """Returns scripted responses based on a per-role queue. Tests script the
-    decompose, gap_reason, section synthesis, and coherence calls. Round-robin
-    across the queue per role; falls back to a benign default if exhausted."""
+    """Returns scripted responses dispatched by PROMPT SHAPE, with per-role
+    queues as the override. The funnel's call order (planner → sections →
+    summary) is an implementation detail; dispatching on the prompt keeps the
+    fakes stable while letting a test script any specific stage:
+
+      - scripts["section"]: per-section synthesis bodies (in order);
+      - scripts["summary"]: executive-summary drafts (draft, then repair);
+      - scripts["rag_answerer"]: legacy shared queue (section + summary);
+      - scripts["query_rewriter"]: gap-reason / decompose lines.
+
+    Unscripted planner/section/summary calls get grounded auto-responses that
+    cite real ids from the prompt, so most tests exercise the funnel without
+    hand-scripting every call."""
 
     def __init__(self, scripts: dict[str, list[str]] | None = None) -> None:
         self._scripts: dict[str, list[str]] = {
             "query_rewriter": [],
             "rag_answerer": [],
+            "section": [],
+            "summary": [],
         }
         if scripts:
             for k, v in scripts.items():
@@ -188,6 +203,28 @@ class _ScriptedRouter(LLMRouter):
         # the C14 isolation tests to assert each gather leg's LLM calls are
         # scoped to that leg's per-leg CallContext, not the shared default.
         self.call_contexts: list[str | None] = []
+
+    @staticmethod
+    def _auto_section(last_msg: str) -> str:
+        ids = re.findall(r"^\[([\w-]+)\]", last_msg, re.MULTILINE)[:2]
+        if not ids:
+            return "(no scripted response)"
+        cited = " ".join(f"[[{pid}]]" for pid in ids)
+        # Long enough to clear the per-section minimum-content gate (the gate
+        # caps at 120 words), every sentence cited and entailed by overlap.
+        sentence = (
+            "The sources document the research question with collected data "
+            f"and measured evidence relevant to the finding {cited}."
+        )
+        return " ".join([sentence] * 12)
+
+    @staticmethod
+    def _auto_summary(last_msg: str) -> str:
+        ids = list(dict.fromkeys(re.findall(r"\[\[([\w-]+)\]\]", last_msg)))[:2]
+        if not ids:
+            return "(no scripted response)"
+        cited = " ".join(f"[[{pid}]]" for pid in ids)
+        return f"The evidence establishes the answer to the question {cited}."
 
     async def complete(
         self, request: CompletionRequest, *, context: Any = None
@@ -199,6 +236,16 @@ class _ScriptedRouter(LLMRouter):
         )
         # snapshot what the LAST user message was for assertions
         last_msg = request.messages[-1].content if request.messages else ""
+        prompt_texts = [message.content for message in request.messages]
+        planner_msg = next(
+            (text for text in prompt_texts if "Design the finished report structure" in text),
+            "",
+        )
+        is_section = any(
+            "You are writing one section" in text or "Rewrite the previous section" in text
+            for text in prompt_texts
+        )
+        is_summary = any("executive editor of a research report" in text for text in prompt_texts)
         self.calls.append((role, last_msg))
         ctx_id = (
             context.conversation_id
@@ -206,11 +253,29 @@ class _ScriptedRouter(LLMRouter):
             else None
         )
         self.call_contexts.append(ctx_id)
-        queue = self._scripts.get(role, [])
-        if queue:
+        if role == "rag_answerer" and planner_msg:
+            evidence_ids = re.findall(r"^\[([^\]]+)\]", planner_msg, re.MULTILINE)
+            groups = [evidence_ids[index : index + 3] for index in range(0, len(evidence_ids), 3)]
+            text = json.dumps(
+                [
+                    {"title": f"Evidence-led finding {index + 1}", "evidence_ids": ids}
+                    for index, ids in enumerate(groups)
+                ]
+            )
+        elif role == "rag_answerer" and "strict claim-grounding judge" in last_msg:
+            text = "SUPPORTED"
+        elif is_section and self._scripts["section"]:
+            text = self._scripts["section"].pop(0)
+        elif is_summary and self._scripts["summary"]:
+            text = self._scripts["summary"].pop(0)
+        elif (queue := self._scripts.get(role, [])):
             text = queue.pop(0)
         elif role == "query_rewriter":
             text = "SUFFICIENT\nnone"  # default: stop the loop
+        elif is_section:
+            text = self._auto_section(last_msg)
+        elif is_summary:
+            text = self._auto_summary(last_msg)
         else:
             text = "(no scripted response)"
         return CompletionResponse(
@@ -402,16 +467,11 @@ async def test_full_run_produces_multi_section_report() -> None:
                 "SUFFICIENT\nnone",
                 "SUFFICIENT\nnone",
             ],
-            # synthesis: one body per section + coherence summary (4 total)
-            # Each section retrieves up to top_k passages from the in-memory vector
-            # store. Section 1 sees passages from the first sub-q's search (p0,p1,
-            # p2), section 2 from the second (p3-onwards). We cite at least one
-            # known id in each so cited_passage_ids is populated.
-            "rag_answerer": [
-                "The basics of X are well-established [[p0]]. Sources cite consistent data [[p1]].",
-                "Today, X works via mechanism Y [[p3]]. Systems demonstrate this [[p4]].",
-                "Future directions point to Z [[p6]]. The field expects progress [[p7]].",
-                "This report surveys X — its basics, present state, and outlook.",
+            # Sections are auto-answered (grounded, floor-clearing bodies citing
+            # each spec's evidence). The summary is scripted CITED so the one
+            # summary writer accepts it on the first draft.
+            "summary": [
+                "The evidence establishes the state of X and its trajectory [[p0]] [[p3]].",
             ],
         }
     )
@@ -431,16 +491,27 @@ async def test_full_run_produces_multi_section_report() -> None:
         depth=DepthTier.STANDARD_DEEP,
         conversation_id="conv_e2e",
     )
+    run._bound = replace(
+        run._bound,
+        min_evidence_passages=9,
+        min_evidence_themes=3,
+        min_evidence_sources=9,
+    )
     plan_steps = ["What is X?", "How does X work today?", "Where is X going?"]
     captured, emit = _collect_events()
     result = await run.run(plan_steps, emit=emit)
 
     # the headline: 3 sections + an executive summary
     assert len(result.sections) == 3
-    assert [s.title for s in result.sections] == plan_steps
-    # The model's uncited summary is rejected; the reducer falls back to
-    # already-verified section findings with resolvable citations.
-    assert result.summary.startswith("The basics of X")
+    assert [s.title for s in result.sections] == [
+        "Evidence-led finding 1",
+        "Evidence-led finding 2",
+        "Evidence-led finding 3",
+    ]
+    assert not ({s.title for s in result.sections} & set(plan_steps))
+    # The one summary writer produced a cited, substantive summary.
+    assert result.summary.strip()
+    assert "[[" in result.summary
     assert "[[p0]]" in result.summary
     # bounded_by is None when nothing hit the caps
     assert result.bounded_by is None
@@ -457,8 +528,9 @@ async def test_full_run_produces_multi_section_report() -> None:
     assert ev.query == "the state of X"
     assert len(ev.sections) == 3
     assert ev.passages  # cited subset is populated
-    assert result.reviewed_passages  # reviewed evidence is retained separately
     assert ev.reviewed_passages == [p.model_dump() for p in result.reviewed_passages]
+    assert ev.claims
+    assert ev.completed_probes == plan_steps
     assert {p["id"] for p in ev.passages}.isdisjoint(
         {p["id"] for p in ev.reviewed_passages}
     )
@@ -471,20 +543,16 @@ async def test_full_run_produces_multi_section_report() -> None:
 
 async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
     """Stop is REAL: `should_cancel` is polled at each sub-question boundary; when
-    it trips, the run halts there, returns the partial sections gathered so far, and
-    flags bounded_by='stopped'. (Regression for "Stop is useless" — the engine used
-    to run to completion regardless.)"""
+    it trips, the run halts there and returns a CHECKPOINT — the gathered
+    evidence and probe state, no report prose — with bounded_by='stopped'.
+    (Regression for "Stop is useless" — the engine used to run to completion
+    regardless.)"""
     search = _FakeSearch()
     extraction = _FakeExtraction()
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-        }
-    )
+    router = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 5})
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
@@ -512,10 +580,12 @@ async def test_should_cancel_halts_at_checkpoint_with_partial_report() -> None:
     result = await run.run(plan_steps, emit=emit, should_cancel=should_cancel)
 
     assert result.bounded_by == "stopped"  # halted by Stop, not by a cap
-    # partial but USABLE: the sub-question that finished before Stop is a fully
-    # synthesized section (a durable checkpoint), not lost work.
-    assert 0 < len(result.sections) < len(plan_steps)
-    assert result.sections[0].title == "What is X?"
+    # A Stop checkpoint carries evidence + probe state and NO report prose:
+    # the report is compiled once, on resume/finish, never manufactured here.
+    assert result.sections == []
+    assert result.summary == ""
+    assert result.reviewed_passages  # the gathered evidence is preserved
+    assert result.completed_probes == [plan_steps[0]]
     assert result.to_event().bounded_by == "stopped"  # propagates to the event
 
 
@@ -530,14 +600,9 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
         s, e, r = _FakeSearch(), _FakeExtraction(), _FakeReranker()
         return s, DefaultRetrievalEngine(search=s, extraction=e, reranker=r, embedder=None)
 
-    # ---- run 1: stop after the first sub-question is gathered+synthesized ----
+    # ---- run 1: stop after the first sub-question is gathered ----
     search1, eng1 = _engine()
-    router1 = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-        }
-    )
+    router1 = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 5})
     run1 = DeepResearchRun(
         query="the state of X",
         router=router1,
@@ -557,17 +622,14 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
 
     partial = await run1.run(plan_steps, emit=emit, should_cancel=cancel1)
     assert partial.bounded_by == "stopped"
-    assert [s.title for s in partial.sections] == ["What is X?"]  # 1 done
-    done_title = partial.sections[0].title
+    assert partial.sections == []
+    assert partial.completed_probes == [plan_steps[0]]
+    assert set(partial.pending_probes) == set(plan_steps[1:])
+    done_probe = partial.completed_probes[0]
 
-    # ---- run 2: resume — carry the completed section, finish the rest --------
+    # ---- run 2: resume — carry the evidence, finish the rest -----------------
     search2, eng2 = _engine()
-    router2 = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 5,
-            "rag_answerer": ["body [[p0]]"] * 5 + ["summary"],
-        }
-    )
+    router2 = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 5})
     run2 = DeepResearchRun(
         query="the state of X",
         router=router2,
@@ -583,15 +645,20 @@ async def test_resume_skips_completed_sections_and_finishes_the_rest() -> None:
         plan_steps,
         emit=emit2,
         resume_sections=partial.sections,
-        resume_passages=partial.cited_passages,
+        resume_passages=[*partial.cited_passages, *partial.reviewed_passages],
         resume_all_hits=partial.all_hits,
+        resume_completed_probes=partial.completed_probes,
+        resume_pending_probes=partial.pending_probes,
     )
 
-    # the full report: 4 sections in plan order, the carried one preserved verbatim
-    assert [s.title for s in final.sections] == plan_steps
+    # The report is recompiled globally; section count is evidence-dependent
+    # and is not the count of starting probes.
+    assert final.sections
+    assert not ({s.title for s in final.sections} & set(plan_steps))
+    assert set(plan_steps) <= set(final.completed_probes)
     assert final.bounded_by is None  # it finished
     # the completed sub-question was NOT re-gathered on resume (no search for it)
-    assert not any(done_title in q for q in search2.calls), search2.calls
+    assert not any(done_probe in q for q in search2.calls), search2.calls
     # but the remaining sub-questions WERE searched this run
     assert any("How does X work?" in q for q in search2.calls)
 
@@ -604,12 +671,7 @@ async def test_no_should_cancel_runs_to_completion() -> None:
         _FakeReranker(),
         _FakeEmbedder(),
     )
-    router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 4,
-            "rag_answerer": ["body [[p0]]"] * 4 + ["summary"],
-        }
-    )
+    router = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 4})
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
@@ -623,6 +685,12 @@ async def test_no_should_cancel_runs_to_completion() -> None:
         depth=DepthTier.STANDARD_DEEP,
         conversation_id="conv_nostop",
     )
+    run._bound = replace(
+        run._bound,
+        min_evidence_passages=6,
+        min_evidence_themes=1,
+        min_evidence_sources=6,
+    )
     _, emit = _collect_events()
     result = await run.run(["a", "b"], emit=emit)  # no should_cancel
     assert result.bounded_by is None and len(result.sections) == 2
@@ -635,12 +703,7 @@ async def test_cap_hit_produces_bounded_by_subquestions() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 10,
-            "rag_answerer": ["body [[p0]]"] * 10 + ["summary"],
-        }
-    )
+    router = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 10})
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
@@ -651,14 +714,14 @@ async def test_cap_hit_produces_bounded_by_subquestions() -> None:
         embedder=embedder,
         vector_store=vector_store,
         nli=_FakeNLI(),
-        depth=DepthTier.QUICK,  # cap = 3 sub-questions
+        depth=DepthTier.QUICK,  # cap = 6 probes
         conversation_id="conv_cap",
     )
-    # propose 5 — should be truncated to 3
-    plan_steps = [f"sub {i}" for i in range(5)]
+    # propose 8 — should be truncated to the six-probe quick cap
+    plan_steps = [f"sub {i}" for i in range(8)]
     _, emit = _collect_events()
     result = await run.run(plan_steps, emit=emit)
-    assert len(result.sections) == 3
+    assert len(result.sections) == 6
     assert result.bounded_by == "subquestions"
 
 
@@ -808,19 +871,41 @@ class _GapRecordingRouter(LLMRouter):
         msg_snapshot = list(request.messages)
         self.message_snapshots.append(msg_snapshot)
         last_msg = msg_snapshot[-1].content if msg_snapshot else ""
+        planner_msg = next(
+            (
+                message.content
+                for message in msg_snapshot
+                if "Design the finished report structure" in message.content
+            ),
+            "",
+        )
         ctx_id = (
             context.conversation_id
             if context is not None and getattr(context, "conversation_id", None)
             else None
         )
         self.records.append({"role": role, "last_msg": last_msg, "conversation_id": ctx_id})
-        if ctx_id == self._fail_when_conv_id:
+        if self._fail_when_conv_id is not None and ctx_id == self._fail_when_conv_id:
             raise RuntimeError(self._fail_message)
-        queue = self._scripts.get(role, [])
-        if queue:
+        if role == "rag_answerer" and planner_msg:
+            evidence_ids = re.findall(r"^\[([^\]]+)\]", planner_msg, re.MULTILINE)
+            groups = [evidence_ids[index : index + 3] for index in range(0, len(evidence_ids), 3)]
+            text = json.dumps(
+                [
+                    {"title": f"Evidence-led finding {index + 1}", "evidence_ids": ids}
+                    for index, ids in enumerate(groups)
+                ]
+            )
+        elif role == "rag_answerer" and "strict claim-grounding judge" in last_msg:
+            text = "SUPPORTED"
+        elif (queue := self._scripts.get(role, [])):
             text = queue.pop(0)
         elif role == "query_rewriter":
             text = "SUFFICIENT\nnone"
+        elif any("You are writing one section" in m.content for m in msg_snapshot):
+            text = _ScriptedRouter._auto_section(last_msg)
+        elif any("executive editor of a research report" in m.content for m in msg_snapshot):
+            text = _ScriptedRouter._auto_summary(last_msg)
         else:
             text = "(default)"
         return CompletionResponse(
@@ -871,20 +956,11 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     reranker = _FakeReranker()
     embedder = _FakeEmbedder()
     vector_store = InMemoryVectorStore()
-    # Scripted: gap reasoner SUFFICIENT for all legs (1 round each), one
-    # synthesis body per section, one coherence summary. Distinctive
-    # subq titles let us assert which leg's task appears in which call.
-    router = _GapRecordingRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 3,
-            "rag_answerer": [
-                "Basics of ALPHA-QUESTION are clear [[p0]]. Source confirms [[p1]].",
-                "BETA-QUESTION today looks like this [[p3]]. Evidence shows [[p4]].",
-                "GAMMA-QUESTION trends toward Z [[p6]]. The field expects [[p7]].",
-                "This report surveys the ALPHA, BETA, and GAMMA space.",
-            ],
-        }
-    )
+    # Scripted: gap reasoner SUFFICIENT for all legs (1 round each). Section
+    # bodies and the summary come from the fake's grounded auto-responses.
+    # Distinctive subq titles let us assert which leg's task appears in
+    # which call.
+    router = _GapRecordingRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 3})
     engine = DefaultRetrievalEngine(
         search=search, extraction=extraction, reranker=reranker, embedder=embedder
     )
@@ -898,6 +974,12 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
         depth=DepthTier.STANDARD_DEEP,
         conversation_id="conv_c14",
     )
+    run._bound = replace(
+        run._bound,
+        min_evidence_passages=9,
+        min_evidence_themes=3,
+        min_evidence_sources=9,
+    )
     plan_steps = [
         "ALPHA-QUESTION: what is it?",
         "BETA-QUESTION: how does it work?",
@@ -906,9 +988,13 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     _, emit = _collect_events()
     result = await run.run(plan_steps, emit=emit)
 
-    # (e) merge shape is unchanged — 3 sections, one per subq, in plan order.
+    # (e) the global compiler keeps the evidence coverage but owns the headings.
     assert len(result.sections) == 3
-    assert [s.title for s in result.sections] == plan_steps
+    assert [s.title for s in result.sections] == [
+        "Evidence-led finding 1",
+        "Evidence-led finding 2",
+        "Evidence-led finding 3",
+    ]
     assert result.bounded_by is None
 
     # ---- (a) per-leg CallContext at the router -----------------------------
@@ -965,22 +1051,17 @@ async def test_c14_concurrent_legs_have_isolated_contexts() -> None:
     ), "message snapshots are aliased — same list object reused across calls"
 
     # ---- (d) synthesis also uses the per-leg CallContext ------------------
-    synth_calls = [r for r in router.records if r["role"] == "rag_answerer"]
-    # One synthesis call per leg + one coherence summary = 4 total.
-    assert len(synth_calls) == 4
-    section_synth = synth_calls[:3]
-    coherence_call = synth_calls[3]
-    # Each section's synthesis was scoped to its leg's conversation_id.
+    section_synth = [
+        r
+        for r in router.records
+        if r["role"] == "rag_answerer" and "WRITE THE SECTION" in r["last_msg"]
+    ]
+    assert len(section_synth) == 3
+    # Final writing has fresh report-section contexts; research probe contexts
+    # remain isolated above and are not reused as report identity.
     for r in section_synth:
         assert r["conversation_id"] is not None
-        assert r["conversation_id"].startswith("conv_c14/s")
-    # The coherence call is the SHARED summary (post-merge step) — it's
-    # allowed to run with the default / None context, since it happens
-    # AFTER the merge and operates on the merged section list.
-    # We don't assert a specific cid on the coherence call; just that the
-    # 3 section synth calls are leg-scoped and the coherence call is
-    # distinct.
-    assert coherence_call is not None
+        assert r["conversation_id"].startswith("conv_c14/report/r")
 
 
 async def test_c14_one_leg_error_does_not_corrupt_other_leg() -> None:
@@ -1181,16 +1262,7 @@ async def _run_with_cap(cap: int | None) -> int:
         embedder=_FakeEmbedder(),
     )
     router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 4,  # 1 round per leg
-            "rag_answerer": [
-                "Body one [[p0]].",
-                "Body two [[p3]].",
-                "Body three [[p6]].",
-                "Body four [[p9]].",
-                "Coherence summary across all four.",
-            ],
-        }
+        {"query_rewriter": ["SUFFICIENT\nnone"] * 4}  # 1 round per leg
     )
     run = DeepResearchRun(
         query="cap test",
@@ -1202,6 +1274,12 @@ async def _run_with_cap(cap: int | None) -> int:
         depth=DepthTier.STANDARD_DEEP,
         conversation_id="conv_cap",
         gather_concurrency=cap,
+    )
+    run._bound = replace(
+        run._bound,
+        min_evidence_passages=12,
+        min_evidence_themes=4,
+        min_evidence_sources=12,
     )
     plan_steps = ["Q one", "Q two", "Q three", "Q four"]
     _, emit = _collect_events()
@@ -1219,10 +1297,9 @@ async def test_gather_concurrency_cap_bounds_in_flight_legs() -> None:
 
 
 async def test_gather_concurrency_none_runs_all_legs_concurrently() -> None:
-    """Control: with NO cap, all 4 legs run at once — proving the cap above is
-    what bounds concurrency, not some accidental serialization in the engine."""
+    """Without a RAM cap, the controller's whole first batch runs concurrently."""
     peak = await _run_with_cap(None)
-    assert peak == 4, f"expected all 4 legs concurrent without a cap, saw {peak}"
+    assert peak == 3, f"expected the standard tier's 3-probe batch, saw {peak}"
 
 
 async def test_memory_bounded_gather_is_surfaced_not_silent() -> None:
@@ -1236,12 +1313,7 @@ async def test_memory_bounded_gather_is_surfaced_not_silent() -> None:
         reranker=_FakeReranker(),
         embedder=_FakeEmbedder(),
     )
-    router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 4,
-            "rag_answerer": ["A [[p0]].", "B [[p3]].", "C [[p6]].", "D [[p9]].", "Summary."],
-        }
-    )
+    router = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 4})
     run = DeepResearchRun(
         query="q",
         router=router,
@@ -1275,12 +1347,7 @@ async def test_unbounded_gather_reports_not_memory_bounded() -> None:
         reranker=_FakeReranker(),
         embedder=_FakeEmbedder(),
     )
-    router = _ScriptedRouter(
-        {
-            "query_rewriter": ["SUFFICIENT\nnone"] * 2,
-            "rag_answerer": ["A [[p0]].", "B [[p3]].", "Summary."],
-        }
-    )
+    router = _ScriptedRouter({"query_rewriter": ["SUFFICIENT\nnone"] * 2})
     run = DeepResearchRun(
         query="q",
         router=router,

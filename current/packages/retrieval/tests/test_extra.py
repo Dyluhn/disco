@@ -80,5 +80,28 @@ async def test_router_query_rewriter_strips_leaked_think():
     assert await rw.rewrite("q", n=2) == ["q"]
 
 
+async def test_engine_uses_original_query_when_rewriter_provider_fails():
+    """A failed optional rewrite cannot turn a viable search into an empty leg."""
+
+    class _FailingRewriter:
+        async def rewrite(self, query: str, *, n: int) -> list[str]:
+            del query, n
+            raise RuntimeError("provider rejected rewrite")
+
+    search = FakeSearchProvider([])
+    engine = DefaultRetrievalEngine(
+        search,
+        FakeExtractionProvider({}),
+        LexicalReranker(),
+        rewriter=_FailingRewriter(),
+    )
+
+    result = await engine.retrieve(
+        RetrievalRequest(query="Can interpretability predict risky behavior?", depth="deep")
+    )
+
+    assert result.issued_queries == ["interpretability predict risky behavior"]
+
+
 def test_nli_empty_hypothesis_scores_zero():
     assert CrossEncoderNLIVerifier().score("anything", "") == 0.0

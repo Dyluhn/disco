@@ -1,6 +1,6 @@
 {
   "schema": "disclaude-architecture-public-api-v1",
-  "source_identity": "c7a36af206e918346b37a26d86cfc33ec417f09c",
+  "source_identity": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
   "python_initializers": [
     {
       "path": "packages/agent-server/src/disco/agent_server/__init__.py",
@@ -3682,9 +3682,12 @@
           "fields": [
             "all_hits: list[dict[str, Any]]",
             "bounded_by: str | None",
+            "claims: list[dict[str, Any]]",
+            "completed_probes: list[str]",
             "depth_tier: str | None",
             "kind: Literal[EventKind.REPORT]",
             "passages: list[dict[str, Any]]",
+            "pending_probes: list[str]",
             "query: str",
             "reviewed_passages: list[dict[str, Any]]",
             "sections: list[ReportSection]",
@@ -14701,8 +14704,8 @@
           "kind": "class",
           "signature": "class DeepResearchRun()",
           "members": [
-            "async def run(self, plan_steps: list[str], *, emit: EmitFn, should_cancel: Callable[[], bool] | None=None, resume_sections: list[ReportSection] | None=None, resume_passages: list[RetrievalPassage] | None=None, resume_all_hits: list[Any] | None=None, pop_steers: PopSteersFn=None, pop_injected_sources: PopInjectedSourcesFn=None) -> ReportFromRun",
-            "def __init__(self, *, query: str, router: LLMRouter, retrieval_engine: RetrievalEngine, embedder: Embedder | None, vector_store: VectorStore, nli: Any, depth: DepthTier | str=DepthTier.STANDARD_DEEP, conversation_id: str='deep_research', gather_concurrency: int | None=None, recency_window: Literal['month', 'week'] | None=None, upload_passages: list[Any] | None=None, corpus_ids: frozenset[str]=frozenset(), iterative: bool=False) -> None",
+            "async def run(self, plan_steps: list[str], *, emit: EmitFn, should_cancel: Callable[[], bool] | None=None, resume_sections: list[ReportSection] | None=None, resume_passages: list[RetrievalPassage] | None=None, resume_all_hits: list[Any] | None=None, resume_completed_probes: list[str] | None=None, resume_pending_probes: list[str] | None=None, pop_steers: PopSteersFn=None, pop_injected_sources: PopInjectedSourcesFn=None) -> ReportFromRun",
+            "def __init__(self, *, query: str, router: LLMRouter, retrieval_engine: RetrievalEngine, embedder: Embedder | None, vector_store: VectorStore, nli: Any, depth: DepthTier | str=DepthTier.STANDARD_DEEP, conversation_id: str='deep_research', gather_concurrency: int | None=None, recency_window: Literal['month', 'week'] | None=None, upload_passages: list[Any] | None=None, corpus_ids: frozenset[str]=frozenset()) -> None",
             "def bound(self) -> DepthBound"
           ],
           "fields": []
@@ -14710,16 +14713,26 @@
         "DepthBound": {
           "kind": "class",
           "signature": "class DepthBound()",
-          "members": [],
+          "members": [
+            "def evidence_capacity_spec(self) -> dict[str, int]",
+            "def report_spec(self) -> dict[str, int]"
+          ],
           "fields": [
             "discover_limit: int",
             "extract_cap: int",
+            "initial_probe_count: int",
             "max_rounds_per_subq: int",
             "max_sources: int",
             "max_subquestions: int",
             "max_wall_clock_s: int",
+            "min_evidence_passages: int",
+            "min_evidence_sources: int",
+            "min_evidence_themes: int",
+            "report_max_words: int",
+            "report_min_words: int",
             "rerank_top_k: int",
-            "retrieval_depth: Literal['shallow', 'standard', 'deep']"
+            "retrieval_depth: Literal['shallow', 'standard', 'deep']",
+            "writing_budget_tokens: int"
           ]
         },
         "DepthTier": {
@@ -14732,7 +14745,7 @@
           "kind": "class",
           "signature": "class ReportFromRun()",
           "members": [
-            "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None",
+            "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str, claims: list[dict[str, Any]] | None=None, completed_probes: list[str] | None=None, pending_probes: list[str] | None=None) -> None",
             "def to_event(self) -> ReportEvent"
           ],
           "fields": []
@@ -18109,7 +18122,7 @@
         {
           "kind": "function",
           "name": "patchConversationSettings",
-          "signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; iterative?: boolean; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>"
+          "signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>"
         },
         {
           "kind": "function",
@@ -18649,7 +18662,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepResearchSubmit",
-          "signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** A4: iterative grounding \u2014 re-search weakly-grounded claims + re-check (up to * 3 rounds). Defaults to false (the standard non-iterative run). */ iterative?: boolean; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }"
+          "signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }"
         },
         {
           "kind": "reexport",
@@ -23184,7 +23197,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepResearchLifecycleParams",
-          "signature": "export interface DeepResearchLifecycleParams { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; recencyWindow: \"month\" | \"week\" | null; sources: string[]; preCid: string | null; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; setPreCid: (cid: string | null) => void; stream: DeepResearchStream; /** The recovered real query (resume path), computed by * `useDeepResearchDerived` \u2014 retry() falls back to it when * `session.query` is still the \"(resumed)\" sentinel. */ recoveredQuery: string | null; }"
+          "signature": "export interface DeepResearchLifecycleParams { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; depthTier: Tier; setDepthTier: (tier: Tier) => void; recencyWindow: \"month\" | \"week\" | null; sources: string[]; preCid: string | null; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; setPreCid: (cid: string | null) => void; stream: DeepResearchStream; /** The recovered real query (resume path), computed by * `useDeepResearchDerived` \u2014 retry() falls back to it when * `session.query` is still the \"(resumed)\" sentinel. */ recoveredQuery: string | null; }"
         }
       ]
     },
@@ -23199,7 +23212,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "DeepResearchSessionApi",
-          "signature": "export interface DeepResearchSessionApi { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; setLeaderId: (id: string | null) => void; sources: string[]; setSources: (sources: string[]) => void; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; setIterative: (iterative: boolean) => void; recencyWindow: \"month\" | \"week\" | null; setRecencyWindow: (window: \"month\" | \"week\" | null) => void; /** G1/DR-4: the pre-created cid for the empty state (before first submit). */ preCid: string | null; setPreCid: (cid: string | null) => void; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; /** W-07: lazily obtain the pre-created cid for the Attach affordance so * uploads work BEFORE the user submits. Returns the existing preCid, or * creates one NOW carrying the CURRENT depth/recency/iterative/leader * settings (so the upload lands in the conversation that will actually * run) and stores it so submit() reuses the SAME cid. null offline. */ ensurePreCid: () => Promise<string | null>; }"
+          "signature": "export interface DeepResearchSessionApi { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; setLeaderId: (id: string | null) => void; sources: string[]; setSources: (sources: string[]) => void; depthTier: Tier; setDepthTier: (tier: Tier) => void; recencyWindow: \"month\" | \"week\" | null; setRecencyWindow: (window: \"month\" | \"week\" | null) => void; /** G1/DR-4: the pre-created cid for the empty state (before first submit). */ preCid: string | null; setPreCid: (cid: string | null) => void; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; /** W-07: lazily obtain the pre-created cid for the Attach affordance so * uploads work BEFORE the user submits. Returns the existing preCid, or * creates one NOW carrying the CURRENT depth/recency/leader * settings (so the upload lands in the conversation that will actually * run) and stores it so submit() reuses the SAME cid. null offline. */ ensurePreCid: () => Promise<string | null>; }"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -25598,7 +25611,7 @@
         {
           "kind": "InterfaceDeclaration",
           "name": "VerifiedClaim",
-          "signature": "export interface VerifiedClaim { claim: Claim; verdict: Verdict; best_passage_id: string | null; entailment_score: number; }"
+          "signature": "export interface VerifiedClaim { section_id?: string; claim: Claim; verdict: Verdict; best_passage_id: string | null; entailment_score: number; }"
         },
         {
           "kind": "TypeAliasDeclaration",
@@ -28401,24 +28414,8 @@
     {
       "surface": "frontend",
       "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
-      "public_name": "DeepResearchLifecycleParams",
-      "target_sha256": "a16af191b5110b46cd1c0917ad9b7d2714d9c26abe74c33098a87032277731f2",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
       "public_name": "useDeepResearchLifecycle",
       "target_sha256": "9f8651407d824fcf2002d67ee4f2e235828bb299d825eda9abacb8553349aa93",
-      "owner_package": "PKG-12-FE-RESEARCH",
-      "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
-    },
-    {
-      "surface": "frontend",
-      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
-      "public_name": "DeepResearchSessionApi",
-      "target_sha256": "39ee33ffa668ffa4e4fe4ac79c9094291dd5e22750e355872271a053633d4034",
       "owner_package": "PKG-12-FE-RESEARCH",
       "reason": "Epic 12-C (PKG-12-FE-RESEARCH): additive surface from decomposing an owned module; the declaring module keeps its own public declarations unchanged."
     },
@@ -29792,14 +29789,6 @@
     },
     {
       "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "ReportEvent",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
-      "target_sha256": "ce3a59f36bf6a6ce36a0f51f5eb6bc5d21a912766f21e56ec25861d5060faddd"
-    },
-    {
-      "surface": "python",
       "path": "packages/core/src/disco/core/llm/__init__.py",
       "public_name": "SecretBox",
       "owner_package": "PKG-19-V30-INTEGRATION",
@@ -29853,22 +29842,6 @@
       "owner_package": "PKG-19-V30-INTEGRATION",
       "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
       "target_sha256": "a12917256d5da22cf1f3ac88159f74083e1045b634c6d583cc7051911a21975f"
-    },
-    {
-      "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "DepthBound",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
-      "target_sha256": "a07a99fa6fc11c256d0e2be1f8bab09a04f44f79491b672eda6001bd5b429f82"
-    },
-    {
-      "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "ReportFromRun",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "reason": "V30 integrates the accepted reliability, preview, and grounded-research contract.",
-      "target_sha256": "432ec0713f1e094c06452acdea00cd7185af0466f1534f8a109337845391619a"
     },
     {
       "surface": "frontend",
@@ -30205,6 +30178,78 @@
       "target_sha256": "da123800a4587268399ab8dff1ab3e8435cea5d4d5adecbf4705e7749fd94533",
       "owner_package": "PKG-32-PRODUCTION-READINESS",
       "reason": "Wire type for one parsed server row of the MCP import preview/apply response, including its warnings, per-server error and secret refs."
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "patchConversationSettings",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The research funnel deletes the dormant iterative flag: the settings patch no longer carries `iterative`.",
+      "target_sha256": "f215970273431385cd1763c70d4bfd92ced90d1e3051fb95122fa84f5260fc56"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "DeepResearchSubmit",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The research funnel deletes the dormant iterative flag from the submit payload; there is one pipeline.",
+      "target_sha256": "a5d86fa9ebb9f7a1d5112f691ffee7d7badfece1646d21749b61da29b4cdb5bf"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
+      "public_name": "DeepResearchLifecycleParams",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The research funnel deletes the dormant iterative flag from the lifecycle params; there is one pipeline.",
+      "target_sha256": "9f45bb13e77f30b593a890d4a7eb213cf103c22c0ac78a7955bdedec71dae544"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_name": "DeepResearchSessionApi",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The research funnel deletes the dormant iterative state from the session api; there is one pipeline.",
+      "target_sha256": "e40ea03d3ef1be1e68b4a47785eb2c91202f303cfdff7e16b95d4c9e760d96e3"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "VerifiedClaim",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The claim ledger tags each verified claim with its owning report section via the optional section_id.",
+      "target_sha256": "04507929a954629d2ea2497fcbc1963b48c0c62f1bb120b57765f167e65759bb"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "ReportEvent",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The terminal report event carries the claim ledger and probe continuity (claims, completed_probes, pending_probes) so Stop/resume and follow-ups keep the run's evidence state.",
+      "target_sha256": "414989625e0c24089c9c5a194fe62a743f854286f15246e316f8ad5a16d4b285"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DeepResearchRun",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "One report funnel: the ignored iterative keyword is deleted and run() restores probe continuity from a Stop checkpoint.",
+      "target_sha256": "06d74b0b2913a2fbb330f784107ac6ad39103bc8899eb181b98585fe8ed0f2e4"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The tier clock owns the whole run: DepthBound gains the evidence capacity and report specs (probe count, evidence floors, report word bounds, writing reserve).",
+      "target_sha256": "3a14b67a335bcc914c40c1bbee289154421afd1d4fe6d468efe662eb5bd42aa0"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "ReportFromRun",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "reason": "The compiled report carries the claim ledger and probe continuity alongside its sections and passages.",
+      "target_sha256": "c366a267ac78bf03b045d95926fc4f7fc3ef957f0739a0d4e96d698fc2f4b0b1"
     }
   ],
   "compatibility_bridges": [],
@@ -30271,23 +30316,6 @@
       ],
       "old_signature_sha256": "efb0a0471135603f48dfe6d59daa20cb6b59d954ba1b9d2693627845035f1f23",
       "new_signature_sha256": "9679fa155dc8d1f2900a2e25960ea31ba4f5c9d68d5eb0aea0d97a173687290b",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "ReportFromRun",
-      "origin": "disco.retrieval.deep_research.engine.ReportFromRun",
-      "removed_members": [
-        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None"
-      ],
-      "added_members": [
-        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None"
-      ],
-      "old_signature_sha256": "d5e6da729cb5d5169954c0e1a1d2eda5704578b96440e9e947e6f283ff93925f",
-      "new_signature_sha256": "292e9c8150c4839676ec17f5766e8367307c827e5d926d62280f0dfca12d4613",
       "owner_package": "PKG-19-V30-INTEGRATION",
       "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
       "accepting_receipt": "2026-07-28/STATUS.md"
@@ -30387,36 +30415,6 @@
       ],
       "old_signature_sha256": "95a118cb36cb0c3fed12e10804b5f6c97ee3f4536d328122a9e0454ed5f18e3a",
       "new_signature_sha256": "24ed7187282897d7028536dcaebff60cf996f9d82aeec5257b6bcce8cae7c6e1",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
-      "public_name": "DepthBound",
-      "origin": "disco.retrieval.deep_research.depth.DepthBound",
-      "removed_members": [],
-      "added_members": [
-        "retrieval_depth: Literal['shallow', 'standard', 'deep']"
-      ],
-      "old_signature_sha256": "7abbb7a9d91f8d5b50e4682a4417e8bf987a348414e8fc74a6afaffe8abd9872",
-      "new_signature_sha256": "06bbbd3e63418beae2b0269f3502da45d8d26fdf25261b133918d15fa4278dfc",
-      "owner_package": "PKG-19-V30-INTEGRATION",
-      "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
-      "accepting_receipt": "2026-07-28/STATUS.md"
-    },
-    {
-      "surface": "python",
-      "path": "packages/core/src/disco/core/__init__.py",
-      "public_name": "ReportEvent",
-      "origin": "disco.core.events.ReportEvent",
-      "removed_members": [],
-      "added_members": [
-        "reviewed_passages: list[dict[str, Any]]"
-      ],
-      "old_signature_sha256": "57c88198f2e18062840f86cb7132f2d8359c3b51395c93c2266dce95e647f956",
-      "new_signature_sha256": "5c1521902f0a5eb5e872ccfc26af304d60f66fd74a00c9b883af77f9fa704b64",
       "owner_package": "PKG-19-V30-INTEGRATION",
       "accepting_commit": "41cecbab85195f473ac8c4f773f5106efadeab83",
       "accepting_receipt": "2026-07-28/STATUS.md"
@@ -30683,6 +30681,82 @@
       "owner_package": "PKG-19-V32-APPKIT-REPRESENTATION",
       "accepting_commit": "dca160deb7a264711fae711c629076f04fd3dee5",
       "accepting_receipt": "automation/runtime/boundary-20260813-pkg19-v32-appkit-representation/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DeepResearchRun",
+      "origin": "disco.retrieval.deep_research.engine.DeepResearchRun",
+      "removed_members": [
+        "async def run(self, plan_steps: list[str], *, emit: EmitFn, should_cancel: Callable[[], bool] | None=None, resume_sections: list[ReportSection] | None=None, resume_passages: list[RetrievalPassage] | None=None, resume_all_hits: list[Any] | None=None, pop_steers: PopSteersFn=None, pop_injected_sources: PopInjectedSourcesFn=None) -> ReportFromRun",
+        "def __init__(self, *, query: str, router: LLMRouter, retrieval_engine: RetrievalEngine, embedder: Embedder | None, vector_store: VectorStore, nli: Any, depth: DepthTier | str=DepthTier.STANDARD_DEEP, conversation_id: str='deep_research', gather_concurrency: int | None=None, recency_window: Literal['month', 'week'] | None=None, upload_passages: list[Any] | None=None, corpus_ids: frozenset[str]=frozenset(), iterative: bool=False) -> None"
+      ],
+      "added_members": [
+        "async def run(self, plan_steps: list[str], *, emit: EmitFn, should_cancel: Callable[[], bool] | None=None, resume_sections: list[ReportSection] | None=None, resume_passages: list[RetrievalPassage] | None=None, resume_all_hits: list[Any] | None=None, resume_completed_probes: list[str] | None=None, resume_pending_probes: list[str] | None=None, pop_steers: PopSteersFn=None, pop_injected_sources: PopInjectedSourcesFn=None) -> ReportFromRun",
+        "def __init__(self, *, query: str, router: LLMRouter, retrieval_engine: RetrievalEngine, embedder: Embedder | None, vector_store: VectorStore, nli: Any, depth: DepthTier | str=DepthTier.STANDARD_DEEP, conversation_id: str='deep_research', gather_concurrency: int | None=None, recency_window: Literal['month', 'week'] | None=None, upload_passages: list[Any] | None=None, corpus_ids: frozenset[str]=frozenset()) -> None"
+      ],
+      "old_signature_sha256": "b68c84cd12811e6591586f46465521c4d1a9ffcf585f229e8bf4b13c3a4169d0",
+      "new_signature_sha256": "3cf4199fd90878b30131f4d08d1c0fc3bf1e24c2bf0a52f96cd11be332edb19f",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/core/src/disco/core/__init__.py",
+      "public_name": "ReportEvent",
+      "origin": "disco.core.events.ReportEvent",
+      "removed_members": [],
+      "added_members": [
+        "claims: list[dict[str, Any]]",
+        "completed_probes: list[str]",
+        "pending_probes: list[str]"
+      ],
+      "old_signature_sha256": "5c1521902f0a5eb5e872ccfc26af304d60f66fd74a00c9b883af77f9fa704b64",
+      "new_signature_sha256": "6d31ab382734bcf823fa8f525dc29ce094940d8538d70f6bbfac449d825d7dc3",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "ReportFromRun",
+      "origin": "disco.retrieval.deep_research.engine.ReportFromRun",
+      "removed_members": [
+        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str) -> None"
+      ],
+      "added_members": [
+        "def __init__(self, *, query: str, summary: str, sections: list[ReportSection], cited_passages: list[RetrievalPassage], reviewed_passages: list[RetrievalPassage], all_hits: list[Any], unsupported_count: int, bounded_by: str | None, depth_tier: str, claims: list[dict[str, Any]] | None=None, completed_probes: list[str] | None=None, pending_probes: list[str] | None=None) -> None"
+      ],
+      "old_signature_sha256": "292e9c8150c4839676ec17f5766e8367307c827e5d926d62280f0dfca12d4613",
+      "new_signature_sha256": "b6ad26ff3f9033b6dd72b2e4591af49bc41ecb07aae184902da100bae5122d6d",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "python",
+      "path": "packages/retrieval/src/disco/retrieval/deep_research/__init__.py",
+      "public_name": "DepthBound",
+      "origin": "disco.retrieval.deep_research.depth.DepthBound",
+      "removed_members": [],
+      "added_members": [
+        "def evidence_capacity_spec(self) -> dict[str, int]",
+        "def report_spec(self) -> dict[str, int]",
+        "initial_probe_count: int",
+        "min_evidence_passages: int",
+        "min_evidence_sources: int",
+        "min_evidence_themes: int",
+        "report_max_words: int",
+        "report_min_words: int",
+        "writing_budget_tokens: int"
+      ],
+      "old_signature_sha256": "06bbbd3e63418beae2b0269f3502da45d8d26fdf25261b133918d15fa4278dfc",
+      "new_signature_sha256": "7fd66574bc95f9ea4fd291b099056de790c821ae1e72531abe25ba39f3f273a3",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
     },
     {
       "surface": "python",
@@ -31207,6 +31281,71 @@
       "owner_package": "PKG-12-FE-SHELL",
       "accepting_commit": "b330cba4bf607bf0c06974d68e2de0f7491d942f",
       "accepting_receipt": "2026-08-02/EPIC12A-BOUNDARY/EPIC-12A-ACCEPTANCE-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchLifecycle.ts",
+      "public_name": "DeepResearchLifecycleParams",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepResearchLifecycleParams { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; recencyWindow: \"month\" | \"week\" | null; sources: string[]; preCid: string | null; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; setPreCid: (cid: string | null) => void; stream: DeepResearchStream; /** The recovered real query (resume path), computed by * `useDeepResearchDerived` \u2014 retry() falls back to it when * `session.query` is still the \"(resumed)\" sentinel. */ recoveredQuery: string | null; }",
+      "new_signature": "export interface DeepResearchLifecycleParams { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; depthTier: Tier; setDepthTier: (tier: Tier) => void; recencyWindow: \"month\" | \"week\" | null; sources: string[]; preCid: string | null; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; setPreCid: (cid: string | null) => void; stream: DeepResearchStream; /** The recovered real query (resume path), computed by * `useDeepResearchDerived` \u2014 retry() falls back to it when * `session.query` is still the \"(resumed)\" sentinel. */ recoveredQuery: string | null; }",
+      "old_target_sha256": "a16af191b5110b46cd1c0917ad9b7d2714d9c26abe74c33098a87032277731f2",
+      "new_target_sha256": "9f45bb13e77f30b593a890d4a7eb213cf103c22c0ac78a7955bdedec71dae544",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/hooks/useDeepResearchParts/useDeepResearchSession.ts",
+      "public_name": "DeepResearchSessionApi",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepResearchSessionApi { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; setLeaderId: (id: string | null) => void; sources: string[]; setSources: (sources: string[]) => void; depthTier: Tier; setDepthTier: (tier: Tier) => void; iterative: boolean; setIterative: (iterative: boolean) => void; recencyWindow: \"month\" | \"week\" | null; setRecencyWindow: (window: \"month\" | \"week\" | null) => void; /** G1/DR-4: the pre-created cid for the empty state (before first submit). */ preCid: string | null; setPreCid: (cid: string | null) => void; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; /** W-07: lazily obtain the pre-created cid for the Attach affordance so * uploads work BEFORE the user submits. Returns the existing preCid, or * creates one NOW carrying the CURRENT depth/recency/iterative/leader * settings (so the upload lands in the conversation that will actually * run) and stores it so submit() reuses the SAME cid. null offline. */ ensurePreCid: () => Promise<string | null>; }",
+      "new_signature": "export interface DeepResearchSessionApi { session: DeepResearchSession | null; setSession: (session: DeepResearchSession | null) => void; leaderId: string | null; setLeaderId: (id: string | null) => void; sources: string[]; setSources: (sources: string[]) => void; depthTier: Tier; setDepthTier: (tier: Tier) => void; recencyWindow: \"month\" | \"week\" | null; setRecencyWindow: (window: \"month\" | \"week\" | null) => void; /** G1/DR-4: the pre-created cid for the empty state (before first submit). */ preCid: string | null; setPreCid: (cid: string | null) => void; preCidRef: MutableRefObject<string | null>; preCreateFlightRef: MutableRefObject<Promise<string> | null>; /** W-07: lazily obtain the pre-created cid for the Attach affordance so * uploads work BEFORE the user submits. Returns the existing preCid, or * creates one NOW carrying the CURRENT depth/recency/leader * settings (so the upload lands in the conversation that will actually * run) and stores it so submit() reuses the SAME cid. null offline. */ ensurePreCid: () => Promise<string | null>; }",
+      "old_target_sha256": "39ee33ffa668ffa4e4fe4ac79c9094291dd5e22750e355872271a053633d4034",
+      "new_target_sha256": "e40ea03d3ef1be1e68b4a47785eb2c91202f303cfdff7e16b95d4c9e760d96e3",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/deepResearch.ts",
+      "public_name": "DeepResearchSubmit",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** A4: iterative grounding \u2014 re-search weakly-grounded claims + re-check (up to * 3 rounds). Defaults to false (the standard non-iterative run). */ iterative?: boolean; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }",
+      "new_signature": "export interface DeepResearchSubmit { query: string; /** Per-conversation lead-model override (leader pill). null = use default. */ leaderId?: string | null; /** Depth tier (quick / standard_deep / exhaustive). Defaults to standard_deep. */ depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; /** DR-3 recency filter: \"month\" = past 30 days, \"week\" = past 7 days, null = off. */ recencyWindow?: \"month\" | \"week\" | null; /** Per-query research source ids. Empty means use the Settings default. */ sources?: string[]; }",
+      "old_target_sha256": "9091ef53682b21b77386c13c7fded7cd36424ff20f5b4afa5a22786629d109b3",
+      "new_target_sha256": "a5d86fa9ebb9f7a1d5112f691ffee7d7badfece1646d21749b61da29b4cdb5bf",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/types/grounded.ts",
+      "public_name": "VerifiedClaim",
+      "declaration_kind": "InterfaceDeclaration",
+      "old_signature": "export interface VerifiedClaim { claim: Claim; verdict: Verdict; best_passage_id: string | null; entailment_score: number; }",
+      "new_signature": "export interface VerifiedClaim { section_id?: string; claim: Claim; verdict: Verdict; best_passage_id: string | null; entailment_score: number; }",
+      "old_target_sha256": "0aa87b0c34707cb1ec880afb1dd0a05b83366cb3527050530c5fef0ed2eedd06",
+      "new_target_sha256": "04507929a954629d2ea2497fcbc1963b48c0c62f1bb120b57765f167e65759bb",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
+    },
+    {
+      "surface": "frontend",
+      "path": "frontend/src/api/agent.ts",
+      "public_name": "patchConversationSettings",
+      "declaration_kind": "function",
+      "old_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; iterative?: boolean; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>",
+      "new_signature": "export async function patchConversationSettings( conversationId: string, settings: { modelOverride?: string | null; autonomous?: boolean; quiet?: boolean; assist?: boolean | null; depthTier?: \"quick\" | \"standard_deep\" | \"exhaustive\"; recencyWindow?: \"month\" | \"week\" | null; sources?: string[]; }, ): Promise<void>",
+      "old_target_sha256": "069e38775bb3909f391213ff6cd89a0855c9094e79dee6f383225402b60aa020",
+      "new_target_sha256": "f215970273431385cd1763c70d4bfd92ced90d1e3051fb95122fa84f5260fc56",
+      "owner_package": "PKG-34-RESEARCH-FUNNEL",
+      "accepting_commit": "dd91e94b04cd249d759919bf0f0d7d64b50f9afb",
+      "accepting_receipt": "automation/runtime/boundary-20260823-research-funnel/BOUNDARY-RECEIPT.md"
     }
   ],
   "compatibility_rule": "Any deleted or renamed public name, origin, signature, frontend export/type/schema, or contract byte fails. Additions require an owning-package baseline transition; moved implementations retain the old public name through an explicit bridge until PKG-13. A member-level change at an unchanged origin requires an explicit member transition pinning both signature digests and the exact member delta. A frontend declaration change requires an explicit frontend declaration transition pinning both target digests and both declaration texts."

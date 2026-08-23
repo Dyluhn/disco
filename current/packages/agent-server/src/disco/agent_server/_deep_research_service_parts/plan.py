@@ -145,16 +145,16 @@ async def finalize_plan(
     subqs: list[Any],
     prior_plans: int,
 ) -> None:
-    """Build the PlanEvent from the decomposed sub-questions, persist it, and
+    """Build the PlanEvent from the initial research directions, persist it, and
     either auto-approve + run the engine (autonomous/headless surfaces —
     mirrors the Build loop's autonomous plan auto-approve) or park at
     AWAITING_PLAN_APPROVAL for a human to approve."""
     steps = [PlanStep(title=s.title) for s in subqs]
     summary = (
-        f"Multi-section research report on: {query.strip()[:140]}. "
-        f"Will gather sources across {len(steps)} sub-questions "
-        f"(tier: {tier.value}; cap: {bound.max_sources} sources, "
-        f"{bound.max_rounds_per_subq} rounds/subq)."
+        f"Deep research on: {query.strip()[:140]}. "
+        f"The investigation will begin with {len(steps)} broad directions, then "
+        f"adapt as evidence reveals stronger leads, gaps, or dead ends "
+        f"(tier: {tier.value}; cap: {bound.max_sources} sources)."
     )
     plan = PlanEvent(
         summary=summary,
@@ -163,7 +163,8 @@ async def finalize_plan(
         context=(
             f"**Query:** {query.strip()}\n\n"
             f"**Depth tier:** {tier.value}\n\n"
-            f"**Sub-questions** (each becomes a section of the report):\n\n"
+            f"**Starting research directions** (these guide the investigation; "
+            f"the final report outline will be written from the findings):\n\n"
             + "\n".join(f"{i + 1}. {s.title}" for i, s in enumerate(subqs))
         ),
     )

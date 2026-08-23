@@ -990,7 +990,7 @@ class TestFrontendPublicApi:
             "AgentErrorEvent",
             "RetrievalRequest", "SearchHit", "DepthBound", "SectionContent", "Passage",
             "DefaultLLMRouter", "LLMSummarizingCondenser", "ReportEvent", "ReportFromRun",
-            "ProviderSettings", "ModelEntry", "Entity",
+            "ProviderSettings", "ModelEntry", "Entity", "DeepResearchRun",
         }
         for row in baseline["member_transitions"]:
             # A member transition never changes origin — that is a bridge's job.

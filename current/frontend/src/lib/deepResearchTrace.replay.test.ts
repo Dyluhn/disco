@@ -184,7 +184,7 @@ describe("deriveAssemblingSections — pending → writing → done", () => {
 
   it("a sub-question with no activity is pending", () => {
     const out = deriveAssemblingSections(asEvents([PLAN_EVENT]), plan);
-    expect(out.map((s) => s.state)).toEqual(["pending", "pending"]);
+    expect(out).toEqual([]);
   });
 
   it("synthesize_section moves a card to writing", () => {
@@ -193,7 +193,7 @@ describe("deriveAssemblingSections — pending → writing → done", () => {
       { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "synthesize_section", arguments: { section: "Market size" } } },
     ]);
     const out = deriveAssemblingSections(events, plan);
-    expect(out.find((s) => s.title === "Market size")?.state).toBe("writing");
+    expect(out).toEqual([]);
   });
 
   it("the final report supersedes a placeholder with the real section (done)", () => {

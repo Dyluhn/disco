@@ -125,6 +125,16 @@ class ReportEvent(BaseEvent, LLMConvertible):
     # The full discovery set (URL, title, snippet, status). All_hits for the
     # All-Searched / Cited tabs at report scale. Same plain-dict reason.
     all_hits: list[dict[str, Any]] = Field(default_factory=list)
+    # Per-claim verification ledger for the interactive verification/source
+    # layer. Kept as plain dictionaries so core remains independent of the
+    # retrieval package's VerifiedClaim model. Verification is visible here,
+    # never substituted into report prose.
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    # Durable checkpoint identity for adaptive research probes. Final report
+    # headings are evidence-led and therefore cannot be used to infer which
+    # starting directions have already completed on resume.
+    completed_probes: list[str] = Field(default_factory=list)
+    pending_probes: list[str] = Field(default_factory=list)
     unsupported_count: int = 0  # whole-report total (sum across sections)
     bounded_by: str | None = None  # named cap if hit, else None (natural finish)
     # The depth tier the run used ("quick" / "standard_deep" / "exhaustive"),

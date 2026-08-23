@@ -113,13 +113,6 @@ Measurements vary by season [2].
 
 ---
 
-"""
-    "_This run was bounded by **sources**. Some planned sub-questions were not covered. "
-    "Consider running the EXHAUSTIVE tier or assigning a faster driver model for deeper coverage._"
-    """
-
----
-
 Sources cited (2):
 
 - [1] Avian Speed Database — https://birds.example.com/p0

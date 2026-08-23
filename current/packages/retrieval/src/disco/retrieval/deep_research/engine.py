@@ -1,16 +1,20 @@
-"""DeepResearchRun — the orchestrator that wires decompose → gather → synth.
+"""DeepResearchRun — the orchestrator that wires decompose → gather → report.
 
 This is what the agent-server's runtime calls after the user approves the plan
-in the AWAITING_PLAN_APPROVAL gate. The plan IS the list of sub-questions
-returned by `decompose_query`; the gate / approval / re-plan flow is owned by
-the agent loop's plan-mode intercept (we reuse the Build plan mode without
-modification).
+in the AWAITING_PLAN_APPROVAL gate. The plan IS the list of starting research
+directions returned by `decompose_query`; the gate / approval / re-plan flow
+is owned by the agent loop's plan-mode intercept.
 
-The run is bounded: any cap hit (`sources`, `rounds`, `wall_clock`,
-`subquestions`) terminates with a partial-but-honest report and the strongest
-terminal reason is set as `bounded_by` on the ReportEvent. Progress events flow
-through the injected `emit` callback so the agent-server appends them as
-ActionEvents / ObservationEvents to the conversation log.
+The run has exactly three outcomes: a report produced by the one pipeline
+(adaptive gathering → evidence-led outline → per-section synthesis with claim
+verification → executive summary), an exception (surfaced by the agent-server
+as an ErrorEvent + ERROR status), or a Stop checkpoint (`bounded_by=
+"stopped"`, no report prose) the user can resume. Research caps (`sources`,
+`rounds`, `wall_clock`, `subquestions`) bound GATHERING and are surfaced
+honestly via `bounded_by`; the writing phase is bounded by the outline's
+section count and each call's own bounded retries, never a shrinking global
+deadline. Progress events flow through the injected `emit` callback so the
+agent-server appends them as ActionEvents / ObservationEvents.
 """
 
 from __future__ import annotations
@@ -28,13 +32,17 @@ from ..models import Passage as RetrievalPassage
 from ..ranking import Embedder
 from ..vectorstore import VectorStore
 from ._budget import SourceBudget
-from ._engine_parts._drain import _dominant_bound, drain_and_synthesize
+from ._engine_parts._adaptive import gather_adaptive_batches
+from ._engine_parts._compiler import compile_report_sections
+from ._engine_parts._drain import drain_and_synthesize, seconds_left
+from ._engine_parts._finish import finish_report
 from ._engine_parts._plan import prepare_plan, start_gather_tasks, start_one_steer_task
-from ._engine_parts._refine import iterative_refine
 from ._engine_parts._report import collect_report_data
+from .controller import ResearchController
 from .decompose import SubQuestion
 from .depth import DepthBound, DepthTier, bounds_for
 from .gather import GatherLegContext, SubQuestionResult, gather_for_subquestion
+from .report_compiler import collect_claim_ledger, collect_global_evidence, compile_report_plan
 from .synthesis import coherence_pass, synthesize_section
 
 # `gather_for_subquestion` and `synthesize_section` are not called directly in
@@ -49,7 +57,12 @@ from .synthesis import coherence_pass, synthesize_section
 # `engine.synthesize_section(...)` (module-attribute lookup at call time,
 # never a captured `from .x import name` binding) specifically so that patch
 # is observed — a direct import in the parts module would silently defeat it.
-_MONKEYPATCH_TARGETS = (gather_for_subquestion, synthesize_section)
+_MONKEYPATCH_TARGETS = (
+    gather_for_subquestion,
+    synthesize_section,
+    coherence_pass,
+    compile_report_plan,
+)
 
 # Callable types for mid-run steer / inject hooks (D3).
 # Both default to None in every public-API call → the OFF-path is byte-identical
@@ -82,6 +95,9 @@ class ReportFromRun:
         unsupported_count: int,
         bounded_by: str | None,
         depth_tier: str,
+        claims: list[dict[str, Any]] | None = None,
+        completed_probes: list[str] | None = None,
+        pending_probes: list[str] | None = None,
     ) -> None:
         self.query = query
         self.summary = summary
@@ -92,22 +108,36 @@ class ReportFromRun:
         self.unsupported_count = unsupported_count
         self.bounded_by = bounded_by
         self.depth_tier = depth_tier
+        self.claims = list(claims or [])
+        self.completed_probes = list(completed_probes or [])
+        self.pending_probes = list(pending_probes or [])
+        # Synthesis owns how much of this envelope the evidence can support;
+        # retrieval never borrows it.  The concrete tier values are available
+        # from ``DeepResearchRun.bound.report_spec`` and this transport carries
+        # the same shape for downstream report assembly.
+        self.report_spec: dict[str, int] | None = None
 
     def to_event(self) -> ReportEvent:
         """Convert into the Core ReportEvent for persistence on the log.
         Retrieval-typed Passage/SearchHit are dumped to plain dicts so `core`
         stays free of any `retrieval` import."""
-        return ReportEvent(
+        from ._report_event import fit_report_event
+
+        event = ReportEvent(
             query=self.query,
             summary=self.summary,
             sections=self.sections,
             passages=[p.model_dump() for p in self.cited_passages],
             reviewed_passages=[p.model_dump() for p in self.reviewed_passages],
             all_hits=[h.model_dump() for h in self.all_hits],
+            claims=self.claims,
             unsupported_count=self.unsupported_count,
             bounded_by=self.bounded_by,
             depth_tier=self.depth_tier,
+            completed_probes=self.completed_probes,
+            pending_probes=self.pending_probes,
         )
+        return fit_report_event(event)
 
 
 class DeepResearchRun:
@@ -115,9 +145,9 @@ class DeepResearchRun:
     agent-server runtime with all dependencies injected. Single-shot:
     `await run.run(plan_steps)` produces the assembled ReportFromRun.
 
-    The plan steps come from the existing PlanEvent the agent loop emitted
-    (the human has approved them — possibly with edits — by the time we run).
-    We trust them as the section titles; we don't re-decompose."""
+    The plan steps come from the approved PlanEvent, but they are starting
+    research directions rather than a table of contents. The final headings
+    are compiled only after the evidence pool is assembled."""
 
     def __init__(
         self,
@@ -134,7 +164,6 @@ class DeepResearchRun:
         recency_window: Literal["month", "week"] | None = None,
         upload_passages: list[Any] | None = None,
         corpus_ids: frozenset[str] = frozenset(),
-        iterative: bool = False,
     ) -> None:
         self._query = query
         self._router = router
@@ -152,10 +181,6 @@ class DeepResearchRun:
         self._upload_passages: list[Any] = upload_passages or []
         # Spaces: durable named corpora to include in every RetrievalRequest.
         self._corpus_ids = corpus_ids
-        # A4.4: iterative-research flag. When False (the default) NOTHING new
-        # runs — the judge/refine loop is never entered, so a standard run is
-        # byte-identical. Gated on this flag at the single call site in `run()`.
-        self._iterative = iterative
         # RAM-aware peak-memory guard (OOM fix) — applies on EVERY tier, because
         # not OOMing is a correctness guarantee, not a free-tier compensation.
         # Each concurrent gather leg holds its own fetch buffers + extracted
@@ -169,6 +194,7 @@ class DeepResearchRun:
         self._gather_concurrency = gather_concurrency if (gather_concurrency or 0) > 0 else None
         self._source_budget = SourceBudget(self._bound.max_sources)
         self._scheduled_subquestions = 0
+        self._controller: ResearchController | None = None
 
     @property
     def bound(self) -> DepthBound:
@@ -181,6 +207,8 @@ class DeepResearchRun:
         resume_sections: list[ReportSection] | None,
         resume_passages: list[RetrievalPassage] | None,
         resume_all_hits: list[Any] | None,
+        resume_completed_probes: list[str] | None,
+        resume_pending_probes: list[str] | None,
         emit: EmitFn,
     ) -> tuple[
         str | None,
@@ -200,6 +228,8 @@ class DeepResearchRun:
             resume_sections=resume_sections,
             resume_passages=resume_passages,
             resume_all_hits=resume_all_hits,
+            resume_completed_probes=resume_completed_probes,
+            resume_pending_probes=resume_pending_probes,
             emit=emit,
         )
 
@@ -258,7 +288,6 @@ class DeepResearchRun:
             ]
         ],
         *,
-        sections: list[ReportSection],
         started: float,
         bounded_by: str | None,
         should_cancel: Callable[[], bool] | None,
@@ -266,23 +295,14 @@ class DeepResearchRun:
         pop_steers: PopSteersFn = None,
         pop_injected_sources: PopInjectedSourcesFn = None,
     ) -> tuple[list[SubQuestionResult], str | None, list[RetrievalPassage]]:
-        """RP-04 consumer: drain the gather tasks in order, synthesizing each
-        section immediately (a durable checkpoint) before consuming the next.
-        Honors Stop (`should_cancel`) and the wall-clock bound at every
-        sub-question boundary, cancelling the still-running legs when either
-        trips. Appends completed sections to `sections` in place; returns
-        `(results, bounded_by, injected_passages)`.
-
-        D3 — mid-run steer / inject hooks (both default None → OFF-path is
-        byte-identical to a run without hooks): see
-        `_engine_parts._drain.drain_and_synthesize` for the full contract —
-        this method is a thin delegator to it (stop-condition check, D3
-        steer/inject checkpoints, leg-result await, and per-leg synthesis are
-        each a single-purpose helper there, not folded into one loop body)."""
+        """RP-04 consumer: drain the gather tasks in order, honoring Stop
+        (`should_cancel`) and the research wall-clock bound at every
+        sub-question boundary. Returns `(results, bounded_by,
+        injected_passages)` — see `_engine_parts._drain.drain_and_synthesize`
+        for the full contract; this method is a thin delegator to it."""
         return await drain_and_synthesize(
             self,
             gather_tasks,
-            sections=sections,
             started=started,
             bounded_by=bounded_by,
             should_cancel=should_cancel,
@@ -292,58 +312,20 @@ class DeepResearchRun:
         )
 
     def _seconds_left(self, started: float) -> float:
-        return max(0.0, self._bound.max_wall_clock_s - (time.monotonic() - started))
+        return seconds_left(self, started)
 
-    async def _refine_before_deadline(
+    async def _compile_report_sections(
         self,
-        sections: list[ReportSection],
         results: list[SubQuestionResult],
         carried_passages: list[RetrievalPassage],
+        *,
         emit: EmitFn,
-        started: float,
-    ) -> tuple[list[ReportSection], list[RetrievalPassage], list[Any], bool]:
-        remaining = self._seconds_left(started)
-        if remaining <= 0:
-            return sections, [], [], True
-        try:
-            refined, passages, hits = await asyncio.wait_for(
-                self._iterative_refine(sections, results, carried_passages, emit),
-                timeout=remaining,
-            )
-        except TimeoutError:
-            return sections, [], [], True
-        return refined, passages, hits, False
-
-    async def _coherence_before_deadline(
-        self,
-        sections: list[ReportSection],
-        passages: list[RetrievalPassage],
-        started: float,
-    ) -> tuple[str, bool]:
-        remaining = self._seconds_left(started)
-        if remaining <= 0:
-            return self._wall_clock_summary(), True
-        try:
-            summary = await asyncio.wait_for(
-                coherence_pass(
-                    self._query,
-                    sections,
-                    router=self._router,
-                    passages=passages,
-                    nli=self._nli,
-                    recency_window=self._recency_window,
-                ),
-                timeout=remaining,
-            )
-        except TimeoutError:
-            return self._wall_clock_summary(), True
-        return summary, False
-
-    @staticmethod
-    def _wall_clock_summary() -> str:
-        return (
-            "Research reached its time limit. The completed sections below contain "
-            "the source-grounded findings available before the deadline."
+    ) -> list[ReportSection]:
+        return await compile_report_sections(
+            self,
+            results,
+            carried_passages,
+            emit=emit,
         )
 
     async def run(
@@ -355,6 +337,8 @@ class DeepResearchRun:
         resume_sections: list[ReportSection] | None = None,
         resume_passages: list[RetrievalPassage] | None = None,
         resume_all_hits: list[Any] | None = None,
+        resume_completed_probes: list[str] | None = None,
+        resume_pending_probes: list[str] | None = None,
         pop_steers: PopSteersFn = None,
         pop_injected_sources: PopInjectedSourcesFn = None,
     ) -> ReportFromRun:
@@ -362,26 +346,26 @@ class DeepResearchRun:
         between phases so the agent-server can write events to the conversation
         log; we never write to the store directly.
 
-        Each sub-question is gathered AND synthesized before moving to the next —
-        so a completed section is a durable checkpoint. `should_cancel` makes Stop
-        REAL: it is polled at each sub-question boundary; when it returns true the
-        run halts there and returns the partial report (every section completed so
-        far) with `bounded_by="stopped"`. Without it the run is uninterruptible.
+        Research gathers evidence in adaptive batches; report writing starts
+        only after gathering completes. `should_cancel` makes Stop REAL: it is
+        polled at each sub-question boundary during gathering; when it returns
+        true the run halts there and returns a CHECKPOINT (`bounded_by=
+        "stopped"`, no report prose) the agent-server persists as a resumable
+        PAUSED state. Once writing has started the run completes normally.
 
-        Resume (checkpointed): pass `resume_sections` (+ their `resume_passages` /
-        `resume_all_hits`) from a prior stopped run's partial ReportEvent. Their
-        sub-questions are skipped — we only gather+synthesize the steps NOT already
-        done, then re-run the coherence pass over the full set. This is what makes
-        a resumed Deep Research run continue instead of redoing completed sections.
+        Resume (checkpointed): pass the prior stopped run's evidence
+        (`resume_passages` / `resume_all_hits`) and probe state. Completed
+        probes are skipped; the final report is recompiled globally from the
+        combined evidence pool.
 
         D3 mid-run steer / inject:
-        - `pop_steers`: callable that returns any pending steer strings. Called at
-          each section boundary; each string starts a new gather leg. Default None
-          → OFF-path, byte-identical to a run without hooks.
+        - `pop_steers`: callable that returns any pending steer strings. Called
+          at each probe boundary; each string becomes a research probe. Default
+          None → OFF-path, byte-identical to a run without hooks.
         - `pop_injected_sources`: callable that returns any pending injected
           passages (pre-converted from WS frame text). Called at each boundary;
-          passages are folded into subsequent sections' candidate sets. Default
-          None → OFF-path, byte-identical."""
+          passages are folded into the evidence pool. Default None → OFF-path,
+          byte-identical."""
         started = time.monotonic()
         # DeepResearchRun is documented as single-shot, but resetting here makes
         # the execution-scoped cap explicit and keeps defensive test reuse honest.
@@ -398,14 +382,16 @@ class DeepResearchRun:
             resume_sections=resume_sections,
             resume_passages=resume_passages,
             resume_all_hits=resume_all_hits,
+            resume_completed_probes=resume_completed_probes,
+            resume_pending_probes=resume_pending_probes,
             emit=emit,
         )
 
-        # ---- per-sub-question: gather → synthesize (a durable checkpoint) ----
-        gather_tasks = self._start_gather_tasks(pending, emit=emit)
-        results, bounded_by, injected_passages = await self._drain_and_synthesize(
-            gather_tasks,
-            sections=sections,
+        results, bounded_by, carried_passages = await gather_adaptive_batches(
+            self,
+            pending,
+            sections,
+            carried_passages,
             started=started,
             bounded_by=bounded_by,
             should_cancel=should_cancel,
@@ -413,60 +399,26 @@ class DeepResearchRun:
             pop_steers=pop_steers,
             pop_injected_sources=pop_injected_sources,
         )
-        # D3: add any injected passages to carried_passages so they participate in
-        # _assemble_report's cited-passage collection (deduped by id there).
-        # OFF-path: injected_passages is always [] when pop_injected_sources is None.
-        if injected_passages:
-            carried_passages = carried_passages + injected_passages
 
-        # ---- A4.4 iterative refinement (gated; OFF-path byte-identical) ----
-        # When `self._iterative` is False (the default) this block is never
-        # entered — the judge/refine loop never runs, nothing new is emitted,
-        # and `sections` is exactly what `_drain_and_synthesize` produced.
-        if self._iterative:
-            (
-                sections,
-                refine_passages,
-                refine_hits,
-                refine_timed_out,
-            ) = await self._refine_before_deadline(
-                sections, results, carried_passages, emit, started
+        if bounded_by == "stopped":
+            # A Stop checkpoint, not a report: keep the gathered evidence and
+            # any sections carried in from a prior checkpoint, write no prose.
+            return self._assemble_report(
+                sections=sections,
+                results=results,
+                carried_passages=carried_passages,
+                carried_hits=carried_hits,
+                summary="",
+                bounded_by="stopped",
             )
-            if refine_timed_out:
-                bounded_by = _dominant_bound(bounded_by, "wall_clock")
-            # Fold the refine legs' fresh passages into the report's passage set so
-            # a section's fresh `[[id]]` citations resolve to source cards in
-            # `_assemble_report` (deduped by id there). OFF-path: never reached.
-            if refine_passages:
-                carried_passages = carried_passages + refine_passages
-            # Fold the refine legs' discovered urls into carried_hits so the report's
-            # all-searched audit trail stays the COMPLETE discovery set (deduped in
-            # _assemble_report).
-            if refine_hits:
-                carried_hits = carried_hits + refine_hits
-            if self._source_budget.remaining <= 0:
-                bounded_by = _dominant_bound(bounded_by, "sources")
 
-        # ---- reduce step: coherence pass produces the executive summary ----
-        await emit("phase", {"phase": "coherence"})
-        summary, coherence_timed_out = await self._coherence_before_deadline(
-            sections,
-            [
-                *carried_passages,
-                *(passage for result in results for passage in result.passages),
-            ],
-            started,
-        )
-        if coherence_timed_out:
-            bounded_by = _dominant_bound(bounded_by, "wall_clock")
-
-        return self._assemble_report(
-            sections=sections,
-            results=results,
-            carried_passages=carried_passages,
-            carried_hits=carried_hits,
-            summary=summary,
-            bounded_by=bounded_by,
+        return await finish_report(
+            self,
+            results,
+            carried_passages,
+            carried_hits,
+            bounded_by,
+            emit=emit,
         )
 
     def _assemble_report(
@@ -487,7 +439,18 @@ class DeepResearchRun:
         cited_passages, reviewed_passages, all_hits, unsupported_total = collect_report_data(
             sections, results, carried_passages, carried_hits
         )
-        return ReportFromRun(
+        evidence = collect_global_evidence(results, carried_passages)
+        claims = [
+            claim.to_event_dict()
+            for claim in collect_claim_ledger(sections, evidence, self._nli)
+        ]
+        completed_probes = (
+            self._controller.completed_queries if self._controller is not None else []
+        )
+        pending_probes = (
+            self._controller.pending_queries if self._controller is not None else []
+        )
+        report = ReportFromRun(
             query=self._query,
             summary=summary,
             sections=sections,
@@ -497,20 +460,9 @@ class DeepResearchRun:
             unsupported_count=unsupported_total,
             bounded_by=bounded_by,
             depth_tier=self._depth,
+            claims=claims,
+            completed_probes=completed_probes,
+            pending_probes=pending_probes,
         )
-
-    async def _iterative_refine(
-        self,
-        sections: list[ReportSection],
-        results: list[SubQuestionResult],
-        carried_passages: list[RetrievalPassage],
-        emit: EmitFn,
-    ) -> tuple[list[ReportSection], list[RetrievalPassage], list[Any]]:
-        """A4.4 — the iterative-research loop, wired to the real engine. Only
-        reached when `self._iterative` is True; the OFF path never calls this.
-        See `_engine_parts._refine.iterative_refine` for the full
-        implementation (judge every section's claims, re-search the weak
-        ones seeded with that section's ORIGINAL passages so re-synthesis
-        sees the COMBINED corpus, re-synthesize, and re-judge — up to the
-        loop's round cap)."""
-        return await iterative_refine(self, sections, results, carried_passages, emit)
+        report.report_spec = self._bound.report_spec
+        return report

@@ -70,6 +70,30 @@ class _SubscriberOverflowMarker:
 _SUBSCRIBER_OVERFLOW = _SubscriberOverflowMarker()
 
 
+def _estimated_json_string_bytes(value: str) -> int:
+    """Upper-bound one string under ``json.dumps(..., ensure_ascii=True)``.
+
+    Treating an entire string as six bytes per character merely because it
+    contains one Unicode code point makes long reports with a single typographic
+    dash look several times larger than their real JSON representation.
+    Scanning code points remains allocation-light while matching JSON escaping.
+    """
+    total = 2  # opening and closing quotes
+    for character in value:
+        codepoint = ord(character)
+        if character in {'"', "\\"}:
+            total += 2
+        elif codepoint < 0x20:
+            total += 6
+        elif codepoint <= 0x7F:
+            total += 1
+        elif codepoint <= 0xFFFF:
+            total += 6
+        else:
+            total += 12  # JSON encodes a non-BMP code point as two surrogates
+    return total
+
+
 def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
     """Conservative, allocation-light JSON size estimate with early exit."""
     total = 0
@@ -79,7 +103,7 @@ def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
         if item is None or isinstance(item, (bool, int, float)):
             total += 24
         elif isinstance(item, str):
-            total += (len(item) if item.isascii() else len(item) * 6) + 2
+            total += _estimated_json_string_bytes(item)
         elif isinstance(item, dict):
             total += 2 + len(item) * 2
             for key, child in item.items():

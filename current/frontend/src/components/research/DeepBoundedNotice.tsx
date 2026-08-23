@@ -1,8 +1,9 @@
 /**
  * DeepBoundedNotice — the honest "what was cut" surface. When the engine's
- * ReportEvent sets `bounded_by`, a quiet aside renders above the report
- * naming what stopped the run, which sub-questions weren't covered, and the
- * lever to go deeper. Not alarmist; just true.
+ * ReportEvent sets `bounded_by`, a quiet aside renders outside the document
+ * naming the research budget that closed the evidence loop. The report itself
+ * remains a finished artifact; starting directions are not treated as promised
+ * sections or an incomplete checklist.
  *
  * Most tools hide this — a run "completes" and you're left guessing what's
  * been left out. Surfacing it elegantly is the trust move that fits this
@@ -37,6 +38,7 @@ const BOUND_TEXT: Record<string, { what: string; lever: string }> = {
 };
 
 export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
+  void plan;
   // "rounds" is the per-sub-question DEPTH cap, not a coverage truncation — every
   // sub-question still produces a section — so it is not surfaced (mirrors the backend
   // report_truncation() shared by the PDF/markdown/LLM-context exporters).
@@ -45,16 +47,10 @@ export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
     BOUND_TEXT[report.bounded_by] ??
     { what: report.bounded_by, lever: "" };
 
-  // figure out which sub-questions weren't covered (best-effort)
-  const coveredTitles = new Set(report.sections.map((s) => s.title));
-  const uncovered =
-    plan?.steps.filter((s) => !coveredTitles.has(s.title)).map((s) => s.title) ??
-    [];
-
   return (
     <aside
       role="note"
-      aria-label="What this run did and didn't cover"
+      aria-label="Research budget used"
       className="rounded-card border border-hairline bg-surface-1 px-body py-body"
     >
       <div className="flex items-start gap-inline">
@@ -64,24 +60,12 @@ export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
         />
         <div className="flex-1">
           <div className="font-ui text-[0.84rem] font-medium text-text">
-            Reached {report.sections.length} of {plan?.steps.length ?? report.sections.length} planned sub-questions
+            Report compiled from the strongest evidence gathered
           </div>
           <p className="mt-hair font-ui text-[0.82rem] leading-snug text-text-muted">
             This run was bounded by <span className="text-text">{text.what}</span>.{" "}
             {text.lever}
           </p>
-
-          {uncovered.length > 0 && (
-            <div className="mt-inline font-ui text-[0.82rem] text-text-muted">
-              <span className="text-text-faint">Not covered: </span>
-              {uncovered.map((title, i) => (
-                <span key={title}>
-                  {i > 0 && <span className="text-text-faint">; </span>}
-                  <span className="text-text">{title}</span>
-                </span>
-              ))}
-            </div>
-          )}
 
           <div className="mt-body flex flex-wrap items-center gap-inline">
             {report.depth_tier && (

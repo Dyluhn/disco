@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from disco.core.llm import (
     CallContext,
     CompletionRequest,
@@ -16,8 +17,10 @@ from disco.core.llm import (
 from disco.retrieval.deep_research import synthesis as synthesis_mod
 from disco.retrieval.deep_research.decompose import SubQuestion
 from disco.retrieval.deep_research.gather import GatherLegContext, SubQuestionResult
+from disco.retrieval.deep_research.report_compiler import RetrievalGap
 from disco.retrieval.deep_research.synthesis import (
     _normalize_citations,
+    _repair_grounded_tables,
     _repair_tables,
     synthesize_section,
 )
@@ -81,6 +84,18 @@ def test_repair_preserves_valid_table():
     assert "| 1 | 2 |" in out
     # exactly one delimiter row
     assert out.count("---") >= 1
+
+    filtered = (
+        "| Approach | Operation | Advantage | Limitation |\n"
+        "| --- | --- | --- | --- |\n"
+        "| lost opening cell | fragment only |  |  |\n"
+        "| VLA | text and images | adapts | needs controls |\n"
+        "|  |  |  |  |"
+    )
+    grounded = _repair_grounded_tables(filtered)
+    assert "lost opening cell" not in grounded
+    assert "| VLA | text and images | adapts | needs controls |" in grounded
+    assert "|  |  |  |  |" not in grounded
 
 
 def test_repair_leaves_prose_with_single_pipe():
@@ -152,7 +167,9 @@ def _passage() -> Passage:
     )
 
 
-async def _run_synth(router: LLMRouter) -> str:
+async def _run_synth(
+    router: LLMRouter, *, target_words: tuple[int, int] | None = None
+) -> str:
     sub = SubQuestionResult(
         subq=SubQuestion(title="How do the models compare?"),
         passages=[_passage()],
@@ -176,6 +193,7 @@ async def _run_synth(router: LLMRouter) -> str:
             namespace="ns",
             call_context=CallContext(conversation_id="conv_trunc"),
         ),
+        target_words=target_words,
     )
     return section.markdown
 
@@ -387,226 +405,65 @@ async def test_think_only_response_counts_as_empty_and_retries() -> None:
     assert "<think" not in md
 
 
-async def test_empty_response_after_retry_preserves_cited_evidence() -> None:
-    """If the section is STILL empty after the retry, preserve source excerpts
-    with real citation ids instead of finishing with an uncited placeholder."""
+async def test_section_still_empty_after_bounded_retry_raises_retrieval_gap() -> None:
+    """A section whose generation stays empty after the one empty-response
+    retry is a run failure — RetrievalGap, never preserved excerpts or
+    placeholder prose."""
     router = _ScriptedRouter(
         [
             ("   ", "stop"),  # whitespace-only
             ("\n\n", "stop"),  # retry: also empty
         ]
     )
-    sub = SubQuestionResult(
-        subq=SubQuestion(title="Historical context?"),
-        passages=[_passage()],
-    )
 
-    emitted: list[tuple[str, dict[str, Any]]] = []
+    with pytest.raises(RetrievalGap, match="produced no prose after the bounded retry"):
+        await _run_synth(router)
 
-    async def _emit(kind: str, payload: dict[str, Any]) -> None:
-        emitted.append((kind, payload))
-
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=4,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_empty"),
-        ),
-    )
-
-    assert router.calls == 2
-    assert "Alpha scored 90" in section.markdown
-    assert "[[p1]]" in section.markdown
-    assert section.cited_passage_ids == ["p1"]
-    assert section.confidence == "low"
-    assert emitted[-1] == (
-        "synthesize_section_fallback",
-        {
-            "section": "Historical context?",
-            "reason": "empty_after_retry",
-            "passages_preserved": 1,
-        },
-    )
+    assert router.calls == 2  # initial call + exactly one empty-response retry
 
 
-async def test_synthesis_exception_preserves_cited_evidence() -> None:
+async def test_synthesis_provider_exception_propagates() -> None:
+    """A non-transient provider failure propagates out of synthesize_section —
+    it is never converted into extractive prose."""
     router = _ScriptedRouter([RuntimeError("provider exploded")])
-    sub = SubQuestionResult(
-        subq=SubQuestion(title="Failure recovery"),
-        passages=[_passage()],
+
+    with pytest.raises(RuntimeError, match="provider exploded"):
+        await _run_synth(router)
+
+    assert router.calls == 1  # no retry for a non-transient failure
+
+
+async def test_thin_candidate_still_thin_after_one_rewrite_raises() -> None:
+    """A grounded candidate below the minimum-content gate gets exactly ONE
+    rewrite; a rewrite that is still thin raises RetrievalGap naming the
+    section instead of shipping an under-filled slot."""
+    thin = "Alpha scored 90 on the benchmark [[p1]]."
+    router = _ScriptedRouter([(thin, "stop"), (thin, "stop")])
+
+    with pytest.raises(RetrievalGap, match="remained too thin after its one rewrite") as gap:
+        await _run_synth(router, target_words=(300, 500))
+
+    assert "How do the models compare?" in str(gap.value)
+    assert router.calls == 2  # one generation + exactly one rewrite
+
+
+async def test_thin_candidate_is_replaced_by_its_one_substantive_rewrite() -> None:
+    """The successful repair path: a thin first draft triggers exactly one
+    rewrite, and the section ships the rewrite's content (the draft is
+    replaced, not appended)."""
+    thin = "Alpha leads [[p1]]."
+    substantive = " ".join(
+        "Alpha scored ninety points and Beta scored eighty five points on "
+        f"benchmark run number {index} [[p1]]."
+        for index in range(12)
     )
-    emitted: list[tuple[str, dict[str, Any]]] = []
+    router = _ScriptedRouter([(thin, "stop"), (substantive, "stop")])
 
-    async def _emit(kind: str, payload: dict[str, Any]) -> None:
-        emitted.append((kind, payload))
+    md = await _run_synth(router, target_words=(300, 500))
 
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=4,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_exception"),
-        ),
-    )
-
-    assert router.calls == 1
-    assert "Alpha scored 90" in section.markdown
-    assert section.cited_passage_ids == ["p1"]
-    assert section.confidence == "low"
-    assert emitted[-1][1]["reason"] == "exception:RuntimeError"
-
-
-async def test_extractive_fallback_frames_preserved_quotes_honestly() -> None:
-    """A section whose synthesis produced nothing must open with the honest
-    framing sentence (added AFTER grounding so the claim gate cannot strip it)
-    and carry clean quotes — never a bare quote-stub list."""
-    router = _ScriptedRouter([("", "stop"), ("", "stop")])
-    sub = SubQuestionResult(
-        subq=SubQuestion(title="Historical context?"),
-        passages=[_passage()],
-    )
-
-    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
-        return None
-
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=4,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_frame"),
-        ),
-    )
-
-    assert section.markdown.startswith(
-        "*(No synthesized answer to this sub-question could be grounded in the "
-        "1 retrieved source; the closest passages are preserved below without "
-        "interpretation.)*"
-    )
-    assert "> Alpha scored 90" in section.markdown
-    assert "[[p1]]" in section.markdown
-    assert section.confidence == "low"
-
-
-async def test_extractive_fallback_with_only_junk_passages_is_one_honest_line() -> None:
-    """Junk-only evidence (nav boilerplate, metadata stubs, table debris —
-    real fragments from an exported report) must yield ONE honest no-evidence
-    sentence, never block-quoted snippet soup."""
-    router = _ScriptedRouter([("", "stop"), ("", "stop")])
-    junk_passages = [
-        Passage(
-            id="nav1",
-            source_url="http://example.test/nav",
-            source_title="Nav junk",
-            text=(
-                "Last verified: August 19, 2026 …. For more details including "
-                "relating to our methodology, see our [FAQs.](/faq)"
-            ),
-        ),
-        Passage(
-            id="tbl1",
-            source_url="http://example.test/table",
-            source_title="Table junk",
-            text="| Vendor | Q2 revenue | Growth | | Alpha | 12.3 | 4.5 |",
-        ),
-    ]
-    sub = SubQuestionResult(
-        subq=SubQuestion(title="Market sizing?"),
-        passages=junk_passages,
-    )
-
-    emitted: list[tuple[str, dict[str, Any]]] = []
-
-    async def _emit(kind: str, payload: dict[str, Any]) -> None:
-        emitted.append((kind, payload))
-
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=4,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_junk"),
-        ),
-    )
-
-    assert section.markdown == (
-        "*(No evidence answering this sub-question was found in the "
-        "2 retrieved sources.)*"
-    )
-    assert ">" not in section.markdown  # no quote stubs
-    assert section.cited_passage_ids == []
-    assert section.confidence == "low"
-    assert emitted[-1][1]["passages_preserved"] == 0
-
-
-async def test_extractive_fallback_preserves_at_most_three_clean_quotes() -> None:
-    router = _ScriptedRouter([("", "stop"), ("", "stop")])
-    passages = [
-        Passage(
-            id=f"p{index}",
-            source_url=f"http://example.test/{index}",
-            source_title=f"Source {index}",
-            text=f"Vendor {index} shipped its flagship model in August 2026.",
-        )
-        for index in range(5)
-    ]
-    sub = SubQuestionResult(subq=SubQuestion(title="Who shipped?"), passages=passages)
-
-    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
-        return None
-
-    section = await synthesize_section(
-        sub,
-        router=router,
-        embedder=None,
-        vector_store=InMemoryVectorStore(),
-        namespace="ns",
-        nli=_FakeNLI(),
-        section_id="s1",
-        top_k_for_section=8,
-        emit=_emit,
-        leg_context=GatherLegContext(
-            subq_id="sq1",
-            namespace="ns",
-            call_context=CallContext(conversation_id="conv_cap"),
-        ),
-    )
-
-    assert section.markdown.count("> ") == 3  # capped at three quotes
-    assert section.markdown.count("[[") == 3
+    assert router.calls == 2  # one generation + exactly one rewrite
+    assert "benchmark run number" in md
+    assert "Alpha leads" not in md  # the thin draft was replaced, not appended
 
 
 async def test_truncation_guard_is_bounded() -> None:

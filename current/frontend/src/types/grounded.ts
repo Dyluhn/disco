@@ -36,6 +36,7 @@ export interface Claim {
 }
 
 export interface VerifiedClaim {
+  section_id?: string;
   claim: Claim;
   verdict: Verdict;
   best_passage_id: string | null;
